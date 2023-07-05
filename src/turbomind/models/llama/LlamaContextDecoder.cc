@@ -24,6 +24,7 @@
 #include "src/turbomind/models/llama/LlamaContextDecoder.h"
 #include "src/turbomind/models/llama/llama_decoder_kernels.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/Tensor.h"
 
 namespace turbomind {
@@ -230,6 +231,20 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                             stream_);
     sync_check_cuda_error();
 
+    // std::vector<half> mask(sess.max_query_len * sess.max_key_len);
+
+    // cudaMemcpyAsync(
+    //     mask.data(), attention_mask_, sizeof(half) * sess.max_query_len * sess.max_key_len, cudaMemcpyDefault, stream_);
+
+    // cudaDeviceSynchronize();
+
+    // for (int i = 0; i < sess.max_query_len; ++i) {
+    //     for (int j = 0; j < sess.max_key_len; ++j) {
+    //         std::cout << (float)mask[i * sess.max_key_len + j] << " ";
+    //     }
+    //     std::cout << "\n";
+    // }
+
     /////////////////////////////////////////////
     /// RMSNorm
     invokeRootMeanSquareNorm(attn_ffn_io_,
@@ -241,7 +256,20 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                              stream_);
     sync_check_cuda_error();
 
+    Compare(decoder_input_output,  //
+            sess.token_num * hidden_units_,
+            Concat("attn_input", 0, 0),
+            kCmpRead,
+            stream_);
+
     for (size_t layer = 0; layer < num_layer_; ++layer) {
+
+        Compare(attn_ffn_io_,  //
+                sess.token_num * hidden_units_,
+                Concat("attn_norm_input", 0, layer),
+                kCmpRead,
+                stream_);
+
         /////////////////////////////////////////////
         /// self-attention
         forwardSelfAttn(sess, input_tensors, layer, false);
@@ -256,14 +284,33 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           stream_);
         sync_check_cuda_error();
 
+        Compare(decoder_input_output,  //
+                sess.token_num * hidden_units_,
+                Concat("attn_out", 0, layer),
+                kCmpRead,
+                stream_);
+
+        // Compare(attn_ffn_io_,  //
+        //         sess.token_num * hidden_units_,
+        //         Concat("ffn_norm_input", 0, layer),
+        //         kCmpRead,
+        //         stream_);
+
         ////////////////////////////////////////////
         /// feed-forward network
         TensorMap ffn_inputs{{"ffn_input", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}}};
         TensorMap ffn_outputs{{"ffn_output", {MEMORY_GPU, data_type_, {sess.token_num, hidden_units_}, attn_ffn_io_}}};
         silu_ffn_layer_->forward(&ffn_outputs, &ffn_inputs, &decoder_layer_weights->at(layer)->ffn_weights);
 
+        Compare(attn_ffn_io_,  //
+                sess.token_num * hidden_units_,
+                Concat("ffn_out_unnorm", 0, layer),
+                kCmpRead,
+                stream_);
+
         auto scale_weight = layer < num_layer_ - 1 ? decoder_layer_weights->at(layer + 1)->self_attn_norm_weights :
                                                      input_tensors->at("output_norm_weight").getPtr<T>();
+        // FT_CHECK(!decoder_layer_weights->at(layer)->ffn_weights.output.bias);
         invokeFusedAddBiasResidualRMSNorm(decoder_input_output,  //
                                           attn_ffn_io_,
                                           decoder_layer_weights->at(layer)->ffn_weights.output.bias,
@@ -273,6 +320,12 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                           hidden_units_,
                                           stream_);
         sync_check_cuda_error();
+
+        // Compare(decoder_input_output,  //
+        //         sess.token_num * hidden_units_,
+        //         Concat("ffn_out", 0, layer),
+        //         kCmpRead,
+        //         stream_);
     }
 
     if (is_free_buffer_after_forward_) {

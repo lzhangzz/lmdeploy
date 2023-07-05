@@ -21,6 +21,7 @@
 
 #include "src/turbomind/models/llama/LlamaContextAttentionLayer.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -150,6 +151,26 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
     // [token_num, hidden_dim] -> [token_num, 3, local_hidden_dim]
     linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv);
 
+    invokeTransposeAxis01(q_buf_2_, qkv_buf_, num_token, 3, local_hidden_units_, stream_);
+
+    // Compare(q_buf_2_,
+    //         num_token * hidden_units_,  //
+    //         Concat("q", 0, layer_id),
+    //         kCmpRead,
+    //         stream_);
+    // Compare(q_buf_2_ + num_token * hidden_units_,  //
+    //         num_token * hidden_units_,
+    //         Concat("k", 0, layer_id),
+    //         kCmpRead,
+    //         stream_);
+    // Compare(q_buf_2_ + 2 * num_token * hidden_units_,
+    //         num_token * hidden_units_,
+    //         Concat("v", 0, layer_id),
+    //         kCmpRead,
+    //         stream_);
+
+    // FT_CHECK(weights->qkv.bias);
+
     //////////////////////////////////////////////
     /// transpose qkv & apply rotary embedding & rebuild padding
     /// qkv [B, s, 3, H, D] -> (q [B, H, s, D], k [B, H, s, D], v [B, H, s, D])
@@ -172,6 +193,10 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                    0,        // int8 mode
                                    stream_);
     sync_check_cuda_error();
+
+    Compare(q_buf_2_, num_token * hidden_units_, Concat("q2", 0, layer_id), kCmpRead, stream_);
+    Compare(k_buf_2_, num_token * hidden_units_, Concat("k2", 0, layer_id), kCmpRead, stream_);
+    Compare(v_buf_2_, num_token * hidden_units_, Concat("v2", 0, layer_id), kCmpRead, stream_);
 
     const size_t layer_offset = layer_id * local_head_num_ * max_seq_len * size_per_head_;
 
@@ -226,6 +251,8 @@ inline void LlamaContextAttentionLayer<T>::forward(TensorMap*                   
                                   quant_policy_,
                                   weights->past_kv_scale.data());
     }
+
+    Compare(qkv_buf_3_, num_token * hidden_units_, Concat("wo_inp", 0, layer_id), kCmpRead, stream_);
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>

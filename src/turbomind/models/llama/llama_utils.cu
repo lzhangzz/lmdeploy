@@ -18,23 +18,45 @@ namespace turbomind {
 
 CmpMode compare_mode = kCmpNone;
 
-template<typename T>
-struct abs_diff_t {
-    using type = T;
-};
+// template<typename T>
+// struct abs_diff_t {
+//     using type = T;
+// };
 
-template<>
-struct abs_diff_t<half> {
-    using type = float;
-};
+// template<>
+// struct abs_diff_t<half> {
+//     using type = float;
+// };
 
 template<typename T>
-struct abs_diff: public thrust::unary_function<thrust::tuple<T, T>, typename abs_diff_t<T>::type> {
+struct abs_diff: public thrust::unary_function<thrust::tuple<T, T>, float> {
+
+    __host__ __device__ float absolute(float ref, float x) const
+    {
+        return fabs(ref - x);
+    }
+
     __host__ __device__ float operator()(thrust::tuple<T, T> x) const
     {
-        using R = typename abs_diff_t<T>::type;
-        auto r  = R(thrust::get<0>(x)) - R(thrust::get<1>(x));
-        return r < R(0) ? -r : r;
+        auto a = (float)thrust::get<0>(x);
+        auto b = (float)thrust::get<1>(x);
+        return absolute(a, b);
+    }
+};
+
+template<typename T>
+struct rel_diff: public thrust::unary_function<thrust::tuple<T, T>, float> {
+
+    __host__ __device__ float relative(float ref, float x) const
+    {
+        return fabs(ref - x) / (fabs(ref) + 1e-6);
+    }
+
+    __host__ __device__ float operator()(thrust::tuple<T, T> x) const
+    {
+        auto a = (float)thrust::get<0>(x);
+        auto b = (float)thrust::get<1>(x);
+        return relative(a, b);
     }
 };
 
@@ -84,11 +106,28 @@ void CmpRead(T* ptr, size_t size, std::string key, cudaStream_t stream)
     thrust::device_vector<T> a = h_a;
     // create abs(a - b) iterator
     thrust::device_ptr<T> dev_ptr(ptr);
-    auto                  zip_iter       = thrust::make_zip_iterator(thrust::make_tuple(a.begin(), dev_ptr));
-    auto                  transform_iter = thrust::make_transform_iterator(zip_iter, abs_diff<T>{});
+    auto                  zip_iter   = thrust::make_zip_iterator(thrust::make_tuple(a.begin(), dev_ptr));
+    auto                  d_abs_iter = thrust::make_transform_iterator(zip_iter, abs_diff<T>{});
+    auto                  d_rel_iter = thrust::make_transform_iterator(zip_iter, rel_diff<T>{});
     // sum(abs(a - b))
-    auto asum = thrust::reduce(thrust::device, transform_iter, transform_iter + size);
-    std::cerr << key << ": " << asum << " " << asum / size << "\n";
+    auto d_abs = thrust::reduce(thrust::device, d_abs_iter, d_abs_iter + size);
+    auto d_rel = thrust::reduce(thrust::device, d_rel_iter, d_rel_iter + size);
+    d_abs /= size;
+    d_rel /= size;
+    auto warn = [](float d_rel) -> std::string {
+        auto str = std::to_string(d_rel);
+        if (d_rel >= 1.f) {
+            return "*** " + str + " ***";
+        }
+        else if (d_rel > .05f) {
+            return "** " + str + " **";
+        }
+        else if (d_rel > 0.01f) {
+            return "* " + str + " *";
+        }
+        return str;
+    };
+    std::cerr << key << ": " << d_abs << " " << warn(d_rel) << "\n";
 }
 
 template<typename T>

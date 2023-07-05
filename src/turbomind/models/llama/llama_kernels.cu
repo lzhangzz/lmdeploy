@@ -29,16 +29,20 @@ __global__ void rootMeanSquareNorm(T* out, const T* input, const T* scale, float
 
     mean = blockReduceSum<float>(mean);
     if (threadIdx.x == 0) {
-        s_inv_mean = rsqrt(.5f * mean / (float)n + eps);
+        // n is half input size
+        s_inv_mean = rsqrt(mean / (2 * n) + eps);
     }
     __syncthreads();
 
+    // def forward(self, x):
+    //     output = self._norm(x.float()).type_as(x)
+    //     return output * self.weight
     for (uint idx = threadIdx.x; idx < n; idx += blockDim.x) {
         float2 tmp2                   = cuda_cast<float2>(input_ptr[blockIdx.x * n + idx]);
-        float2 sca2                   = cuda_cast<float2>(scale_ptr[idx]);
-        tmp2.x                        = tmp2.x * s_inv_mean * sca2.x;
-        tmp2.y                        = tmp2.y * s_inv_mean * sca2.y;
-        out_ptr[blockIdx.x * n + idx] = cuda_cast<T2>(tmp2);
+        T2     out2                   = scale_ptr[idx];
+        out2.x                        = T(tmp2.x * s_inv_mean) * out2.x;
+        out2.y                        = T(tmp2.y * s_inv_mean) * out2.y;
+        out_ptr[blockIdx.x * n + idx] = out2;
     }
 }
 

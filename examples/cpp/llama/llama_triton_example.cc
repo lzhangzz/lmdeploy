@@ -15,7 +15,8 @@
  * limitations under the License.
  */
 
-// Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
+// Modified from
+// https://github.com/NVIDIA/FasterTransformer/blob/main/examples/cpp/multi_gpu_gpt/multi_gpu_gpt_triton_example.cc
 
 #include "3rdparty/INIReader.h"
 #include <memory>
@@ -296,7 +297,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     param.repetition_penalty         = reader.GetFloat("request", "repetition_penalty", 1.0f);
     param.presence_penalty           = reader.GetFloat("request", "presence_penalty", 0.0f);
     param.min_length                 = reader.GetInteger("request", "min_length", 0);
-    param.random_seed                = (unsigned long long int)0;
+    param.random_seed                = 0x8886c76b453ca99bULL;
     param.start_id                   = start_id;
     param.end_id                     = end_id;
 
@@ -471,7 +472,7 @@ int main(int argc, char* argv[])
     }
     cudaDeviceSynchronize();
 
-    if (1) {
+    if (0) {
         // test time
         struct timeval start, end;
         gettimeofday(&start, NULL);

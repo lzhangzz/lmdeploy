@@ -247,6 +247,10 @@ void LlamaV2<T>::contextDecode(T*         deocder_output,
         {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
         {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
 
+    TM_LOG_INFO("token_num = %d", token_num);
+
+    Compare(context_decoder_input_buf, token_num * hidden_units_, "ctx_dec_inp", kCmpRead, stream_);
+
     context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 
     if (tensor_para_.rank_ == 0) {

@@ -482,6 +482,8 @@ bool LlamaBatch<T>::generate()
                             batch_size_,
                             step_ - 1);
 
+    Compare(decoder_input_buf_, batch_size_ * llama_->hidden_units_, Concat("input", step_ - 1), kCmpRead, stream_);
+
     llama_->decoderForward(decoder_output_buf_,
                            k_cache_ptr_buf_,
                            v_cache_ptr_buf_,
@@ -803,6 +805,7 @@ void LlamaBatch<T>::contextDecode()
                                                      stream_));
                     context_decoder_ids += get_input_len(j);
                 }
+
                 llama_->contextDecode(nullptr,
                                       k_cache_ptr_buf_ + offset,
                                       v_cache_ptr_buf_ + offset,

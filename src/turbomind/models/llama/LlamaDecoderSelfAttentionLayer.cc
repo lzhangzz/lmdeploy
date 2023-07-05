@@ -231,6 +231,8 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*                     o
     const auto kv_cache_layer_offset = layer_id * local_head_num_ * max_seq_len * size_per_head_;
     const int  memory_len            = max_seq_len;
 
+    // FT_CHECK(weights->qkv.bias);
+
     fusedQKV_masked_attention_dispatch<T>(
         qkv_buf_,
         weights->qkv.bias,  // query_weight.bias,

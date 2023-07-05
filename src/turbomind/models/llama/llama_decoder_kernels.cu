@@ -11,8 +11,7 @@ namespace cg = cooperative_groups;
 namespace turbomind {
 
 template<typename T>
-struct res_norm_ops_t {
-};
+struct res_norm_ops_t {};
 
 template<typename T>
 struct res_norm_t {
@@ -39,25 +38,50 @@ struct res_norm_t {
 
 template<>
 struct res_norm_ops_t<half> {
-    __device__ float2 cast(const uint& x) const
+    __device__ half2 cast(const uint& x) const
     {
-        return __half22float2(reinterpret_cast<const half2&>(x));
+        return reinterpret_cast<const half2&>(x);
     }
-    __device__ uint cast(const float2& x) const
+    __device__ uint cast(const half2& x) const
     {
-        auto y = __float22half2_rn(x);
-        return reinterpret_cast<uint&>(y);
+        return reinterpret_cast<const uint&>(x);
     }
-    __device__ float2 add(const float2& a, const float2& b, const float2& bias, float& accum) const
+    __device__ float square(float x) const
     {
-        float2 c{a.x + b.x + bias.x, a.y + b.y + bias.y};
-        accum += c.x * c.x + c.y * c.y;
+        return x * x;
+    }
+    __device__ half2 add(const half2& a, const half2& b, const half2& bias, float& accum) const
+    {
+        half2 c{a.x + b.x + bias.x, a.y + b.y + bias.y};
+        accum += square(float(c.x)) + square(float(c.y));
         return c;
     }
-    __device__ float2 norm(const float2& a, const float2& s, float factor) const
+    __device__ half2 norm(const half2& a, const half2& s, float factor) const
     {
-        return {a.x * s.x * factor, a.y * s.y * factor};
+        float2 tmp = __half22float2(a);
+        tmp.x *= factor;
+        tmp.y *= factor;
+        return __hmul2(__float22half2_rn(tmp), s);
     }
+    // __device__ float2 cast(const uint& x) const
+    // {
+    //     return __half22float2(reinterpret_cast<const half2&>(x));
+    // }
+    // __device__ uint cast(const float2& x) const
+    // {
+    //     auto y = __float22half2_rn(x);
+    //     return reinterpret_cast<uint&>(y);
+    // }
+    // __device__ float2 add(const float2& a, const float2& b, const float2& bias, float& accum) const
+    // {
+    //     float2 c{a.x + b.x + bias.x, a.y + b.y + bias.y};
+    //     accum += c.x * c.x + c.y * c.y;
+    //     return c;
+    // }
+    // __device__ float2 norm(const float2& a, const float2& s, float factor) const
+    // {
+    //     return {a.x * s.x * factor, a.y * s.y * factor};
+    // }
 };
 
 template<>
