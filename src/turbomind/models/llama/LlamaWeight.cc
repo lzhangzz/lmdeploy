@@ -88,7 +88,8 @@ void LlamaWeight<T>::mallocWeights()
 template<typename T>
 void LlamaWeight<T>::loadModel(std::string dir_path)
 {
-    FtCudaDataType model_file_type = FtCudaDataType::FP16;
+    // FtCudaDataType model_file_type = FtCudaDataType::FP16;
+    FtCudaDataType model_file_type = FtCudaDataType::FP32;
     dir_path += '/';
 
     loadWeightFromBin((T*)pre_decoder_embedding_table,

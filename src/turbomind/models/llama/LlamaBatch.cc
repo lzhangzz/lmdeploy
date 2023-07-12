@@ -499,6 +499,43 @@ bool LlamaBatch<T>::generate()
                                 decoder_output_buf_,
                                 batch_size_);
 
+    std::vector<float> logits(llama_->vocab_size_);
+    cudaMemcpyAsync(logits.data(), logits_buf_, sizeof(float) * logits.size(), cudaMemcpyDefault, stream_);
+    cudaStreamSynchronize(stream_);
+
+    std::vector<int> indices(logits.size());
+    std::iota(indices.begin(), indices.end(), 0);
+
+    constexpr int K = 40;
+    constexpr float Te = 0.8;
+
+    // top-k
+    std::partial_sort(
+        indices.begin(), indices.begin() + K, indices.end(), [&](int i, int j) { return logits[i] > logits[j]; });
+
+    // apply temperature
+     for (int i = 0; i < K; ++i) {
+        logits[indices[i]] /= Te;
+    }
+
+    // compute probs
+    std::vector<float> probs(K);
+    float              accum = 0;
+    for (int i = 0; i < K; ++i) {
+        probs[i] = std::exp(logits[indices[i]] - logits[indices[0]]);
+        accum += probs[i];
+    }
+
+    // normalize
+    for (int i = 0; i < K; ++i) {
+        probs[i] /= accum;
+    }
+
+    // output
+    for (int i = 0; i < 10; ++i) {
+        TM_LOG_INFO("%d %d %f %f", i, indices[i], probs[i], logits[indices[i]]);
+    }
+
     // stop-words & bad-words require the matched tokens to be contiguous, so item size > 1 is
     // not supported yet.
     bool should_stop{};
