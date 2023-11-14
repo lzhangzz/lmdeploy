@@ -53,7 +53,7 @@ void TestBlocks(thrust::universal_vector<half>&  linear,          // linear data
     std::mt19937       g(rd());
     std::shuffle(idxs.begin(), idxs.end(), g);
 
-    for (int i = 0; i < idxs.size(); ++i) {
+    for (size_t i = 0; i < idxs.size(); ++i) {
         ptrs[i] = blocks.data().get() + idxs[i] * head_num * block_size * head_dim;
     }
 
@@ -110,16 +110,18 @@ int main(int argc, char* argv[])
 
     DecoderMultiHeadAttentionParams<half> params{};
 
-    constexpr int kHeadNum   = 32;
-    constexpr int kHeadDim   = 128;
-    constexpr int KvHeadNum  = 32;
+    constexpr int kHeadNum  = 32;
+    constexpr int kHeadDim  = 128;
+    constexpr int KvHeadNum = 32;
+    // constexpr int kBatchSize  = 50;
+    // constexpr int kContextLen = 4096;
     constexpr int kBatchSize = 1;
-    // constexpr int kContextLen = 7306;
-    constexpr int kContextLen  = 1024;
+    constexpr int kContextLen  = 1287;
+    // constexpr int kContextLen  = 2048;
     constexpr int kSequenceLen = kContextLen + 1;
     constexpr int kBlockSz     = 128;
     constexpr int kTestIter    = 10;
-    constexpr int kMaxSplitK   = 1;
+    constexpr int kMaxSplitK   = 16;
 
     RNG rng{};
 
@@ -135,6 +137,9 @@ int main(int argc, char* argv[])
     thrust::universal_vector<float> partial_M(kBatchSize * kHeadNum * kMaxSplitK);
     thrust::universal_vector<float> partial_L(kBatchSize * kHeadNum * kMaxSplitK);
     thrust::universal_vector<float> partial_O(kBatchSize * kHeadNum * kMaxSplitK * kHeadDim);
+    thrust::universal_vector<int>   semaphores(kBatchSize * kHeadNum * kMaxSplitK);
+
+    std::fill(semaphores.begin(), semaphores.end(), 0);
 
     rng.GenerateNormal(qkv.data().get(), qkv.size(), 1.f, 0.f);
 
@@ -199,8 +204,8 @@ int main(int argc, char* argv[])
         k_cache_ref_ptrs[i] = k_cache_ref.data().get() + i * k_cache_ref.size() / kBatchSize;
         v_cache_ref_ptrs[i] = v_cache_ref.data().get() + i * v_cache_ref.size() / kBatchSize;
 
-        // align(k_cache_ptrs[i], 256);
-        // align(v_cache_ptrs[i], 256);
+        // align(k_cache_ptrs[i], 1 << 22);
+        // align(v_cache_ptrs[i], 1 << 22);
     }
 
     // getchar();
@@ -237,6 +242,7 @@ int main(int argc, char* argv[])
     params.partial_L = partial_L.data().get();
     params.partial_M = partial_M.data().get();
     params.partial_O = partial_O.data().get();
+    params.locks     = semaphores.data().get();
 
     for (int i = 0; i < kTestIter; ++i) {
         mmha_ft_reference(params, cudaStream_t{});
@@ -312,7 +318,12 @@ int main(int argc, char* argv[])
 
     std::cout << "---------------------------------------------------\n";
 
-    Compare(output.data().get(), output_ref.data().get(), kHeadDim, kHeadDim, kHeadNum, false);
+    Compare(output.data().get(),  //
+            output_ref.data().get(),
+            kHeadDim,
+            kHeadDim,
+            kHeadNum,
+            false);
 
     // [H, S, D]
 

@@ -51,7 +51,6 @@ struct DecoderMultiHeadAttentionParams {
     int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
-    // bool  use_dynamic_ntk;
 
     // log(n) attention
     bool use_logn_attn;
@@ -63,6 +62,7 @@ struct DecoderMultiHeadAttentionParams {
     float* partial_O;
     float* partial_M;
     float* partial_L;
+    int*   locks;
 
     int          arch;
     cudaStream_t stream;

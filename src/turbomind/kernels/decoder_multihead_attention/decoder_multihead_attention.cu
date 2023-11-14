@@ -10,24 +10,19 @@ namespace turbomind {
 
 namespace {
 
-template<typename MHAType>
-bool Print(size_t dynamic_smem_size)
+template<class TMap>
+void Print(TMap)
 {
-    using MapKv = typename MHAType::MapKv;
-
-    std::cout << "     warps: " << MapKv::kWarpCount << "\n";
-    std::cout << "     shape: (" << MapKv::kC << ", " << MapKv::kS << ")\n";
-    std::cout << "    access: (" << MapKv::kAccessC << ", " << 1 << ")\n";
-    std::cout << "warpThread: (" << MapKv::kWarpThreadC << ", " << MapKv::kWarpThreadS << ")\n";
-    std::cout << "warpAccess: (" << MapKv::kWarpAccessC << ", " << MapKv::kWarpAccessS << ")\n";
-    std::cout << "  warpIter: (" << MapKv::kWarpIterC << ", " << MapKv::kWarpIterS << ")\n";
-    std::cout << "      warp: (" << MapKv::kWarpC << ", " << MapKv::kWarpS << ")\n";
-    std::cout << "      iter: (" << MapKv::kIterC << ", " << MapKv::kIterS << ")\n";
-    std::cout << " footprint: (" << MapKv::kFootprintC << ", " << MapKv::kFootprintS << ")\n";
-    std::cout << "     delta: (" << MapKv::kDeltaC << ", " << MapKv::kDeltaS << ")\n";
-    std::cout << "dynamic smem size: " << dynamic_smem_size << "\n";
-
-    return true;
+    std::cout << "     warps: " << TMap::kWarpCount << "\n";
+    std::cout << "     shape: (" << TMap::kDimC << ", " << TMap::kDimS << ")\n";
+    std::cout << "    access: (" << TMap::kAccessC << ", " << 1 << ")\n";
+    std::cout << "warpThread: (" << TMap::kWarpThreadC << ", " << TMap::kWarpThreadS << ")\n";
+    std::cout << "warpAccess: (" << TMap::kWarpAccessC << ", " << TMap::kWarpAccessS << ")\n";
+    std::cout << "  warpIter: (" << TMap::kWarpIterC << ", " << TMap::kWarpIterS << ")\n";
+    std::cout << "      warp: (" << TMap::kWarpC << ", " << TMap::kWarpS << ")\n";
+    std::cout << "      iter: (" << TMap::kIterC << ", " << TMap::kIterS << ")\n";
+    std::cout << " footprint: (" << TMap::kFootprintC << ", " << TMap::kFootprintS << ")\n";
+    std::cout << "     delta: (" << TMap::kDeltaC << ", " << TMap::kDeltaS << ")\n";
 }
 
 }  // namespace
@@ -40,7 +35,14 @@ void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
 
         static const size_t kDynSmemSize = Attn::GetDynamicSmemSize();
 
-        // [[maybe_unused]] static const bool _ = Print<Attn>(kDynSmemSize);
+        [[maybe_unused]] static const int _ = [&] {
+            std::cout << "GmemMap:\n";
+            Print(typename Attn::GmemMap{});
+            std::cout << "\nSmemMap:\n";
+            Print(typename Attn::SmemMap{});
+            std::cout << "\nDynamic smem size: " << kDynSmemSize << "\n";
+            return 0;
+        }();
 
         const int slice_count = (params.max_seq_len + Attn::kSliceLen - 1) / Attn::kSliceLen;
         const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));
@@ -57,24 +59,29 @@ void invokeDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>& p
 
         decoder_multihead_attention<Attn><<<grid, block, kDynSmemSize, params.stream>>>(params);
 
-        if (max_split_k > 1) {
-            dim3 grid(params.num_heads, params.batch_size);
-            decoder_multihead_attention_reduce<Attn><<<grid, block, 0, params.stream>>>(params);
-        }
+        // cudaStreamSynchronize(params.stream);
+
+        // if (auto err = cudaGetLastError(); err != cudaSuccess) {
+        //     std::cout << cudaGetErrorString(err) << "\n";
+        //     std::abort();
+        // }
+
+        // if (max_split_k > 1) {
+        //     dim3 grid(params.num_heads, params.batch_size);
+        //     decoder_multihead_attention_reduce<Attn><<<grid, block, 0, params.stream>>>(params);
+        // }
     };
 
     if (params.arch >= 80) {
-        // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 6>;  // 64k
-
-        using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 1024, 5, true>;
+        using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 512, 5, true>;
         invoke((Type*)0);
     }
     else {
         // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 32, HeadDim, 2048, 3>; // 34k
         // DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 2048, 3>;  // 34k
 
-        using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 1024, 3, true>;
-        invoke((Type*)0);
+        // using Type = DecoderMultiHeadAttentionKernel<T, Tkv, HeadPerCta, HeadDim, 64, HeadDim, 1024, 3, true>;
+        // invoke((Type*)0);
     }
 }
 
@@ -87,22 +94,23 @@ void DispatchDecoderMultiheadAttention(const DecoderMultiHeadAttentionParams<T>&
 
     if constexpr (std::is_same_v<T, half>) {
         if (params.quant_policy & QuantPolicy::kCacheKVInt8) {
-            invokeDecoderMultiheadAttention<T, int8_t, HeadDim, 1>(params);
+            // invokeDecoderMultiheadAttention<T, int8_t, HeadDim, 1>(params);
             return;
         }
 
         int group_size = params.num_heads / params.num_kv_heads;
 
+        // invokeDecoderMultiheadAttention<T, T, HeadDim, 8>(params);
         if (0) {}
         // else if (group_size % 8 == 0) {
         //     invokeDecoderMultiheadAttention<T, T, HeadDim, 8>(params);
         // }
-        else if (group_size % 4 == 0) {
-            invokeDecoderMultiheadAttention<T, T, HeadDim, 4>(params);
-        }
-        else if (group_size % 2 == 0) {
-            invokeDecoderMultiheadAttention<T, T, HeadDim, 2>(params);
-        }
+        // else if (group_size % 4 == 0) {
+        // invokeDecoderMultiheadAttention<T, T, HeadDim, 4>(params);
+        // }
+        // else if (group_size % 2 == 0) {
+        //     invokeDecoderMultiheadAttention<T, T, HeadDim, 2>(params);
+        // }
         else {
             invokeDecoderMultiheadAttention<T, T, HeadDim, 1>(params);
         }
