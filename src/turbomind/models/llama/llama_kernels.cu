@@ -762,6 +762,26 @@ void invokePadLastTokenIds(
     padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
 }
 
+template<typename T>
+__global__ void getFeatureOfLastToken(T* output, const T* input, const int* cu_seqlens, int dims)
+{
+    int bi = blockIdx.x;
+    int ti = cu_seqlens[bi + 1] - 1;
+    for (int i = threadIdx.x; i < dims; i += blockDim.x) {
+        output[dims * bi + i] = input[dims * ti + i];
+    }
+}
+
+template<typename T>
+void invokeGetFeatureOfLastToken(
+    T* output, const T* input, const int* cu_seqlens, int dims, int batch_size, cudaStream_t stream)
+{
+    getFeatureOfLastToken<<<batch_size, 256, 0, stream>>>(output, input, cu_seqlens, dims);
+}
+
+template void invokeGetFeatureOfLastToken(half*, const half*, const int*, int, int, cudaStream_t);
+template void invokeGetFeatureOfLastToken(float*, const float*, const int*, int, int, cudaStream_t);
+
 #define VERSION_SWITCH(VERSION, CONST_NAME, ...)                                                                       \
     [&] {                                                                                                              \
         if (VERSION == 2) {                                                                                            \

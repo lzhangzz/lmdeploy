@@ -145,6 +145,30 @@ private:
                         int          max_seq_len,
                         size_t       batch_size);
 
+    void forwardUnified(T*           out,
+                        T*           decoder_output,
+                        const T*     decoder_input,
+                        void**       k_block_ptrs,
+                        void**       v_block_ptrs,
+                        const int*   input_ids,
+                        const int*   cu_block_cnts,
+                        const float* rope_theta,
+                        const int*   dc_sequence_length,
+                        const int*   dc_finished,
+                        const int*   pf_input_length,
+                        const int*   pf_context_length,
+                        T**          pf_tmp_k_ptrs,
+                        T**          pf_tmp_v_ptrs,
+                        int          token_num,
+                        int          dc_batch_size,
+                        int          dc_step,
+                        int          dc_sum_seq_len,
+                        int          dc_max_seq_len,
+                        int          pf_batch_size,
+                        int          pf_max_input_len,
+                        int          pf_max_context_len,
+                        int          pf_session_len);
+
     void postDecodeEmbedding(float* logits, float* local_logits, const T* decoder_output, int batch_size);
 
     void dynamicDecode(int*            token_ids,

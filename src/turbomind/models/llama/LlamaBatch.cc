@@ -1517,6 +1517,183 @@ void LlamaBatch<T>::OutputThreadEntry()
     }
 }
 
+template<typename T>
+bool LlamaBatch<T>::Forward(GenerationState& g)
+{
+    NvtxScope _("Forward");
+
+    FT_CHECK(max_context_token_num_ >= max_batch_size_);
+
+    // const auto batch_size = state_->active_size;
+    const int active_size = state_->active_size;
+
+    int pf_offset = 0;
+    for (int i = 0; i < active_size; ++i) {
+        const auto& seq = *state_->sequences[i];
+        dbg(std::tuple(i, state_->h_context_length[i], seq.cache_len));
+        if (const int missing = state_->h_context_length[i] - seq.cache_len; missing > 1) {
+            dbg(seq.tokens, seq.cache_len);
+            Copy(state_->output_ids + i * session_len_ + seq.cache_len, missing, input_ids_buf_ + i * session_len_);
+        }
+        else {
+            ++pf_offset;
+        }
+    }
+
+    // const int context_decode_count = batch_size - base;
+
+    Copy(state_->h_context_length, active_size, context_length_buf_);
+    Copy(state_->h_rope_theta, active_size, rope_theta_);
+    Copy(h_input_length_buf_, active_size, input_length_buf_);
+
+    // Find mini-batch offsets: input length > 1 ? prefill() : decode()
+    // Constraints on mini-batches
+    // - `context_decoder_input` and `context_decoder_output` can hold `max_context_token_num_` tokens w/o padding
+    // - prefill() use `tmp_k_cache_buf_` and `tmp_k_cache_buf_`, they can hold `max_context_token_num_` tokens
+    //     but each sequence is padded to the maximum context length in the batch
+    std::vector<int> offsets{0};
+    std::vector<int> max_context_cnts;
+    // initialize first mini-batch with decode tokens
+    int accum_size        = pf_offset;
+    int accum_token_count = pf_offset;
+    int max_context_count = 0;
+    for (int i = pf_offset; i < active_size; ++i) {
+        int size          = accum_size + 1;
+        int input_count   = accum_token_count + h_input_length_buf_[i];
+        int context_count = std::max(max_context_count, state_->h_context_length[i]);
+        // we have `cu_seqlens` on q so no padding for input is needed
+        // prefill kernels are expecting uniform k/v cache length -> `max_context_count * size <=
+        // max_context_token_num_`
+        if (input_count <= max_context_token_num_ && context_count * size <= max_context_token_num_) {
+            accum_size        = size;
+            accum_token_count = input_count;
+            max_context_count = context_count;
+        }
+        else {
+            offsets.push_back(i);
+            max_context_cnts.push_back(max_context_count);
+            accum_size        = 1;
+            accum_token_count = h_input_length_buf_[i];
+            max_context_count = state_->h_context_length[i];
+        }
+    }
+    offsets.push_back(active_size);
+    max_context_cnts.push_back(max_context_count);
+
+    dbg(offsets, max_context_cnts);
+
+    // forward on mini-batches
+    for (int p = 0; p < (int)offsets.size() - 1; ++p) {
+        int  first           = offsets[p];
+        int  last            = offsets[p + 1];
+        int  mini_batch_size = last - first;
+        T*   k_ptr           = tmp_k_cache_buf_;
+        T*   v_ptr           = tmp_v_cache_buf_;
+        int  max_input_len{};
+        auto input_ids = context_decoder_ids_buf_;
+        //
+        std::vector<int> decode_indices{};
+        std::vector<int> decode_lengths{};
+        TM_LOG_INFO("first = %d, last = %d", first, last);
+        for (int i = first; i < last; ++i) {
+            // TM_LOG_INFO("session_len = %d, input_length = %d", session_len_, h_input_length_buf_[i]);
+            input_ids = Copy(input_ids_buf_ + i * session_len_, h_input_length_buf_[i], input_ids);
+            dbg(i, h_input_length_buf_[i]);
+            h_tmp_k_ptrs_[i] = k_ptr;
+            h_tmp_v_ptrs_[i] = v_ptr;
+            k_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
+            v_ptr += model_->local_kv_head_num_ * max_context_cnts[p] * model_->size_per_head_;
+            decode_indices.push_back(i);
+            decode_lengths.push_back(h_input_length_buf_[i]);
+            max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
+        }
+        int token_count = input_ids - context_decoder_ids_buf_;
+        dbg(token_count, max_input_len, max_context_cnts[p]);
+
+        Copy(h_tmp_k_ptrs_ + first, mini_batch_size, tmp_k_ptrs_ + first);
+        Copy(h_tmp_v_ptrs_ + first, mini_batch_size, tmp_v_ptrs_ + first);
+
+        if (rank_ == 0) {
+            TM_LOG_INFO(
+                "[decodeContext] offset = %d, batch_size = %d, token_num = %d, max_input_len = %d, max_context_len = %d",
+                first,
+                last - first,
+                token_count,
+                max_input_len,
+                max_context_cnts[p]);
+        }
+
+        dbg(first, last);
+        dbg(k_block_ptrs_, v_block_ptrs_);
+
+        // model_->contextDecode(nullptr,
+        //                       k_block_ptrs_,
+        //                       v_block_ptrs_,
+        //                       tmp_k_ptrs_ + first,
+        //                       tmp_v_ptrs_ + first,
+        //                       context_decoder_input_buf_,
+        //                       context_decoder_output_buf_,
+        //                       context_decoder_ids_buf_,
+        //                       input_length_buf_ + first,
+        //                       context_length_buf_ + first,
+        //                       cu_block_counts_ + first,
+        //                       rope_theta_ + first,
+        //                       token_count,
+        //                       max_input_len,
+        //                       max_context_cnts[k],
+        //                       max_context_cnts[k],
+        //                       sub_batch_size);
+
+        const int dc_batch_size = p ? 0 : pf_offset;
+        const int pf_batch_size = mini_batch_size - dc_batch_size;
+
+        model_->forwardUnified(decoder_output_buf_,
+                               context_decoder_output_buf_,
+                               context_decoder_input_buf_,
+                               (void**)k_block_ptrs_,
+                               (void**)v_block_ptrs_,
+                               context_decoder_ids_buf_,
+                               cu_block_counts_ + first,
+                               rope_theta_ + first,
+                               nullptr,
+                               nullptr,
+                               input_length_buf_ + first,
+                               context_length_buf_ + first,
+                               (T**)tmp_k_ptrs_ + first,
+                               (T**)tmp_v_ptrs_ + first,
+                               token_count,
+                               dc_batch_size,
+                               g.step,
+                               g.sum_seq_len,
+                               g.max_seq_len,
+                               pf_batch_size,
+                               max_input_len,
+                               max_context_cnts[p],
+                               max_context_cnts[p]);
+
+        // compute logits of inputs if requested
+        OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+    }
+
+    // invokePlusScalar(context_length_buf_ + base, 1, context_decode_count, stream_);
+
+    std::fill(h_input_length_buf_, h_input_length_buf_ + active_size, 0);
+
+    // `SequenceManager` needs real-time value of cache length
+    for (int i = 0; i < active_size; ++i) {
+        if (state_->requests[i]) {
+            FT_CHECK(state_->sequences[i]);
+            state_->sequences[i]->cache_len = state_->h_context_length[i];  // -1 since we skip last token
+        }
+    }
+
+    // check_cuda_error(cudaStreamSynchronize(stream_));
+    // const auto tock = std::chrono::high_resolution_clock::now();
+    // if (rank_ == 0) {
+    //     TM_LOG_INFO("[decodeContext] %.2f ms", std::chrono::duration<float, std::milli>(tock - tick).count());
+    // }
+}
+
 template class LlamaBatch<half>;
 template class LlamaBatch<float>;
 
