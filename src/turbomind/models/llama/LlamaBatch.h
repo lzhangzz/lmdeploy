@@ -151,8 +151,6 @@ private:
                           elem_sz.data(),
                           src_idx,
                           dst_idx,
-                          h_idx_buf_,
-                          d_idx_buf_,
                           count,
                           N,
                           stream_);
@@ -297,10 +295,6 @@ private:
     bool                    output_stop_token_{false};
 
     int* h_output_ids_{};
-
-    // indexed copy utils
-    int* h_idx_buf_{};
-    int* d_idx_buf_{};
 };
 
 }  // namespace turbomind
