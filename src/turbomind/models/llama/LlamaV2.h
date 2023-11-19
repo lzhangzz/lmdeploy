@@ -30,6 +30,7 @@
 #include "src/turbomind/models/llama/Request.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/allocator.h"
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include "src/turbomind/utils/instance_comm.h"
@@ -147,7 +148,7 @@ private:
 
     void forwardUnified(T*           out,
                         T*           decoder_output,
-                        const T*     decoder_input,
+                        T*           decoder_input,
                         void**       k_block_ptrs,
                         void**       v_block_ptrs,
                         const int*   input_ids,
@@ -159,7 +160,7 @@ private:
                         const int*   pf_context_length,
                         T**          pf_tmp_k_ptrs,
                         T**          pf_tmp_v_ptrs,
-                        int          token_num,
+                        size_t       token_num,
                         int          dc_batch_size,
                         int          dc_step,
                         int          dc_sum_seq_len,
@@ -219,10 +220,12 @@ private:
 
     const bool debug_{false};
 
-    LlamaWeight<T>*            weights_{};
-    LlamaDecoder<T>*           decoder_{};
-    LlamaContextDecoder<T>*    context_decoder_{};
-    DynamicDecodeLayer<float>* dynamic_decode_layer_{};
+    LlamaWeight<T>*         weights_{};
+    LlamaDecoder<T>*        decoder_{};
+    LlamaContextDecoder<T>* context_decoder_{};
+
+    std::unique_ptr<UnifiedDecoder<T>> unified_decoder_;
+    DynamicDecodeLayer<float>*         dynamic_decode_layer_{};
 
     const int                      step_length_;
     std::shared_ptr<SharedState>   shared_state_;

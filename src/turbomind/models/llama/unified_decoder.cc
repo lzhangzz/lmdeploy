@@ -145,30 +145,32 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     FT_CHECK(padding_offset_);
 
-    const int pf_offset = dc_batch_size;
+    if (pf_batch_size) {
+        const int pf_offset = dc_batch_size;
 
-    size_t tmp_token_num{};
-    // `cu_seqlens` is exclusive sum of "input_lengths"
-    invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
-                                       &tmp_token_num,  // updated token num
-                                       padding_offset_,
-                                       cu_seqlens_,
-                                       input_length + pf_offset,
-                                       pf_batch_size,
-                                       pf_max_q_len,
-                                       stream_);
-    sync_check_cuda_error();
+        size_t tmp_token_num{};
+        // `cu_seqlens` is exclusive sum of "input_lengths"
+        invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
+                                           &tmp_token_num,  // updated token num
+                                           padding_offset_,
+                                           cu_seqlens_,
+                                           input_length + pf_offset,
+                                           pf_batch_size,
+                                           pf_max_q_len,
+                                           stream_);
+        sync_check_cuda_error();
 
-    FT_CHECK(tmp_token_num == token_num - dc_batch_size);
+        FT_CHECK(tmp_token_num == token_num - dc_batch_size);
 
-    invokeCreateCausalMasks(attention_mask_,
-                            input_length + pf_offset,
-                            context_length + pf_offset,
-                            pf_max_q_len,
-                            pf_max_k_len,
-                            pf_batch_size,
-                            stream_);
-    sync_check_cuda_error();
+        invokeCreateCausalMasks(attention_mask_,
+                                input_length + pf_offset,
+                                context_length + pf_offset,
+                                pf_max_q_len,
+                                pf_max_k_len,
+                                pf_batch_size,
+                                stream_);
+        sync_check_cuda_error();
+    }
 
     /////////////////////////////////////////////
     /// RMSNorm

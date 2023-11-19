@@ -31,6 +31,7 @@
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/Tensor.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
@@ -194,6 +195,22 @@ void LlamaV2<T>::initialize(const LlamaAttentionParams& attn_params,
                                                           allocator_,
                                                           is_free_buffer_after_forward_,
                                                           cuda_device_prop_);
+
+    unified_decoder_.reset(new UnifiedDecoder<T>(head_num_,
+                                                 kv_head_num,
+                                                 size_per_head_,
+                                                 inter_size_,
+                                                 num_layer_,
+                                                 attn_params,
+                                                 rmsnorm_eps_,
+                                                 tensor_para_,
+                                                 stream_,
+                                                 cublas_wrapper_,
+                                                 allocator_,
+                                                 is_free_buffer_after_forward_,
+                                                 use_context_fmha,
+                                                 cache_block_seq_len,
+                                                 quant_policy));
 }
 
 template<typename T>
@@ -283,6 +300,87 @@ void LlamaV2<T>::contextDecode(T*           deocder_output,
         {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
 
     context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
+
+    if (tensor_para_.rank_ == 0) {
+        TM_LOG_INFO("context decoding end");
+    }
+}
+
+template<typename T>
+void LlamaV2<T>::forwardUnified(T*           out,
+                                T*           decoder_output,
+                                T*           decoder_input,
+                                void**       k_block_ptrs,
+                                void**       v_block_ptrs,
+                                const int*   input_ids,
+                                const int*   cu_block_cnts,
+                                const float* rope_theta,
+                                const int*   dc_sequence_length,
+                                const int*   dc_finished,
+                                const int*   pf_input_length,
+                                const int*   pf_context_length,
+                                T**          pf_tmp_k_ptrs,
+                                T**          pf_tmp_v_ptrs,
+                                size_t       token_num,
+                                int          dc_batch_size,
+                                int          dc_step,
+                                int          dc_sum_seq_len,
+                                int          dc_max_seq_len,
+                                int          pf_batch_size,
+                                int          pf_max_input_len,
+                                int          pf_max_context_len,
+                                int          pf_session_len)
+{
+    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
+
+    if (tensor_para_.rank_ == 0) {
+        TM_LOG_INFO("context decoding start");
+    }
+
+    invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
+                                             nullptr,  // processed somewhere else
+                                             weights_->pre_decoder_embedding_table,
+                                             static_cast<T*>(nullptr),
+                                             pPromptTuningParam<T>{},
+                                             input_ids,
+                                             0,  // only used for position encoding
+                                             token_num,
+                                             token_num,
+                                             1,
+                                             hidden_units_,
+                                             stream_);
+    sync_check_cuda_error();
+
+    const auto   dtype = getTensorType<T>();
+    const size_t bsz   = dc_batch_size + pf_batch_size;
+
+    TensorMap inputs{{"decoder_input", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_input}},
+                     {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
+                     {"input_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, pf_input_length}},
+                     {"context_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, pf_context_length}},
+                     {"dc_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &dc_batch_size}},
+                     {"dc_sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_sum_seq_len}},
+                     {"dc_max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &dc_max_seq_len}},
+                     {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, dc_sequence_length}},
+                     {"finished", {MEMORY_GPU, TYPE_BOOL, {bsz}, dc_finished}},
+                     {"step", {MEMORY_CPU, TYPE_INT32, {1}, &dc_step}},
+                     {"pf_batch_size", {MEMORY_CPU, TYPE_INT32, {1}, &pf_batch_size}},
+                     {"pf_max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_input_len}},
+                     {"pf_max_k_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_max_context_len}},
+                     {"session_len", {MEMORY_CPU, TYPE_INT32, {1}, &pf_session_len}},
+                     {"rope_theta", {MEMORY_GPU, TYPE_FP32, {hidden_units_}, rope_theta}},
+                     {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {bsz}, cu_block_cnts}}};
+
+    TensorMap outputs{{"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, decoder_output}},
+                      {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_block_ptrs}},
+                      {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_block_ptrs}},
+                      {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_k_ptrs}},
+                      {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, pf_tmp_v_ptrs}},
+                      {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, out}}};
+
+    // context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
+
+    unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
 
     if (tensor_para_.rank_ == 0) {
         TM_LOG_INFO("context decoding end");
