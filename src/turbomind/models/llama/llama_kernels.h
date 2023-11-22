@@ -105,6 +105,8 @@ void invokeIndexedCopy(void**       h_src_ptr,
                        int          n_copys,
                        cudaStream_t st);
 
+void invokeBatchedCopy(void** src_ptr, void** dst_ptr, int* size, int count, cudaStream_t st);
+
 // ABCDe            ABCDe     e
 // ABCDEFGHIJk      ABCDEFGHIJk
 // ABCDEFGHi    ->  ABCDEFGHi i

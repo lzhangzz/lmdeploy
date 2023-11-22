@@ -316,7 +316,7 @@ void LlamaV2<T>::forwardUnified(T*           out,
                                 const int*   cu_block_cnts,
                                 const float* rope_theta,
                                 const int*   dc_sequence_length,
-                                const int*   dc_finished,
+                                const bool*  dc_finished,
                                 const int*   pf_input_length,
                                 const int*   pf_context_length,
                                 T**          pf_tmp_k_ptrs,
@@ -332,10 +332,6 @@ void LlamaV2<T>::forwardUnified(T*           out,
                                 int          pf_session_len)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    if (tensor_para_.rank_ == 0) {
-        TM_LOG_INFO("context decoding start");
-    }
 
     invokeInputIdsEmbeddingLookupPosEncoding(decoder_input,
                                              nullptr,  // processed somewhere else
@@ -381,10 +377,6 @@ void LlamaV2<T>::forwardUnified(T*           out,
     // context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
-
-    if (tensor_para_.rank_ == 0) {
-        TM_LOG_INFO("context decoding end");
-    }
 }
 
 template<typename T>

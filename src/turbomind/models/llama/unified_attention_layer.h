@@ -80,7 +80,7 @@ public:
     void forward(TensorMap* outputs, const TensorMap* inputs, const LlamaAttentionWeight<T>* weights);
 
     void prefill(T*                output,
-                 const T*          input,
+                 const T*          qkv,
                  void**            k_cache_ptrs,
                  void**            v_cache_ptrs,
                  const T*          attention_mask,
@@ -92,16 +92,16 @@ public:
                  const int*        context_length,
                  const int*        cu_block_count,
                  const float*      rope_theta,
-                 int               batch_size,
-                 int               num_token,
+                 int               pf_batch_size,
+                 int               pf_num_token,
                  size_t            layer_offset,
                  int               pf_max_q_len,
                  int               pf_max_k_len,
-                 int               session_len,
+                 int               pf_session_len,
                  const WeightType* weights);
 
     void decode(T*                output,
-                const T*          input,
+                const T*          qkv,
                 void**            k_cache_ptrs,
                 void**            v_cache_ptrs,
                 const int*        cu_block_count,
@@ -115,18 +115,22 @@ public:
                 int               max_split_k,
                 const WeightType* weights);
 
-    void fusedMultiHeadAttention(T**    key_cache_ptrs,
-                                 T**    val_cache_ptrs,
-                                 size_t cache_layer_offset,
-                                 T*     attention_mask,
-                                 int*   cu_seqlens,
-                                 int*   context_lengths,
-                                 int    batch_size,
-                                 int    max_q_len,
-                                 int    max_k_len,
-                                 int    max_seq_len);
+    void fusedMultiHeadAttention(T*       output,
+                                 const T* query,
+                                 T**      key_cache_ptrs,
+                                 T**      val_cache_ptrs,
+                                 size_t   cache_layer_offset,
+                                 T*       attention_mask,
+                                 int*     cu_seqlens,
+                                 int*     context_lengths,
+                                 int      batch_size,
+                                 int      max_q_len,
+                                 int      max_k_len,
+                                 int      max_seq_len);
 
-    void unfusedMultiHeadAttention(T**          key_cache_ptrs,
+    void unfusedMultiHeadAttention(T*           output,
+                                   const T*     query,
+                                   T**          key_cache_ptrs,
                                    T**          val_cache_ptrs,
                                    size_t       cache_layer_offset,
                                    const T*     attention_mask,

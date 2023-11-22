@@ -155,7 +155,7 @@ private:
                         const int*   cu_block_cnts,
                         const float* rope_theta,
                         const int*   dc_sequence_length,
-                        const int*   dc_finished,
+                        const bool*  dc_finished,
                         const int*   pf_input_length,
                         const int*   pf_context_length,
                         T**          pf_tmp_k_ptrs,

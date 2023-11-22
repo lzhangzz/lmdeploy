@@ -203,6 +203,7 @@ private:
     // lengths
     int* input_length_buf_{};    // input + cache missed length
     int* context_length_buf_{};  // history length + input_length
+    int* init_context_length_{};
     // temp buffers used for block->linear kv-cache conversion
     T*     tmp_k_cache_buf_{};
     T*     tmp_v_cache_buf_{};

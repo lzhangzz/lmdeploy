@@ -10,19 +10,16 @@
 namespace turbomind {
 
 template<typename T>
-void UnifiedDecoder<T>::allocateBuffer(size_t num_token,
-                                       size_t pfill_batch_size,
-                                       size_t pfill_max_q_len,
-                                       size_t pfill_max_k_len)
+void UnifiedDecoder<T>::allocateBuffer(size_t num_token, size_t pf_batch_size, size_t pf_max_q_len, size_t pf_max_k_len)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    if (pfill_batch_size) {
-        attention_mask_ = (T*)allocator_->reMalloc(
-            attention_mask_, sizeof(T) * pfill_batch_size * pfill_max_q_len * pfill_max_k_len, false);
+    if (pf_batch_size) {
+        attention_mask_ =
+            (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * pf_batch_size * pf_max_q_len * pf_max_k_len, false);
         padding_offset_ =
-            (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * pfill_batch_size * pfill_max_q_len, false);
-        cu_seqlens_ = (int*)allocator_->reMalloc(cu_seqlens_, sizeof(int) * (pfill_batch_size + 1), false);
+            (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * pf_batch_size * pf_max_q_len, false);
+        cu_seqlens_ = (int*)allocator_->reMalloc(cu_seqlens_, sizeof(int) * (pf_batch_size + 1), false);
     }
 }
 
@@ -83,11 +80,14 @@ void UnifiedDecoder<T>::forwardSelfAttn(T*                             attn_io,
 {
     TensorMap inputs(*_inputs);
     inputs.insert("input_query", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
-    inputs.insert("attention_mask",
-                  {MEMORY_GPU, dtype_, {pf_batch_size, 1, pf_max_q_len, pf_max_k_len}, attention_mask_});
-    inputs.insert("padding_offset", {MEMORY_GPU, TYPE_INT32, {token_num - dc_batch_size}, padding_offset_});
-    inputs.insert("cu_seqlens", {MEMORY_GPU, TYPE_INT32, {pf_batch_size + 1}, cu_seqlens_});
     inputs.insert("layer_id", {MEMORY_CPU, TYPE_INT32, {1}, &layer_id});
+    if (pf_batch_size) {
+        inputs.insert("attention_mask",
+                      {MEMORY_GPU, dtype_, {pf_batch_size, 1, pf_max_q_len, pf_max_k_len}, attention_mask_});
+        const size_t pf_token_num = token_num - dc_batch_size;
+        inputs.insert("padding_offset", {MEMORY_GPU, TYPE_INT32, {pf_token_num}, padding_offset_});
+        inputs.insert("cu_seqlens", {MEMORY_GPU, TYPE_INT32, {pf_batch_size + 1}, cu_seqlens_});
+    }
 
     TensorMap outputs(*_outputs);
     outputs.insert("hidden_features", {MEMORY_GPU, dtype_, {token_num, hidden_units_}, attn_io});
@@ -143,10 +143,10 @@ void UnifiedDecoder<T>::forward(TensorMap* outputs, const TensorMap* inputs, con
 
     allocateBuffer(token_num, pf_batch_size, pf_max_q_len, pf_max_k_len);
 
-    FT_CHECK(padding_offset_);
+    const int pf_offset = dc_batch_size;
 
     if (pf_batch_size) {
-        const int pf_offset = dc_batch_size;
+        FT_CHECK(padding_offset_);
 
         size_t tmp_token_num{};
         // `cu_seqlens` is exclusive sum of "input_lengths"

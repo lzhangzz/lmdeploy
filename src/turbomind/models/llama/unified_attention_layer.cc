@@ -52,18 +52,18 @@ void UnifiedAttentionLayer<T>::allocateBuffer(size_t num_token,
     // no padding
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * num_token * local_q_kv_head_num * size_per_head_, false);
 
-    // padding is rebuilt for q/k/v_buf_2_
-    // [qH + 2kvH, B, S, D]
-    q_buf_2_ = (T*)allocator_->reMalloc(
-        q_buf_2_, sizeof(T) * local_q_kv_head_num * pf_batch_size * pf_max_q_len * size_per_head_, false);
-    k_buf_2_ = q_buf_2_ + local_head_num_ * pf_batch_size * pf_max_q_len * size_per_head_;
-    v_buf_2_ = k_buf_2_ + local_kv_head_num_ * pf_batch_size * pf_max_q_len * size_per_head_;
-
     // qkv_buf_3_ padding is removed
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * num_token * local_head_num_ * size_per_head_, false);
 
     if (pf_batch_size) {
-        [this](size_t bsz, size_t max_q, size_t max_k) {
+        [&](size_t bsz, size_t max_q, size_t max_k) {
+            // padding is rebuilt for q/k/v_buf_2_
+            // [qH + 2kvH, B, S, D]
+            q_buf_2_ = (T*)allocator_->reMalloc(
+                q_buf_2_, sizeof(T) * local_q_kv_head_num * bsz * max_q * size_per_head_, false);
+            k_buf_2_ = q_buf_2_ + local_head_num_ * bsz * max_q * size_per_head_;
+            v_buf_2_ = k_buf_2_ + local_kv_head_num_ * bsz * max_q * size_per_head_;
+
             if (use_fmha_) {
                 FlashAttentionOp<T> flash_attention(bsz, local_head_num_, max_k, max_q, size_per_head_);
                 if (flash_attention.get_workspace_size() > 0) {
@@ -148,23 +148,29 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     const int layer_id    = inputs->getVal<int>("layer_id");
     const int session_len = inputs->getVal<int>("session_len");
 
-    const int pf_batch_size = inputs->at("attention_mask").shape[0];
-    const int pf_max_q_len  = inputs->at("attention_mask").shape[2];
-    const int pf_max_k_len  = inputs->at("attention_mask").shape[3];
+    int pf_batch_size = 0;
+    int pf_max_q_len  = 0;
+    int pf_max_k_len  = 0;
+    T*  attention_mask{};
+    if (inputs->isExist("attention_mask")) {
+        pf_batch_size  = inputs->at("attention_mask").shape[0];
+        pf_max_q_len   = inputs->at("attention_mask").shape[2];
+        pf_max_k_len   = inputs->at("attention_mask").shape[3];
+        attention_mask = inputs->getPtr<T>("attention_mask");
+    }
 
     const int dc_batch_size  = inputs->getVal<int>("dc_batch_size");
     const int dc_sum_seq_len = inputs->getVal<int>("dc_sum_seq_len");
     const int dc_max_seq_len = inputs->getVal<int>("dc_max_seq_len");
 
     T*     attention_input = inputs->getPtr<T>("input_query");
-    T*     attention_mask  = inputs->getPtr<T>("attention_mask");
     int*   input_length    = inputs->getPtr<int>("input_lengths");
     int*   context_length  = inputs->getPtr<int>("context_lengths");
     int*   sequence_length = inputs->getPtr<int>("sequence_lengths");
     bool*  is_finished     = inputs->getPtr<bool>("finished");
     int*   cu_block_count  = inputs->getPtr<int>("cu_block_counts");
-    int*   cu_seqlens      = inputs->getPtr<int>("cu_seqlens");
-    int*   padding_offset  = inputs->getPtr<int>("padding_offset");
+    int*   cu_seqlens      = inputs->getPtr<int>("cu_seqlens", nullptr);
+    int*   padding_offset  = inputs->getPtr<int>("padding_offset", nullptr);
     float* rope_theta      = inputs->getPtr<float>("rope_theta", nullptr);
 
     auto k_cache_ptrs = outputs->getPtr<void*>("key_cache");
@@ -192,7 +198,8 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
     linear_.forward(qkv_buf_, attention_input, num_token, weights->qkv);
 
     if (pf_batch_size) {
-        const int offset = dc_batch_size;
+        const int offset       = dc_batch_size;
+        const int pf_num_token = num_token - offset;
         prefill(qkv_buf_3_ + offset * weights->output.input_dims,
                 qkv_buf_ + offset * weights->qkv.output_dims,
                 k_cache_ptrs,
@@ -207,7 +214,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
                 cu_block_count + offset,
                 rope_theta + offset,
                 pf_batch_size,
-                num_token,
+                pf_num_token,
                 layer_offset,
                 pf_max_q_len,
                 pf_max_k_len,
@@ -250,7 +257,7 @@ inline void UnifiedAttentionLayer<T>::forward(TensorMap* outputs, const TensorMa
 
 template<typename T>
 void UnifiedAttentionLayer<T>::prefill(T*                output,
-                                       const T*          input,
+                                       const T*          qkv,
                                        void**            k_cache_ptrs,
                                        void**            v_cache_ptrs,
                                        const T*          attention_mask,
@@ -262,12 +269,12 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
                                        const int*        context_length,
                                        const int*        cu_block_count,
                                        const float*      rope_theta,
-                                       int               batch_size,
-                                       int               num_token,
+                                       int               pf_batch_size,
+                                       int               pf_num_token,
                                        size_t            layer_offset,
                                        int               pf_max_q_len,
                                        int               pf_max_k_len,
-                                       int               session_len,
+                                       int               pf_session_len,
                                        const WeightType* weights)
 {
     //////////////////////////////////////////////
@@ -276,15 +283,15 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
                                    v_buf_2_,
-                                   qkv_buf_,
+                                   (T*)qkv,
                                    weights->qkv.bias,
                                    padding_offset,  // padding_offset,
                                    context_length,  // used for applying rotary embedding
                                    input_length,
                                    rope_theta,
-                                   batch_size,
+                                   pf_batch_size,
                                    pf_max_q_len,  // seq_len
-                                   num_token,     // batch_size * seq_len
+                                   pf_num_token,
                                    local_head_num_,
                                    local_kv_head_num_,
                                    size_per_head_,
@@ -309,7 +316,7 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
                         cu_block_count,
                         input_length,
                         context_length,
-                        batch_size,
+                        pf_batch_size,
                         kv_cache_block_len_,
                         layer_offset,
                         pf_max_q_len,
@@ -322,6 +329,7 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
 
     const int kv_cache_elem_bits = quant_policy_ & QuantPolicy::kCacheKVInt8 ? 8 : sizeof(T) * 8;
 
+    FT_CHECK(weights->past_kv_scale.size() == 4);
     ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
                                   (const void**)v_cache_ptrs,
                                   (T**)tmp_k_ptrs,
@@ -330,39 +338,43 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
                                   context_length,
                                   layer_offset,
                                   kv_cache_block_len_,
-                                  session_len,
+                                  pf_session_len,
                                   local_kv_head_num_,
                                   size_per_head_,
-                                  batch_size,
+                                  pf_batch_size,
                                   quant_policy_,
                                   weights->past_kv_scale.data(),
                                   stream_);
     sync_check_cuda_error();
 
     if (use_fmha_) {
-        fusedMultiHeadAttention(tmp_k_ptrs,
+        fusedMultiHeadAttention(output,
+                                q_buf_2_,
+                                tmp_k_ptrs,
                                 tmp_v_ptrs,
                                 0,
                                 (T*)attention_mask,
                                 (int*)cu_seqlens,
                                 (int*)context_length,
-                                batch_size,
+                                pf_batch_size,
                                 pf_max_q_len,
                                 pf_max_k_len,
-                                session_len);
+                                pf_session_len);
     }
     else {
-        unfusedMultiHeadAttention(tmp_k_ptrs,
+        unfusedMultiHeadAttention(output,
+                                  q_buf_2_,
+                                  tmp_k_ptrs,
                                   tmp_v_ptrs,
                                   0,
                                   attention_mask,
                                   padding_offset,
                                   context_length,
-                                  batch_size,
-                                  num_token,
+                                  pf_batch_size,
+                                  pf_num_token,
                                   pf_max_q_len,
                                   pf_max_k_len,
-                                  session_len,
+                                  pf_session_len,
                                   quant_policy_,
                                   weights->past_kv_scale.data());
     }
@@ -370,7 +382,7 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
 
 template<typename T>
 void UnifiedAttentionLayer<T>::decode(T*                output,
-                                      const T*          input,
+                                      const T*          qkv,
                                       void**            k_cache_ptrs,
                                       void**            v_cache_ptrs,
                                       const int*        cu_block_count,
@@ -386,8 +398,8 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
 {
     DecoderMultiHeadAttentionParams<T> params{};
 
-    params.out    = qkv_buf_3_;
-    params.q      = qkv_buf_;
+    params.out    = output;
+    params.q      = (T*)qkv;
     params.k      = params.q + local_head_num_ * size_per_head_;
     params.v      = params.k + local_kv_head_num_ * size_per_head_;
     params.stride = (local_head_num_ + 2 * local_kv_head_num_) * size_per_head_;
@@ -436,6 +448,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.stream = stream_;
 
     params.quant_policy = quant_policy_;
+    FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
     std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
 
     {
@@ -445,16 +458,18 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptrs,
-                                                       T**    val_cache_ptrs,
-                                                       size_t cache_layer_offset,
-                                                       T*     attention_mask,
-                                                       int*   cu_seqlens,
-                                                       int*   context_lengths,
-                                                       int    batch_size,
-                                                       int    max_q_len,
-                                                       int    max_k_len,
-                                                       int    max_seq_len)
+void UnifiedAttentionLayer<T>::fusedMultiHeadAttention(T*       output,
+                                                       const T* query,
+                                                       T**      key_cache_ptrs,
+                                                       T**      val_cache_ptrs,
+                                                       size_t   cache_layer_offset,
+                                                       T*       attention_mask,
+                                                       int*     cu_seqlens,
+                                                       int*     context_lengths,
+                                                       int      batch_size,
+                                                       int      max_q_len,
+                                                       int      max_k_len,
+                                                       int      max_seq_len)
 {
     //////////////////////////////////////////////
     // flash attention
@@ -483,8 +498,8 @@ void UnifiedAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptrs,
     };
     size_t                       group_size = size_t(local_head_num_ / local_kv_head_num_);
     AttentionOp                  flash_attention(batch_size, local_head_num_, max_k_len, max_q_len, size_per_head_);
-    typename AttentionOp::Params attn_params{qkv_buf_3_,
-                                             q_buf_2_,
+    typename AttentionOp::Params attn_params{output,
+                                             (T*)query,
                                              k_cache_buf_,
                                              v_cache_buf_,
                                              attention_mask,
@@ -504,7 +519,9 @@ void UnifiedAttentionLayer<T>::fusedMultiHeadAttention(T**    key_cache_ptrs,
 }
 
 template<typename T>
-void UnifiedAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_cache_ptrs,
+void UnifiedAttentionLayer<T>::unfusedMultiHeadAttention(T*           output,
+                                                         const T*     query,
+                                                         T**          key_cache_ptrs,
                                                          T**          val_cache_ptrs,
                                                          size_t       cache_layer_offset,
                                                          const T*     attention_mask,
@@ -550,7 +567,7 @@ void UnifiedAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_cache_
                                         k_cache_buf_,                   // A
                                         size_per_head_,                 // lda
                                         max_k_len * size_per_head_,     // strideA
-                                        q_buf_2_,                       // B
+                                        query,                          // B
                                         size_per_head_,                 // ldb
                                         max_q_len * size_per_head_,     // strideB
                                         qk_buf_,                        // C
@@ -595,7 +612,7 @@ void UnifiedAttentionLayer<T>::unfusedMultiHeadAttention(T**          key_cache_
     //////////////////////////////////////////////
     /// transpose <B,h,s,D> -> <B,s,h,D>
     invokeTransposeAttentionOutRemovePadding(qkv_buf_2_,
-                                             qkv_buf_3_,
+                                             output,
                                              num_token,
                                              batch_size,
                                              max_q_len,
