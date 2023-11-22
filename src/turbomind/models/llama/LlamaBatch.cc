@@ -930,9 +930,7 @@ auto LlamaBatch<T>::InitializeGeneration() -> GenerationState
     const int start_step = max_context_len;
 
     if (rank_ == 0) {
-        TM_LOG_INFO("[initGen] batch_size = %d", (int)batch_size);
-        TM_LOG_INFO("[initGen] max_context_len = %d", (int)max_context_len);
-
+        TM_LOG_INFO("[initGen] batch_size = %d, max_ctx_len = %d", (int)batch_size, (int)max_context_len);
         if (debug_) {
             TM_LOG_INFO("[initGen] slot  sequence_id  context_len  seq_limit_len  finished");
             for (int i = 0; i < batch_size; ++i) {
