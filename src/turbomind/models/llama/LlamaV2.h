@@ -114,38 +114,6 @@ private:
 
     void embeddingLookup(T* embeddings, const int* token_ids_buf, int batch_size, int step);
 
-    void contextDecode(T*           deocder_output,
-                       uintptr_t*   k_block_ptrs,
-                       uintptr_t*   v_block_ptrs,
-                       void**       k_tmp_ptrs,
-                       void**       v_tmp_ptrs,
-                       T*           context_decoder_input_buf,
-                       T*           context_decoder_output_buf,
-                       const int*   input_ids,
-                       const int*   input_length,
-                       const int*   context_length,
-                       const int*   cu_block_counts,
-                       const float* rope_theta,
-                       size_t       token_num,
-                       size_t       max_input_len,
-                       size_t       max_context_len,
-                       size_t       session_len,
-                       size_t       batch_size);
-
-    void decoderForward(T*           decoder_output,
-                        uintptr_t*   k_cache_ptr,
-                        uintptr_t*   v_cache_ptr,
-                        T*           decoder_input,
-                        const int*   sequence_length,
-                        const bool*  finished,
-                        const int*   cu_block_counts,
-                        const float* rope_theta,
-                        int          step,
-                        int          ite,
-                        int          sum_seq_len,
-                        int          max_seq_len,
-                        size_t       batch_size);
-
     void forwardUnified(T*           out,
                         T*           decoder_output,
                         T*           decoder_input,

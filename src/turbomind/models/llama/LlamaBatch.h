@@ -60,8 +60,6 @@ public:
 
     [[nodiscard]] bool Initialize();
 
-    void ContextDecode();
-
     struct GenerationState {
         int max_init_ctx_len;
         int step;
@@ -74,8 +72,6 @@ public:
     GenerationState InitializeGeneration();
 
     [[nodiscard]] bool Forward(GenerationState& g);
-
-    [[nodiscard]] bool Generate(GenerationState& g);
 
     [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
 

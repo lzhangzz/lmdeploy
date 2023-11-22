@@ -235,78 +235,6 @@ void LlamaV2<T>::embeddingLookup(T* embeddings, const int* token_ids_buf, int ba
 }
 
 template<typename T>
-void LlamaV2<T>::contextDecode(T*           deocder_output,
-                               uintptr_t*   k_cache_ptr,
-                               uintptr_t*   v_cache_ptr,
-                               void**       tmp_k_ptrs,
-                               void**       tmp_v_ptrs,
-                               T*           context_decoder_input_buf,
-                               T*           context_decoder_output_buf,
-                               const int*   input_ids,
-                               const int*   input_length,
-                               const int*   context_length,
-                               const int*   cu_block_counts,
-                               const float* rope_theta,
-                               size_t       token_num,
-                               size_t       max_input_len,
-                               size_t       max_context_len,
-                               size_t       session_len,
-                               size_t       batch_size)
-{
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    if (tensor_para_.rank_ == 0) {
-        TM_LOG_INFO("context decoding start");
-    }
-
-    invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf,
-                                             nullptr,  // processed somewhere else
-                                             weights_->pre_decoder_embedding_table,
-                                             static_cast<T*>(nullptr),
-                                             pPromptTuningParam<T>{},
-                                             input_ids,
-                                             0,  // only used for position encoding
-                                             token_num,
-                                             token_num,
-                                             1,
-                                             hidden_units_,
-                                             stream_);
-    sync_check_cuda_error();
-
-    const auto dtype = getTensorType<T>();
-    const auto bsz   = batch_size;
-
-    const int max_q_len   = max_input_len;
-    const int max_kv_len  = max_context_len;
-    const int max_seq_len = session_len;
-
-    std::unordered_map<std::string, Tensor> decoder_input_tensors{
-        {"decoder_input", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_input_buf}},
-        {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
-        {"input_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, input_length}},
-        {"context_lengths", {MEMORY_GPU, TYPE_INT32, {bsz}, context_length}},
-        {"max_q_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_q_len}},
-        {"max_kv_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_kv_len}},
-        {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
-        {"rope_theta", {MEMORY_GPU, TYPE_FP32, {hidden_units_}, rope_theta}},
-        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}}};
-
-    std::unordered_map<std::string, Tensor> decoder_output_tensors{
-        {"decoder_output", {MEMORY_GPU, dtype, {token_num, hidden_units_}, context_decoder_output_buf}},
-        {"key_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, k_cache_ptr}},
-        {"value_cache", {MEMORY_GPU, TYPE_UINT64, {bsz}, v_cache_ptr}},
-        {"tmp_k", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_k_ptrs}},
-        {"tmp_v", {MEMORY_GPU, TYPE_UINT64, {bsz}, tmp_v_ptrs}},
-        {"last_token_hidden_units", {MEMORY_GPU, dtype, {bsz, hidden_units_}, deocder_output}}};
-
-    context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
-
-    if (tensor_para_.rank_ == 0) {
-        TM_LOG_INFO("context decoding end");
-    }
-}
-
-template<typename T>
 void LlamaV2<T>::forwardUnified(T*           out,
                                 T*           decoder_output,
                                 T*           decoder_input,
@@ -377,50 +305,6 @@ void LlamaV2<T>::forwardUnified(T*           out,
     // context_decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 
     unified_decoder_->forward(&outputs, &inputs, &weights_->decoder_layer_weights);
-}
-
-template<typename T>
-void LlamaV2<T>::decoderForward(T*           decoder_output,
-                                uintptr_t*   k_cache_ptr,
-                                uintptr_t*   v_cache_ptr,
-                                T*           decoder_input,
-                                const int*   sequence_length,
-                                const bool*  finished,
-                                const int*   cu_block_counts,
-                                const float* rope_theta,
-                                int          step,
-                                int          ite,
-                                int          sum_seq_len,
-                                int          max_seq_len,
-                                size_t       batch_size)
-{
-    TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    const auto dtype = getTensorType<T>();
-
-    // max_input_length is not used w/o linear_bias_slopes
-    // sequence_lengths_ will be incremented in dynamic decode
-    std::unordered_map<std::string, Tensor> decoder_input_tensors{
-        {"decoder_input", {MEMORY_GPU, dtype, {batch_size, hidden_units_}, decoder_input}},
-        {"sequence_lengths", {MEMORY_GPU, TYPE_INT32, {batch_size}, sequence_length}},
-        {"cu_block_counts", {MEMORY_GPU, TYPE_INT32, {batch_size}, cu_block_counts}},
-        {"sum_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &sum_seq_len}},
-        {"max_seq_len", {MEMORY_CPU, TYPE_INT32, {1}, &max_seq_len}},
-        {"finished", {MEMORY_GPU, TYPE_BOOL, {batch_size}, finished}},
-        {"output_norm_weight", {MEMORY_GPU, dtype, {hidden_units_}, weights_->output_norm_weight}},
-        {"rope_theta", {MEMORY_GPU, TYPE_FP32, {batch_size}, rope_theta}},
-        {"step", {MEMORY_CPU, TYPE_INT32, {1}, &step}},
-        {"ite", {MEMORY_CPU, TYPE_INT32, {1}, &ite}},
-    };
-
-    // LOG(ERROR) << key_cache_ << " " << value_cache_;
-    std::unordered_map<std::string, Tensor> decoder_output_tensors{
-        {"decoder_output", {MEMORY_GPU, dtype, {batch_size, hidden_units_}, decoder_output}},
-        {"key_cache", {MEMORY_GPU, TYPE_UINT64, {batch_size}, k_cache_ptr}},
-        {"value_cache", {MEMORY_GPU, TYPE_UINT64, {batch_size}, v_cache_ptr}},
-    };
-
-    decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &weights_->decoder_layer_weights);
 }
 
 template<typename T>
