@@ -528,6 +528,7 @@ template void invokeTransposeKVCache(half*,
                                      int,
                                      const float*);
 
+// TODO: handle out-of-bound caused by step_length > 1
 __global__ void gatherOutput(int*       output_ids,
                              const int* ids,
                              const int* context_length,
@@ -545,8 +546,10 @@ __global__ void gatherOutput(int*       output_ids,
             continue;
         }
         // skip padding for dst
-        const int dst_idx   = src_idx < context_len ? src_idx : src_idx - (max_context_len - context_len);
-        output_ids[dst_idx] = ids[src_idx * batch_size + batch_id];
+        const int dst_idx = src_idx < context_len ? src_idx : src_idx - (max_context_len - context_len);
+        if (dst_idx < max_context_len) {
+            output_ids[dst_idx] = ids[src_idx * batch_size + batch_id];
+        }
     }
 }
 

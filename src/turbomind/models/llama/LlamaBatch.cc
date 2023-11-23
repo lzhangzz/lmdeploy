@@ -1194,18 +1194,19 @@ void LlamaBatch<T>::InternalThreadEntry(int device_id)
                 InitializeSampling();
             }
             for (int i = 0; i < step_length_; ++i) {
-                if (!Forward(g)) {
+                auto cont = Forward(g, i);
+                if (auto signals = Finish(g, finished_count); !signals.empty()) {
+                    if (finished_count) {
+                        // Finished requests and corresponding output tensors will be released when notified
+                        // wait for all ranks to ensure no rank (except for output thread) will access related
+                        // resources
+                        shared_state->barrier->wait();
+                    }
+                    SendSignals(std::move(signals));
+                }
+                if (!cont) {
                     break;
                 }
-            }
-            if (auto signals = Finish(g, finished_count); !signals.empty()) {
-                if (finished_count) {
-                    // Finished requests and corresponding output tensors will be released when notified
-                    // wait for all ranks to ensure no rank (except for output thread) will access related
-                    // resources
-                    shared_state->barrier->wait();
-                }
-                SendSignals(std::move(signals));
             }
         }
 
@@ -1271,7 +1272,7 @@ void LlamaBatch<T>::OutputThreadEntry()
 }
 
 template<typename T>
-bool LlamaBatch<T>::Forward(GenerationState& g)
+bool LlamaBatch<T>::Forward(GenerationState& g, int iter)
 {
     NvtxScope _("Forward");
 
@@ -1284,18 +1285,26 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
         TM_LOG_INFO("------------------------- step = %d -------------------------", g.step - 1);
     }
 
-    std::vector<const int*> input_d_ptrs;
+    int               pf_offset = 0;
+    std::vector<int*> input_d_ptrs(active_size);
 
-    int pf_offset = 0;
-    for (int i = 0; i < active_size; ++i) {
-        const auto& seq = *state_->sequences[i];
-        dbg(std::tuple(i, state_->h_context_length[i], seq.cache_len));
-        const int missing      = state_->h_context_length[i] - seq.cache_len;
-        h_input_length_buf_[i] = missing;
-        input_d_ptrs.push_back(state_->output_ids + i * session_len_ + seq.cache_len);
-        if (missing == 1) {
-            ++pf_offset;
+    if (iter == 0) {  // The first iter may have pre-fill tokens
+        for (int i = 0; i < active_size; ++i) {
+            const auto& seq        = *state_->sequences[i];
+            const int   missing    = state_->h_context_length[i] - seq.cache_len;
+            h_input_length_buf_[i] = missing;
+            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + seq.cache_len;
+            if (missing == 1) {
+                ++pf_offset;
+            }
         }
+    }
+    else {
+        for (int i = 0; i < active_size; ++i) {
+            h_input_length_buf_[i] = 1;
+            input_d_ptrs[i]        = state_->output_ids + i * session_len_ + state_->h_context_length[i] - 1;
+        }
+        pf_offset = active_size;
     }
 
     // These buffers are only accessed when there are prefill workloads
@@ -1316,6 +1325,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     int accum_token_count = pf_offset;
     int max_context_count = 0;
     for (int i = pf_offset; i < active_size; ++i) {
+        FT_CHECK(iter == 0);
         int size          = accum_size + 1;
         int input_count   = accum_token_count + h_input_length_buf_[i];
         int context_count = std::max(max_context_count, state_->h_context_length[i]);
@@ -1339,8 +1349,6 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
     }
     offsets.push_back(active_size);
     max_context_cnts.push_back(max_context_count);
-
-    dbg(offsets, max_context_cnts);
 
     // forward on mini-batches
     for (int p = 0; p < (int)offsets.size() - 1; ++p) {
@@ -1374,15 +1382,11 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
             max_input_len = std::max(max_input_len, h_input_length_buf_[i]);
         }
         int token_count = input_ids - context_decoder_ids_buf_;
-        dbg(token_count, max_input_len, max_context_cnts[p]);
 
         batched_copy.Submit(stream_);
 
         Copy(h_tmp_k_ptrs_ + first, mini_batch_size, tmp_k_ptrs_ + first);
         Copy(h_tmp_v_ptrs_ + first, mini_batch_size, tmp_v_ptrs_ + first);
-
-        dbg(first, last);
-        dbg(k_block_ptrs_, v_block_ptrs_);
 
         const int dc_batch_size = p ? 0 : pf_offset;
         const int pf_batch_size = mini_batch_size - dc_batch_size;
@@ -1424,8 +1428,10 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                                max_context_cnts[p],
                                max_context_cnts[p]);
 
-        // compute logits of inputs if requested
-        OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+        if (iter == 0) {
+            // compute logits of inputs if requested
+            OutputContextLogits(context_decoder_output_buf_, decode_indices, decode_lengths);
+        }
     }
 
     std::fill(h_input_length_buf_, h_input_length_buf_ + active_size, 0);
@@ -1460,7 +1466,7 @@ bool LlamaBatch<T>::Forward(GenerationState& g)
                           session_len_ * 2,
                           active_size);
 
-    if ((debug_) && rank_ == 0) {
+    if (debug_ && rank_ == 0) {
         std::vector<int> curr(active_size);
         Copy(token_ids_buf_ + g.step * active_size, active_size, curr.data());
         cudaStreamSynchronize(stream_);

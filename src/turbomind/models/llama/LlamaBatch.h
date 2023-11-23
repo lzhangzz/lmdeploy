@@ -71,7 +71,7 @@ public:
 
     GenerationState InitializeGeneration();
 
-    [[nodiscard]] bool Forward(GenerationState& g);
+    [[nodiscard]] bool Forward(GenerationState& g, int iter);
 
     [[nodiscard]] auto Finish(GenerationState& g, int& finished_count) -> std::vector<Signal>;
 
