@@ -24,6 +24,7 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/utils/custom_ar_comm.h"
 #include "src/turbomind/utils/nccl_utils.h"
+#include "src/turbomind/models/llama/linear.h"
 #include <functional>
 
 namespace turbomind {

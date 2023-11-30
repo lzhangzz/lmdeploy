@@ -19,6 +19,7 @@ add_library(Llama STATIC
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc
+        LlamaLinear.cu
         llama_kernels.cu
         llama_decoder_kernels.cu
         llama_utils.cu)
@@ -26,6 +27,7 @@ set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Llama PUBLIC CUDA::cudart
         gemm_s4_f16
+        gemm_sm80
         cublasMMWrapper
         DynamicDecodeLayer
         activation_kernels
