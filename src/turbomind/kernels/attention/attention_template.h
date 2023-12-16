@@ -17,7 +17,7 @@
 
 namespace turbomind {
 
-template<typename T, typename Tkv, int CTA_Q, int CTA_S, int HeadDim, int Stages>
+template<class T, class Tkv, class BlockSeqLen, int CTA_Q, int CTA_S, int HeadDim, int Stages>
 struct Attention {
     using ParamType = AttentionParams<T>;
 
@@ -39,6 +39,8 @@ struct Attention {
     int batch_idx_;
     int warp_id_;
     int lane_id_;
+
+    BlockSeqLen block_seqlen_;
 
     // int  kv_head_idx_;
     // bool is_gqa_leader_;
@@ -83,6 +85,10 @@ struct Attention {
         query_idx_ = blockIdx.x * CTA_Q;  // local offset into `input_length`
         head_idx_  = blockIdx.y;
         batch_idx_ = blockIdx.z;
+
+        if constexpr (std::is_integral_v<BlockSeqLen>) {
+            block_seqlen_ = params.kv_cache_block_size;
+        }
 
         // if (query_idx_ >= params.input_length[batch_idx_]) {
         //     return;
@@ -228,8 +234,8 @@ struct Attention {
     {
         // FragQ frag_Q_buf[2];
         // FragK frag_K_buf[2];
-        FragQ frag_Q_buf[K_ITER_K];
-        FragK frag_K_buf[K_ITER_K];
+        __align__(16) FragQ frag_Q_buf[K_ITER_K];
+        __align__(16) FragK frag_K_buf[K_ITER_K];
         smem_K.LoadK(frag_K_buf[0], 0);
         smem_Q.LoadQ(frag_Q_buf[0], 0);
         PRAGMA_UNROLL
@@ -250,7 +256,7 @@ struct Attention {
         }
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K, int input_len, int context_len)
+    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
     {
         PRAGMA_UNROLL
         for (int m = 0; m < K_ITER_M; ++m) {  // Q
@@ -272,8 +278,14 @@ struct Attention {
     }
 
     template<bool is_residue>
-    __device__ void
-    Softmax(FragS& frag_S, FragM& frag_M, FragM& expdiff_M, FragM& frag_L, FragP& frag_P, int offset_Q, int offset_K)
+    __device__ void Softmax(FragS& frag_S,
+                            FragM& frag_M,
+                            FragM& expdiff_M,
+                            FragM& frag_L,
+                            FragP& frag_P,
+                            FragO& frag_O,
+                            int    offset_Q,
+                            int    offset_K)
     {
         FragM tmp_M;
         PRAGMA_UNROLL
@@ -346,16 +358,7 @@ struct Attention {
                 frag_L[m][q] = tmp_L[m][q] + expdiff_M[m][q] * frag_L[m][q];  // update L
             }
         }
-    }
 
-    __device__ int get_vi(int k, int s1, int s0)
-    {
-        return k * OP_K + lane_id_ % 4 * 2 + s1 * 8 + s0;
-    }
-
-    template<class Smem>
-    __device__ void ComputePV(Smem& smem, const FragP& frag_P, const FragM& expdiff_M, FragO& frag_O)
-    {
         PRAGMA_UNROLL
         for (int n = 0; n < V_ITER_N; ++n) {
             PRAGMA_UNROLL
@@ -369,15 +372,25 @@ struct Attention {
                 }
             }
         }
+    }
 
-        FragV frag_V_buf[2];
+    __device__ int get_vi(int k, int s1, int s0)
+    {
+        return k * OP_K + lane_id_ % 4 * 2 + s1 * 8 + s0;
+    }
+
+    template<class Smem>
+    __device__ void ComputePV(Smem& smem, const FragP& frag_P, const FragM& expdiff_M, FragO& frag_O)
+    {
+        // FragV frag_V_buf[2];
+        __align__(16) FragV frag_V_buf[V_ITER_K];
         smem.LoadV(frag_V_buf[0], 0);
         PRAGMA_UNROLL
         for (int k = 0; k < V_ITER_K; ++k) {
             if (k < V_ITER_K - 1) {
-                smem.LoadV(frag_V_buf[(k + 1) % 2], (k + 1) % V_ITER_K);
+                smem.LoadV(frag_V_buf[k + 1], k + 1);
             }
-            FragV& frag_V = frag_V_buf[k % 2];
+            FragV& frag_V = frag_V_buf[k];
             PRAGMA_UNROLL
             for (int n = 0; n < V_ITER_N; ++n) {
                 PRAGMA_UNROLL
@@ -453,7 +466,7 @@ struct Attention {
         }
 
         using ThrMap = RakedThreadMap<kHeadDim, CTA_S, sizeof(uint4) / sizeof(Tkv), kWarpCount>;
-        using Gmem   = GmemIterator<Tkv, ThrMap, Swizzle, kStages>;
+        using Gmem   = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
         using SmemQ  = SmemIterator<Tkv, kHeadDim, Swizzle>;
         using SmemK  = SmemIterator<Tkv, kHeadDim, Swizzle>;
         using SmemV  = SmemIterator<Tkv, kHeadDim, Swizzle>;
@@ -461,15 +474,23 @@ struct Attention {
         FragQ frag_Q;
         LoadQ(frag_Q);
 
-        const int block_seqlen = params_.kv_cache_block_size;
+        // const int block_seqlen = params_.kv_cache_block_size;
         // [L, 2, H, s, D]
-        const int local_key_offset = params_.key_offset + head_idx_ * block_seqlen * kHeadDim;
-        const int local_val_offset = params_.val_offset + head_idx_ * block_seqlen * kHeadDim;
+        const int local_key_offset = params_.key_offset + head_idx_ * block_seqlen_ * kHeadDim;
+        const int local_val_offset = params_.val_offset + head_idx_ * block_seqlen_ * kHeadDim;
 
-        Gmem gmem{k_cache_ptrs_, block_seqlen, {local_key_offset, local_val_offset}, smem_KV_, warp_id_, lane_id_};
+        // Gmem gmem{k_cache_ptrs_, block_seqlen_, {local_key_offset, local_val_offset}, smem_KV_, warp_id_, lane_id_};
+        Gmem gmem_K{k_cache_ptrs_, block_seqlen_, local_key_offset, smem_KV_, warp_id_, lane_id_};
+        Gmem gmem_V{k_cache_ptrs_,
+                    block_seqlen_,
+                    local_val_offset,
+                    smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD),
+                    warp_id_,
+                    lane_id_};
 
-        gmem.ClearSmem(Int<0>{});
-        gmem.ClearSmem(Int<1>{});
+        // gmem.ClearSmem(Int<0>{});
+        gmem_K.ClearSmem(Int<0>{});
+        gmem_V.ClearSmem(Int<0>{});
 
         SmemQ smem_Q{smem_Q_};
         SmemK smem_K{smem_KV_};
@@ -485,25 +506,27 @@ struct Attention {
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_S, input) + CTA_S - 1) / CTA_S - 1;
 
-        gmem.AdjustBlockTileIdx(iter);
-        gmem.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
+        gmem_K.AdjustBlockTileIdx(iter);
+        gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
         CpAsyncCommit();  // commit for K
 
-        FragO frag_O{};
+        __align__(16) FragO frag_O{};
+
         FragL frag_L{};
         FragM frag_M;
         fill(frag_M, -std::numeric_limits<float>::infinity());
 
-        auto loop = [&](auto is_residue, auto is_mask) {
+        auto loop = [&](auto is_residue, auto is_mask, auto is_last) {
             const int offset_K = iter * CTA_S;
 
-            FragS frag_S{};
+            __align__(16) FragS frag_S{};
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being filled & V being used
 
             // Prefetch for V
-            gmem.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
+            gmem_V.AdjustBlockTileIdx(iter);
+            gmem_V.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
             CpAsyncCommit();
 
             ComputeQK(smem_Q, smem_K, frag_Q, frag_S);
@@ -512,30 +535,35 @@ struct Attention {
             __syncthreads();  // Wait while K being used & V being filled
 
             // Prefetch K for next iter (always full tile here)
-            if (iter > 0) {
-                gmem.AdjustBlockTileIdx(iter - 1);
-                gmem.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
+            if constexpr (!is_last) {
+                gmem_K.AdjustBlockTileIdx(iter - 1);
+                gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
+                CpAsyncCommit();
             }
-            CpAsyncCommit();
 
             if constexpr (is_mask) {
-                ApplyCasualMask(frag_S, offset_Q, offset_K, input, context);
+                ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
 
-            FragP frag_P;
-            FragM expdiff_M;
-            Softmax<is_residue>(frag_S, frag_M, expdiff_M, frag_L, frag_P, offset_Q, offset_K);
+            __align__(16) FragP frag_P;
+            FragM               expdiff_M;
+            Softmax<is_residue>(frag_S, frag_M, expdiff_M, frag_L, frag_P, frag_O, offset_Q, offset_K);
 
             ComputePV(smem_V, frag_P, expdiff_M, frag_O);
         };
 
-        PRAGMA_UNROLL
-        for (int mask_iter = 2; iter >= 0 && mask_iter != 0; --iter, --mask_iter) {
-            loop(std::true_type{}, std::true_type{});
+        int mask_iter = 2;
+        for (; iter >= 1 && mask_iter != 0; --iter, --mask_iter) {
+            loop(std::true_type{}, std::true_type{}, std::false_type{});
         }
-
+        for (; iter >= 0 && mask_iter != 0; --iter, --mask_iter) {
+            loop(std::false_type{}, std::true_type{}, std::true_type{});
+        }
+        for (; iter >= 1; --iter) {
+            loop(std::false_type{}, std::false_type{}, std::false_type{});
+        }
         for (; iter >= 0; --iter) {
-            loop(std::false_type{}, std::false_type{});
+            loop(std::false_type{}, std::false_type{}, std::true_type{});
         }
 
         StoreO(frag_O, frag_L);

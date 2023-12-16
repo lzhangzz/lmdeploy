@@ -58,7 +58,7 @@ void invokeAttention(const AttentionParams<T>& params)
     };
 
     if (params.arch >= 80) {
-        using Type = Attention<T, Tkv, 64, 64, 128, 2>;
+        using Type = Attention<T, Tkv, std::integral_constant<int, 128>, 64, 64, 128, 2>;
         invoke((Type*)0);
     }
 }

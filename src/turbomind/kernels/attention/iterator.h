@@ -16,7 +16,7 @@ namespace turbomind {
 
 constexpr int SMEM_PAD = 8;
 
-template<class T, class Map, class Swizzle, int Stages>
+template<class T, class Map, class BlockSeqLen, class Swizzle, int Stages>
 struct GmemIterator {
     using ElementType = T;
     using AccessType  = Array<T, Map::kAccessC>;
@@ -33,11 +33,12 @@ struct GmemIterator {
 
     T* smem_;
 
-    const int block_shifter_;
-    const int block_mask_;
+    // const int block_shifter_;
+    // const int block_mask_;
+    BlockSeqLen block_seqlen_;
 
-    const Array<int, 2> local_offsets_;
-    // const int local_offset_;
+    // const Array<int, 2> local_offsets_;
+    const int local_offset_;
 
     int init_offset_;
     int src_offset_;
@@ -45,50 +46,62 @@ struct GmemIterator {
 
     int tile_idx_{-1};
 
+    // __device__ GmemIterator(
+    //     const T** block_ptrs, BlockSeqLen block_seqlen, Array<int, 2> local_offsets, T* smem, int warp_id, int lane_id):
+    //     block_ptrs_(block_ptrs), smem_(smem), block_seqlen_{block_seqlen}, local_offsets_(local_offsets)
+    // {
+    //     int2 offsets = Map::get_offset(warp_id, lane_id);
+    //     // printf("tid=%3d, offset x=%3d, y=%3d\n", (int)threadIdx.x, offsets.x, offsets.y);
+    //     init_offset_ = offsets.x + offsets.y * Map::kDimC;
+    //     // dst_offset_  = init_offset_;
+    //     dst_offset_ = offsets.x + offsets.y * (Map::kDimC + SMEM_PAD);
+    // }
+
     __device__
-    GmemIterator(const T** block_ptrs, int block_len, Array<int, 2> local_offsets, T* smem, int warp_id, int lane_id):
-        block_ptrs_(block_ptrs),
-        smem_(smem),
-        block_shifter_(31 - __clz(block_len / Map::kDimS)),
-        block_mask_((block_len / Map::kDimS) - 1),
-        local_offsets_(local_offsets)
+    GmemIterator(const T** block_ptrs, BlockSeqLen block_seqlen, int local_offset, T* smem, int warp_id, int
+    lane_id):
+        block_ptrs_(block_ptrs), smem_(smem), block_seqlen_{block_seqlen}, local_offset_{local_offset}
     {
-        // if (threadIdx.x == 0) {
-        //     printf("block shifter: %d, block mask: %d\n", block_shifter_, block_mask_);
-        // }
         int2 offsets = Map::get_offset(warp_id, lane_id);
-        // printf("tid=%3d, offset x=%3d, y=%3d\n", (int)threadIdx.x, offsets.x, offsets.y);
         init_offset_ = offsets.x + offsets.y * Map::kDimC;
-        // dst_offset_  = init_offset_;
-        dst_offset_ = offsets.x + offsets.y * (Map::kDimC + SMEM_PAD);
+        dst_offset_  = offsets.x + offsets.y * (Map::kDimC + SMEM_PAD);
     }
 
     __device__ void AdjustBlockTileIdx(int tile_idx)  // Interprept step as (block_idx, local_tile_idx)
     {
-        // Has different block idx
-        if ((tile_idx_ ^ tile_idx) & ~block_mask_) {
-            // Get new block idx
-            const int block_idx = tile_idx >> block_shifter_;
-            const int local_idx = tile_idx & block_mask_;
-            // Load base addresses for new block
-            block_ = block_ptrs_[block_idx];
+        // const int tiles_per_block = block_seqlen_ / Map::kDimS;
+        // // Has different block idx
+        // if ((tile_idx_ ^ tile_idx) & ~(tiles_per_block - 1)) {
+        //     // Get new block idx
+        //     const int block_idx = tile_idx / tiles_per_block;
+        //     const int local_idx = tile_idx % tiles_per_block;
 
-            // Move to specified tile
-            src_offset_ = init_offset_ + local_idx * Map::kDimS * Map::kDimC;
-        }
-        else {
-            // Move within the same block
-            src_offset_ += (tile_idx - tile_idx_) * Map::kDimS * Map::kDimC;
-        }
-        tile_idx_ = tile_idx;
+        //     // Load base addresses for new block
+        //     block_ = block_ptrs_[block_idx];
+
+        //     // Move to specified tile
+        //     src_offset_ = init_offset_ + local_idx * Map::kDimS * Map::kDimC;
+        // }
+        // else {
+        //     // Move within the same block
+        //     src_offset_ += (tile_idx - tile_idx_) * Map::kDimS * Map::kDimC;
+        // }
+        // tile_idx_ = tile_idx;
+
+        const int block_idx = tile_idx / (block_seqlen_ / Map::kDimS);
+        const int local_idx = tile_idx % (block_seqlen_ / Map::kDimS);
+        block_              = block_ptrs_[block_idx];
+        src_offset_         = init_offset_ + local_idx * Map::kDimS * Map::kDimC;
     }
 
     // Pass `I` by `std::integral_constant` to avoid explict template keyword at the call site
     template<bool is_residue, int I>
     __device__ void PrefetchStage(std::integral_constant<int, I>, std::bool_constant<is_residue>, int max_s)
     {
-        auto      src      = block_ + local_offsets_[I] + src_offset_;
-        auto      dst      = smem_ + I * kSizePerTile;
+        // auto      src      = block_ + local_offsets_[I] + src_offset_;
+        // auto      dst      = smem_ + I * kSizePerTile;
+        auto src = block_ + local_offset_ + src_offset_;
+        auto dst = smem_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
@@ -132,7 +145,7 @@ struct GmemIterator {
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global [%1], [%2], %3;\n"
+                     "  @p cp.async.cg.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask),
                      "r"(smem_int_ptr),
                      "l"(src),
@@ -172,17 +185,19 @@ struct SmemIterator {
     __device__ SmemIterator(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
 
     template<int ITER_N>
-    __device__ void LoadK(Array<T, 4> (&frag_B)[ITER_N], int k)
+    __device__ void LoadK(Array<T, 4> (&frag_K)[ITER_N], int k)
     {
         static_assert(ITER_N % 2 == 0);
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int lane_id       = threadIdx.x % WARP_SIZE;
+        const int group_id      = lane_id / 16;
+        const int group_lane_id = lane_id % 16;
         PRAGMA_UNROLL
         for (int n = 0; n < ITER_N / 2; ++n) {  // Load (s16,d16) tiles
-            auto&     r   = (Array<uint32_t, 4>&)frag_B[n * 2];
-            const int nn  = n * 16 + lane_id % 16;
-            const int kk  = k * 16 + lane_id / 16 * 8;
-            const int idx = swizzle_(nn * (DIMS + SMEM_PAD) + kk);
-            ldmatrix_m8n8_x4_b16(r[0], r[2], r[1], r[3], smem_int_ptr_ + kElemSize * idx);
+            auto&     r   = (Array<uint32_t, 4>&)frag_K[n * 2];
+            const int s   = n * 16 + group_lane_id % 8 + group_id * 8;
+            const int c   = k * 16 + group_lane_id / 8 * 8;
+            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
         }
     }
 
@@ -204,14 +219,14 @@ struct SmemIterator {
     }
 
     template<int ITER_N>  // 16
-    __device__ void LoadV(Array<T, 4> (&frag_B)[ITER_N], int k)
+    __device__ void LoadV(Array<T, 4> (&frag_V)[ITER_N], int k)
     {
         // __syncthreads();
         static_assert(ITER_N % 2 == 0);
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int n = 0; n < ITER_N / 2; ++n) {  // Load (d16,s16) tiles
-            auto&     r   = (Array<uint32_t, 4>&)frag_B[n * 2];
+            auto&     r   = (Array<uint32_t, 4>&)frag_V[n * 2];
             const int kk  = k * 16 + lane_id % 16;      // s
             const int nn  = n * 16 + lane_id / 16 * 8;  // d
             const int idx = swizzle_(kk * (DIMS + SMEM_PAD) + nn);
