@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <cfloat>
 #include <limits>
+#include <type_traits>
 
 namespace turbomind {
 
@@ -98,6 +99,57 @@ inline __device__ Array<To, N> cast(const Array<From, N>& src)
     return dst;
 }
 
+template<class T, int N>
+inline __device__ void fill(Array<T, N>& x, T val)
+{
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+        x[i] = val;
+    }
+}
+
+template<class T, int M, int N>
+inline __device__ void fill(Array<T, N> (&x)[M], T val)
+{
+    PRAGMA_UNROLL
+    for (int i = 0; i < M; ++i) {
+        fill(x[i], val);
+    }
+}
+
+template<class T, int N>
+inline __device__ void clear(Array<T, N>& x)
+{
+    fill(x, T(0));
+}
+
+template<class T, int M, int N>
+inline __device__ void clear(Array<T, N> (&x)[M])
+{
+    PRAGMA_UNROLL
+    for (int i = 0; i < M; ++i) {
+        clear(x[i]);
+    }
+}
+
+template<int N>
+inline __device__ void expdiff(Array<float, N>& c, const Array<float, N>& a, const Array<float, N>& b)
+{
+    PRAGMA_UNROLL
+    for (int i = 0; i < N; ++i) {
+        c[i] = expf(a[i] - b[i]);
+    }
+}
+
+template<int N, int M>
+inline __device__ void expdiff(Array<float, N> (&c)[M], const Array<float, N> (&a)[M], const Array<float, N> (&b)[M])
+{
+    PRAGMA_UNROLL
+    for (int i = 0; i < M; ++i) {
+        expdiff(a[i], b[i], c[i]);
+    }
+}
+
 template<int N>
 struct RotaryEmbedding {
 
@@ -132,6 +184,72 @@ struct RotaryEmbedding {
             float tmp1 = cs_[i] * (float)x[i + 1] + cs_[i + 1] * (float)x[i];
             x[i]       = (T)tmp0;
             x[i + 1]   = (T)tmp1;
+        }
+    }
+};
+
+template<class D, int N>
+struct FastRoPE {
+
+    static_assert(N % 2 == 0);
+
+    Array<float, N / 2> inv_freq_;
+
+    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
+    {
+        const float inv_freq = timestep / powf(base, idx / (float)dims);
+        float2      cs;
+        sincosf(inv_freq, &cs.y, &cs.x);
+        return cs;
+    }
+
+    __device__ FastRoPE(int idx, D dims, float base, std::integral_constant<int, N>)
+    {
+        constexpr float inv_dims = 1.f / dims;
+        PRAGMA_UNROLL
+        for (int i = 0; i < N / 2; ++i) {
+            inv_freq_[i] = fdividef(1.f, powf(base, (idx + i * 2) * inv_dims));
+        }
+    }
+
+    template<typename T>
+    __device__ void apply(Array<T, N>& x, int timestep)
+    {
+        PRAGMA_UNROLL
+        for (int i = 0; i < N / 2; ++i) {
+            float c, s;
+            sincosf(timestep * inv_freq_[i], &s, &c);
+            float tmp0 = c * (float)x[i * 2] - s * (float)x[i * 2 + 1];
+            float tmp1 = c * (float)x[i * 2 + 1] + s * (float)x[i * 2];
+            x[i]       = (T)tmp0;
+            x[i + 1]   = (T)tmp1;
+        }
+    }
+};
+
+template<int N, int C = 8>
+struct RoPE {
+    Array<float, N> inv_freqs_;
+
+    RoPE() = default;
+    __device__ RoPE(float idx, float base, float dims)
+    {
+        for (int i = 0; i < N; ++i) {
+            inv_freqs_[i] = powf(base, idx / dims + (C / dims) * i);
+        }
+    }
+
+    template<class T>
+    __device__ void apply(Array<T, N * 2>& x, float timestep)
+    {
+        for (int i = 0; i < N; ++i) {
+            const float inv_freq = timestep * inv_freqs_[i];
+            float2      cs;
+            sincosf(inv_freq, &cs.y, &cs.x);
+            float tmp0   = cs.x * (float)x[i * 2] - cs.y * (float)x[i * 2 + 1];
+            float tmp1   = cs.x * (float)x[i * 2 + 1] + cs.y * (float)x[i * 2];
+            x[i * 2]     = (T)tmp0;
+            x[i * 2 + 1] = (T)tmp1;
         }
     }
 };

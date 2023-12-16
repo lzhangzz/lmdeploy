@@ -182,12 +182,12 @@ struct SATypeConverter<half> {
 };
 
 template<typename T>
-void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p,
-                       T**                                       per_sample_k_cache,
-                       T**                                       per_sample_v_cache,
-                       const int*                                sequence_length,
-                       int                                       max_memory_len,
-                       cudaStream_t                              st)
+void mmha_ft_reference(const AttentionParams<T>& p,
+                       T**                       per_sample_k_cache,
+                       T**                       per_sample_v_cache,
+                       const int*                sequence_length,
+                       int                       max_memory_len,
+                       cudaStream_t              st)
 {
     using DataType = typename SATypeConverter<T>::Type;
 
@@ -211,7 +211,7 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p,
 
     params.k_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_k_cache);
     params.v_cache_per_sample         = reinterpret_cast<DataType**>(per_sample_v_cache);
-    params.kv_cache_per_sample_offset = p.layer_offset;
+    params.kv_cache_per_sample_offset = 0;  // single layer
     params.batch_size                 = p.batch_size;
     params.beam_width                 = 1;
     params.memory_max_len             = max_memory_len;
@@ -242,11 +242,11 @@ void mmha_ft_reference(const DecoderMultiHeadAttentionParams<T>& p,
     masked_multihead_attention(params, st);
 }
 
-template void mmha_ft_reference(const DecoderMultiHeadAttentionParams<half>& params,
-                                half**                                       per_sample_k_cache,
-                                half**                                       per_sample_v_cache,
-                                const int*                                   sequence_length,
-                                int                                          max_memory_len,
-                                cudaStream_t                                 st);
+template void mmha_ft_reference(const AttentionParams<half>& params,
+                                half**                       per_sample_k_cache,
+                                half**                       per_sample_v_cache,
+                                const int*                   sequence_length,
+                                int                          max_memory_len,
+                                cudaStream_t                 st);
 
 }  // namespace turbomind

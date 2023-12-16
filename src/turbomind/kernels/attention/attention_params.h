@@ -6,37 +6,46 @@
 namespace turbomind {
 
 template<typename T>
-struct DecoderMultiHeadAttentionParams {
+struct AttentionParams {
     // token-level buffers, [B, qH + 2kvH, D] or [B, kvH, D]
-    T* __restrict__ out;
-    T* __restrict__ q;
-    T* __restrict__ k;
-    T* __restrict__ v;
+    T*  out;
+    T*  q;
+    T*  k;
+    T*  v;
     int stride;
 
     // bias, [qH, D] or [kvH, D]
-    T* __restrict__ q_bias;
-    T* __restrict__ k_bias;
-    T* __restrict__ v_bias;
+    T* q_bias;
+    T* k_bias;
+    T* v_bias;
+
+    const int* cu_seqlens;
+    // const int* padding_offset;
+    // const int* token_idx_to_batch_idx;
 
     // sequence-level buffers
-    const int* __restrict__ context_length;
-    const bool* __restrict__ finished;
-    const float* __restrict__ rope_theta;
+    const int*   context_length;
+    const int*   input_length;
+    const bool*  finished;
+    const float* rope_theta;
 
     // kv cache
-    size_t layer_offset;
+    // int layer_offset;
+
+    int key_offset;
+    int val_offset;
 
     /// cache layout M,[N,H,x,D]
     /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
     /// 1. [L,sum(S),H,x,D]
-    void** __restrict__ k_cache_block_ptrs;  // X,[H,x,D]
-    void** __restrict__ v_cache_block_ptrs;  // X,[H,x,D]
-    int* __restrict__ cu_block_cnts;         // [B+1]
-    int kv_cache_block_size;
+    void** k_cache_block_ptrs;  // X,[H,x,D]
+    // void** v_cache_block_ptrs;  // X,[H,x,D]
+    int* cu_block_cnts;  // [B+1]
+    int  kv_cache_block_size;
 
     // batch-level params
     int batch_size;
+    int max_input_len;
     int max_seq_len;
 
     // instance-level params
@@ -49,7 +58,6 @@ struct DecoderMultiHeadAttentionParams {
     int   rotary_embedding_dim;
     float rotary_embedding_base;
     int   max_position_embeddings;
-    // bool  use_dynamic_ntk;
 
     // log(n) attention
     bool use_logn_attn;
@@ -61,9 +69,14 @@ struct DecoderMultiHeadAttentionParams {
     float* partial_O;
     float* partial_M;
     float* partial_L;
+    int*   locks;
 
     int          arch;
     cudaStream_t stream;
+
+    // debug
+    float* qk;
+    T*     pr;
 };
 
 }  // namespace turbomind

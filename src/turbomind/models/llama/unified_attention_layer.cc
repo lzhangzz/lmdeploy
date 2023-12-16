@@ -20,9 +20,9 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/turbomind/layers/attention_layers/GptContextAttentionLayer.cc
 
 #include "src/turbomind/models/llama/unified_attention_layer.h"
+#include "src/turbomind/kernels/attention/attention.h"
+#include "src/turbomind/kernels/attention/kv_cache.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
-#include "src/turbomind/kernels/decoder_multihead_attention/decoder_multihead_attention.h"
-#include "src/turbomind/kernels/decoder_multihead_attention/kv_cache.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/LlamaNcclGuard.h"
@@ -395,7 +395,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
                                       int               max_split_k,
                                       const WeightType* weights)
 {
-    DecoderMultiHeadAttentionParams<T> params{};
+    AttentionParams<T> params{};
 
     params.out    = output;
     params.q      = (T*)qkv;
@@ -411,14 +411,15 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.cu_block_cnts = (int*)cu_block_count;
 
     params.k_cache_block_ptrs  = (void**)k_cache_ptrs;
-    params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
+    // params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
     params.kv_cache_block_size = kv_cache_block_len_;
 
     params.finished       = is_finished;
     params.context_length = context_length;
     params.rope_theta     = rope_theta;
 
-    params.layer_offset = layer_offset;
+    // params.layer_offset = layer_offset;
+    /// TODO: set key_offset & val_offset
 
     params.num_heads     = local_head_num_;
     params.num_kv_heads  = local_kv_head_num_;
@@ -452,7 +453,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
 
     {
         NvtxScope scope("decoder_multihead_attention");
-        DispatchDecoderMultiheadAttention<T>(params);
+        dispatchAttention<T>(params);
     }
 }
 

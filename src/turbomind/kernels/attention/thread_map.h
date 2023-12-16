@@ -49,10 +49,10 @@ struct ThreadMapQ {
     }
 };
 
-template<int C, int S, int AccessC, int WarpThreadC, int WarpCount>
-struct ThreadMapKv {
-    static constexpr int kC = C;
-    static constexpr int kS = S;
+template<int DimC, int DimS, int AccessC, int WarpCount, int WarpThreadC = DimC / AccessC>
+struct RakedThreadMap {
+    static constexpr int kDimC = DimC;
+    static constexpr int kDimS = DimS;
 
     static constexpr int kWarpCount = WarpCount;
     static constexpr int kAccessC   = AccessC;
@@ -65,8 +65,8 @@ struct ThreadMapKv {
     static constexpr int kWarpAccessC = kWarpThreadC * kAccessC;
     static constexpr int kWarpAccessS = kWarpThreadS;
 
-    static constexpr int kWarpIterC = C / kWarpAccessC;
-    static constexpr int kWarpIterS = S / kWarpAccessS;
+    static constexpr int kWarpIterC = kDimC / kWarpAccessC;
+    static constexpr int kWarpIterS = kDimS / kWarpAccessS;
 
     static constexpr int kWarpC = 1;
     static constexpr int kWarpS = kWarpCount;
@@ -80,6 +80,9 @@ struct ThreadMapKv {
     static constexpr int kDeltaC = kWarpAccessC;
     static constexpr int kDeltaS = kWarpAccessS;
 
+    // static constexpr int kDeltaC = kWarpAccessC * kWarpC;
+    // static constexpr int kDeltaS = kWarpAccessS * kWarpS;
+
     __device__ static int2 get_offset(int warp_id, int lane_id)
     {
         int warp_offset_c = warp_id % kWarpC;
@@ -90,6 +93,9 @@ struct ThreadMapKv {
 
         int cta_thread_offset_c = kFootprintC * warp_offset_c + warp_thread_offset_c * kAccessC;
         int cta_thread_offset_s = kFootprintS * warp_offset_s + warp_thread_offset_s;
+
+        // int cta_thread_offset_c = kWarpAccessC * warp_offset_c + warp_thread_offset_c * kAccessC;
+        // int cta_thread_offset_s = kWarpAccessS * warp_offset_s + warp_thread_offset_s;
 
         return {cta_thread_offset_c, cta_thread_offset_s};
     }
