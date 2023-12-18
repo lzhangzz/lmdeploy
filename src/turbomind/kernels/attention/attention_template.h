@@ -29,9 +29,10 @@ struct Attention {
 
     struct SharedStorage {
         union {
-            T   smem_Q[CTA_Q][kHeadDim + SMEM_PAD];
-            Tkv smem_KV[2][CTA_S][kHeadDim + SMEM_PAD];
+            T smem_Q[CTA_Q][kHeadDim + SMEM_PAD];
+            T smem_R[CTA_S][kHeadDim];
         };
+        Tkv smem_KV[2][CTA_S][kHeadDim + SMEM_PAD];
     };
 
     const ParamType& params_;
@@ -54,6 +55,7 @@ struct Attention {
 
     Tkv* smem_KV_;
     T*   smem_Q_;
+    T*   smem_R_;
     // float* smem_O_;
 
     template<int I>
@@ -62,7 +64,7 @@ struct Attention {
     struct Swizzle {
         __device__ int operator()(int index)
         {
-            // return index;
+            return index;
 
             // sssSSSdDDDddd
             // DDD ^= SSS
@@ -82,6 +84,7 @@ struct Attention {
 
         smem_Q_  = (T*)&shared->smem_Q;
         smem_KV_ = (Tkv*)&shared->smem_KV;
+        smem_R_  = (T*)&shared->smem_R;
 
         // [q, h, b]
         query_idx_ = blockIdx.x * CTA_Q;  // local offset into `input_length`
@@ -182,6 +185,20 @@ struct Attention {
             }
         }
 
+        if constexpr (1) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < ITER_C; ++c) {
+                    const int qi = offset.y + s * Map::kDeltaS + query_idx_;
+                    const int di = offset.x + c * Map::kDeltaC;
+                    //
+                    RotaryEmbedding<kVecSize> rope(10000.f, kHeadDim, qi, {di, 0});
+                    rope.apply(vec_Q[s][c]);
+                }
+            }
+        }
+
         Swizzle swizzle;
 
         // Store to shared memory
@@ -210,40 +227,105 @@ struct Attention {
                 ldmatrix_m8n8_x4_b16(Q[0], Q[1], Q[2], Q[3], smem_int_ptr + sizeof(T) * idx);
             }
         }
+
+        // __syncthreads();
+
+        // constexpr int THREADS = kWarpCount * WARP_SIZE;
+        // PRAGMA_UNROLL
+        // for (int k = 0; k < K_ITER_K; ++k) {
+        //     PRAGMA_UNROLL
+        //     for (int m = 0; m < K_ITER_M; ++m) {
+        //         constexpr int kVecSize = 8;
+        //         Store(&smem_Q_[(k * K_ITER_M * THREADS + m * THREADS + threadIdx.x) * kVecSize], frag_Q[k][m]);
+        //     }
+        // }
+    }
+
+    __device__ void PrecomputeRotaryEmbeddings(int offset_K)
+    {
+        //         dim: (128, 64)
+        //      access: ( 2,  1)
+        // warp thread: (32,  1)
+        // warp access: (64,  1)
+        //   warp iter: ( 2, 64)
+        //       warps: ( 2,  2)
+        //       iters: ( 1, 32)
+        //   footprint: (64, 32)
+        //       delta: ( 0,  1)
+
+        constexpr int S = 32;
+
+        int warp_offset_c = warp_id_ % 2;
+        int warp_offset_s = warp_id_ / 2;
+
+        int warp_thread_offset_c = lane_id_;
+
+        int offset_c = 64 * warp_offset_c + warp_thread_offset_c * 2;
+        int offset_s = 32 * warp_offset_s;
+
+        Array<T, 2> cs[S];  // (s1, d32), S32, d2
+        float       base = 10000.f;
+
+        float inv_freq = fdividef(1.f, powf(base, (float)offset_c / kHeadDim));
+        PRAGMA_UNROLL
+        for (int s = 0; s < S; ++s) {
+            Array<float, 2> cs;
+            sincosf(((float)offset_s + (float)s) * inv_freq, &cs[1], &cs[0]);
+            Store(&smem_R_[(offset_s + s) * kHeadDim + offset_c], cast<T>(cs));
+        }
     }
 
     template<bool is_residue, class SmemQ, class SmemK, class GmemV>
-    __device__ void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragK& frag_K, FragS& frag_S, GmemV& gmem_V)
+    __device__ void
+    ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragK& frag_K, FragS& frag_S, GmemV& gmem_V, int offset_K)
     {
         smem_K.LoadK(frag_K[0], 0);
-        // smem_Q.LoadQ(frag_Q[0], 0);
+        PRAGMA_UNROLL
+        for (int n = 0; n < K_ITER_N; ++n) {
+            ApplyRotaryEmbedding<T>(frag_K[0][n],  //
+                                    10000.f,
+                                    kHeadDim,
+                                    n * OP_N + lane_id_ / 4 + offset_K,
+                                    0 * OP_K + lane_id_ % 4 * 2);
+        }
+        // smem_Q.LoadQ_(frag_Q[0], 0);
         PRAGMA_UNROLL
         for (int k = 0; k < K_ITER_K; ++k) {  //  reuse `inv_freqs` for dims
             if (k < K_ITER_K - 1) {
                 smem_K.LoadK(frag_K[k + 1], k + 1);
-                // smem_Q.LoadQ(frag_Q[k + 1], k + 1);
+                // smem_Q.LoadQ_(frag_Q[k + 1], k + 1);
             }
             PRAGMA_UNROLL
-            for (int n = 0; n < K_ITER_N; ++n) {  // reuse rope coeff for steps
+            for (int m = 0; m < K_ITER_M; ++m) {
                 PRAGMA_UNROLL
-                for (int m = 0; m < K_ITER_M; ++m) {
+                for (int n = K_ITER_N - 1; n >= 0; --n) {  // reuse rope coeff for steps
                     mma_m16n8k16_row_col(frag_S[m][n], frag_Q[k][m], frag_K[k][n], frag_S[m][n]);
+                }
+            }
+            if (k < K_ITER_K - 1) {
+                PRAGMA_UNROLL
+                for (int n = 0; n < K_ITER_N; ++n) {
+                    ApplyRotaryEmbedding<T>(frag_K[k + 1][n],
+                                            10000.f,
+                                            kHeadDim,
+                                            (n + 0) * OP_N + lane_id_ / 4 + offset_K,
+                                            (k + 1) * OP_K + lane_id_ % 4 * 2);
                 }
             }
         }
         // smem_K.Advance(-K_ITER_K);
 
         // Array<T, 4> tCrK[K_ITER_N][K_ITER_K];
-        // smem_K.LoadK(tCrK[0], 0);
+        // smem_K.LoadK_(tCrK[0], 0);
         // PRAGMA_UNROLL
         // for (int n = 0; n < K_ITER_N; ++n) {
         //     if (n < K_ITER_N - 1) {
-        //         smem_K.LoadK(tCrK[n + 1], n + 1);
+        //         smem_K.LoadK_(tCrK[n + 1], n + 1);
         //     }
         //     PRAGMA_UNROLL
-        //     for (int k = 0; k < K_ITER_K; ++k) {
+        //     for (int m = 0; m < K_ITER_M; ++m) {
         //         PRAGMA_UNROLL
-        //         for (int m = 0; m < K_ITER_M; ++m) {
+        //         for (int k = 0; k < K_ITER_K; ++k) {
         //             mma_m16n8k16_row_col(frag_S[m][n], frag_Q[k][m], tCrK[n][k], frag_S[m][n]);
         //         }
         //     }
@@ -454,7 +536,8 @@ struct Attention {
         int local_key_offset = params_.key_offset + head_idx_ * block_seqlen_ * kHeadDim;
         int local_val_offset = params_.val_offset + head_idx_ * block_seqlen_ * kHeadDim;
 
-        // Gmem gmem{k_cache_ptrs_, block_seqlen_, {local_key_offset, local_val_offset}, smem_KV_, warp_id_, lane_id_};
+        // Gmem gmem{k_cache_ptrs_, block_seqlen_, {local_key_offset, local_val_offset}, smem_KV_, warp_id_,
+        // lane_id_};
         Gmem gmem_K{k_cache_ptrs_, block_seqlen_, local_key_offset, smem_KV_, warp_id_, lane_id_};
         Gmem gmem_V{k_cache_ptrs_,
                     block_seqlen_,
@@ -507,7 +590,7 @@ struct Attention {
             gmem_V.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
             CpAsyncCommit();
 
-            ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V);
+            ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V, offset_K);
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled
@@ -552,6 +635,7 @@ struct Attention {
         PRAGMA_NO_UNROLL
         for (; iter >= 0; --iter) {
             __align__(16) FragS frag_S{};
+            const int           offset_K = iter * CTA_S;
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being filled & V being used
@@ -561,7 +645,7 @@ struct Attention {
             gmem_V.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
             CpAsyncCommit();
 
-            ComputeQK<false>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V);
+            ComputeQK<false>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V, offset_K);
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled

@@ -188,6 +188,22 @@ struct RotaryEmbedding {
     }
 };
 
+template<class C, class T>
+__device__ void ApplyRotaryEmbedding(Array<T, 4>& x, float base, int dims, int ti, int di)
+{
+    PRAGMA_UNROLL
+    for (int d1 = 0; d1 < 2; ++d1) {
+        int    d        = d1 * 8 + di;
+        float  inv_freq = ti / powf(base, d / (float)dims);
+        float2 cs;
+        sincosf(inv_freq, &cs.y, &cs.x);
+        C x1          = (C)cs.x * (C)x[d1 * 2 + 0] - (C)cs.y * (C)x[d1 * 2 + 1];
+        C x2          = (C)cs.x * (C)x[d1 * 2 + 1] + (C)cs.y * (C)x[d1 * 2 + 0];
+        x[d1 * 2 + 0] = (T)x1;
+        x[d1 * 2 + 1] = (T)x2;
+    }
+}
+
 template<class D, int N>
 struct FastRoPE {
 

@@ -1,5 +1,6 @@
 
 
+#include "array_ops.h"
 #include "reference.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 
@@ -20,15 +21,16 @@ __global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens,
 }
 
 template<class T>
-__global__ void dispatchQKV(T*       q_out,    // [B, H, s, D]
-                            T*       k_cache,  // [B, H, S, D]
-                            T*       v_cache,  // [B, H, S, D]
-                            const T* qkv,      // [B, s, H, D]
-                            int      max_q_len,
-                            int      max_k_len,
-                            int      head_num,
-                            int      head_dim,
-                            int      kv_head_num)
+__global__ void processQKV(T*       q_out,    // [B, H, s, D]
+                           T*       k_cache,  // [B, H, S, D]
+                           T*       v_cache,  // [B, H, S, D]
+                           const T* qkv,      // [B, s, H, D]
+                           int      max_q_len,
+                           int      max_k_len,
+                           int      head_num,
+                           int      head_dim,
+                           int      kv_head_num,
+                           float    rope_theta)
 {
     const int    ti = blockIdx.x;
     const size_t hi = blockIdx.y;
@@ -42,20 +44,34 @@ __global__ void dispatchQKV(T*       q_out,    // [B, H, s, D]
     auto k = q + head_num * head_dim;
     auto v = k + kv_head_num * head_dim;
 
-    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
-        q_out[bi * head_num * max_q_len * head_dim + hi * max_q_len * head_dim + ti * head_dim + d] =
-            q[hi * head_dim + d];
+    for (int d = threadIdx.x * 2; d < head_dim; d += blockDim.x * 2) {
+        const auto  idx = bi * head_num * max_q_len * head_dim + hi * max_q_len * head_dim + ti * head_dim + d;
+        Array<T, 2> vec;
+        Ldg(vec, &q[hi * head_dim + d]);
+        if (rope_theta) {
+            RotaryEmbedding<2> rope(rope_theta, head_dim, ti, {d, 0});
+            rope.apply(vec);
+        }
+        Store(&q_out[idx], vec);
     }
 
     if (hi >= kv_head_num) {
         return;
     }
 
-    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+    for (int d = threadIdx.x * 2; d < head_dim; d += blockDim.x * 2) {
         const auto idx =
             bi * kv_head_num * max_k_len * head_dim + hi * max_k_len * head_dim + (history + ti) * head_dim + d;
-        k_cache[idx] = k[hi * head_dim + d];
-        v_cache[idx] = v[hi * head_dim + d];
+        Array<T, 2> vec_K;
+        Array<T, 2> vec_V;
+        Ldg(vec_K, &k[hi * head_dim + d]);
+        Ldg(vec_V, &v[hi * head_dim + d]);
+        if (rope_theta) {
+            RotaryEmbedding<2> rope(rope_theta, head_dim, ti, {d, 0});
+            rope.apply(vec_K);
+        }
+        Store(&k_cache[idx], vec_K);
+        Store(&v_cache[idx], vec_V);
     }
 }
 
@@ -115,8 +131,16 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
         dim3 blocks(max_q_len_, head_num_, batch_size_);
         cudaDeviceSynchronize();
 
-        dispatchQKV<<<blocks, threads, 0, stream_>>>(
-            q_.data().get(), k_cache, v_cache, qkv, max_q_len_, max_k_len_, head_num_, head_dim_, kv_head_num_);
+        processQKV<<<blocks, threads, 0, stream_>>>(q_.data().get(),  //
+                                                    k_cache,
+                                                    v_cache,
+                                                    qkv,
+                                                    max_q_len_,
+                                                    max_k_len_,
+                                                    head_num_,
+                                                    head_dim_,
+                                                    kv_head_num_,
+                                                    10000.f);
 
         cudaDeviceSynchronize();
     }

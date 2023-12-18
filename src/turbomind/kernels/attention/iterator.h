@@ -14,7 +14,7 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-constexpr int SMEM_PAD = 0;
+constexpr int SMEM_PAD = 8;
 
 template<class T, class Map, class BlockSeqLen, class Swizzle, int Stages>
 struct GmemIterator {
@@ -155,10 +155,11 @@ template<class T, int DIMS, class Swizzle>
 struct SmemIterator {
     static_assert(sizeof(T) == 2);
     static constexpr int kElemSize = sizeof(T);
+    const T*             smem_;
     uint32_t             smem_int_ptr_;
     Swizzle              swizzle_;
 
-    __device__ SmemIterator(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
     {
         // smem_int_ptr_ = __shfl_sync(uint32_t(-1), smem_int_ptr_, 0);
     }
@@ -180,6 +181,21 @@ struct SmemIterator {
         }
     }
 
+    template<int ITER_K>
+    __device__ void LoadK_(Array<T, 4> (&frag_K)[ITER_K], int n)
+    {
+        static_assert(ITER_K % 2 == 0);
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int k = 0; k < ITER_K / 2; ++k) {  // Load (s16,d16) tiles
+            auto&     r   = (Array<uint32_t, 4>&)frag_K[k * 2];
+            const int s   = lane_id % 8 + n * 8;
+            const int c   = lane_id / 8 * 8 + k * 32;
+            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
+        }
+    }
+
     template<int ITER_M>
     __device__ void LoadQ(Array<T, 8> (&frag_Q)[ITER_M], int k)
     {
@@ -194,6 +210,15 @@ struct SmemIterator {
             const int kk  = k * 16 + lane_id / 16 * 8;
             const int idx = swizzle_(mm * (DIMS + SMEM_PAD) + kk);
             ldmatrix_m8n8_x4_b16(Q[0], Q[1], Q[2], Q[3], smem_int_ptr_ + kElemSize * idx);
+        }
+    }
+
+    template<int ITER_M>
+    __device__ void LoadQ_(Array<T, 8> (&frag_Q)[ITER_M], int k)
+    {
+        PRAGMA_UNROLL
+        for (int m = 0; m < ITER_M; ++m) {
+            Lds(frag_Q[m], &smem_[(k * 128 + m * 128 + threadIdx.x) * 8]);
         }
     }
 
@@ -345,7 +370,7 @@ struct SmemIteratorV {
         //  32,  010 000 0000
         //  48,  011 000 0000
         //  64,  100 000 0000
- 
+
         offset_k *= 16;
         for (int n = 0; n < 8; ++n) {
             ptrs_[n] += kElemSize * offset_k * (DIMS + SMEM_PAD);
