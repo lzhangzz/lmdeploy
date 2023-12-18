@@ -64,12 +64,20 @@ struct Attention {
     struct Swizzle {
         __device__ int operator()(int index)
         {
-            return index;
+            // return index;
 
             // sssSSSdDDDddd
             // DDD ^= SSS
             constexpr int mask = 0x7 << 7;
             return index ^ ((index & mask) >> 4);
+        }
+    };
+
+    struct Identity {
+        template<class X>
+        __device__ X operator()(X x)
+        {
+            return x;
         }
     };
 
@@ -255,44 +263,69 @@ struct Attention {
 
         constexpr int S = 32;
 
-        int warp_offset_c = warp_id_ % 2;
-        int warp_offset_s = warp_id_ / 2;
+        const int warp_offset_c = warp_id_ % 2;
+        const int warp_offset_s = warp_id_ / 2;
 
-        int warp_thread_offset_c = lane_id_;
+        const int warp_thread_offset_c = lane_id_;
 
-        int offset_c = 64 * warp_offset_c + warp_thread_offset_c * 2;
-        int offset_s = 32 * warp_offset_s;
+        int       offset_c = 64 * warp_offset_c + warp_thread_offset_c * 2;
+        const int offset_s = 32 * warp_offset_s;
 
-        Array<T, 2> cs[S];  // (s1, d32), S32, d2
-        float       base = 10000.f;
+        // instead of swizzling the data, we swizzle the computation index
+        // offset_c = offset_c ^ ((offset_s & 0x7) << 3);
 
-        float inv_freq = fdividef(1.f, powf(base, (float)offset_c / kHeadDim));
+        const float base     = 10000.f;
+        const float offset_S = offset_K + offset_s;
+        const float inv_freq = fdividef(1.f, powf(base, (float)offset_c / kHeadDim));
+
+        Swizzle swizzle;
+
         PRAGMA_UNROLL
         for (int s = 0; s < S; ++s) {
             Array<float, 2> cs;
-            sincosf(((float)offset_s + (float)s) * inv_freq, &cs[1], &cs[0]);
-            Store(&smem_R_[(offset_s + s) * kHeadDim + offset_c], cast<T>(cs));
+            sincosf((offset_S + (float)s) * inv_freq, &cs[1], &cs[0]);
+            Store(&smem_R_[swizzle((offset_s + s) * kHeadDim + offset_c)], cast<T>(cs));
         }
     }
 
-    template<bool is_residue, class SmemQ, class SmemK, class GmemV>
-    __device__ void
-    ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragK& frag_K, FragS& frag_S, GmemV& gmem_V, int offset_K)
+    __device__ void ApplyPrecomputedRoPE(FragK& frag_K, const FragK& frag_R, int k)
     {
-        smem_K.LoadK(frag_K[0], 0);
         PRAGMA_UNROLL
         for (int n = 0; n < K_ITER_N; ++n) {
-            ApplyRotaryEmbedding<T>(frag_K[0][n],  //
-                                    10000.f,
-                                    kHeadDim,
-                                    n * OP_N + lane_id_ / 4 + offset_K,
-                                    0 * OP_K + lane_id_ % 4 * 2);
+            PRAGMA_UNROLL
+            for (int d1 = 0; d1 < 2; ++d1) {
+                auto& x  = (Array<T, 2>&)frag_K[k][n][d1 * 2];
+                auto& r  = (Array<T, 2>&)frag_R[k][n][d1 * 2];
+                T     y0 = r[0] * x[0] - r[1] * x[1];
+                T     y1 = r[0] * x[1] + r[1] * x[0];
+                x[0]     = y0;
+                x[1]     = y1;
+            }
         }
+    }
+
+    template<bool is_residue, class SmemQ, class SmemK, class SmemR, class GmemV>
+    __device__ void ComputeQK(SmemQ& smem_Q,
+                              SmemK& smem_K,
+                              SmemR& smem_R,
+                              FragQ& frag_Q,
+                              FragK& frag_K,
+                              FragS& frag_S,
+                              GmemV& gmem_V,
+                              int    offset_K)
+    {
+        FragK frag_R;
+        smem_K.LoadK(frag_K[0], 0);
+        smem_R.LoadK(frag_R[0], 0);
+        ApplyPrecomputedRoPE(frag_K, frag_R, 0);
+
         // smem_Q.LoadQ_(frag_Q[0], 0);
         PRAGMA_UNROLL
         for (int k = 0; k < K_ITER_K; ++k) {  //  reuse `inv_freqs` for dims
             if (k < K_ITER_K - 1) {
                 smem_K.LoadK(frag_K[k + 1], k + 1);
+                smem_R.LoadK(frag_R[k + 1], k + 1);
+
                 // smem_Q.LoadQ_(frag_Q[k + 1], k + 1);
             }
             PRAGMA_UNROLL
@@ -303,14 +336,7 @@ struct Attention {
                 }
             }
             if (k < K_ITER_K - 1) {
-                PRAGMA_UNROLL
-                for (int n = 0; n < K_ITER_N; ++n) {
-                    ApplyRotaryEmbedding<T>(frag_K[k + 1][n],
-                                            10000.f,
-                                            kHeadDim,
-                                            (n + 0) * OP_N + lane_id_ / 4 + offset_K,
-                                            (k + 1) * OP_K + lane_id_ % 4 * 2);
-                }
+                ApplyPrecomputedRoPE(frag_K, frag_R, k + 1);
             }
         }
         // smem_K.Advance(-K_ITER_K);
@@ -455,7 +481,7 @@ struct Attention {
                 }
             }
         }
-        // smem.Advance(-V_ITER_K);
+        smem.Advance(-V_ITER_K);
     }
 
     __device__ void StoreO(FragO& frag_O, const FragL& frag_L)
@@ -526,6 +552,7 @@ struct Attention {
         using Gmem   = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
         using SmemQ  = SmemIterator<Tkv, kHeadDim, Swizzle>;
         using SmemK  = SmemIterator<Tkv, kHeadDim, Swizzle>;
+        using SmemR  = SmemIterator<T, kHeadDim, Swizzle>;
         using SmemV  = SmemIterator<Tkv, kHeadDim, Swizzle>;
 
         FragQ frag_Q;
@@ -552,10 +579,12 @@ struct Attention {
 
         static_assert(CTA_S * (kHeadDim + SMEM_PAD) == Gmem::kSizePerTile);
         SmemQ smem_Q{smem_Q_};
-        SmemK smem_K{smem_KV_};
-        SmemV smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
-        // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
-        // SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
+        // SmemK smem_K{smem_KV_};
+        // SmemR smem_R{smem_R_};
+        // SmemV smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
+        SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
+        SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_R{smem_R_};
+        SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
 
         const int input   = params_.input_length[batch_idx_];
         const int context = params_.context_length[batch_idx_];
@@ -569,6 +598,9 @@ struct Attention {
         gmem_K.AdjustBlockTileIdx(iter);
         gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
         CpAsyncCommit();  // commit for K
+
+        __syncthreads();
+        PrecomputeRotaryEmbeddings(iter * CTA_S);
 
         __align__(16) FragK frag_K;
         __align__(16) FragV frag_V;
@@ -590,13 +622,14 @@ struct Attention {
             gmem_V.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
             CpAsyncCommit();
 
-            ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V, offset_K);
+            ComputeQK<is_residue>(smem_Q, smem_K, smem_R, frag_Q, frag_K, frag_S, gmem_V, offset_K);
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled
 
             // Prefetch K for next iter (always full tile here)
             if (iter > 0) {
+                PrecomputeRotaryEmbeddings(offset_K - CTA_S);
                 gmem_K.AdjustBlockTileIdx(iter - 1);
                 gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();
@@ -645,13 +678,14 @@ struct Attention {
             gmem_V.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
             CpAsyncCommit();
 
-            ComputeQK<false>(smem_Q, smem_K, frag_Q, frag_K, frag_S, gmem_V, offset_K);
+            ComputeQK<false>(smem_Q, smem_K, smem_R, frag_Q, frag_K, frag_S, gmem_V, offset_K);
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled
 
             // Prefetch K for next iter (always full tile here)
             if (iter > 0) {
+                PrecomputeRotaryEmbeddings(offset_K - CTA_S);
                 gmem_K.AdjustBlockTileIdx(iter - 1);
                 gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();

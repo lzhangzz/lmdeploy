@@ -14,7 +14,7 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-constexpr int SMEM_PAD = 8;
+constexpr int SMEM_PAD = 0;
 
 template<class T, class Map, class BlockSeqLen, class Swizzle, int Stages>
 struct GmemIterator {
