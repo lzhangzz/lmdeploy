@@ -50,7 +50,8 @@ void invokeAttention(const AttentionParams<T>& params)
         const int max_q_tile = (params.max_input_len + CTA_Q - 1) / CTA_Q;
 
         dim3 block(Attn::kWarpCount * WARP_SIZE);
-        dim3 grid(max_q_tile, params.num_heads, params.batch_size);
+        // dim3 grid(max_q_tile, params.num_heads, params.batch_size);
+        dim3 grid(max_q_tile, params.batch_size, params.num_heads);
 
         cudaFuncSetAttribute(attention_kernel<Attn>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
 
