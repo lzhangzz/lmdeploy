@@ -86,6 +86,18 @@ inline __device__ Array<T, N> operator*(const Array<T, N>& a, const T& b)
     return binary_op_vs(a, b, multiplies<T>{});
 }
 
+template<typename T, int N>
+inline __device__ Array<T, N> operator+(const Array<T, N>& a, const T& b)
+{
+    return binary_op_vs(a, b, plus<T>{});
+}
+
+template<typename T, int N>
+inline __device__ Array<T, N> operator-(const Array<T, N>& a, const T& b)
+{
+    return binary_op_vs(a, b, minus<T>{});
+}
+
 }  // namespace ops
 
 template<typename To, typename From, int N>
@@ -300,7 +312,7 @@ struct LogNScaling {
 };
 
 template<typename T, int N>
-inline __device__ void Store(T* dst, const Array<T, N>& src)
+inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
 {
     static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
 
@@ -312,6 +324,26 @@ inline __device__ void Store(T* dst, const Array<T, N>& src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
         *(uint1*)dst = (const uint1&)src;
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
+template<typename T, int N>
+inline __device__ void Stcs(T* __restrict__ dst, const Array<T, N>& src)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        // *(uint4*)dst = (const uint4&)src;
+        __stcs((uint4*)dst, (const uint4&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        __stcs((uint2*)dst, (const uint2&)src);
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
+        __stcs((uint*)dst, (const uint&)src);
     }
     else {
         static_assert(!std::is_same_v<T, T>);

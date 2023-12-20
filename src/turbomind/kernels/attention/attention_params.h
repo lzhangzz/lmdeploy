@@ -20,8 +20,6 @@ struct AttentionParams {
     T* v_bias;
 
     const int* cu_seqlens;
-    // const int* padding_offset;
-    // const int* token_idx_to_batch_idx;
 
     // sequence-level buffers
     const int*   context_length;
@@ -38,10 +36,12 @@ struct AttentionParams {
     /// cache layout M,[N,H,x,D]
     /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
     /// 1. [L,sum(S),H,x,D]
-    void** k_cache_block_ptrs;  // X,[H,x,D]
-    // void** v_cache_block_ptrs;  // X,[H,x,D]
+    void** k_cache_block_ptrs;  // S,[L,H,s,D]
+    // void** v_cache_block_ptrs;  // S,[L,H,s,D]
     int* cu_block_cnts;  // [B+1]
     int  kv_cache_block_size;
+
+    T** kv_cache_quant_ptrs;  // [B,H,2,S,2]
 
     // batch-level params
     int batch_size;
@@ -61,9 +61,6 @@ struct AttentionParams {
 
     // log(n) attention
     bool use_logn_attn;
-
-    int   quant_policy;
-    float kv_quant_params[4];
 
     int    max_split_k;
     float* partial_O;

@@ -123,11 +123,11 @@ int main(int argc, char* argv[])
 {
     AttentionParams<half> params{};
 
-    constexpr int kHeadNum     = 16;
+    constexpr int kHeadNum = 16;
     // constexpr int kHeadNum     = 1;
-    constexpr int kHeadDim     = 128;
-    constexpr int KvHeadNum    = kHeadNum;
-    constexpr int kBatchSize   = 2;
+    constexpr int kHeadDim   = 128;
+    constexpr int KvHeadNum  = kHeadNum;
+    constexpr int kBatchSize = 2;
     // constexpr int kBatchSize   = 1;
     constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
@@ -138,7 +138,7 @@ int main(int argc, char* argv[])
     // constexpr int kSequenceLen = 72;
     // constexpr int kInputLen    = 98;
     constexpr int kContextLen = kSequenceLen + kInputLen;
-    constexpr int kBlockSz    = 128;
+    constexpr int kBlockSz    = 64;
     constexpr int kTestIter   = 10;
     constexpr int kMaxSplitK  = 1;
 
@@ -221,7 +221,8 @@ int main(int argc, char* argv[])
     params.max_seq_len   = kSequenceLen;
     params.cu_block_cnts = cu_block_cnts.data().get();
 
-    params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
+    params.k_cache_block_ptrs = (void**)k_ptrs.data().get();
+    // params.v_cache_block_ptrs  = (void**)v_ptrs.data().get();
     params.kv_cache_block_size = kBlockSz;
 
     params.finished       = finished.data().get();

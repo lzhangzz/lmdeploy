@@ -57,9 +57,10 @@ struct GmemIterator {
 
     __device__ void AdjustBlockTileIdx(int tile_idx)  // Interprept step as (block_idx, local_tile_idx)
     {
-        const int block_idx = tile_idx / (block_seqlen_ / Map::kDimS);
-        const int local_idx = tile_idx % (block_seqlen_ / Map::kDimS);
-        block_ = block_ptrs_[block_idx] + local_offset_ + local_idx * Map::kDimS * Map::kDimC + init_offset_;
+        // const int block_idx = tile_idx / (block_seqlen_ / Map::kDimS);
+        // const int local_idx = tile_idx % (block_seqlen_ / Map::kDimS);
+        // block_ = block_ptrs_[block_idx] + local_offset_ + local_idx * Map::kDimS * Map::kDimC + init_offset_;
+        block_ = block_ptrs_[tile_idx] + local_offset_ + init_offset_;
     }
 
     // Pass `I` by `std::integral_constant` to avoid explict template keyword at the call site
@@ -303,6 +304,84 @@ struct SmemIteratorK {
         int mask = (k_ ^ (k_ + offset_k)) & (0x7 << 5);
         for (int n = 0; n < 4; ++n) {
             ptrs_[n] ^= mask;
+        }
+        k_ += offset_k;
+    }
+
+    // 0 -> 1: ^ 001  (000 ^ 001)
+    // 1 -> 2: ^ 011  (001 ^ 010)
+    // 2 -> 3: ^ 001  (010 ^ 011)
+    // 3 -> 4: ^ 111  (011 ^ 100)
+    // 4 -> 5: ^ 001  (100 ^ 101)
+    // 5 -> 6: ^ 011  (101 ^ 110)
+    // 6 -> 7: ^ 001  (110 ^ 111)
+    // 7 -> 0: ^ 111  (111 ^ 000)
+};
+
+template<class T, int DIMS, class Swizzle>
+struct SmemIteratorQ {
+    static_assert(sizeof(T) == 2);
+    static constexpr int kElemSize = sizeof(T);
+    uint32_t             smem_int_ptr_;
+    int                  offset_;
+    Swizzle              swizzle_;
+    int                  k_{};
+
+    Array<int, 4> ptrs_;
+
+    __device__ SmemIteratorQ(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+    {
+        constexpr int WARP_Q  = 16;
+        const int     lane_id = threadIdx.x % WARP_SIZE;
+        const int     warp_id = threadIdx.x / WARP_SIZE;
+
+        // const int s = group_lane_id % 8 + group_id * 8;
+        // const int c = group_lane_id / 8 * 8;
+
+        const int s = lane_id % 16 + warp_id * WARP_Q;
+        const int c = lane_id / 16 * 8;
+
+        auto fn = [](int offset) {
+            // sssSSSdDDDdddx
+            // DDD ^= SSS
+            constexpr int mask = 0x7 << 8;
+            return offset ^ ((offset & mask) >> 4);
+        };
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < 1; ++m) {
+            ptrs_[m] = smem_int_ptr_ + fn(kElemSize * ((m * 16 + s) * (DIMS + SMEM_PAD) + c));
+        }
+    }
+
+    template<int ITER_M>
+    __device__ void LoadQ(Array<T, 8> (&frag_Q)[ITER_M], int k)
+    {
+        PRAGMA_UNROLL
+        for (int m = 0; m < ITER_M; ++m) {  // Load (s16,d16) tiles
+            auto& r = (Array<uint32_t, 4>&)frag_Q[m];
+            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], ptrs_[m]);
+        }
+
+        Advance(1);
+    }
+
+    __device__ void Advance(int offset_k)
+    {
+        // sssSSSdDD Ddddx
+        //   0   000 0000
+        //  16,  001 0000
+        //  32,  010 0000
+        //  48,  011 0000
+        //  64,  100 0000
+        //  80,  101 0000
+        //  96,  110 0000
+        //  112, 111 0000
+        //  128 1000 0000
+        offset_k *= 32;
+        int mask = (k_ ^ (k_ + offset_k)) & (0x7 << 5);
+        for (int m = 0; m < 1; ++m) {
+            ptrs_[m] ^= mask;
         }
         k_ += offset_k;
     }

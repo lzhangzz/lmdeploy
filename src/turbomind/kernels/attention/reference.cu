@@ -1,5 +1,4 @@
 
-
 #include "array_ops.h"
 #include "reference.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
@@ -140,7 +139,7 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
                                                     head_num_,
                                                     head_dim_,
                                                     kv_head_num_,
-                                                    10000.f);
+                                                    0 * 10000.f);
 
         cudaDeviceSynchronize();
     }
