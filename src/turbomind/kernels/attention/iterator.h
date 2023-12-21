@@ -160,10 +160,7 @@ struct SmemIterator {
     uint32_t             smem_int_ptr_;
     Swizzle              swizzle_;
 
-    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
-    {
-        // smem_int_ptr_ = __shfl_sync(uint32_t(-1), smem_int_ptr_, 0);
-    }
+    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
 
     template<int ITER_N>
     __device__ void LoadK(Array<T, 4> (&frag_K)[ITER_N], int k)
@@ -236,6 +233,44 @@ struct SmemIterator {
             const int nn  = n * 16 + lane_id / 16 * 8;  // d
             const int idx = swizzle_(kk * (DIMS + SMEM_PAD) + nn);
             ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
+        }
+    }
+};
+
+template<int DIMS, class Swizzle>
+struct SmemIterator<uint8_t, DIMS, Swizzle> {
+    uint32_t smem_int_ptr_;
+    Swizzle  swizzle_;
+
+    __device__ SmemIterator(const uint8_t* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
+
+    template<int ITER_N>
+    __device__ void LoadK(Array<uint8_t, 4> (&frag_K)[ITER_N], int k)
+    {
+        static_assert(ITER_N % 4 == 0);
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < ITER_N; n += 4) {  // K16,N32 (1x4) per LDSM.x4
+            auto&     r   = (Array<uint32_t, 4>&)frag_K[n];
+            const int s   = n * 8 + lane_id;
+            const int c   = k * 16 + 0;
+            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
+        }
+    }
+
+    template<int ITER_N>
+    __device__ void LoadV(Array<uint8_t, 4> (&frag_V)[ITER_N], int k)
+    {
+        static_assert(ITER_N % 4 == 0);
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < ITER_N; n += 4) {  // K16,N32 (2x2) per LDSM.x4
+            auto&     r   = (Array<uint32_t, 4>&)frag_V[n];
+            const int s   = k * 16 + lane_id % 16;      // s
+            const int c   = n * 8 + lane_id / 16 * 16;  // d
+            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
         }
     }
 };

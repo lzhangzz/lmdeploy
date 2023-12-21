@@ -84,7 +84,7 @@ inline __device__ Array<half, 4> cvt_f16x4_u8(const Array<uint8_t, 4>& src)
 template<class T>
 inline __device__ T round(float x)
 {
-    uint32_t y;
+    uint32_t y{};
     if constexpr (std::is_same_v<T, uint8_t>) {
         asm("cvt.rni.sat.u8.f32 %0, %1;\n" : "=r"(y) : "f"(x));
     }
@@ -100,7 +100,7 @@ inline __device__ T round(float x)
 template<class T>
 inline __device__ T round(half x)
 {
-    uint32_t y;
+    uint32_t y{};
     if constexpr (std::is_same_v<T, uint8_t>) {
         asm("cvt.rni.sat.u8.f16 %0, %1;\n" : "=r"(y) : "h"((uint16_t&)x));
     }
@@ -118,7 +118,7 @@ inline __device__ T quant(float x, B n_bits)
 {
     auto y = round<T>(x);
     if constexpr (n_bits < sizeof(T) * 8) {
-        return min(y, (1 << n_bits) - 1);
+        return min(y, T((1 << n_bits) - 1));
     }
     else {
         return y;
@@ -217,28 +217,28 @@ dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array
 }
 
 template<int D, int S>
-__device__ void
-dequantize_for_frag_K(Array<half, D> (&dst)[S], const Array<uint8_t, D> (&src)[S], const Array<half, 2> (&param)[S])
+inline __device__ void
+dequantize_K(Array<half, D> (&dst)[S], const Array<uint8_t, D> (&src)[S], const Array<half, 2> (&param)[S])
 {
     static_assert(D % 4 == 0);
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
         PRAGMA_UNROLL
         for (int d = 0; d < D; d += 4) {
-            (Array<half, 4>&)dst[s][d] = cvt_f16x4_u8((Array<uint8_t, 4>&)src[s][d]);
+            (Array<half, 4>&)dst[s][d] = cvt_f16x4_u8<false>((Array<uint8_t, 4>&)src[s][d]);
         }
     }
 
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
         using namespace ops;
-        dst[s] = dst[s] * param[s][0] + param[s][1];
+        dst[s] = dst[s] * param[s][0] + (param[s][1] - half(1024.f) * param[s][0]);
     }
 }
 
 template<int S, int D>
 __device__ void
-dequantize_for_frag_V(Array<half, S> (&dst)[D], const Array<uint8_t, S> (&src)[D], const Array<half, 2> (&param)[S])
+dequantize_V(Array<half, S> (&dst)[D], const Array<uint8_t, S> (&src)[D], const Array<half, 2> (&param)[S])
 {
     static_assert(S % 4 == 0);
     PRAGMA_UNROLL

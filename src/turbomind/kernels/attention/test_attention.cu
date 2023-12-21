@@ -124,11 +124,12 @@ int main(int argc, char* argv[])
     AttentionParams<half> params{};
 
     constexpr int kHeadNum = 16;
-    // constexpr int kHeadNum     = 1;
-    constexpr int kHeadDim   = 128;
-    constexpr int KvHeadNum  = kHeadNum;
+    // constexpr int kHeadNum  = 1;
+    constexpr int kHeadDim  = 128;
+    constexpr int KvHeadNum = kHeadNum;
     constexpr int kBatchSize = 2;
-    // constexpr int kBatchSize   = 1;
+    // constexpr int kBatchSize = 1;
+    // constexpr int kInputLen    = 8192;
     constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;
@@ -160,6 +161,11 @@ int main(int argc, char* argv[])
     thrust::universal_vector<float> partial_L(kBatchSize * kHeadNum * kMaxSplitK);
     thrust::universal_vector<float> partial_O(kBatchSize * kHeadNum * kMaxSplitK * kHeadDim);
     thrust::universal_vector<int>   semaphores(kBatchSize * kHeadNum * kMaxSplitK);
+
+    thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
+    thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
+
+    thrust::universal_vector<float> qk_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     std::fill(semaphores.begin(), semaphores.end(), 0);
 
@@ -225,6 +231,8 @@ int main(int argc, char* argv[])
     // params.v_cache_block_ptrs  = (void**)v_ptrs.data().get();
     params.kv_cache_block_size = kBlockSz;
 
+    params.kv_cache_quant_data = kv_cache_quant_data.data().get();
+
     params.finished       = finished.data().get();
     params.input_length   = input_length.data().get();
     params.context_length = context_length.data().get();
@@ -250,48 +258,32 @@ int main(int argc, char* argv[])
     params.max_split_k = kMaxSplitK;
     params.arch        = 80;
 
-    // thrust::universal_vector<float> qk(kBatchSize * kInputLen * kSequenceLen);
-    // thrust::universal_vector<half>  pr(kBatchSize * kInputLen * kSequenceLen);
-    // params.qk = qk.data().get();
-    // params.pr = pr.data().get();
+    // params.qk = qk_buf.data().get();
 
     Reference<half> reference(Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
-    for (int i = 0; i < 10; ++i) {
-        // mmha_ft_reference(params,
-        //                   (half**)k_cache_ref_ptrs.data().get(),
-        //                   (half**)v_cache_ref_ptrs.data().get(),
-        //                   sequence_length.data().get(),
-        //                   kContextLen,
-        //                   cudaStream_t{});
-
+    for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
     }
 
     cudaDeviceSynchronize();
 
-    if (0) {
+    if constexpr (0) {
         for (int b = 0; b < kBatchSize; ++b) {
-            for (int i = 0; i < kInputLen; ++i) {
-                auto qk = reference.qk() + b * kInputLen * kContextLen + i * kInputLen;
-                for (int j = 0; j < kInputLen; ++j) {
-                    std::cout << qk[j] * params.inv_sqrt_dh << " ";
+            for (int h = 0; h < kHeadNum; ++h) {
+                for (int q = 0; q < kInputLen; ++q) {
+                    auto qk = reference.qk() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
+                              + q * kContextLen;
+                    for (int k = 0; k < kContextLen; ++k) {
+                        std::cout << qk[k] * params.inv_sqrt_dh << " ";
+                    }
+                    std::cout << "\n";
                 }
                 std::cout << "\n";
             }
             std::cout << "\n";
         }
-
-        std::cout << "\n";
-
-        // for (int i = 0; i < kInputLen; ++i) {
-        //     auto pr = unfused_attention.pr() + i * kInputLen;
-        //     for (int j = 0; j < kInputLen; ++j) {
-        //         std::cout << (float)pr[j] << " ";
-        //     }
-        //     std::cout << "\n";
-        // }
     }
 
     if (auto err = cudaGetLastError(); err != cudaSuccess) {
@@ -313,6 +305,24 @@ int main(int argc, char* argv[])
         }
         if (1) {
             outputs.push_back(output);
+        }
+    }
+
+    if (params.qk) {
+        cudaDeviceSynchronize();
+        for (int b = 0; b < kBatchSize; ++b) {
+            for (int h = 0; h < kHeadNum; ++h) {
+                for (int q = 0; q < kInputLen; ++q) {
+                    auto qk = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
+                              + q * kContextLen;
+                    for (int k = 0; k < kContextLen; ++k) {
+                        std::cout << qk[k] * params.inv_sqrt_dh << " ";
+                    }
+                    std::cout << "\n";
+                }
+                std::cout << "\n";
+            }
+            std::cout << "\n";
         }
     }
 

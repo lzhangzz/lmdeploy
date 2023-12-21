@@ -41,7 +41,7 @@ struct AttentionParams {
     int* cu_block_cnts;  // [B+1]
     int  kv_cache_block_size;
 
-    T** kv_cache_quant_ptrs;  // [B,H,2,S,2]
+    T* kv_cache_quant_data;  // [B,H,2,S,2]
 
     // batch-level params
     int batch_size;
