@@ -267,8 +267,8 @@ struct SmemIterator<uint8_t, DIMS, Swizzle> {
         PRAGMA_UNROLL
         for (int n = 0; n < ITER_N; n += 4) {  // K16,N32 (2x2) per LDSM.x4
             auto&     r   = (Array<uint32_t, 4>&)frag_V[n];
-            const int s   = k * 16 + lane_id % 16;      // s
-            const int c   = n * 8 + lane_id / 16 * 16;  // d
+            const int s   = lane_id % 16 + k * 16;      // v
+            const int c   = lane_id / 16 * 16 + n * 8;  // d
             const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
             ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
         }

@@ -338,16 +338,6 @@ struct Attention {
     __device__ void
     TransformK(TransformedK& transformed_K, FragK& frag_K, const Array<T, 2> (&param_K)[K_ITER_N], int k)
     {
-        const int lane_id  = threadIdx.x % WARP_SIZE;
-        const int col      = lane_id % 4;
-        const int row      = lane_id / 4;
-        const int selector = lane_id % 2 ? 0x7632 : 0x5410;
-        PRAGMA_UNROLL
-        for (int n = 0; n < K_ITER_N; ++n) {
-            uint32_t lo             = __shfl_sync(uint32_t(-1), (uint32_t&)frag_K[k][n], row * 4 + col / 2);
-            uint32_t hi             = __shfl_sync(uint32_t(-1), (uint32_t&)frag_K[k][n], row * 4 + col / 2 + 2);
-            (uint32_t&)frag_K[k][n] = __byte_perm(lo, hi, selector);
-        }
         dequantize_K(transformed_K[k], frag_K[k], param_K);
     }
 
@@ -524,22 +514,7 @@ struct Attention {
 
     __device__ void TransformV(TransformedV& transformed_V, FragV& frag_V, const Array<T, 2> (&param_V)[4], int k)
     {
-        FragV tmp_V;
-        // frag_v: (D8,S2),(s2,d2) -> (D8,d2),(S2,s2)
-        PRAGMA_UNROLL
-        for (int d1 = 0; d1 < 8; ++d1) {
-            PRAGMA_UNROLL
-            for (int s1 = 0; s1 < 2; ++s1) {
-                PRAGMA_UNROLL
-                for (int s0 = 0; s0 < 2; ++s0) {
-                    PRAGMA_UNROLL
-                    for (int d0 = 0; d0 < 2; ++d0) {
-                        tmp_V[k][d1 * 2 + d0][s1 * 2 + s0] = frag_V[k][d1 * 2 + s1][s0 * 2 + d0];
-                    }
-                }
-            }
-        }
-        dequantize_V(transformed_V[k], tmp_V[k], param_V);
+        dequantize_V(transformed_V[k], frag_V[k], param_V);
     }
 
     template<class Smem>
@@ -610,18 +585,9 @@ struct Attention {
                         tmp_O[d] = frag_O[m][n][q * 2 + d] * tmp_L[m][q];
                     }
                     if (qi < qi_end) {
-                        if constexpr (sizeof(Tkv) > 1) {
-                            const int di = n * 8 + lane_id_ % 4 * 2;
-                            // [(b, s), h, d]
-                            Store(&params_.out[qi * params_.num_heads * kHeadDim + head_idx_ * kHeadDim + di], tmp_O);
-                        }
-                        else {
-                            PRAGMA_UNROLL
-                            for (int d = 0; d < 2; ++d) {
-                                const int di = (n / 2) * 16 + lane_id_ % 4 * 4 + d * 2 + n % 2;
-                                params_.out[qi * params_.num_heads * kHeadDim + head_idx_ * kHeadDim + di] = tmp_O[d];
-                            }
-                        }
+                        const int di = n * 8 + lane_id_ % 4 * 2;
+                        // [(b, s), h, d]
+                        Store(&params_.out[qi * params_.num_heads * kHeadDim + head_idx_ * kHeadDim + di], tmp_O);
                     }
                 }
             }
@@ -653,8 +619,7 @@ struct Attention {
                           + offset_K * 2;                                                 //
 
         if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-            auto tmp                   = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-            smem_param_K_[threadIdx.x] = tmp;
+            smem_param_K_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
             // printf("k %d %f %f\n", (int)threadIdx.x, (float)tmp[0], (float)tmp[1]);
         }
     }
@@ -669,8 +634,7 @@ struct Attention {
         quant_data += max_context_len_ * 2;
 
         if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-            auto tmp                   = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-            smem_param_V_[threadIdx.x] = tmp;
+            smem_param_V_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
             // printf("v %d %f %f\n", (int)threadIdx.x, (float)tmp[0], (float)tmp[1]);
         }
     }
@@ -762,9 +726,9 @@ struct Attention {
 
             ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_K, frag_S, offset_K);
 
-            if (params_.qk) {
-                OutputQk(frag_S, offset_Q, offset_K);
-            }
+            // if (params_.qk) {
+            //     OutputQk(frag_S, offset_Q, offset_K);
+            // }
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled
@@ -823,9 +787,9 @@ struct Attention {
 
             ComputeQK<false>(smem_Q, smem_K, frag_Q, frag_K, frag_S, offset_K);
 
-            if (params_.qk) {
-                OutputQk(frag_S, offset_Q, offset_K);
-            }
+            // if (params_.qk) {
+            //     OutputQk(frag_S, offset_Q, offset_K);
+            // }
 
             CpAsyncWait();
             __syncthreads();  // Wait while K being used & V being filled
@@ -907,13 +871,8 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
 
     const int2 offset = Map::get_offset(warp_id, lane_id);
 
-    // Vec __align__(16) vec_K[ITER_S][ITER_C];
-    // Vec __align__(16) vec_V[ITER_S][ITER_C];
-
-    constexpr int STAGES = 2;
-
-    __shared__ Vec vec_K[STAGES][ITER_C][128];
-    __shared__ Vec vec_V[STAGES][ITER_C][128];
+    Vec __align__(16) vec_K[ITER_S][ITER_C];
+    Vec __align__(16) vec_V[ITER_S][ITER_C];
 
     Vec bias_V[ITER_C];
     Vec bias_K[ITER_C];
@@ -933,110 +892,94 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
         }
     }
 
-    for (int s = 0; s < STAGES - 1; ++s) {
+    PRAGMA_UNROLL
+    for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
         for (int c = 0; c < ITER_C; ++c) {
             const int qi = offset.y + s * Map::kDeltaS + qi_beg;
             const int di = offset.x + c * Map::kDeltaC;
-            // if (qi < qi_end) {
-            //     Ldg(vec_K[0][c], &params.k[qi * params.stride + head_idx * kHeadDim + di]);
-            //     Ldg(vec_V[0][c], &params.v[qi * params.stride + head_idx * kHeadDim + di]);
-            // }
-            CpAsync((T*)&vec_K[s][c][threadIdx.x],
-                    (const Vec*)&params.k[qi * params.stride + head_idx * kHeadDim + di],
-                    qi < qi_end);
-            CpAsync((T*)&vec_V[s][c][threadIdx.x],
-                    (const Vec*)&params.v[qi * params.stride + head_idx * kHeadDim + di],
-                    qi < qi_end);
+            if (qi < qi_end) {
+                Ldg(vec_K[s][c], &params.k[qi * params.stride + head_idx * kHeadDim + di]);
+                Ldg(vec_V[s][c], &params.v[qi * params.stride + head_idx * kHeadDim + di]);
+            }
         }
-        __pipeline_commit();
+    }
+
+    if (params.k_bias) {
+        using namespace ops;
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                vec_K[s][c] = vec_K[s][c] + bias_K[c];
+            }
+        }
+    }
+    if (params.v_bias) {
+        using namespace ops;
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                vec_V[s][c] = vec_V[s][c] + bias_V[c];
+            }
+        }
+    }
+
+    Tkv** k_cache_block_ptrs = (Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
+
+    Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
+    Array<Tkv, kVecSize> out_V[ITER_S][ITER_C];
+
+    // quant param
+    using PType = T;
+    Array<PType, 2> param_K[ITER_S];
+    Array<PType, 2> param_V[ITER_S];
+
+    if constexpr (std::is_same_v<T, Tkv>) {
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                out_K[s][c] = vec_K[s][c];
+                out_V[s][c] = vec_V[s][c];
+            }
+        }
+    }
+    else if constexpr (1) {
+        constexpr std::integral_constant<int, sizeof(Tkv) * 8> n_bits{};
+        warp_stats<Map::kWarpThreadC>(param_K, vec_K, n_bits);
+        warp_stats<Map::kWarpThreadC>(param_V, vec_V, n_bits);
+        quantize(out_K, vec_K, param_K, n_bits);
+        quantize(out_V, vec_V, param_V, n_bits);
+    }
+    else {
+        using QType = uint8_t;
+        constexpr std::integral_constant<int, sizeof(QType) * 8> n_bits{};
+        // quant data
+        Array<QType, kVecSize> quant_K[ITER_S][ITER_C];
+        Array<QType, kVecSize> quant_V[ITER_S][ITER_C];
+        warp_stats<Map::kWarpThreadC>(param_K, vec_K, n_bits);
+        warp_stats<Map::kWarpThreadC>(param_V, vec_V, n_bits);
+        quantize(quant_K, vec_K, param_K, n_bits);
+        quantize(quant_V, vec_V, param_V, n_bits);
+        dequantize(out_K, quant_K, param_K, n_bits);
+        dequantize(out_V, quant_V, param_V, n_bits);
+    }
+
+    if constexpr (std::is_same_v<Tkv, uint8_t>) {
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                permute_K(out_K[s][c]);
+            }
+        }
+        permute_V<Map>(out_V);
     }
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
-        const int next = STAGES - 1 + s;
-        if (next < ITER_S) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                const int qi = offset.y + next * Map::kDeltaS + qi_beg;
-                const int di = offset.x + c * Map::kDeltaC;
-                // if (qi < qi_end) {
-                //     Ldg(vec_K[s + 1][c], &params.k[qi * params.stride + head_idx * kHeadDim + di]);
-                //     Ldg(vec_V[s + 1][c], &params.v[qi * params.stride + head_idx * kHeadDim + di]);
-                // }
-                CpAsync((T*)&vec_K[next % STAGES][c][threadIdx.x],
-                        (const Vec*)&params.k[qi * params.stride + head_idx * kHeadDim + di],
-                        qi < qi_end);
-                CpAsync((T*)&vec_V[next % STAGES][c][threadIdx.x],
-                        (const Vec*)&params.v[qi * params.stride + head_idx * kHeadDim + di],
-                        qi < qi_end);
-            }
-        }
-
-        __pipeline_commit();
-        __pipeline_wait_prior(STAGES - 1);
-
-        Vec frag_K[ITER_C];
-        Vec frag_V[ITER_C];
-        PRAGMA_UNROLL
-        for (int c = 0; c < ITER_C; ++c) {
-            Lds(frag_K[c], (const T*)&vec_K[s % STAGES][c][threadIdx.x]);
-            Lds(frag_V[c], (const T*)&vec_V[s % STAGES][c][threadIdx.x]);
-        }
-
-        if (params.k_bias) {
-            using namespace ops;
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                frag_K[c] = frag_K[c] + bias_K[c];
-            }
-        }
-        if (params.v_bias) {
-            using namespace ops;
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                frag_V[c] = frag_V[c] + bias_V[c];
-            }
-        }
-
-        Tkv** k_cache_block_ptrs = (Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
-
-        Array<Tkv, kVecSize> out_K[ITER_C];
-        Array<Tkv, kVecSize> out_V[ITER_C];
-
-        // quant param
-        using PType = T;
-        Array<PType, 2> param_K[1];
-        Array<PType, 2> param_V[1];
-
-        if constexpr (std::is_same_v<T, Tkv>) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                out_K[c] = frag_K[c];
-                out_V[c] = frag_V[c];
-            }
-        }
-        else if constexpr (1) {
-            constexpr std::integral_constant<int, sizeof(Tkv) * 8> n_bits{};
-            warp_stats<Map::kWarpThreadC>(param_K, (Vec(&)[1][ITER_C])frag_K, n_bits);
-            warp_stats<Map::kWarpThreadC>(param_V, (Vec(&)[1][ITER_C])frag_V, n_bits);
-            quantize((Array<Tkv, kVecSize>(&)[1][ITER_C])out_K, (Vec(&)[1][ITER_C])frag_K, param_K, n_bits);
-            quantize((Array<Tkv, kVecSize>(&)[1][ITER_C])out_V, (Vec(&)[1][ITER_C])frag_V, param_V, n_bits);
-        }
-        else {
-            using QType = uint8_t;
-            constexpr std::integral_constant<int, sizeof(QType) * 8> n_bits{};
-            // quant data
-            Array<QType, kVecSize> quant_K[1][ITER_C];
-            Array<QType, kVecSize> quant_V[1][ITER_C];
-            warp_stats<Map::kWarpThreadC>(param_K, (Vec(&)[1][ITER_C])frag_K, n_bits);
-            warp_stats<Map::kWarpThreadC>(param_V, (Vec(&)[1][ITER_C])frag_V, n_bits);
-            quantize(quant_K, (Vec(&)[1][ITER_C])frag_K, param_K, n_bits);
-            quantize(quant_V, (Vec(&)[1][ITER_C])frag_V, param_V, n_bits);
-            dequantize((Vec(&)[1][ITER_C])out_K, quant_K, param_K, n_bits);
-            dequantize((Vec(&)[1][ITER_C])out_V, quant_V, param_V, n_bits);
-        }
-
         const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
         const int ti = history_len + qi;
 
@@ -1053,8 +996,8 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                Stcs(&k_cache[di], out_K[c]);
-                Stcs(&v_cache[di], out_V[c]);
+                Stcs(&k_cache[di], out_K[s][c]);
+                Stcs(&v_cache[di], out_V[s][c]);
             }
 
             int max_context_len = params.max_input_len + params.max_seq_len;
@@ -1066,19 +1009,11 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
             auto v_cache_quant_data = k_cache_quant_data + max_context_len * 2;
 
             if (offset.x == 0) {  // thread group leader stores
-                Stcs(k_cache_quant_data, param_K[0]);
-                Stcs(v_cache_quant_data, param_V[0]);
-                // printf("%d k %f %f  v %f %f\n",
-                //        history_len + qi,
-                //        (float)param_K[0][0],
-                //        (float)param_K[0][1],
-                //        (float)param_V[0][0],
-                //        (float)param_V[0][1]);
+                Stcs(k_cache_quant_data, param_K[s]);
+                Stcs(v_cache_quant_data, param_V[s]);
             }
         }
     }
-
-    __pipeline_wait_prior(0);
 }
 
 extern __shared__ uint8_t dynamic_smem[];
