@@ -29,12 +29,13 @@ struct Attention {
     static_assert(kStages == 2);
 
     struct SharedStorage {
-        union {
-            T smem_Q[CTA_Q][kHeadDim + SMEM_PAD];
-            T smem_R[CTA_S][kHeadDim];
-        };
+        T smem_Q[CTA_Q][kHeadDim + SMEM_PAD];
 
-        Tkv smem_KV[2][CTA_S][kHeadDim + SMEM_PAD];
+        Tkv smem_K[CTA_S][kHeadDim + SMEM_PAD];
+        Tkv smem_V[CTA_S][kHeadDim + SMEM_PAD];
+
+        T smem_trans_K[CTA_S][kHeadDim + SMEM_PAD];
+        T smem_trans_V[CTA_S][kHeadDim + SMEM_PAD];
 
         Array<T, 2> param_KV[2][CTA_S];
     };
@@ -57,7 +58,10 @@ struct Attention {
     const Tkv** k_cache_ptrs_;
     // const Tkv** v_cache_ptrs_;
 
-    Tkv* smem_KV_;
+    Tkv* smem_K_;
+    Tkv* smem_V_;
+    T*   smem_trans_K_;
+    T*   smem_trans_V_;
     T*   smem_Q_;
     T*   smem_R_;
 
@@ -71,12 +75,20 @@ struct Attention {
     using Int = std::integral_constant<int, I>;
 
     struct Swizzle {
+        // __device__ int operator()(int index)
+        // {
+        //     // sssSSSDDDdddd
+        //     // DDD ^= SSS
+        //     constexpr int mask = 0x7 << 7;
+        //     return index ^ ((index & mask) >> 3);
+        // }
+
         __device__ int operator()(int index)
         {
-            // sssSSSDDDdddd
+            // sssSSSdDDDddd
             // DDD ^= SSS
             constexpr int mask = 0x7 << 7;
-            return index ^ ((index & mask) >> 3);
+            return index ^ ((index & mask) >> 4);
         }
     };
 
@@ -98,8 +110,10 @@ struct Attention {
         SharedStorage* shared = (SharedStorage*)dsmem;
 
         smem_Q_       = (T*)&shared->smem_Q;
-        smem_KV_      = (Tkv*)&shared->smem_KV;
-        smem_R_       = (T*)&shared->smem_R;
+        smem_K_       = (Tkv*)&shared->smem_K;
+        smem_V_       = (Tkv*)&shared->smem_V;
+        smem_trans_K_ = (T*)&shared->smem_trans_K;
+        smem_trans_V_ = (T*)&shared->smem_trans_V;
         smem_param_K_ = shared->param_KV[0];
         smem_param_V_ = shared->param_KV[1];
 
@@ -142,7 +156,7 @@ struct Attention {
     static constexpr int V_ITER_K = WARP_S / OP_K;    //  64 / 16 = 4  -> S4
     //
 
-    static constexpr bool kUseSmemQ = true;
+    static constexpr bool kUseSmemQ = false;
 
     using FragQ  = Array<T, 8>[K_ITER_K][K_ITER_M];      // ((q8, d4), (D8, Q1), (d2, q2, d2))
     using FragK  = Array<Tkv, 4>[K_ITER_K][K_ITER_N];    // ((s8, d4), (D8, S8), (d2, d2))
@@ -317,22 +331,6 @@ struct Attention {
         }
     }
 
-    __device__ void ApplyPrecomputedRoPE(FragK& frag_K, const FragK& frag_R, int k)
-    {
-        PRAGMA_UNROLL
-        for (int n = 0; n < K_ITER_N; ++n) {
-            PRAGMA_UNROLL
-            for (int d1 = 0; d1 < 2; ++d1) {
-                auto& x  = (Array<T, 2>&)frag_K[k][n][d1 * 2];
-                auto& r  = (Array<T, 2>&)frag_R[k][n][d1 * 2];
-                T     y0 = r[0] * x[0] - r[1] * x[1];
-                T     y1 = r[0] * x[1] + r[1] * x[0];
-                x[0]     = y0;
-                x[1]     = y1;
-            }
-        }
-    }
-
     using TransformedK = Array<T, 4>[K_ITER_K][K_ITER_N];  // ((s8, d4), (D8, S8), (d2, d2))
 
     __device__ void
@@ -342,23 +340,14 @@ struct Attention {
     }
 
     template<bool is_residue, class SmemQ, class SmemK>
-    __device__ void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragK& frag_K, FragS& frag_S, int offset_K)
+    __device__ void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S, int offset_K)
     {
-
-        TransformedK transformed_K;
-
-        Array<T, 2> param_K[K_ITER_N];  // 8
-        PRAGMA_UNROLL
-        for (int n = 0; n < K_ITER_N; ++n) {
-            const int s = n * OP_N + lane_id_ / 4;
-            param_K[n]  = smem_param_K_[s];
-        }
+        TransformedK frag_K;
 
         smem_K.LoadK(frag_K[0], 0);
         if constexpr (kUseSmemQ) {
             smem_Q.LoadQ(frag_Q[0], 0);
         }
-        TransformK(transformed_K, frag_K, param_K, 0);
 
         PRAGMA_UNROLL
         for (int k = 0; k < K_ITER_K; ++k) {
@@ -372,11 +361,8 @@ struct Attention {
             for (int m = 0; m < K_ITER_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = K_ITER_N - 1; n >= 0; --n) {
-                    mma_m16n8k16_row_col(frag_S[m][n], frag_Q[k][m], transformed_K[k][n], frag_S[m][n]);
+                    mma_m16n8k16_row_col(frag_S[m][n], frag_Q[k][m], frag_K[k][n], frag_S[m][n]);
                 }
-            }
-            if (k < K_ITER_K - 1) {
-                TransformK(transformed_K, frag_K, param_K, k + 1);
             }
         }
     }
@@ -518,25 +504,12 @@ struct Attention {
     }
 
     template<class Smem>
-    __device__ void ComputePV(Smem& smem, const FragP& frag_P, FragV& frag_V, FragO& frag_O)
+    __device__ void ComputePV(Smem& smem, const FragP& frag_P, FragO& frag_O)
     {
-        TransformedV transformed_V;
 
-        Array<T, 2> param_V[V_ITER_K][4];  // K,(s2, s2)
-
-        PRAGMA_UNROLL
-        for (int k = 0; k < V_ITER_K; ++k) {
-            PRAGMA_UNROLL
-            for (int s1 = 0; s1 < 2; ++s1) {
-                PRAGMA_UNROLL
-                for (int s0 = 0; s0 < 2; ++s0) {
-                    param_V[k][s1 * 2 + s0] = smem_param_V_[k * OP_K + s1 * 8 + lane_id_ % 4 * 2 + s0];
-                }
-            }
-        };
+        TransformedV frag_V;
 
         smem.LoadV(frag_V[0], 0);
-        TransformV(transformed_V, frag_V, param_V[0], 0);
 
         PRAGMA_UNROLL
         for (int k = 0; k < V_ITER_K; ++k) {
@@ -547,11 +520,8 @@ struct Attention {
             for (int m = 0; m < V_ITER_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_ITER_N; ++n) {
-                    mma_m16n8k16_row_col(frag_O[m][n], frag_P[m][k], transformed_V[k][n], frag_O[m][n]);
+                    mma_m16n8k16_row_col(frag_O[m][n], frag_P[m][k], frag_V[k][n], frag_O[m][n]);
                 }
-            }
-            if (k < V_ITER_K - 1) {
-                TransformV(transformed_V, frag_V, param_V[k + 1], k + 1);
             }
         }
         // smem.Advance(-V_ITER_K);
@@ -620,7 +590,6 @@ struct Attention {
 
         if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
             smem_param_K_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-            // printf("k %d %f %f\n", (int)threadIdx.x, (float)tmp[0], (float)tmp[1]);
         }
     }
 
@@ -635,7 +604,31 @@ struct Attention {
 
         if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
             smem_param_V_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-            // printf("v %d %f %f\n", (int)threadIdx.x, (float)tmp[0], (float)tmp[1]);
+        }
+    }
+
+    // k0v0k1v1k2v2
+    //   K0V0K1V1K2
+    //     Q0P0Q1P1
+
+    template<class Map>
+    __device__ void Dequantize(T* smem_trans, Tkv* smem, const Array<T, 2>* param)
+    {
+        const int2    offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        constexpr int N      = Map::kAccessC;
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            const int si = offset.y + s * Map::kDeltaS;
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                const int ci  = offset.x + c * Map::kDeltaC;
+                // const int idx = Swizzle{}(si * (Map::kDimC + SMEM_PAD) + ci);
+                const int idx = si * (Map::kDimC + SMEM_PAD) + ci;
+                dequantize((Array<T, N>(&)[1][1])smem_trans[Swizzle{}(idx)],
+                           (Array<uint8_t, N>(&)[1][1])smem[idx],
+                           (Array<T, 2>(&)[1])param[si],
+                           std::integral_constant<int, 8>{});
+            }
         }
     }
 
@@ -649,41 +642,29 @@ struct Attention {
         if (query_idx_ >= params_.input_length[batch_idx_]) {
             return;
         }
-
-        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, sizeof(uint4) / sizeof(Tkv), kWarpCount>;
-        using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
-        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
+        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, sizeof(uint4) / sizeof(T), kWarpCount>;
+        using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Identity, kStages>;
+        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Identity, kStages>;
         using SmemQ  = SmemIterator<T, kHeadDim, Swizzle>;
-        using SmemK  = SmemIterator<Tkv, kHeadDim, Swizzle>;
-        using SmemV  = SmemIterator<Tkv, kHeadDim, Swizzle>;
+        using SmemK  = SmemIterator<T, kHeadDim, Swizzle>;
+        using SmemV  = SmemIterator<T, kHeadDim, Swizzle>;
 
         FragQ frag_Q;
         LoadQ(frag_Q);
 
-        // const int block_seqlen = params_.kv_cache_block_size;
         // [L, 2, H, s, D]
         int local_key_offset = params_.key_offset + head_idx_ * block_seqlen_ * kHeadDim;
         int local_val_offset = params_.val_offset + head_idx_ * block_seqlen_ * kHeadDim;
 
-        // Gmem gmem{k_cache_ptrs_, block_seqlen_, {local_key_offset, local_val_offset}, smem_KV_, warp_id_,
-        // lane_id_};
-        GmemK gmem_K{k_cache_ptrs_, block_seqlen_, local_key_offset, smem_KV_, warp_id_, lane_id_};
-        GmemV gmem_V{k_cache_ptrs_,
-                     block_seqlen_,
-                     local_val_offset,
-                     smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD),
-                     warp_id_,
-                     lane_id_};
+        GmemK gmem_K{k_cache_ptrs_, block_seqlen_, local_key_offset, smem_K_, warp_id_, lane_id_};
+        GmemV gmem_V{k_cache_ptrs_, block_seqlen_, local_val_offset, smem_V_, warp_id_, lane_id_};
 
-        // gmem.ClearSmem(Int<0>{});
         gmem_K.ClearSmem(Int<0>{});
         gmem_V.ClearSmem(Int<0>{});
 
-        // static_assert(CTA_S * (kHeadDim + SMEM_PAD) == Gmem::kSizePerTile);
         SmemQ smem_Q{smem_Q_};
-        SmemK smem_K{smem_KV_};
-        SmemV smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
-        // SmemR smem_R{smem_R_};
+        SmemK smem_K{smem_trans_K_};
+        SmemV smem_V{smem_trans_V_};
         // SmemIteratorQ<T, kHeadDim, Swizzle> smem_Q{smem_Q_};
         // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
         // SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
@@ -698,46 +679,59 @@ struct Attention {
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_S, input) + CTA_S - 1) / CTA_S - 1;
 
+        LoadQuantParamsK(iter * CTA_S, context - iter * CTA_S);
         gmem_K.AdjustBlockTileIdx(iter);
         gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
-        LoadQuantParamsK(iter * CTA_S, context - iter * CTA_S);
-        CpAsyncCommit();  // commit for K
+        CpAsyncCommit();
 
-        __align__(16) FragK frag_K;
-        __align__(16) FragV frag_V;
+        LoadQuantParamsV(iter * CTA_S, context - iter * CTA_S);
+        gmem_V.AdjustBlockTileIdx(iter);
+        gmem_V.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
+        CpAsyncCommit();
+
+        CpAsyncWait();
+        __syncthreads();
+
+        Dequantize<ThrMap>(smem_trans_K_, smem_K_, smem_param_K_);
+
         __align__(16) FragO frag_O{};
-        FragL               frag_L{};
-        FragM               frag_M;
+
+        FragL frag_L{};
+        FragM frag_M;
         fill(frag_M, -std::numeric_limits<float>::infinity());
 
-        auto loop = [&](auto is_residue, auto is_mask, auto is_last) {
+        auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = iter * CTA_S;
 
             __align__(16) FragS frag_S{};
 
             CpAsyncWait();
-            __syncthreads();  // Wait while K being filled & V being used
+            __syncthreads();  // Wait while smem_V being filled & trans_V being used
 
-            // Prefetch for V
-            gmem_V.AdjustBlockTileIdx(iter);
-            gmem_V.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
-            LoadQuantParamsV(offset_K, is_residue ? context - offset_K : CTA_S);
-            CpAsyncCommit();
+            // Prefetch for next K, gmem_K[i-1] -> smem_K
+            if (iter > 0) {
+                LoadQuantParamsK(offset_K - CTA_S, CTA_S);
+                gmem_K.AdjustBlockTileIdx(iter - 1);
+                gmem_K.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
+                CpAsyncCommit();
+            }
 
-            ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_K, frag_S, offset_K);
+            Dequantize<ThrMap>(smem_trans_V_, smem_V_, smem_param_V_);  // (smem_V, param_V) -> smem_trans_V
+
+            ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_S, offset_K);
 
             // if (params_.qk) {
             //     OutputQk(frag_S, offset_Q, offset_K);
             // }
 
             CpAsyncWait();
-            __syncthreads();  // Wait while K being used & V being filled
+            __syncthreads();  // Wait while trans_K being used & smem_K being filled
 
-            // Prefetch K for next iter (always full tile here)
+            // Prefetch for next V, gmem_V[i - 1] -> smem_V
             if (iter > 0) {
-                gmem_K.AdjustBlockTileIdx(iter - 1);
-                gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
-                LoadQuantParamsK(offset_K - CTA_S, CTA_S);
+                LoadQuantParamsV(offset_K - CTA_S, CTA_S);
+                gmem_V.AdjustBlockTileIdx(iter - 1);
+                gmem_V.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();
             }
 
@@ -749,65 +743,20 @@ struct Attention {
             __align__(16) FragP frag_P;
             Softmax<is_residue>(frag_S, frag_M, frag_L, (FragPs&)frag_P, frag_O, qk_scale);
 
-            ComputePV(smem_V, frag_P, frag_V, frag_O);
+            Dequantize<ThrMap>(smem_trans_K_, smem_K_, smem_param_K_);  // (smem_K, param_K) -> smem_trans_K
+
+            ComputePV(smem_V, frag_P, frag_O);
         };
 
         int mask_iter = 2;
-        // for (; iter >= 1 && mask_iter != 0; --iter, --mask_iter) {
-        //     loop(std::true_type{}, std::true_type{}, std::false_type{});
-        // }
-        // for (; iter >= 0 && mask_iter != 0; --iter, --mask_iter) {
-        //     loop(std::false_type{}, std::true_type{}, std::true_type{});
-        // }
-        // for (; iter >= 1; --iter) {
-        //     loop(std::false_type{}, std::false_type{}, std::false_type{});
-        // }
-        // for (; iter >= 0; --iter) {
-        //     loop(std::false_type{}, std::false_type{}, std::true_type{});
-        // }
 
         PRAGMA_UNROLL
         for (; iter >= 0 && mask_iter != 0; --iter, --mask_iter) {
-            loop(std::true_type{}, std::true_type{}, std::false_type{});
+            loop(std::true_type{}, std::true_type{});
         }
 
-        PRAGMA_NO_UNROLL
         for (; iter >= 0; --iter) {
-            __align__(16) FragS frag_S{};
-            const int           offset_K = iter * CTA_S;
-
-            CpAsyncWait();
-            __syncthreads();  // Wait while K being filled & V being used
-
-            // Prefetch for V
-            gmem_V.AdjustBlockTileIdx(iter);
-            gmem_V.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
-            LoadQuantParamsV(offset_K, CTA_S);
-            CpAsyncCommit();
-
-            ComputeQK<false>(smem_Q, smem_K, frag_Q, frag_K, frag_S, offset_K);
-
-            // if (params_.qk) {
-            //     OutputQk(frag_S, offset_Q, offset_K);
-            // }
-
-            CpAsyncWait();
-            __syncthreads();  // Wait while K being used & V being filled
-
-            // Prefetch K for next iter (always full tile here)
-            if (iter > 0) {
-                // PrecomputeRotaryEmbeddings(offset_K - CTA_S);
-                gmem_K.AdjustBlockTileIdx(iter - 1);
-                gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
-                LoadQuantParamsK(offset_K - CTA_S, CTA_S);
-                CpAsyncCommit();
-            }
-
-            const float         qk_scale = params_.inv_sqrt_dh;
-            __align__(16) FragP frag_P;
-            Softmax<false>(frag_S, frag_M, frag_L, (FragPs&)frag_P, frag_O, qk_scale);
-
-            ComputePV(smem_V, frag_P, frag_V, frag_O);
+            loop(std::false_type{}, std::false_type{});
         }
 
         StoreO(frag_O, frag_L);
@@ -967,16 +916,16 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
         dequantize(out_V, quant_V, param_V, n_bits);
     }
 
-    if constexpr (std::is_same_v<Tkv, uint8_t>) {
-        PRAGMA_UNROLL
-        for (int s = 0; s < ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                permute_K(out_K[s][c]);
-            }
-        }
-        permute_V<Map>(out_V);
-    }
+    // if constexpr (std::is_same_v<Tkv, uint8_t>) {
+    //     PRAGMA_UNROLL
+    //     for (int s = 0; s < ITER_S; ++s) {
+    //         PRAGMA_UNROLL
+    //         for (int c = 0; c < ITER_C; ++c) {
+    //             permute_K(out_K[s][c]);
+    //         }
+    //     }
+    //     permute_V<Map>(out_V);
+    // }
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {

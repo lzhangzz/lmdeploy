@@ -188,7 +188,7 @@ quantize(Array<Q, N> (&dst)[S][C], const Array<T, N> (&src)[S][C], const Array<P
 }
 
 template<class T, class Q, class P, class B, int N, int C, int S>
-__device__ void
+inline __device__ void
 dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array<P, 2> (&params)[S], B n_bits)
 {
     static_assert(N % 4 == 0);

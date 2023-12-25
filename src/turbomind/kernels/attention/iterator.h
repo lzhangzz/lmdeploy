@@ -110,7 +110,7 @@ struct GmemIterator {
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
+                     "  @p cp.async.ca.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask),
                      "r"(smem_int_ptr),
                      "l"(src),
@@ -126,7 +126,7 @@ struct GmemIterator {
     {
         constexpr int cp_size = sizeof(AccessType);
 #if TURBOMIND_ARCH_SM80
-        asm volatile("cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(smem_int_ptr),
+        asm volatile("cp.async.ca.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(smem_int_ptr),
                      "l"(src),
                      "n"(cp_size));
 #else

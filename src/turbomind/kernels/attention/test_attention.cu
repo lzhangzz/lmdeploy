@@ -129,8 +129,8 @@ int main(int argc, char* argv[])
     constexpr int KvHeadNum  = kHeadNum;
     constexpr int kBatchSize = 2;
     // constexpr int kBatchSize = 1;
-    // constexpr int kInputLen    = 8192;
     constexpr int kInputLen    = 8192;
+    // constexpr int kInputLen    = 16;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
@@ -165,7 +165,7 @@ int main(int argc, char* argv[])
     thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
     thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
 
-    thrust::universal_vector<float> qk_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<float> qk_buf((size_t)0* kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     std::fill(semaphores.begin(), semaphores.end(), 0);
 
@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
     params.max_split_k = kMaxSplitK;
     params.arch        = 80;
 
-    // params.qk = qk_buf.data().get();
+    params.qk = qk_buf.data().get();
 
     Reference<half> reference(Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
@@ -308,7 +308,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (params.qk) {
+    if (0 && params.qk) {
         cudaDeviceSynchronize();
         for (int b = 0; b < kBatchSize; ++b) {
             for (int h = 0; h < kHeadNum; ++h) {
