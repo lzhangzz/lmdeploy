@@ -85,6 +85,7 @@ struct Attention {
 
         __device__ int operator()(int index)
         {
+            return index;
             // sssSSSdDDDddd
             // DDD ^= SSS
             constexpr int mask = 0x7 << 7;
@@ -580,7 +581,7 @@ struct Attention {
         __pipeline_wait_prior(0);
     }
 
-    template<class MaxS>
+    template<class Map, class MaxS>
     __device__ void LoadQuantParamsK(int offset_K, MaxS max_s)
     {
         auto quant_data = params_.kv_cache_quant_data                                     //
@@ -588,12 +589,21 @@ struct Attention {
                           + head_idx_ * 2 * max_context_len_ * 2                          //
                           + offset_K * 2;                                                 //
 
-        if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-            smem_param_K_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
+        // if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
+        //     smem_param_K_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
+        // }
+
+        const int2 offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            const int si = offset.y + s * Map::kDeltaS;
+            if (offset.x == 0) {
+                Store((T*)&smem_param_K_[si], (Array<T, 2>&)quant_data[si * 2]);
+            }
         }
     }
 
-    template<class MaxS>
+    template<class Map, class MaxS>
     __device__ void LoadQuantParamsV(int offset_K, MaxS max_s)
     {
         auto quant_data = params_.kv_cache_quant_data                                     //
@@ -602,8 +612,16 @@ struct Attention {
                           + offset_K * 2;                                                 //
         quant_data += max_context_len_ * 2;
 
-        if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-            smem_param_V_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
+        // if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
+        //     smem_param_V_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
+        // }
+        const int2 offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            const int si = offset.y + s * Map::kDeltaS;
+            if (offset.x == 0) {
+                Store((T*)&smem_param_V_[si], (Array<T, 2>&)quant_data[si * 2]);
+            }
         }
     }
 
@@ -614,20 +632,25 @@ struct Attention {
     template<class Map>
     __device__ void Dequantize(T* smem_trans, Tkv* smem, const Array<T, 2>* param)
     {
+
         const int2    offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
         constexpr int N      = Map::kAccessC;
+
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             const int si = offset.y + s * Map::kDeltaS;
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int ci  = offset.x + c * Map::kDeltaC;
-                // const int idx = Swizzle{}(si * (Map::kDimC + SMEM_PAD) + ci);
-                const int idx = si * (Map::kDimC + SMEM_PAD) + ci;
-                dequantize((Array<T, N>(&)[1][1])smem_trans[Swizzle{}(idx)],
-                           (Array<uint8_t, N>(&)[1][1])smem[idx],
+                const int         ci  = offset.x + c * Map::kDeltaC;
+                const int         idx = si * (Map::kDimC + SMEM_PAD) + ci;
+                Array<uint8_t, N> data;
+                Lds(data, &smem[idx]);
+                Array<T, N> output;
+                dequantize((Array<T, N>(&)[1][1])output,
+                           (Array<uint8_t, N>(&)[1][1])data,
                            (Array<T, 2>(&)[1])param[si],
                            std::integral_constant<int, 8>{});
+                Store(&smem_trans[Swizzle{}(idx)], output);
             }
         }
     }
@@ -679,12 +702,12 @@ struct Attention {
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_S, input) + CTA_S - 1) / CTA_S - 1;
 
-        LoadQuantParamsK(iter * CTA_S, context - iter * CTA_S);
+        LoadQuantParamsK<ThrMap>(iter * CTA_S, context - iter * CTA_S);
         gmem_K.AdjustBlockTileIdx(iter);
         gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
         CpAsyncCommit();
 
-        LoadQuantParamsV(iter * CTA_S, context - iter * CTA_S);
+        LoadQuantParamsV<ThrMap>(iter * CTA_S, context - iter * CTA_S);
         gmem_V.AdjustBlockTileIdx(iter);
         gmem_V.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
         CpAsyncCommit();
@@ -710,7 +733,7 @@ struct Attention {
 
             // Prefetch for next K, gmem_K[i-1] -> smem_K
             if (iter > 0) {
-                LoadQuantParamsK(offset_K - CTA_S, CTA_S);
+                LoadQuantParamsK<ThrMap>(offset_K - CTA_S, CTA_S);
                 gmem_K.AdjustBlockTileIdx(iter - 1);
                 gmem_K.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();
@@ -729,7 +752,7 @@ struct Attention {
 
             // Prefetch for next V, gmem_V[i - 1] -> smem_V
             if (iter > 0) {
-                LoadQuantParamsV(offset_K - CTA_S, CTA_S);
+                LoadQuantParamsV<ThrMap>(offset_K - CTA_S, CTA_S);
                 gmem_V.AdjustBlockTileIdx(iter - 1);
                 gmem_V.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();
@@ -761,8 +784,6 @@ struct Attention {
 
         StoreO(frag_O, frag_L);
     }
-
-    // __device__ void
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -901,6 +922,8 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
         warp_stats<Map::kWarpThreadC>(param_V, vec_V, n_bits);
         quantize(out_K, vec_K, param_K, n_bits);
         quantize(out_V, vec_V, param_V, n_bits);
+        fuse_magic(param_K);
+        fuse_magic(param_V);
     }
     else {
         using QType = uint8_t;

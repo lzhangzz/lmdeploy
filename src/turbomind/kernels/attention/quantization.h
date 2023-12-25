@@ -187,6 +187,15 @@ quantize(Array<Q, N> (&dst)[S][C], const Array<T, N> (&src)[S][C], const Array<P
     }
 }
 
+template<class P, int S>
+__device__ void fuse_magic(Array<P, 2> (&params)[S])
+{
+    PRAGMA_UNROLL
+    for (int s = 0; s < S; ++s) {
+        params[s][1] = params[s][1] - half(1024) * params[s][0];
+    }
+}
+
 template<class T, class Q, class P, class B, int N, int C, int S>
 inline __device__ void
 dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array<P, 2> (&params)[S], B n_bits)
@@ -195,7 +204,7 @@ dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array
     PRAGMA_UNROLL
     for (int s = 0; s < S; ++s) {
         auto scale = params[s][0];
-        auto zero  = params[s][1];
+        auto zero  = params[s][1];  // - half(1024.f) * params[s][0];
         PRAGMA_UNROLL
         for (int c = 0; c < C; ++c) {
             if constexpr (1) {
@@ -203,7 +212,7 @@ dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array
                 for (int i = 0; i < N; i += 4) {
                     using namespace ops;
                     (Array<T, 4>&)dst[s][c][i] =
-                        cast<T>(cast<P>(cvt_f16x4_u8((Array<Q, 4>&)src[s][c][i])) * scale + zero);
+                        cast<T>(cast<P>(cvt_f16x4_u8<false>((Array<Q, 4>&)src[s][c][i])) * scale + zero);
                 }
             }
             else {

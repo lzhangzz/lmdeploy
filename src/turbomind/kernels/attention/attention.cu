@@ -37,7 +37,7 @@ void invokeAttention(const AttentionParams<T>& params)
 
         [[maybe_unused]] static const int _ = [&] {
             std::cout << "GmemMap:\n";
-            Print(RakedThreadMap<128, 64, 16, 4>{});
+            Print(RakedThreadMap<128, 64, 8, 4>{});
             // std::cout << "\nSmemMap:\n";
             // Print(typename Attn::SmemMap{});
             std::cout << "\nDynamic smem size: " << kDynSmemSize << "\n";
