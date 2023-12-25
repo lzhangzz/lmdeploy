@@ -74,14 +74,6 @@ struct Attention {
     using Int = std::integral_constant<int, I>;
 
     struct Swizzle {
-        // __device__ int operator()(int index)
-        // {
-        //     // sssSSSDDDdddd
-        //     // DDD ^= SSS
-        //     constexpr int mask = 0x7 << 7;
-        //     return index ^ ((index & mask) >> 3);
-        // }
-
         __device__ int operator()(int index)
         {
             // return index;
@@ -248,9 +240,9 @@ struct Attention {
 
         __syncwarp();
 
-        // Load from shared memory using LDSM, rearrange to m16n8k16 atom layout
+        uint32_t smem_int_ptr = cast_smem_ptr_to_uint(smem_Q_);
         if constexpr (!kUseSmemQ) {
-            uint32_t smem_int_ptr = cast_smem_ptr_to_uint(smem_Q_);
+            // Load from shared memory using LDSM, rearrange to m16n8k16 atom layout
             PRAGMA_UNROLL
             for (int m = 0; m < K_ITER_M; ++m) {
                 PRAGMA_UNROLL
@@ -263,33 +255,35 @@ struct Attention {
                 }
             }
         }
+        else {
+            // Rearrange Q in smem so that swizzling is not needed for later LDSMs
+            const int lane_id       = threadIdx.x % WARP_SIZE;
+            const int group_id      = lane_id / 16;
+            const int group_lane_id = lane_id % 16;
+            PRAGMA_UNROLL
+            for (int k = 0; k < K_ITER_K; ++k) {
+                PRAGMA_UNROLL
+                for (int m = 0; m < K_ITER_M; ++m) {
+                    auto&     r   = (Array<uint32_t, 4>&)frag_Q[k][m];
+                    const int s   = m * 16 + group_lane_id % 8 + group_id * 8 + warp_id_ * WARP_Q;
+                    const int c   = k * 16 + group_lane_id / 8 * 8;
+                    const int idx = Swizzle{}(s * (kHeadDim + SMEM_PAD) + c);
+                    ldmatrix_m8n8_x4_b16(r[0], r[2], r[1], r[3], smem_int_ptr + sizeof(T) * idx);
+                }
+            }
 
-        // const int lane_id       = threadIdx.x % WARP_SIZE;
-        // const int group_id      = lane_id / 16;
-        // const int group_lane_id = lane_id % 16;
-        // PRAGMA_UNROLL
-        // for (int k = 0; k < K_ITER_K; ++k) {
-        //     PRAGMA_UNROLL
-        //     for (int m = 0; m < K_ITER_M; ++m) {
-        //         auto&     r   = (Array<uint32_t, 4>&)frag_Q[k][m];
-        //         const int s   = m * 16 + group_lane_id % 8 + group_id * 8 + warp_id_ * WARP_Q;
-        //         const int c   = k * 16 + group_lane_id / 8 * 8;
-        //         const int idx = Swizzle{}(s * (kHeadDim + SMEM_PAD) + c);
-        //         ldmatrix_m8n8_x4_b16(r[0], r[2], r[1], r[3], smem_int_ptr + sizeof(T) * idx);
-        //     }
-        // }
+            __syncthreads();
 
-        // __syncthreads();
-
-        // constexpr int THREADS = kWarpCount * WARP_SIZE;
-        // PRAGMA_UNROLL
-        // for (int k = 0; k < K_ITER_K; ++k) {
-        //     PRAGMA_UNROLL
-        //     for (int m = 0; m < K_ITER_M; ++m) {
-        //         constexpr int kVecSize = 8;
-        //         Store(&smem_Q_[(k * K_ITER_M * THREADS + m * THREADS + threadIdx.x) * kVecSize], frag_Q[k][m]);
-        //     }
-        // }
+            constexpr int THREADS = kWarpCount * WARP_SIZE;
+            PRAGMA_UNROLL
+            for (int k = 0; k < K_ITER_K; ++k) {
+                PRAGMA_UNROLL
+                for (int m = 0; m < K_ITER_M; ++m) {
+                    constexpr int kVecSize = 8;
+                    Store(&smem_Q_[(k * K_ITER_M * THREADS + m * THREADS + threadIdx.x) * kVecSize], frag_Q[k][m]);
+                }
+            }
+        }
     }
 
     __device__ void PrecomputeRotaryEmbeddings(int offset_K)
@@ -346,7 +340,7 @@ struct Attention {
 
         smem_K.LoadK(frag_K[0], 0);
         if constexpr (kUseSmemQ) {
-            smem_Q.LoadQ(frag_Q[0], 0);
+            smem_Q.LoadQ_(frag_Q[0], 0);
         }
 
         PRAGMA_UNROLL
@@ -354,7 +348,7 @@ struct Attention {
             if (k < K_ITER_K - 1) {
                 smem_K.LoadK(frag_K[k + 1], k + 1);
                 if constexpr (kUseSmemQ) {
-                    smem_Q.LoadQ(frag_Q[k + 1], k + 1);
+                    smem_Q.LoadQ_(frag_Q[k + 1], k + 1);
                 }
             }
             PRAGMA_UNROLL
@@ -624,6 +618,8 @@ struct Attention {
 
         const int offset_Q = history + query_idx_;
 
+        const float qk_scale = params_.inv_sqrt_dh;
+
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_S, input) + CTA_S - 1) / CTA_S - 1;
 
@@ -676,7 +672,6 @@ struct Attention {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
 
-            const float         qk_scale = params_.inv_sqrt_dh;
             __align__(16) FragP frag_P;
             Softmax<is_residue>(frag_S, frag_M, frag_L, (FragPs&)frag_P, frag_O, qk_scale);
 
@@ -864,10 +859,12 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
 
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
-        const int qi = offset.y + s * Map::kDeltaS + token_idx;  // local offset into `input_length`
-        const int ti = history_len + qi;
+        const int si = offset.y + s * Map::kDeltaS;
+        const int qi = si + token_idx;  // local offset into `input_length`
 
         if (qi < input_len) {
+            const int ti = history_len + qi;  // timestep
+
             const int block_seqlen = params.kv_cache_block_size;
             // block index and local offsets
             const int cache_block_index  = ti / block_seqlen;
@@ -879,7 +876,8 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
                            + head_idx * block_seqlen * kHeadDim + cache_block_offset * kHeadDim;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int di = offset.x + c * Map::kDeltaC;
+                int di = offset.x + c * Map::kDeltaC;
+                // di ^= ((si & 0x7) << 3);
                 Stcs(&k_cache[di], out_K[s][c]);
                 Stcs(&v_cache[di], out_V[s][c]);
             }
