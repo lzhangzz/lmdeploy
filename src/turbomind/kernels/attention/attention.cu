@@ -72,7 +72,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     FT_CHECK(params.size_per_head == HeadDim);
 
     if constexpr (std::is_same_v<T, half>) {
-        invokeAttention<T, uint8_t, HeadDim, 64>(params);
+        invokeAttention<T, T, HeadDim, 64>(params);
     }
 }
 
@@ -85,7 +85,7 @@ void invokeProcessKV(const AttentionParams<T>& params)
     constexpr int WARPS = 4;
     constexpr int DIMS  = 128;
     constexpr int CTA_Q = 64;
-    using Tkv           = uint8_t;
+    using Tkv           = T;
 
     int  block = WARPS * WARP_SIZE;
     dim3 grid((params.max_input_len + CTA_Q - 1) / CTA_Q, params.num_kv_heads, params.batch_size);

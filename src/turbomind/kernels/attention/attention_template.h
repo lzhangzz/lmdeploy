@@ -34,10 +34,9 @@ struct Attention {
         Tkv smem_K[CTA_S][kHeadDim + SMEM_PAD];
         Tkv smem_V[CTA_S][kHeadDim + SMEM_PAD];
 
-        T smem_trans_K[CTA_S][kHeadDim + SMEM_PAD];
-        T smem_trans_V[CTA_S][kHeadDim + SMEM_PAD];
-
-        Array<T, 2> param_KV[2][CTA_S];
+        // T smem_trans_K[CTA_S][kHeadDim + SMEM_PAD];
+        // T smem_trans_V[CTA_S][kHeadDim + SMEM_PAD];
+        // Array<T, 2> param_KV[2][CTA_S];
     };
 
     const ParamType& params_;
@@ -60,15 +59,15 @@ struct Attention {
 
     Tkv* smem_K_;
     Tkv* smem_V_;
-    T*   smem_trans_K_;
-    T*   smem_trans_V_;
-    T*   smem_Q_;
-    T*   smem_R_;
+    // T*   smem_trans_K_;
+    // T*   smem_trans_V_;
+    T* smem_Q_;
+    T* smem_R_;
 
     int max_context_len_{};
 
-    Array<T, 2>* smem_param_K_;
-    Array<T, 2>* smem_param_V_;
+    // Array<T, 2>* smem_param_K_;
+    // Array<T, 2>* smem_param_V_;
     // float* smem_O_;
 
     template<int I>
@@ -85,7 +84,7 @@ struct Attention {
 
         __device__ int operator()(int index)
         {
-            return index;
+            // return index;
             // sssSSSdDDDddd
             // DDD ^= SSS
             constexpr int mask = 0x7 << 7;
@@ -110,13 +109,13 @@ struct Attention {
     {
         SharedStorage* shared = (SharedStorage*)dsmem;
 
-        smem_Q_       = (T*)&shared->smem_Q;
-        smem_K_       = (Tkv*)&shared->smem_K;
-        smem_V_       = (Tkv*)&shared->smem_V;
-        smem_trans_K_ = (T*)&shared->smem_trans_K;
-        smem_trans_V_ = (T*)&shared->smem_trans_V;
-        smem_param_K_ = shared->param_KV[0];
-        smem_param_V_ = shared->param_KV[1];
+        smem_Q_ = (T*)&shared->smem_Q;
+        smem_K_ = (Tkv*)&shared->smem_K;
+        smem_V_ = (Tkv*)&shared->smem_V;
+        // smem_trans_K_ = (T*)&shared->smem_trans_K;
+        // smem_trans_V_ = (T*)&shared->smem_trans_V;
+        // smem_param_K_ = shared->param_KV[0];
+        // smem_param_V_ = shared->param_KV[1];
 
         // [q, h, b]
         query_idx_ = blockIdx.x * CTA_Q;  // local offset into `input_length`
@@ -581,80 +580,6 @@ struct Attention {
         __pipeline_wait_prior(0);
     }
 
-    template<class Map, class MaxS>
-    __device__ void LoadQuantParamsK(int offset_K, MaxS max_s)
-    {
-        auto quant_data = params_.kv_cache_quant_data                                     //
-                          + batch_idx_ * params_.num_kv_heads * 2 * max_context_len_ * 2  //
-                          + head_idx_ * 2 * max_context_len_ * 2                          //
-                          + offset_K * 2;                                                 //
-
-        // if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-        //     smem_param_K_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-        // }
-
-        const int2 offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
-            const int si = offset.y + s * Map::kDeltaS;
-            if (offset.x == 0) {
-                Store((T*)&smem_param_K_[si], (Array<T, 2>&)quant_data[si * 2]);
-            }
-        }
-    }
-
-    template<class Map, class MaxS>
-    __device__ void LoadQuantParamsV(int offset_K, MaxS max_s)
-    {
-        auto quant_data = params_.kv_cache_quant_data                                     //
-                          + batch_idx_ * params_.num_kv_heads * 2 * max_context_len_ * 2  //
-                          + head_idx_ * 2 * max_context_len_ * 2                          //
-                          + offset_K * 2;                                                 //
-        quant_data += max_context_len_ * 2;
-
-        // if (threadIdx.x < max_s && threadIdx.x < CTA_S) {
-        //     smem_param_V_[threadIdx.x] = (Array<T, 2>&)quant_data[threadIdx.x * 2];
-        // }
-        const int2 offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
-            const int si = offset.y + s * Map::kDeltaS;
-            if (offset.x == 0) {
-                Store((T*)&smem_param_V_[si], (Array<T, 2>&)quant_data[si * 2]);
-            }
-        }
-    }
-
-    // k0v0k1v1k2v2
-    //   K0V0K1V1K2
-    //     Q0P0Q1P1
-
-    template<class Map>
-    __device__ void Dequantize(T* smem_trans, Tkv* smem, const Array<T, 2>* param)
-    {
-
-        const int2    offset = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE);
-        constexpr int N      = Map::kAccessC;
-
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
-            const int si = offset.y + s * Map::kDeltaS;
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                const int         ci  = offset.x + c * Map::kDeltaC;
-                const int         idx = si * (Map::kDimC + SMEM_PAD) + ci;
-                Array<uint8_t, N> data;
-                Lds(data, &smem[idx]);
-                Array<T, N> output;
-                dequantize((Array<T, N>(&)[1][1])output,
-                           (Array<uint8_t, N>(&)[1][1])data,
-                           (Array<T, 2>(&)[1])param[si],
-                           std::integral_constant<int, 8>{});
-                Store(&smem_trans[Swizzle{}(idx)], output);
-            }
-        }
-    }
-
     __device__ void Run()
     {
         // early exit if finished flag is set
@@ -666,8 +591,8 @@ struct Attention {
             return;
         }
         using ThrMap = RakedThreadMap<kHeadDim, CTA_S, sizeof(uint4) / sizeof(T), kWarpCount>;
-        using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Identity, kStages>;
-        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Identity, kStages>;
+        using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
+        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kStages>;
         using SmemQ  = SmemIterator<T, kHeadDim, Swizzle>;
         using SmemK  = SmemIterator<T, kHeadDim, Swizzle>;
         using SmemV  = SmemIterator<T, kHeadDim, Swizzle>;
@@ -686,8 +611,8 @@ struct Attention {
         gmem_V.ClearSmem(Int<0>{});
 
         SmemQ smem_Q{smem_Q_};
-        SmemK smem_K{smem_trans_K_};
-        SmemV smem_V{smem_trans_V_};
+        SmemK smem_K{smem_K_};
+        SmemV smem_V{smem_V_};
         // SmemIteratorQ<T, kHeadDim, Swizzle> smem_Q{smem_Q_};
         // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
         // SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
@@ -702,20 +627,15 @@ struct Attention {
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_S, input) + CTA_S - 1) / CTA_S - 1;
 
-        LoadQuantParamsK<ThrMap>(iter * CTA_S, context - iter * CTA_S);
         gmem_K.AdjustBlockTileIdx(iter);
         gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
         CpAsyncCommit();
 
-        LoadQuantParamsV<ThrMap>(iter * CTA_S, context - iter * CTA_S);
-        gmem_V.AdjustBlockTileIdx(iter);
-        gmem_V.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
-        CpAsyncCommit();
-
-        CpAsyncWait();
-        __syncthreads();
-
-        Dequantize<ThrMap>(smem_trans_K_, smem_K_, smem_param_K_);
+        // gmem_V.AdjustBlockTileIdx(iter);
+        // gmem_V.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
+        // CpAsyncCommit();
+        // CpAsyncWait();
+        // __syncthreads();
 
         __align__(16) FragO frag_O{};
 
@@ -729,17 +649,12 @@ struct Attention {
             __align__(16) FragS frag_S{};
 
             CpAsyncWait();
-            __syncthreads();  // Wait while smem_V being filled & trans_V being used
+            __syncthreads();  // Wait while smem_K being filled & smem_V being used
 
-            // Prefetch for next K, gmem_K[i-1] -> smem_K
-            if (iter > 0) {
-                LoadQuantParamsK<ThrMap>(offset_K - CTA_S, CTA_S);
-                gmem_K.AdjustBlockTileIdx(iter - 1);
-                gmem_K.PrefetchStage(Int<1>{}, std::false_type{}, CTA_S);
-                CpAsyncCommit();
-            }
-
-            Dequantize<ThrMap>(smem_trans_V_, smem_V_, smem_param_V_);  // (smem_V, param_V) -> smem_trans_V
+            // Prefetch for V, gmem_V[i-1] -> smem_V
+            gmem_V.AdjustBlockTileIdx(iter);
+            gmem_V.PrefetchStage(Int<1>{}, std::false_type{}, is_residue ? context - offset_K : CTA_S);
+            CpAsyncCommit();
 
             ComputeQK<is_residue>(smem_Q, smem_K, frag_Q, frag_S, offset_K);
 
@@ -750,11 +665,10 @@ struct Attention {
             CpAsyncWait();
             __syncthreads();  // Wait while trans_K being used & smem_K being filled
 
-            // Prefetch for next V, gmem_V[i - 1] -> smem_V
+            // Prefetch for next K, gmem_K[i - 1] -> smem_K
             if (iter > 0) {
-                LoadQuantParamsV<ThrMap>(offset_K - CTA_S, CTA_S);
-                gmem_V.AdjustBlockTileIdx(iter - 1);
-                gmem_V.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
+                gmem_K.AdjustBlockTileIdx(iter - 1);
+                gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
                 CpAsyncCommit();
             }
 
@@ -765,8 +679,6 @@ struct Attention {
             const float         qk_scale = params_.inv_sqrt_dh;
             __align__(16) FragP frag_P;
             Softmax<is_residue>(frag_S, frag_M, frag_L, (FragPs&)frag_P, frag_O, qk_scale);
-
-            Dequantize<ThrMap>(smem_trans_K_, smem_K_, smem_param_K_);  // (smem_K, param_K) -> smem_trans_K
 
             ComputePV(smem_V, frag_P, frag_O);
         };
@@ -972,17 +884,19 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
                 Stcs(&v_cache[di], out_V[s][c]);
             }
 
-            int max_context_len = params.max_input_len + params.max_seq_len;
-            // [B, H, 2, S, 2]
-            auto k_cache_quant_data = params.kv_cache_quant_data
-                                      + batch_idx * params.num_kv_heads * 2 * max_context_len * 2
-                                      + head_idx * 2 * max_context_len * 2  //
-                                      + (history_len + qi) * 2;
-            auto v_cache_quant_data = k_cache_quant_data + max_context_len * 2;
+            if (std::is_same_v<Tkv, uint8_t>) {
+                int max_context_len = params.max_input_len + params.max_seq_len;
+                // [B, H, 2, S, 2]
+                auto k_cache_quant_data = params.kv_cache_quant_data
+                                          + batch_idx * params.num_kv_heads * 2 * max_context_len * 2
+                                          + head_idx * 2 * max_context_len * 2  //
+                                          + (history_len + qi) * 2;
+                auto v_cache_quant_data = k_cache_quant_data + max_context_len * 2;
 
-            if (offset.x == 0) {  // thread group leader stores
-                Stcs(k_cache_quant_data, param_K[s]);
-                Stcs(v_cache_quant_data, param_V[s]);
+                if (offset.x == 0) {  // thread group leader stores
+                    Stcs(k_cache_quant_data, param_K[s]);
+                    Stcs(v_cache_quant_data, param_V[s]);
+                }
             }
         }
     }
