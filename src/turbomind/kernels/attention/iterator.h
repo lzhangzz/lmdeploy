@@ -49,7 +49,6 @@ struct GmemIterator {
         block_seqlen_{block_seqlen},
         local_offset_{local_offset}
     {
-        // smem_int_ptr_ = __shfl_sync(uint32_t(-1), smem_int_ptr_, 0);
         int2 offsets = Map::get_offset(warp_id, lane_id);
         init_offset_ = offsets.x + offsets.y * Map::kDimC;
         dst_offset_  = offsets.x + offsets.y * (Map::kDimC + SMEM_PAD);

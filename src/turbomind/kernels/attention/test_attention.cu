@@ -3,6 +3,7 @@
 #include "attention.h"
 #include "kv_cache.h"
 #include "src/turbomind/kernels/attention/reference.h"
+#include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "test_utils.h"
 #include <cmath>
@@ -15,6 +16,10 @@
 #include <iomanip>
 #include <numeric>
 #include <random>
+
+#include "cuda_bf16.h"
+
+#include "quantization.h"
 
 using namespace turbomind;
 
@@ -119,17 +124,50 @@ void TestBlocks(const thrust::universal_vector<half>& k_cache,  // [B, H, S, D]
     }
 }
 
+__global__ void test_bf16(nv_bfloat16* out, int n)
+{
+    // #pragma unroll 8
+    for (int i = 0; i < n; ++i) {
+        Array<uint8_t, 4> v;
+        PRAGMA_UNROLL
+        for (int c = 0; c < 4; ++c) {
+            v[c] = unsigned((i * 4 + c) % 256);
+        }
+        auto u = cvt_bf16x4_u8(v);
+        Stcs(&out[i * 4], u);
+
+        // PRAGMA_UNROLL
+        // for (int c = 0; c < 4; ++c) {
+        //     printf("%d -> %f, diff = %f\n", i * 4 + c, (float)u[c], (float)u[c] - float((i * 4 + c) % 256));
+        // }
+    }
+}
+
 int main(int argc, char* argv[])
 {
+    // uint16_t x = 0x4380;
+
+    // printf("%f\n", (float)((nv_bfloat16&)x));
+
+    // thrust::universal_vector<nv_bfloat16> tmp(1 << 20);
+    // // thrust::universal_vector<nv_bfloat16> tmp(256);
+    // for (int i = 0; i < 10; ++i) {
+    //     test_bf16<<<1, 1>>>(tmp.data().get(), tmp.size() / 4);
+    // }
+
+    // cudaDeviceSynchronize();
+
+    // return 0;
+
     AttentionParams<half> params{};
 
     constexpr int kHeadNum = 16;
     // constexpr int kHeadNum  = 1;
-    constexpr int kHeadDim   = 128;
-    constexpr int KvHeadNum  = kHeadNum;
+    constexpr int kHeadDim  = 128;
+    constexpr int KvHeadNum = kHeadNum;
     constexpr int kBatchSize = 2;
     // constexpr int kBatchSize = 1;
-    constexpr int kInputLen    = 8192;
+    constexpr int kInputLen = 8192;
     // constexpr int kInputLen    = 16;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;
@@ -165,7 +203,8 @@ int main(int argc, char* argv[])
     thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
     thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
 
-    thrust::universal_vector<float> qk_buf((size_t)0* kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<float> qk_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<half>  pr_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     std::fill(semaphores.begin(), semaphores.end(), 0);
 
@@ -259,6 +298,7 @@ int main(int argc, char* argv[])
     params.arch        = 80;
 
     params.qk = qk_buf.data().get();
+    params.pr = pr_buf.data().get();
 
     Reference<half> reference(Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
@@ -308,7 +348,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (0 && params.qk) {
+    if (0) {
         cudaDeviceSynchronize();
         for (int b = 0; b < kBatchSize; ++b) {
             for (int h = 0; h < kHeadNum; ++h) {
@@ -317,6 +357,7 @@ int main(int argc, char* argv[])
                               + q * kContextLen;
                     for (int k = 0; k < kContextLen; ++k) {
                         std::cout << qk[k] * params.inv_sqrt_dh << " ";
+                        // std::cout << (float)qk[k] << " ";
                     }
                     std::cout << "\n";
                 }

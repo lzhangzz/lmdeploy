@@ -75,10 +75,64 @@ inline __device__ Array<half, 4> cvt_f16x4_u8(const Array<uint8_t, 4>& src)
     dst[1] = __byte_perm((uint32_t&)src, f16_magic, 0x7372);
     if constexpr (norm) {
         for (int i = 0; i < 4; ++i) {
-            ((Array<half, 4>&)dst)[i] -= half(1024);
+            ((Array<half, 4>&)dst)[i] -= __ushort_as_half(0x6400U);
         }
     }
     return (Array<half, 4>&)dst;
+}
+
+// inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& src)
+// {
+//     // 01234567 01234567
+//     // SEEEEEEE EMMMMMMM
+//     //      1MM XXXXXXXX
+//     // (1 + x/2^7) * 2^(e-127) -> e-127=7 -> e=134 -> 01000011 -> 0x43
+//     static constexpr uint32_t bf16_magic = 0x43004200;  // 128
+
+//     uint32_t tmp = ((uint32_t&)src & 0x7f7f7f7f);
+
+//     Array<uint32_t, 2> dst;
+//     dst[0] = __byte_perm(tmp, bf16_magic, 0x7170);
+//     dst[1] = __byte_perm(tmp, bf16_magic, 0x7372);
+
+//     auto& vec = (Array<nv_bfloat16, 4>&)dst;
+
+//     // Do not fuse these 2 loops, it's faster
+//     PRAGMA_UNROLL
+//     for (int i = 0; i < 4; ++i) {
+//         vec[i] -= __ushort_as_bfloat16(0x4300U);
+//     }
+//     PRAGMA_UNROLL
+//     for (int i = 0; i < 4; ++i) {
+//         if ((uint32_t&)src & (0x80 << (i * 8))) {
+//             vec[i] += __ushort_as_bfloat16(0x4300U);
+//         }
+//     }
+//     return (Array<nv_bfloat16, 4>&)dst;
+// }
+
+inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& src)
+{
+    // 01234567 01234567 01234567 01234567
+    // SEEEEEEE EMMMMMMM MMMMMMMM MMMMMMMM
+    //      1MM          XXXXXXXX
+    // (1 + x/2^15) * 2^(e-127) -> e-127=15 -> e=142 -> 01000111 -> 0x47
+    static constexpr uint32_t f32_magic = 0x47000000;  // 32768
+
+    Array<uint32_t, 4> tmp;
+    tmp[0] = __byte_perm((uint32_t&)src, f32_magic, 0x7604);
+    tmp[1] = __byte_perm((uint32_t&)src, f32_magic, 0x7614);
+    tmp[2] = __byte_perm((uint32_t&)src, f32_magic, 0x7624);
+    tmp[3] = __byte_perm((uint32_t&)src, f32_magic, 0x7634);
+
+    auto& vec = (Array<float, 4>&)tmp;
+
+    Array<nv_bfloat16, 4> dst;
+    PRAGMA_UNROLL
+    for (int i = 0; i < 4; ++i) {
+        dst[i] = __float2bfloat16(vec[i] - 32768.f);
+    }
+    return dst;
 }
 
 template<class T>
