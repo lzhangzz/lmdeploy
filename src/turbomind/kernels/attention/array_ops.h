@@ -145,24 +145,6 @@ inline __device__ void clear(Array<T, N> (&x)[M])
 }
 
 template<int N>
-inline __device__ void expdiff(Array<float, N>& c, const Array<float, N>& a, const Array<float, N>& b)
-{
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        c[i] = expf(a[i] - b[i]);
-    }
-}
-
-template<int N, int M>
-inline __device__ void expdiff(Array<float, N> (&c)[M], const Array<float, N> (&a)[M], const Array<float, N> (&b)[M])
-{
-    PRAGMA_UNROLL
-    for (int i = 0; i < M; ++i) {
-        expdiff(a[i], b[i], c[i]);
-    }
-}
-
-template<int N>
 struct RotaryEmbedding {
 
     static_assert(N % 2 == 0);

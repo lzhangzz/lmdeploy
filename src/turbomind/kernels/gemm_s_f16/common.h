@@ -14,6 +14,13 @@ namespace turbomind {
 #define TURBOMIND_S4_DEQUANT_USE_FMA 0
 #endif
 
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 700))
+#define TURBOMIND_ARCH_SM70 1
+#else
+#define TURBOMIND_ARCH_SM70 0
+#endif
+
+
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750))
 #define TURBOMIND_ARCH_SM75 1
 #else

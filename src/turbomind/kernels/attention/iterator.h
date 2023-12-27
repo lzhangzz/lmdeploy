@@ -193,6 +193,29 @@ struct SmemIterator {
         }
     }
 
+    template<int N>
+    __device__ void LoadK_sm70(Array<half, 4> (&frag_K)[N], int k)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            const int s = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
+            const int c = k * 4;
+            Lds(frag_K[n], &smem_[s * DIMS + c]);
+        }
+    }
+    template<int N>
+    __device__ void LoadV_sm70(Array<half, 4> (&frag_V)[N], int k)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            const int s = k * 4 + lane_id % 4;
+            const int c = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
+            Lds(frag_V[n], &smem_[s * DIMS + c]);
+        }
+    }
+
     template<int ITER_M>
     __device__ void LoadQ(Array<T, 8> (&frag_Q)[ITER_M], int k)
     {

@@ -161,12 +161,12 @@ int main(int argc, char* argv[])
 
     AttentionParams<half> params{};
 
-    constexpr int kHeadNum = 16;
-    // constexpr int kHeadNum  = 1;
+    // constexpr int kHeadNum = 16;
+    constexpr int kHeadNum  = 1;
     constexpr int kHeadDim  = 128;
     constexpr int KvHeadNum = kHeadNum;
-    constexpr int kBatchSize = 2;
-    // constexpr int kBatchSize = 1;
+    // constexpr int kBatchSize = 2;
+    constexpr int kBatchSize = 1;
     constexpr int kInputLen = 8192;
     // constexpr int kInputLen    = 16;
     constexpr int kSequenceLen = 0;
@@ -353,11 +353,14 @@ int main(int argc, char* argv[])
         for (int b = 0; b < kBatchSize; ++b) {
             for (int h = 0; h < kHeadNum; ++h) {
                 for (int q = 0; q < kInputLen; ++q) {
-                    auto qk = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
-                              + q * kContextLen;
+                    auto ref = reference.pr() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
+                               + q * kContextLen;
+                    auto data = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen
+                                + h * kInputLen * kContextLen + q * kContextLen;
                     for (int k = 0; k < kContextLen; ++k) {
-                        std::cout << qk[k] * params.inv_sqrt_dh << " ";
-                        // std::cout << (float)qk[k] << " ";
+                        std::cout << std::max(0.f, std::abs(data[k] - (float)ref[k]) - 1e-5f) << " ";
+                        // std::cout << data[k] * params.inv_sqrt_dh << " ";
+                        // std::cout << (float)data[k] << " ";
                     }
                     std::cout << "\n";
                 }
@@ -415,7 +418,7 @@ int main(int argc, char* argv[])
             kHeadNum * kHeadDim,
             kHeadNum * kHeadDim,
             kBatchSize * kInputLen,
-            0);
+            1);
 
     // [BH, SD]
     Compare(k_cache.data().get() + kSequenceLen * kHeadDim,

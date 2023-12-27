@@ -410,7 +410,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.batch_size    = batch_size;
     params.cu_block_cnts = (int*)cu_block_count;
 
-    params.k_cache_block_ptrs  = (void**)k_cache_ptrs;
+    params.k_cache_block_ptrs = (void**)k_cache_ptrs;
     // params.v_cache_block_ptrs  = (void**)v_cache_ptrs;
     params.kv_cache_block_size = kv_cache_block_len_;
 
@@ -447,9 +447,9 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     params.arch   = arch_;
     params.stream = stream_;
 
-    params.quant_policy = quant_policy_;
-    FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
-    std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
+    // params.quant_policy = quant_policy_;
+    // FT_CHECK(std::size(weights->past_kv_scale) == std::size(params.kv_quant_params));
+    // std::copy(weights->past_kv_scale.begin(), weights->past_kv_scale.end(), std::begin(params.kv_quant_params));
 
     {
         NvtxScope scope("decoder_multihead_attention");
