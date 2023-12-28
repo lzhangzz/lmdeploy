@@ -4,16 +4,12 @@
 #include "kv_cache.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
-#include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "test_utils.h"
 #include <cmath>
-#include <ios>
 #include <iostream>
-#include <limits>
 #include <thrust/universal_vector.h>
 
 #include <algorithm>
-#include <iomanip>
 #include <numeric>
 #include <random>
 
@@ -145,28 +141,14 @@ __global__ void test_bf16(nv_bfloat16* out, int n)
 
 int main(int argc, char* argv[])
 {
-    // uint16_t x = 0x4380;
-
-    // printf("%f\n", (float)((nv_bfloat16&)x));
-
-    // thrust::universal_vector<nv_bfloat16> tmp(1 << 20);
-    // // thrust::universal_vector<nv_bfloat16> tmp(256);
-    // for (int i = 0; i < 10; ++i) {
-    //     test_bf16<<<1, 1>>>(tmp.data().get(), tmp.size() / 4);
-    // }
-
-    // cudaDeviceSynchronize();
-
-    // return 0;
-
     AttentionParams<half> params{};
 
-    // constexpr int kHeadNum = 16;
-    constexpr int kHeadNum  = 1;
-    constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum;
-    // constexpr int kBatchSize = 2;
-    constexpr int kBatchSize = 1;
+    constexpr int kHeadNum = 16;
+    // constexpr int kHeadNum  = 1;
+    constexpr int kHeadDim   = 128;
+    constexpr int KvHeadNum  = kHeadNum;
+    constexpr int kBatchSize = 2;
+    // constexpr int kBatchSize = 1;
     constexpr int kInputLen = 8192;
     // constexpr int kInputLen    = 16;
     constexpr int kSequenceLen = 0;
@@ -303,7 +285,7 @@ int main(int argc, char* argv[])
     Reference<half> reference(Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 10; ++i) {
         reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
     }
 
@@ -358,8 +340,8 @@ int main(int argc, char* argv[])
                     auto data = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen
                                 + h * kInputLen * kContextLen + q * kContextLen;
                     for (int k = 0; k < kContextLen; ++k) {
-                        std::cout << std::max(0.f, std::abs(data[k] - (float)ref[k]) - 1e-5f) << " ";
-                        // std::cout << data[k] * params.inv_sqrt_dh << " ";
+                        // std::cout << std::max(0.f, std::abs(data[k] - (float)ref[k]) - 1e-5f) << " ";
+                        std::cout << data[k] * params.inv_sqrt_dh << " ";
                         // std::cout << (float)data[k] << " ";
                     }
                     std::cout << "\n";
@@ -418,7 +400,7 @@ int main(int argc, char* argv[])
             kHeadNum * kHeadDim,
             kHeadNum * kHeadDim,
             kBatchSize * kInputLen,
-            1);
+            0);
 
     // [BH, SD]
     Compare(k_cache.data().get() + kSequenceLen * kHeadDim,

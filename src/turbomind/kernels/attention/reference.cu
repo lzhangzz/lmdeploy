@@ -90,16 +90,15 @@ void Reference<T>::Reshape(
     std::cout << max_q_len << " " << max_k_len << " " << head_num << " " << head_dim << " " << batch_size << "\n";
 
     q_.resize(batch_size * head_num * max_q_len * head_dim);
+    mask_.resize(batch_size * max_q_len * max_k_len);
 
     if (type_ == kUNFUSED) {
         std::cout << "size of QK buf: "
                   << ((batch_size * head_num * max_q_len * max_k_len * sizeof(float)) / float(1 << 30)) << " GB\n";
-        mask_.resize(batch_size * max_q_len * max_k_len);
         qk_.resize(batch_size * head_num * max_q_len * max_k_len);
         pr_.resize(batch_size * head_num * max_q_len * max_k_len);
         out_.resize(batch_size * max_q_len * head_num * head_dim);
         cudaStreamSynchronize(0);
-        createCausalMasks<<<batch_size, 512, 0, stream_>>>(mask_.data().get(), nullptr, nullptr, max_q_len, max_k_len);
     }
     else if (type_ == kFLASH_ATTENTION) {
         key_cache_ptrs_.resize(batch_size);
@@ -113,6 +112,8 @@ void Reference<T>::Reshape(
             k_seqlens_[i] = max_k_len;
         }
     }
+
+    createCausalMasks<<<batch_size, 512, 0, stream_>>>(mask_.data().get(), nullptr, nullptr, max_q_len, max_k_len);
 
     max_q_len_   = max_q_len;
     max_k_len_   = max_k_len;
@@ -251,10 +252,10 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
         AttentionOp                  flash_attention(batch_size_, head_num_, max_k_len_, max_q_len_, head_dim_);
         typename AttentionOp::Params attn_params{output,
                                                  q_.data().get(),
-                                                 nullptr,  // k ptr
-                                                 nullptr,  // v ptr
-                                                 nullptr,  // attention mask
-                                                 nullptr,  // qk buf float
+                                                 nullptr,             // k ptr
+                                                 nullptr,             // v ptr
+                                                 mask_.data().get(),  // attention mask
+                                                 nullptr,             // qk buf float
                                                  cu_q_seqlens_.data().get(),
                                                  nullptr,
                                                  nullptr,

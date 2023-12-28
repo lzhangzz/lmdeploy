@@ -53,13 +53,25 @@ void invokeAttention(const AttentionParams<T>& params)
         // dim3 grid(max_q_tile, params.num_heads, params.batch_size);
         dim3 grid(max_q_tile, params.batch_size, params.num_heads);
 
-        cudaFuncSetAttribute(attention_kernel<Attn>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
+        std::cout << "(" << grid.x << " " << grid.y << " " << grid.z << ") " << block.x << "\n";
+
+        auto err =
+            cudaFuncSetAttribute(attention_kernel<Attn>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
+        if (err) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
 
         attention_kernel<Attn><<<grid, block, kDynSmemSize, params.stream>>>(params);
+
+        if (auto err = cudaGetLastError(); err != cudaSuccess) {
+            std::cout << cudaGetErrorString(err) << "\n";
+            std::abort();
+        }
     };
 
     if (params.arch >= 80) {
-        using Type = Attention<T, Tkv, std::integral_constant<int, 64>, 64, 64, 128, 2>;
+        using Type = Attention<T, Tkv, std::integral_constant<int, 64>, CTA_Q, 64, 128, 2>;
         invoke((Type*)0);
     }
 }
@@ -72,7 +84,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     FT_CHECK(params.size_per_head == HeadDim);
 
     if constexpr (std::is_same_v<T, half>) {
-        invokeAttention<T, T, HeadDim, 64>(params);
+        invokeAttention<T, T, HeadDim, 128>(params);
     }
 }
 

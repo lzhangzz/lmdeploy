@@ -14,16 +14,14 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-constexpr int SMEM_PAD = 0;
-
-template<class T, class Map, class BlockSeqLen, class Swizzle, int Stages>
+template<class T, class Map, class BlockSeqLen, class Swizzle, int Padding, int Stages>
 struct GmemIterator {
     using ElementType = T;
     using AccessType  = Array<T, Map::kAccessC>;
 
     static constexpr int kElementSize = sizeof(ElementType);
     static constexpr int kAccessSize  = sizeof(AccessType);
-    static constexpr int kSizePerTile = Map::kDimS * (Map::kDimC + SMEM_PAD);
+    static constexpr int kSizePerTile = Map::kDimS * (Map::kDimC + Padding);
     static constexpr int kIterCount   = Map::kIterS * Map::kIterC;
 
     Swizzle swizzle_;
@@ -51,7 +49,7 @@ struct GmemIterator {
     {
         int2 offsets = Map::get_offset(warp_id, lane_id);
         init_offset_ = offsets.x + offsets.y * Map::kDimC;
-        dst_offset_  = offsets.x + offsets.y * (Map::kDimC + SMEM_PAD);
+        dst_offset_  = offsets.x + offsets.y * (Map::kDimC + Padding);
     }
 
     __device__ void AdjustBlockTileIdx(int tile_idx)  // Interprept step as (block_idx, local_tile_idx)
@@ -72,16 +70,48 @@ struct GmemIterator {
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + SMEM_PAD) + c * Map::kDeltaC);
+                const int idx = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
                 if constexpr (is_residue) {
-                    CpAsync(smem_int_ptr_ + kElementSize * idx,  //
-                            &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
-                            offset_s + s * Map::kDeltaS < max_s);
+                    Copy(idx,
+                         &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
+                         offset_s + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(smem_int_ptr_ + kElementSize * idx,  //
-                            &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    Copy(idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
                 }
+            }
+        }
+    }
+
+    using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
+
+    template<bool is_residue>
+    __device__ void Load(Fragment& fragment, int max_s)
+    {
+        auto      src      = block_;
+        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
+                    Ldg(fragment[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                }
+                else {
+                    clear(fragment[s][c]);
+                }
+            }
+        }
+    }
+
+    __device__ void Save(const Fragment& fragment)
+    {
+        PRAGMA_UNROLL
+        for (int s = 0; s < Map::kIterS; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                const int idx = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
+                Store(&smem_[idx], fragment[s][c]);
             }
         }
     }
@@ -95,15 +125,16 @@ struct GmemIterator {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 clear((Array<T, Map::kAccessC>&)
-                          dst[dst_offset_ + s * Map::kDeltaS * (Map::kDimC + SMEM_PAD) + c * Map::kDeltaC]);
+                          dst[dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC]);
             }
         }
     }
 
-    static __device__ void CpAsync(uint32_t smem_int_ptr, const T* __restrict__ src, bool mask)
+    __device__ void CpAsync(int offset, const T* __restrict__ src, bool mask)
     {
-        // const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
         constexpr int cp_size = sizeof(AccessType);
+
+        offset = smem_int_ptr_ * kElementSize * offset;
 #if TURBOMIND_ARCH_SM80
         // clang-format off
         asm volatile("{\n"
@@ -111,7 +142,7 @@ struct GmemIterator {
                      "  setp.ne.b32 p, %0, 0;\n"
                      "  @p cp.async.cg.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask),
-                     "r"(smem_int_ptr),
+                     "r"(offset),
                      "l"(src),
                      "n"(cp_size));
         // clang-format on
@@ -121,37 +152,53 @@ struct GmemIterator {
 #endif
     }
 
-    static __device__ void CpAsync(uint32_t smem_int_ptr, const T* __restrict__ src)
+    __device__ void CpAsync(int offset, const T* __restrict__ src)
     {
         constexpr int cp_size = sizeof(AccessType);
+
+        offset = smem_int_ptr_ * kElementSize * offset;
 #if TURBOMIND_ARCH_SM80
-        asm volatile("cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(smem_int_ptr),
-                     "l"(src),
-                     "n"(cp_size));
+        asm volatile(
+            "cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(offset), "l"(src), "n"(cp_size));
 #else
         assert(TURBOMIND_ARCH_SM80);
 #endif
     }
 
-    // static __device__ void CpLdg(T* __restrict__ dst, const T* __restrict__ src, bool mask)
-    // {
-    //     if (mask) {
-    //         Ldg(*(AccessType*)dst, src);
-    //     }
-    // }
+    __device__ void CpLdg(int offset, const T* __restrict__ src, bool mask)
+    {
+        if (mask) {
+            Ldg(*(AccessType*)&smem_[offset], src);
+        }
+    }
 
-    // __device__ void Copy(T* __restrict__ dst, const T* __restrict__ src, bool mask)
-    // {
-    //     if constexpr (TURBOMIND_ARCH_SM80) {
-    //         CpAsync(dst, src, mask);
-    //     }
-    //     else {
-    //         CpLdg(dst, src, mask);
-    //     }
-    // }
+    __device__ void CpLdg(int offset, const T* __restrict__ src)
+    {
+        Ldg(*(AccessType*)&smem_[offset], src);
+    }
+
+    __device__ void Copy(int offset, const T* __restrict__ src, bool mask)
+    {
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            CpAsync(offset, src, mask);
+        }
+        else {
+            CpLdg(offset, src, mask);
+        }
+    }
+
+    __device__ void Copy(int offset, const T* __restrict__ src)
+    {
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            CpAsync(offset, src);
+        }
+        else {
+            CpLdg(offset, src);
+        }
+    }
 };
 
-template<class T, int DIMS, class Swizzle>
+template<class T, int DIMS, class Swizzle, int Padding>
 struct SmemIterator {
     static_assert(sizeof(T) == 2);
     static constexpr int kElemSize = sizeof(T);
@@ -173,7 +220,7 @@ struct SmemIterator {
             auto&     r   = (Array<uint32_t, 4>&)frag_K[n * 2];
             const int s   = n * 16 + group_lane_id % 8 + group_id * 8;
             const int c   = k * 16 + group_lane_id / 8 * 8;
-            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            const int idx = swizzle_(s * (DIMS + Padding) + c);
             ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
         }
     }
@@ -188,7 +235,7 @@ struct SmemIterator {
             auto&     r   = (Array<uint32_t, 4>&)frag_K[k * 2];
             const int s   = lane_id % 8 + n * 8;
             const int c   = lane_id / 8 * 8 + k * 32;
-            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            const int idx = swizzle_(s * (DIMS + Padding) + c);
             ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
         }
     }
@@ -201,7 +248,7 @@ struct SmemIterator {
         for (int n = 0; n < N; ++n) {
             const int s = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
             const int c = k * 4;
-            Lds(frag_K[n], &smem_[s * DIMS + c]);
+            Lds(frag_K[n], &smem_[s * (DIMS + Padding) + c]);
         }
     }
     template<int N>
@@ -212,7 +259,7 @@ struct SmemIterator {
         for (int n = 0; n < N; ++n) {
             const int s = k * 4 + lane_id % 4;
             const int c = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
-            Lds(frag_V[n], &smem_[s * DIMS + c]);
+            Lds(frag_V[n], &smem_[s * (DIMS + Padding) + c]);
         }
     }
 
@@ -228,7 +275,7 @@ struct SmemIterator {
             auto&     Q   = (Array<uint32_t, 4>&)frag_Q[m];
             const int mm  = m * 16 + lane_id % 16 + warp_id * WARP_Q;
             const int kk  = k * 16 + lane_id / 16 * 8;
-            const int idx = swizzle_(mm * (DIMS + SMEM_PAD) + kk);
+            const int idx = swizzle_(mm * (DIMS + Padding) + kk);
             ldmatrix_m8n8_x4_b16(Q[0], Q[1], Q[2], Q[3], smem_int_ptr_ + kElemSize * idx);
         }
     }
@@ -253,14 +300,14 @@ struct SmemIterator {
             auto&     r   = (Array<uint32_t, 4>&)frag_V[n * 2];
             const int kk  = k * 16 + lane_id % 16;      // s
             const int nn  = n * 16 + lane_id / 16 * 8;  // d
-            const int idx = swizzle_(kk * (DIMS + SMEM_PAD) + nn);
+            const int idx = swizzle_(kk * (DIMS + Padding) + nn);
             ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
         }
     }
 };
 
-template<int DIMS, class Swizzle>
-struct SmemIterator<uint8_t, DIMS, Swizzle> {
+template<int DIMS, class Swizzle, int Padding>
+struct SmemIterator<uint8_t, DIMS, Swizzle, Padding> {
     uint32_t smem_int_ptr_;
     Swizzle  swizzle_;
 
@@ -276,7 +323,7 @@ struct SmemIterator<uint8_t, DIMS, Swizzle> {
             auto&     r   = (Array<uint32_t, 4>&)frag_K[n];
             const int s   = n * 8 + lane_id;
             const int c   = k * 16 + 0;
-            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            const int idx = swizzle_(s * (DIMS + Padding) + c);
             ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
         }
     }
@@ -291,13 +338,13 @@ struct SmemIterator<uint8_t, DIMS, Swizzle> {
             auto&     r   = (Array<uint32_t, 4>&)frag_V[n];
             const int s   = lane_id % 16 + k * 16;      // v
             const int c   = lane_id / 16 * 16 + n * 8;  // d
-            const int idx = swizzle_(s * (DIMS + SMEM_PAD) + c);
+            const int idx = swizzle_(s * (DIMS + Padding) + c);
             ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
         }
     }
 };
 
-template<class T, int DIMS, class Swizzle>
+template<class T, int DIMS, class Swizzle, int Padding>
 struct SmemIteratorK {
     static_assert(sizeof(T) == 2);
     static constexpr int kElemSize = sizeof(T);
@@ -327,7 +374,7 @@ struct SmemIteratorK {
 
         PRAGMA_UNROLL
         for (int n = 0; n < 4; ++n) {
-            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * ((n * 16 + s) * (DIMS + SMEM_PAD) + c));
+            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * ((n * 16 + s) * (DIMS + Padding) + c));
         }
     }
 
@@ -375,7 +422,7 @@ struct SmemIteratorK {
     // 7 -> 0: ^ 111  (111 ^ 000)
 };
 
-template<class T, int DIMS, class Swizzle>
+template<class T, int DIMS, class Swizzle, int Padding>
 struct SmemIteratorQ {
     static_assert(sizeof(T) == 2);
     static constexpr int kElemSize = sizeof(T);
@@ -407,7 +454,7 @@ struct SmemIteratorQ {
 
         PRAGMA_UNROLL
         for (int m = 0; m < 1; ++m) {
-            ptrs_[m] = smem_int_ptr_ + fn(kElemSize * ((m * 16 + s) * (DIMS + SMEM_PAD) + c));
+            ptrs_[m] = smem_int_ptr_ + fn(kElemSize * ((m * 16 + s) * (DIMS + Padding) + c));
         }
     }
 
@@ -453,7 +500,7 @@ struct SmemIteratorQ {
     // 7 -> 0: ^ 111  (111 ^ 000)
 };
 
-template<class T, int DIMS, class Swizzle>
+template<class T, int DIMS, class Swizzle, int Padding>
 struct SmemIteratorV {
     static_assert(sizeof(T) == 2);
     static constexpr int kElemSize = sizeof(T);
@@ -480,7 +527,7 @@ struct SmemIteratorV {
 
         PRAGMA_UNROLL
         for (int n = 0; n < 8; ++n) {
-            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * (s * (DIMS + SMEM_PAD) + (n * 16 + c)));
+            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * (s * (DIMS + Padding) + (n * 16 + c)));
         }
     }
 
@@ -509,7 +556,7 @@ struct SmemIteratorV {
 
         offset_k *= 16;
         for (int n = 0; n < 8; ++n) {
-            ptrs_[n] += kElemSize * offset_k * (DIMS + SMEM_PAD);
+            ptrs_[n] += kElemSize * offset_k * (DIMS + Padding);
         }
     }
 };

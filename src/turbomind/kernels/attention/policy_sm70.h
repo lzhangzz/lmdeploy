@@ -49,12 +49,16 @@ mma_m8n8k4_row_row(Array<float, 8>& d, const Array<half, 4>& a, const Array<half
 
 template<class T, class Tkv, int CTA_Q, int CTA_S, int HeadDim>
 struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
-    static constexpr int  kSmemPadding = 0;
-    static constexpr int  kWarpCount   = 4;
-    static constexpr bool kUseSmemQ    = false;
+    static constexpr int kPadQ = 4;
+    static constexpr int kPadK = 4;
+    static constexpr int kPadV = 4;
+
+    static constexpr bool kUseSmemQ = false;
 
     static constexpr int WARP_S = CTA_S;
-    static constexpr int WARP_Q = CTA_Q / kWarpCount;
+    static constexpr int WARP_Q = 16;
+
+    static constexpr int kWarpCount = CTA_Q / WARP_Q;
 
     static constexpr int OP_M = 16;
     static constexpr int OP_N = 16;
@@ -79,7 +83,6 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                                             //      4  0  8  1    4 16    1
     using FragS = Array<float, 8>[kM][kN];  // (q2,q2,s2,s2,q2) (Qm,Sn) (s2,q2,s2)
                                             //   4  8  8  2  1   16 16    4  2  1
-
     using FragP = Array<half, 4>[vK][vM];   //    (q2,q2,x2,q4) (Sk,Qm) (s4)
                                             //      4  8  0  1    4 16    1
     using FragV = Array<half, 4>[vK][vN];   //    (d2,x2,d2,s4) (Sk,Dn) (d4)       [row major]
@@ -136,8 +139,8 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             PRAGMA_UNROLL
             for (int m = 0; m < kM; ++m) {
                 const int mm = m * OP_M + mma / 2 * 8 + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
-                const int kk = k * OP_K + 0;
-                Lds(frag_Q[k][m], &smem_Q[mm * (HeadDim + kSmemPadding) + kk]);
+                const int kk = k * 4 + 0;
+                Lds(frag_Q[k][m], &smem_Q[mm * (HeadDim + kPadQ) + kk]);
             }
         }
     }
@@ -157,6 +160,12 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                 PRAGMA_UNROLL
                 for (int n = 0; n < kN; ++n) {
                     mma_m8n8k4_row_col(frag_S[m][n], frag_Q[k][m], frag_K[k][n], frag_S[m][n]);
+                    // mma_m8n8k4_row_col(
+                    //     frag_S[m][n], (Array<half, 4>&)frag_Q[k][m][0], (Array<half, 4>&)frag_K[k][n][0],
+                    //     frag_S[m][n]);
+                    // mma_m8n8k4_row_col(
+                    //     frag_S[m][n], (Array<half, 4>&)frag_Q[k][m][4], (Array<half, 4>&)frag_K[k][n][4],
+                    //     frag_S[m][n]);
                 }
             }
         }
@@ -266,11 +275,7 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             }
         }
 
-        // __shared__ __align__(16) half tmp_P[CTA_Q][CTA_S];
-        ForeachS(frag_S, [&](int qi, int si, float p) {
-            // tmp_P[qi][si] = half(p);
-            smem_P[qi * CTA_S + si] = half(p);
-        });
+        ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[qi * (CTA_S + kPadQ) + si] = half(p); });
 
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -281,8 +286,7 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             for (int k = 0; k < vK; ++k) {
                 const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
                 const int si = k * OP_K;
-                // Lds(frag_P[m][k], &tmp_P[qi][si]);
-                Lds(frag_P[m][k], &smem_P[qi * CTA_S + si]);
+                Lds(frag_P[m][k], &smem_P[qi * (CTA_S + kPadQ) + si]);  // 384
             }
         }
     }
