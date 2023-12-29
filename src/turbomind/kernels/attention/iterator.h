@@ -43,8 +43,6 @@ struct GmemIterator {
     int init_offset_;
     int dst_offset_;
 
-    // Fragment fragment_;
-
     __device__
     GmemIterator(const T** block_ptrs, BlockSeqLen block_seqlen, int local_offset, T* smem, int warp_id, int lane_id):
         block_ptrs_(block_ptrs),
@@ -130,44 +128,26 @@ struct GmemIterator {
 
     __device__ void Save(const Fragment& rmem)
     {
-        Array<int, Map::kIterC * 2> idxs;
+        Array<int, Map::kIterC> idxs;
         PRAGMA_UNROLL
         for (int c = 0; c < Map::kIterC; ++c) {
-            const int idx0  = swizzle_(dst_offset_ + c * Map::kDeltaC);
-            const int idx1  = swizzle_(dst_offset_ + c * Map::kDeltaC + 4);
-            idxs[c * 2]     = idx0;
-            idxs[c * 2 + 1] = idx1;
+            const int idx0 = swizzle_(dst_offset_ + c * Map::kDeltaC);
+            idxs[c]        = idx0;
         }
-
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&smem_[idxs[c * 2 + 0]], (Array<T, 4>&)rmem[s][c][0]);
-                Store(&smem_[idxs[c * 2 + 1]], (Array<T, 4>&)rmem[s][c][4]);
+                Store(&smem_[idxs[c]], rmem[s][c]);
             }
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 const int s0 = offset_s + s * Map::kDeltaS;
                 const int s1 = s0 + Map::kDeltaS;
-                idxs[c * 2 + 0] =
-                    swizzle_.AdvanceS<Map::kDeltaS>(idxs[c * 2 + 0], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
-                idxs[c * 2 + 1] =
-                    swizzle_.AdvanceS<Map::kDeltaS>(idxs[c * 2 + 1], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
+                idxs[c]      = swizzle_.AdvanceS<Map::kDeltaS>(idxs[c], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
             }
         }
-
-        // PRAGMA_UNROLL
-        // for (int s = 0; s < Map::kIterS; ++s) {
-        //     PRAGMA_UNROLL
-        //     for (int c = 0; c < Map::kIterC; ++c) {
-        //         const int idx0 = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c *
-        //         Map::kDeltaC); Store(&smem_[idx0], (Array<T, 4>&)rmem[s][c][0]); const int idx1 =
-        //             swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC + 4);
-        //         Store(&smem_[idx1], (Array<T, 4>&)rmem[s][c][4]);
-        //     }
-        // }
     }
 
     template<int I>

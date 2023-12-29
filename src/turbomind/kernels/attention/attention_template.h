@@ -25,6 +25,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     using Policy::kPadQ;
     using Policy::kPadK;
+    using Policy::kPadP;
     using Policy::kPadV;
     using Policy::kWarpCount;
 
@@ -59,7 +60,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             struct {
                 __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
                 __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-                __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
+                __align__(16) T smem_P[CTA_Q][CTA_S + kPadP];
             };
         };
     };
@@ -119,7 +120,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     __device__ void LoadQ(FragQ& frag_Q)
     {
-        constexpr int kVecSize = 8;  // sizeof(uint4) / sizeof(T);
+        constexpr int kVecSize = 4;  // sizeof(uint4) / sizeof(T);
 
         using Vec = Array<T, kVecSize>;
         using Map = RakedThreadMap<kHeadDim, CTA_Q, kVecSize, kWarpCount>;
@@ -189,9 +190,9 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                // Store(&smem_Q_[Swizzle{}(qi * (kHeadDim + kPadQ) + di)], vec_Q[s][c]);
-                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 0], (Array<T, 4>&)vec_Q[s][c][0]);
-                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 4], (Array<T, 4>&)vec_Q[s][c][4]);
+                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di], vec_Q[s][c]);
+                // Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 0], (Array<T, 4>&)vec_Q[s][c][0]);
+                // Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 4], (Array<T, 4>&)vec_Q[s][c][4]);
             }
         }
 
@@ -254,7 +255,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         if (query_idx_ >= params_.input_length[batch_idx_]) {
             return;
         }
-        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, 8 /*sizeof(uint4) / sizeof(T)*/, kWarpCount>;
+        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, 4 /*sizeof(uint4) / sizeof(T)*/, kWarpCount>;
         using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kPadK, kStages>;
         using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, SwizzleV, kPadV, kStages>;
         using SmemQ  = SmemIterator<T, kHeadDim, Swizzle, kPadQ>;

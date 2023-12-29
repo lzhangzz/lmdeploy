@@ -1,3 +1,4 @@
+#include "array_ops.h"
 #include "policy.h"
 #include "src/turbomind/kernels/custom_ar_kernels.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
@@ -51,6 +52,7 @@ template<class T, class Tkv, int CTA_Q, int CTA_S, int HeadDim>
 struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     static constexpr int kPadQ = 4;
     static constexpr int kPadK = 4;
+    static constexpr int kPadP = 4;
     static constexpr int kPadV = 0;
 
     static constexpr bool kUseSmemQ = false;
@@ -130,12 +132,6 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int mma = lane_id % 16 / 4;
-
-        const int mm = mma / 2 * 8 + (lane_id & 1) + lane_id / 16 * 4;
-        const int nn = mma % 2 * 8 + (lane_id & 2);
-
         PRAGMA_UNROLL
         for (int m = 0; m < kM; ++m) {
             PRAGMA_UNROLL
@@ -146,9 +142,9 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                     for (int q = 0; q < 2; ++q) {
                         PRAGMA_UNROLL
                         for (int s0 = 0; s0 < 2; ++s0) {
-                            const int qi = m * OP_M + mm + q * 2 + warp_id * WARP_Q;
-                            const int si = n * OP_N + nn + s1 * 4 + s0;
-                            ((Func&&)func)(qi, si, S[m][n][s1 * 4 + q * 2 + s0]);
+                            const int qi = m * OP_M + (lane_id & 8) + (lane_id & 1) + lane_id / 16 * 4 + q * 2;
+                            const int si = n * OP_N + (lane_id & 4) * 2 + (lane_id & 2) + s1 * 4 + s0;
+                            ((Func&&)func)(warp_id * WARP_Q + qi, si, S[m][n][s1 * 4 + q * 2 + s0]);
                         }
                     }
                 }
@@ -203,7 +199,6 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     template<class SmemP, class Smem>
     __device__ void ComputePV(SmemP& smem_P, Smem& smem_V, FragP& frag_P, FragO& frag_O)
     {
-
         if constexpr (kUseSmemP) {
             smem_P.LoadP_sm70(frag_P[0], 0);
         }
@@ -312,18 +307,18 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             }
         }
 
-        ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[qi * (CTA_S + kPadQ) + si] = half(p); });
+        ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[qi * (CTA_S + kPadP) + si] = half(p); });
 
         if constexpr (!kUseSmemP) {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int m = 0; m < vM; ++m) {
+            for (int k = 0; k < vK; ++k) {
                 PRAGMA_UNROLL
-                for (int k = 0; k < vK; ++k) {
+                for (int m = 0; m < vM; ++m) {
                     const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
                     const int si = k * OP_K;
-                    Lds(frag_P[m][k], &smem_P[qi * (CTA_S + kPadQ) + si]);
+                    Lds(frag_P[k][m], &smem_P[qi * (CTA_S + kPadP) + si]);
                 }
             }
         }
