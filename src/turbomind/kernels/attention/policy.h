@@ -8,10 +8,15 @@ struct sm70_t {};
 struct simt_t {};
 
 struct Identity {
-    template<class X>
-    __device__ X operator()(X x)
+    template<class T>
+    __device__ T operator()(T offset)
     {
-        return x;
+        return offset;
+    }
+
+    template <int D>
+    __device__ int AdvanceS(int offset, int s0, int s1) {
+        return offset;
     }
 };
 

@@ -98,10 +98,30 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     struct SwizzleV {
         __device__ int operator()(int offset)
         {
-            // ssssSSdddDDdd
-            offset = ((offset & 8) << 1) ^ offset;
-            offset = ((offset & (0x3 << 7)) >> 5) ^ offset;
+            // Rearrange for LDS.128 (also avoid bank-conflict along C)
+            // 6543210
+            // dDDDDdd
+            offset = ((offset & 8) << 2) ^ offset;                                     // x[5] ^= x[3]
+            offset = ((offset & ~20) | (((offset & 16) >> 2) | ((offset & 4) << 2)));  // swap(x[4], x[2])
+
+            // Shuffle C according S to avoid bank-conflict
+            // ssssSSddDDddd
+            offset = ((offset & (0x3 << 7)) >> 4) ^ offset;
             return offset;
+        }
+
+        template<int D>
+        __device__ int AdvanceS(int offset, int s0, int s1)
+        {
+            if constexpr (D % 4 == 0) {
+                return offset;
+            }
+            else if constexpr (D % 2 == 0) {
+                return offset ^ (((s0 ^ s1) & 0x2) << 3);
+            }
+            else {
+                return offset ^ (((s0 ^ s1) & 0x3) << 3);
+            }
         }
     };
 

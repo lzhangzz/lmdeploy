@@ -6,6 +6,8 @@
 #include "array_ops.h"
 #include <type_traits>
 
+#include "policy.h"
+
 namespace turbomind {
 
 #if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
@@ -128,17 +130,44 @@ struct GmemIterator {
 
     __device__ void Save(const Fragment& rmem)
     {
+        Array<int, Map::kIterC * 2> idxs;
+        PRAGMA_UNROLL
+        for (int c = 0; c < Map::kIterC; ++c) {
+            const int idx0  = swizzle_(dst_offset_ + c * Map::kDeltaC);
+            const int idx1  = swizzle_(dst_offset_ + c * Map::kDeltaC + 4);
+            idxs[c * 2]     = idx0;
+            idxs[c * 2 + 1] = idx1;
+        }
+
+        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx0 = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
-                Store(&smem_[idx0], (Array<T, 4>&)rmem[s][c][0]);
-                const int idx1 =
-                    swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC + 4);
-                Store(&smem_[idx1], (Array<T, 4>&)rmem[s][c][4]);
+                Store(&smem_[idxs[c * 2 + 0]], (Array<T, 4>&)rmem[s][c][0]);
+                Store(&smem_[idxs[c * 2 + 1]], (Array<T, 4>&)rmem[s][c][4]);
+            }
+            PRAGMA_UNROLL
+            for (int c = 0; c < Map::kIterC; ++c) {
+                const int s0 = offset_s + s * Map::kDeltaS;
+                const int s1 = s0 + Map::kDeltaS;
+                idxs[c * 2 + 0] =
+                    swizzle_.AdvanceS<Map::kDeltaS>(idxs[c * 2 + 0], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
+                idxs[c * 2 + 1] =
+                    swizzle_.AdvanceS<Map::kDeltaS>(idxs[c * 2 + 1], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
             }
         }
+
+        // PRAGMA_UNROLL
+        // for (int s = 0; s < Map::kIterS; ++s) {
+        //     PRAGMA_UNROLL
+        //     for (int c = 0; c < Map::kIterC; ++c) {
+        //         const int idx0 = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c *
+        //         Map::kDeltaC); Store(&smem_[idx0], (Array<T, 4>&)rmem[s][c][0]); const int idx1 =
+        //             swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC + 4);
+        //         Store(&smem_[idx1], (Array<T, 4>&)rmem[s][c][4]);
+        //     }
+        // }
     }
 
     template<int I>
@@ -231,8 +260,6 @@ struct SmemIterator {
     uint32_t             smem_int_ptr_;
     Swizzle              swizzle_;
 
-    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
-
     template<int ITER_N>
     __device__ void LoadK(Array<T, 4> (&frag_K)[ITER_N], int k)
     {
@@ -288,15 +315,29 @@ struct SmemIterator {
             Lds(frag_K[n], &smem_[s * (DIMS + Padding) + c]);
         }
     }
+
+    Array<int, 4> idxs_;
+
+    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+    {
+        if constexpr (!std::is_same_v<Swizzle, Identity>) {
+            const int lane_id = threadIdx.x % WARP_SIZE;
+            PRAGMA_UNROLL
+            for (int n = 0; n < 8; n += 2) {
+                const int s  = 0 * 4 + lane_id % 4;
+                const int c  = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
+                idxs_[n / 2] = swizzle_(s * (DIMS) + c);
+            }
+        }
+    }
+
     template<int N>
     __device__ void LoadV_sm70(Array<half, 4> (&frag_V)[N], int k)
     {
-        const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
-        for (int n = 0; n < N; ++n) {
-            const int s = k * 4 + lane_id % 4;
-            const int c = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
-            Lds(frag_V[n], &smem_[swizzle_(s * (DIMS + Padding) + c)]);
+        for (int n = 0; n < N; n += 2) {
+            const int idx = idxs_[n / 2] + k * 4 * DIMS;
+            Lds((Array<half, 8>&)frag_V[n], &smem_[idx]);
         }
     }
     template<int M>

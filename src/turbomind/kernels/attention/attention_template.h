@@ -50,18 +50,18 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     static_assert(kStages == 2);
 
     struct SharedStorage {
-        __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
-        __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
-        __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-        __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
-        // union {
-        //     __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
-        //     struct {
-        //         __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
-        //         __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-        //         __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
-        //     };
-        // };
+        // __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
+        // __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
+        // __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
+        // __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
+        union {
+            __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
+            struct {
+                __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
+                __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
+                __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
+            };
+        };
     };
 
     const ParamType& params_;

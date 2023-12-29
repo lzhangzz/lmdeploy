@@ -161,6 +161,14 @@ int main(int argc, char* argv[])
     }
     printf("\n");
 
+    for (int i = 0; i < 32; ++i) {
+        int x = i << 2;
+        x     = ((x & 8) << 2) ^ x;
+        x     = ((x & ~20) | (((x & 16) >> 2) | ((x & 4) << 2)));
+        printf("%2d ", x >> 2);
+    }
+    printf("\n");
+
     AttentionParams<half> params{};
 
     constexpr int kHeadNum = 16;
