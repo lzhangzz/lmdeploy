@@ -7,8 +7,6 @@
 #include "quantization.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
-#include <climits>
-#include <cmath>
 #include <cstdint>
 #include <cuda_pipeline_primitives.h>
 #include <limits>
@@ -44,20 +42,26 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     using typename Policy::Swizzle;
 
+    using typename Policy::SwizzleV;
+
     static constexpr int kHeadDim = HeadDim;
     static constexpr int kStages  = Stages;
 
     static_assert(kStages == 2);
 
     struct SharedStorage {
-        union {
-            __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
-            struct {
-                __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
-                __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-                __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
-            };
-        };
+        __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
+        __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
+        __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
+        __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
+        // union {
+        //     __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
+        //     struct {
+        //         __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
+        //         __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
+        //         __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
+        //     };
+        // };
     };
 
     const ParamType& params_;
@@ -115,7 +119,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     __device__ void LoadQ(FragQ& frag_Q)
     {
-        constexpr int kVecSize = 4;  // sizeof(uint4) / sizeof(T);
+        constexpr int kVecSize = 8;  // sizeof(uint4) / sizeof(T);
 
         using Vec = Array<T, kVecSize>;
         using Map = RakedThreadMap<kHeadDim, CTA_Q, kVecSize, kWarpCount>;
@@ -185,7 +189,9 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                Store(&smem_Q_[Swizzle{}(qi * (kHeadDim + kPadQ) + di)], vec_Q[s][c]);
+                // Store(&smem_Q_[Swizzle{}(qi * (kHeadDim + kPadQ) + di)], vec_Q[s][c]);
+                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 0], (Array<T, 4>&)vec_Q[s][c][0]);
+                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 4], (Array<T, 4>&)vec_Q[s][c][4]);
             }
         }
 
@@ -248,12 +254,13 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         if (query_idx_ >= params_.input_length[batch_idx_]) {
             return;
         }
-        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, 4 /*sizeof(uint4) / sizeof(T)*/, kWarpCount>;
+        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, 8 /*sizeof(uint4) / sizeof(T)*/, kWarpCount>;
         using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kPadK, kStages>;
-        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kPadV, kStages>;
+        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, SwizzleV, kPadV, kStages>;
         using SmemQ  = SmemIterator<T, kHeadDim, Swizzle, kPadQ>;
         using SmemK  = SmemIterator<T, kHeadDim, Swizzle, kPadK>;
-        using SmemV  = SmemIterator<T, kHeadDim, Swizzle, kPadV>;
+        using SmemP  = SmemIterator<T, CTA_S, SwizzleV, kPadQ>;
+        using SmemV  = SmemIterator<T, kHeadDim, SwizzleV, kPadV>;
 
         FragQ frag_Q;
         LoadQ(frag_Q);
@@ -273,6 +280,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         SmemQ smem_Q{smem_Q_};
         SmemK smem_K{smem_K_};
         SmemV smem_V{smem_V_};
+        SmemP smem_P{smem_P_};
         // SmemIteratorQ<T, kHeadDim, Swizzle> smem_Q{smem_Q_};
         // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
         // SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
@@ -289,13 +297,16 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         // ceil(tiles) - 1
         int iter = (history + min(query_idx_ + CTA_Q, input) + CTA_S - 1) / CTA_S - 1;
 
-        // if (threadIdx.x == 0) {
-        //     printf("iter = %d\n", iter);
-        // }
+        typename GmemK::Fragment fragment_K;
+        typename GmemV::Fragment fragment_V;
 
         gmem_K.AdjustBlockTileIdx(iter);
-        gmem_K.PrefetchStage(Int<0>{}, std::true_type{}, context - iter * CTA_S);
+        gmem_K.PrefetchStage(std::true_type{}, context - iter * CTA_S, fragment_K);
         CpAsyncCommit();
+        gmem_K.Save(fragment_K);
+        // gmem_K.Load<true>(fragment_K, context - iter * CTA_S);
+        // gmem_K.Save(fragment_K);
+        // // CpAsyncCommit();
 
         __align__(16) FragO frag_O{};
 
@@ -313,10 +324,10 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
             // Prefetch for V, gmem_V[i-1] -> smem_V
             gmem_V.AdjustBlockTileIdx(iter);
-            // gmem_V.PrefetchStage(Int<1>{}, is_residue, is_residue ? context - offset_K : CTA_S);
-            // CpAsyncCommit();
-            typename GmemV::Fragment fragment_V;
-            gmem_V.Load<is_residue>(fragment_V, is_residue ? context - offset_K : CTA_S);
+            gmem_V.PrefetchStage(is_residue, is_residue ? context - offset_K : CTA_S, fragment_V);
+            CpAsyncCommit();
+
+            // gmem_V.Load<is_residue>(fragment_V, is_residue ? context - offset_K : CTA_S);
 
             Policy::ComputeQK(smem_Q, smem_K, frag_Q, frag_S);
 
@@ -325,13 +336,11 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             CpAsyncWait();
             __syncthreads();  // Wait while trans_K being used & smem_K being filled
 
-            typename GmemK::Fragment fragment_K;
             // Prefetch for next K, gmem_K[i - 1] -> smem_K
             if (iter > 0) {
                 gmem_K.AdjustBlockTileIdx(iter - 1);
-                // gmem_K.PrefetchStage(Int<0>{}, std::false_type{}, CTA_S);
-                // CpAsyncCommit();
-                gmem_K.Load<is_residue>(fragment_K, CTA_S);
+                gmem_K.PrefetchStage(std::false_type{}, CTA_S, fragment_K);
+                CpAsyncCommit();
             }
 
             if constexpr (is_mask) {
@@ -346,7 +355,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             // StoreS(frag_S, offset_K);
             // StoreP(frag_P, offset_K);
 
-            Policy::ComputePV(smem_V, frag_P, frag_O);
+            Policy::ComputePV(smem_P, smem_V, frag_P, frag_O);
 
             gmem_K.Save(fragment_K);
         };
@@ -367,18 +376,24 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     __device__ void CpAsyncWait()
     {
-        __pipeline_wait_prior(0);
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            __pipeline_wait_prior(0);
+        }
     }
 
     __device__ void CpAsyncCommit()
     {
-        __pipeline_commit();
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            __pipeline_commit();
+        }
     }
 
     __device__ void CpAsyncFlush()
     {
-        __pipeline_commit();
-        __pipeline_wait_prior(0);
+        if constexpr (TURBOMIND_ARCH_SM80) {
+            __pipeline_commit();
+            __pipeline_wait_prior(0);
+        }
     }
 };
 

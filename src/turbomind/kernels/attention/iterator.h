@@ -24,6 +24,8 @@ struct GmemIterator {
     static constexpr int kSizePerTile = Map::kDimS * (Map::kDimC + Padding);
     static constexpr int kIterCount   = Map::kIterS * Map::kIterC;
 
+    using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
+
     Swizzle swizzle_;
 
     const T** block_ptrs_;
@@ -38,6 +40,8 @@ struct GmemIterator {
 
     int init_offset_;
     int dst_offset_;
+
+    // Fragment fragment_;
 
     __device__
     GmemIterator(const T** block_ptrs, BlockSeqLen block_seqlen, int local_offset, T* smem, int warp_id, int lane_id):
@@ -61,57 +65,78 @@ struct GmemIterator {
     }
 
     // Pass `I` by `std::integral_constant` to avoid explict template keyword at the call site
-    template<bool is_residue, int I>
-    __device__ void PrefetchStage(std::integral_constant<int, I>, std::bool_constant<is_residue>, int max_s)
-    {
-        auto      src      = block_;
-        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
-                if constexpr (is_residue) {
-                    Copy(idx,
-                         &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
-                         offset_s + s * Map::kDeltaS < max_s);
-                }
-                else {
-                    Copy(idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
-                }
-            }
-        }
-    }
-
-    using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
-
     template<bool is_residue>
-    __device__ void Load(Fragment& fragment, int max_s)
+    __device__ void PrefetchStage(std::bool_constant<is_residue>, int max_s, Fragment& rmem)
     {
         auto      src      = block_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
+        if constexpr (TURBOMIND_ARCH_SM80) {
             PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
-                    Ldg(fragment[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+            for (int s = 0; s < Map::kIterS; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < Map::kIterC; ++c) {
+                    const int idx =
+                        swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
+                    if constexpr (is_residue) {
+                        Copy(idx,
+                             &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
+                             offset_s + s * Map::kDeltaS < max_s);
+                    }
+                    else {
+                        Copy(idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    }
                 }
-                else {
-                    clear(fragment[s][c]);
+            }
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int s = 0; s < Map::kIterS; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < Map::kIterC; ++c) {
+                    if constexpr (!is_residue) {
+                        Ldg(rmem[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    }
+                    else if (offset_s + s * Map::kDeltaS < max_s) {
+                        Ldg(rmem[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    }
+                    else {
+                        clear(rmem[s][c]);
+                    }
                 }
             }
         }
     }
 
-    __device__ void Save(const Fragment& fragment)
+    // template<bool is_residue>
+    // __device__ void Load(Fragment& fragment, int max_s)
+    // {
+    //     auto      src      = block_;
+    //     const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+    //     PRAGMA_UNROLL
+    //     for (int s = 0; s < Map::kIterS; ++s) {
+    //         PRAGMA_UNROLL
+    //         for (int c = 0; c < Map::kIterC; ++c) {
+    //             if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
+    //                 Ldg(fragment[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+    //             }
+    //             else {
+    //                 clear(fragment[s][c]);
+    //             }
+    //         }
+    //     }
+    // }
+
+    __device__ void Save(const Fragment& rmem)
     {
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
-                Store(&smem_[idx], fragment[s][c]);
+                const int idx0 = swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
+                Store(&smem_[idx0], (Array<T, 4>&)rmem[s][c][0]);
+                const int idx1 =
+                    swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC + 4);
+                Store(&smem_[idx1], (Array<T, 4>&)rmem[s][c][4]);
             }
         }
     }
@@ -240,6 +265,18 @@ struct SmemIterator {
         }
     }
 
+    template<int M>
+    __device__ void LoadQ_sm70(Array<half, 4> (&frag_Q)[M], int k)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            const int mm = m * 16 + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * 16;
+            const int kk = k * 4;
+            Lds(frag_Q[m], &smem_[mm * (DIMS + Padding) + kk]);
+        }
+    }
     template<int N>
     __device__ void LoadK_sm70(Array<half, 4> (&frag_K)[N], int k)
     {
@@ -259,7 +296,19 @@ struct SmemIterator {
         for (int n = 0; n < N; ++n) {
             const int s = k * 4 + lane_id % 4;
             const int c = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
-            Lds(frag_V[n], &smem_[s * (DIMS + Padding) + c]);
+            Lds(frag_V[n], &smem_[swizzle_(s * (DIMS + Padding) + c)]);
+        }
+    }
+    template<int M>
+    __device__ void LoadP_sm70(Array<half, 4> (&frag_P)[M], int k)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            const int qi = m * 16 + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * 16;
+            const int si = k * 4;
+            Lds(frag_P[m], &smem_[qi * (DIMS + Padding) + si]);
         }
     }
 

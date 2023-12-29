@@ -51,9 +51,10 @@ template<class T, class Tkv, int CTA_Q, int CTA_S, int HeadDim>
 struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     static constexpr int kPadQ = 4;
     static constexpr int kPadK = 4;
-    static constexpr int kPadV = 4;
+    static constexpr int kPadV = 0;
 
     static constexpr bool kUseSmemQ = false;
+    static constexpr bool kUseSmemP = false;
 
     static constexpr int WARP_S = CTA_S;
     static constexpr int WARP_Q = 16;
@@ -89,11 +90,20 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                                             //      4  0  8  1    4 16    1
     using FragO = Array<float, 8>[vM][vN];  // (q2,q2,d2,d2,q2) (Qm,Dn) (d2,q2,d2)
                                             //   4  8  8  2  1   16 16    4  2  1
-
-    using FragM = Array<float, 2>[vM];  // (q2,q2,_2,_2,q2) (Qm), (q2))
+    using FragM = Array<float, 2>[vM];      // (q2,q2,_2,_2,q2) (Qm)    (q2))
     using FragL = FragM;
 
     using Swizzle = Identity;
+
+    struct SwizzleV {
+        __device__ int operator()(int offset)
+        {
+            // ssssSSdddDDdd
+            offset = ((offset & 8) << 1) ^ offset;
+            offset = ((offset & (0x3 << 7)) >> 5) ^ offset;
+            return offset;
+        }
+    };
 
     template<class Fragment, class Func>
     static __device__ void ForeachS(Fragment& S, Func&& func)
@@ -128,19 +138,17 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
     __device__ void TransformQ(const T* smem_Q, FragQ& frag_Q)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int mma = lane_id % 16 / 4;
-
-        static_assert(!kUseSmemQ);
-        PRAGMA_UNROLL
-        for (int k = 0; k < kK; ++k) {
+        if constexpr (!kUseSmemQ) {
+            const int warp_id = threadIdx.x / WARP_SIZE;
+            const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int m = 0; m < kM; ++m) {
-                const int mm = m * OP_M + mma / 2 * 8 + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
-                const int kk = k * 4 + 0;
-                Lds(frag_Q[k][m], &smem_Q[mm * (HeadDim + kPadQ) + kk]);
+            for (int k = 0; k < kK; ++k) {
+                PRAGMA_UNROLL
+                for (int m = 0; m < kM; ++m) {
+                    const int mm = m * OP_M + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
+                    const int kk = k * 4 + 0;
+                    Lds(frag_Q[k][m], &smem_Q[mm * (HeadDim + kPadQ) + kk]);
+                }
             }
         }
     }
@@ -148,11 +156,18 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     template<class SmemQ, class SmemK>
     static __device__ void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S)
     {
+        if constexpr (kUseSmemQ) {
+            smem_Q.LoadQ_sm70(frag_Q[0], 0);
+        }
         FragK frag_K;
         smem_K.LoadK_sm70(frag_K[0], 0);
+
         PRAGMA_UNROLL
         for (int k = 0; k < kK; ++k) {
             if (k < kK - 1) {
+                if constexpr (kUseSmemQ) {
+                    smem_Q.LoadQ_sm70(frag_Q[k + 1], k + 1);
+                }
                 smem_K.LoadK_sm70(frag_K[k + 1], k + 1);
             }
             PRAGMA_UNROLL
@@ -160,25 +175,27 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                 PRAGMA_UNROLL
                 for (int n = 0; n < kN; ++n) {
                     mma_m8n8k4_row_col(frag_S[m][n], frag_Q[k][m], frag_K[k][n], frag_S[m][n]);
-                    // mma_m8n8k4_row_col(
-                    //     frag_S[m][n], (Array<half, 4>&)frag_Q[k][m][0], (Array<half, 4>&)frag_K[k][n][0],
-                    //     frag_S[m][n]);
-                    // mma_m8n8k4_row_col(
-                    //     frag_S[m][n], (Array<half, 4>&)frag_Q[k][m][4], (Array<half, 4>&)frag_K[k][n][4],
-                    //     frag_S[m][n]);
                 }
             }
         }
     }
 
-    template<class Smem>
-    __device__ void ComputePV(Smem& smem_V, const FragP& frag_P, FragO& frag_O)
+    template<class SmemP, class Smem>
+    __device__ void ComputePV(SmemP& smem_P, Smem& smem_V, FragP& frag_P, FragO& frag_O)
     {
+
+        if constexpr (kUseSmemP) {
+            smem_P.LoadP_sm70(frag_P[0], 0);
+        }
         FragV frag_V;
         smem_V.LoadV_sm70(frag_V[0], 0);
+
         PRAGMA_UNROLL
         for (int k = 0; k < vK; ++k) {
             if (k < vK - 1) {
+                if constexpr (kUseSmemP) {
+                    smem_P.LoadP_sm70(frag_P[k + 1], k + 1);
+                }
                 smem_V.LoadV_sm70(frag_V[k + 1], k + 1);
             }
             PRAGMA_UNROLL
@@ -277,16 +294,17 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
 
         ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[qi * (CTA_S + kPadQ) + si] = half(p); });
 
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        PRAGMA_UNROLL
-        for (int m = 0; m < vM; ++m) {
+        if constexpr (!kUseSmemP) {
+            const int warp_id = threadIdx.x / WARP_SIZE;
+            const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int k = 0; k < vK; ++k) {
-                const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
-                const int si = k * OP_K;
-                Lds(frag_P[m][k], &smem_P[qi * (CTA_S + kPadQ) + si]);  // 384
+            for (int m = 0; m < vM; ++m) {
+                PRAGMA_UNROLL
+                for (int k = 0; k < vK; ++k) {
+                    const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
+                    const int si = k * OP_K;
+                    Lds(frag_P[m][k], &smem_P[qi * (CTA_S + kPadQ) + si]);
+                }
             }
         }
     }
@@ -306,9 +324,8 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int mma = lane_id % 16 / 4;
-        const int mm  = mma / 2 * 8 + (lane_id & 1) + lane_id / 16 * 4;
-        const int nn  = mma % 2 * 8 + (lane_id & 2);
+        const int mm = lane_id / 16 * 4 + (lane_id & 8) + (lane_id & 1);
+        const int nn = (lane_id & 4) * 2 + (lane_id & 2);
 
         PRAGMA_UNROLL
         for (int m = 0; m < vM; ++m) {

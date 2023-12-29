@@ -141,6 +141,26 @@ __global__ void test_bf16(nv_bfloat16* out, int n)
 
 int main(int argc, char* argv[])
 {
+    for (int i = 0; i < 32; ++i) {
+        printf("%2d ", i);
+    }
+    printf("\n");
+
+    for (int i = 0; i < 32; ++i) {
+        printf("%2d ", (i & ~5) | (((i & 1) << 2) ^ ((i & 4) >> 2)));
+    }
+    printf("\n");
+
+    for (int i = 0; i < 32; ++i) {
+        printf("%2d ", (i & ~3) | (((i & 1) << 1) ^ ((i & 2) >> 1)));
+    }
+    printf("\n");
+
+    for (int i = 0; i < 32; ++i) {
+        printf("%2d ", ((i & 2) << 1) ^ i);
+    }
+    printf("\n");
+
     AttentionParams<half> params{};
 
     constexpr int kHeadNum = 16;
@@ -149,8 +169,8 @@ int main(int argc, char* argv[])
     constexpr int KvHeadNum  = kHeadNum;
     constexpr int kBatchSize = 2;
     // constexpr int kBatchSize = 1;
-    constexpr int kInputLen = 8192;
-    // constexpr int kInputLen    = 16;
+    // constexpr int kInputLen  = 128;
+    constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
