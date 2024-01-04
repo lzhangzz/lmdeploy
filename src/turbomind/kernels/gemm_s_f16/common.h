@@ -439,4 +439,14 @@ mma_m16n8k16_row_col(Array<float, 4>& d, const Array<half, 8>& a, const Array<ha
 #endif
 }
 
+__inline__ __device__ void ldsm_x4_trans(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
+{
+    ldsm_x4_trans(d[0], d[1], d[2], d[3], smem_int_ptr);
+}
+
+__inline__ __device__ void ldsm_x4(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
+{
+    ldmatrix_m8n8_x4_b16(d[0], d[1], d[2], d[3], smem_int_ptr);
+}
+
 }  // namespace turbomind
