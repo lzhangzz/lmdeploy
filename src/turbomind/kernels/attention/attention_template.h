@@ -471,7 +471,6 @@ template<typename AttentionType, typename ParamType = typename AttentionType::Pa
 __global__ void __launch_bounds__(256, 1) attention_kernel(ParamType params)
 {
     AttentionType{}(params, dynamic_smem);
-    // MHAType{params, dynamic_smem}.Run();
 }
 
 template<typename MHAType, typename ParamType = typename MHAType::ParamType>

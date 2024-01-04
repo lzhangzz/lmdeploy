@@ -72,32 +72,32 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
     static constexpr int OP_N = 16;
     static constexpr int OP_K = 4;
 
-    static constexpr int kM = WARP_Q / OP_M;   // 1
-    static constexpr int kN = WARP_S / OP_N;   // 4
-    static constexpr int kK = HeadDim / OP_K;  // 32
+    static constexpr int K_M = WARP_Q / OP_M;   // 1
+    static constexpr int K_N = WARP_S / OP_N;   // 4
+    static constexpr int K_K = HeadDim / OP_K;  // 32
 
-    static constexpr int vM = WARP_Q / OP_M;   // 1
-    static constexpr int vN = HeadDim / OP_N;  // 8
-    static constexpr int vK = WARP_S / OP_K;   // 16
+    static constexpr int V_M = WARP_Q / OP_M;   // 1
+    static constexpr int V_N = HeadDim / OP_N;  // 8
+    static constexpr int V_K = WARP_S / OP_K;   // 16
 
     //  +---+---+
     //  | 0 | 1 |
     //  +---+---+
     //  | 2 | 3 |
     //  +---+---+
-    using FragQ = Array<half, 4>[kK][kM];   //    (q2,q2,x2,q4) (Dk,Qm) (d4)
-                                            //      4  8  0  1    4 16    1
-    using FragK = Array<half, 4>[kK][kN];   //    (s2,x2,s2,s4) (Dk,Sn) (d4)
-                                            //      4  0  8  1    4 16    1
-    using FragS = Array<float, 8>[kM][kN];  // (q2,q2,s2,s2,q2) (Qm,Sn) (s2,q2,s2)
-                                            //   4  8  8  2  1   16 16    4  2  1
-    using FragP = Array<half, 4>[vK][vM];   //    (q2,q2,x2,q4) (Sk,Qm) (s4)
-                                            //      4  8  0  1    4 16    1
-    using FragV = Array<half, 4>[vK][vN];   //    (d2,x2,d2,s4) (Sk,Dn) (d4)       [row major]
-                                            //      4  0  8  1    4 16    1
-    using FragO = Array<float, 8>[vM][vN];  // (q2,q2,d2,d2,q2) (Qm,Dn) (d2,q2,d2)
-                                            //   4  8  8  2  1   16 16    4  2  1
-    using FragM = Array<float, 2>[vM];      // (q2,q2,_2,_2,q2) (Qm)    (q2))
+    using FragQ = Array<half, 4>[K_K][K_M];   //    (q2,q2,x2,q4) (Dk,Qm) (d4)
+                                              //      4  8  0  1    4 16    1
+    using FragK = Array<half, 4>[K_K][K_N];   //    (s2,x2,s2,s4) (Dk,Sn) (d4)
+                                              //      4  0  8  1    4 16    1
+    using FragS = Array<float, 8>[K_M][K_N];  // (q2,q2,s2,s2,q2) (Qm,Sn) (s2,q2,s2)
+                                              //   4  8  8  2  1   16 16    4  2  1
+    using FragP = Array<half, 4>[V_K][V_M];   //    (q2,q2,x2,q4) (Sk,Qm) (s4)
+                                              //      4  8  0  1    4 16    1
+    using FragV = Array<half, 4>[V_K][V_N];   //    (d2,x2,d2,s4) (Sk,Dn) (d4)       [row major]
+                                              //      4  0  8  1    4 16    1
+    using FragO = Array<float, 8>[V_M][V_N];  // (q2,q2,d2,d2,q2) (Qm,Dn) (d2,q2,d2)
+                                              //   4  8  8  2  1   16 16    4  2  1
+    using FragM = Array<float, 2>[V_M];       // (q2,q2,_2,_2,q2) (Qm)    (q2))
     using FragL = FragM;
 
     // using Swizzle = Identity;
@@ -151,8 +151,8 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
     using SmemIterQ = NullSmemIter<T>;
     using SmemIterP = NullSmemIter<T>;
 
-    using SmemIterK = Sm70SmemIterK<T, SmemLayoutK, kN>;
-    using SmemIterV = Sm70SmemIterV<T, SmemLayoutV, vN>;
+    using SmemIterK = Sm70SmemIterK<T, SmemLayoutK, K_N>;
+    using SmemIterV = Sm70SmemIterV<T, SmemLayoutV, V_N>;
 
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
@@ -166,9 +166,9 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
-        for (int m = 0; m < kM; ++m) {
+        for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
-            for (int n = 0; n < kN; ++n) {
+            for (int n = 0; n < K_N; ++n) {
                 PRAGMA_UNROLL
                 for (int s1 = 0; s1 < 2; ++s1) {
                     PRAGMA_UNROLL
@@ -191,9 +191,9 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int k = 0; k < kK; ++k) {
+            for (int k = 0; k < K_K; ++k) {
                 PRAGMA_UNROLL
-                for (int m = 0; m < kM; ++m) {
+                for (int m = 0; m < K_M; ++m) {
                     const int qi = m * OP_M + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
                     const int di = k * 4;
                     Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(qi, di)]);
@@ -213,18 +213,19 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         }
 
         PRAGMA_UNROLL
-        for (int k = 0; k < kK; ++k) {
-            if (k < kK - 1) {
+        for (int k = 0; k < K_K; ++k) {
+            if (k < K_K - 1) {
                 smem_K.Load(frag_K[k + 1], k + 1);
                 if constexpr (kUseSmemQ) {
                     smem_Q.Load(frag_Q[k + 1], k + 1);
                 }
             }
             PRAGMA_UNROLL
-            for (int m = 0; m < kM; ++m) {
+            for (int m = 0; m < K_M; ++m) {
                 PRAGMA_UNROLL
-                for (int n = 0; n < kN; ++n) {
-                    mma_m8n8k4_row_col(frag_S[m][n], frag_Q[k][m], frag_K[k][n], frag_S[m][n]);
+                for (int n = 0; n < K_N; ++n) {
+                    const int nn = n ^ 1;
+                    mma_m8n8k4_row_col(frag_S[m][nn], frag_Q[k][m], frag_K[k][nn], frag_S[m][nn]);
                 }
             }
         }
@@ -241,17 +242,17 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         }
 
         PRAGMA_UNROLL
-        for (int k = 0; k < vK; ++k) {
-            if (k < vK - 1) {
+        for (int k = 0; k < V_K; ++k) {
+            if (k < V_K - 1) {
                 smem_V.Load(frag_V[k + 1], k + 1);
                 if constexpr (kUseSmemP) {
                     smem_P.Load(frag_P[k + 1], k + 1);
                 }
             }
             PRAGMA_UNROLL
-            for (int m = 0; m < vM; ++m) {
+            for (int m = 0; m < V_M; ++m) {
                 PRAGMA_UNROLL
-                for (int n = 0; n < vN; ++n) {
+                for (int n = 0; n < V_N; ++n) {
                     mma_m8n8k4_row_row(frag_O[m][n], frag_P[k][m], frag_V[k][n], frag_O[m][n]);
                 }
             }
@@ -263,14 +264,14 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
     {
         FragM prev_M;
         PRAGMA_UNROLL
-        for (int m = 0; m < kM; ++m) {
+        for (int m = 0; m < K_M; ++m) {
             prev_M[m] = frag_M[m];
         }
 
         PRAGMA_UNROLL
-        for (int m = 0; m < kM; ++m) {
+        for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
-            for (int n = 0; n < kN; ++n) {
+            for (int n = 0; n < K_N; ++n) {
                 PRAGMA_UNROLL
                 for (int s1 = 0; s1 < 2; ++s1) {
                     PRAGMA_UNROLL
@@ -291,7 +292,7 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         }
 
         PRAGMA_UNROLL
-        for (int m = 0; m < kM; ++m) {
+        for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
                 // exp(M - M'), isinf(frag_M) => isnan(expdiff_M)
@@ -300,7 +301,7 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
                     expdiff_M = 0.f;
                 }
                 PRAGMA_UNROLL
-                for (int n = 0; n < vN; ++n) {
+                for (int n = 0; n < V_N; ++n) {
                     PRAGMA_UNROLL
                     for (int s1 = 0; s1 < 2; ++s1) {
                         PRAGMA_UNROLL
@@ -314,12 +315,12 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         }
 
         PRAGMA_UNROLL
-        for (int m = 0; m < kM; ++m) {
+        for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
                 float tmp_L{};
                 PRAGMA_UNROLL
-                for (int n = 0; n < kN; ++n) {
+                for (int n = 0; n < K_N; ++n) {
                     PRAGMA_UNROLL
                     for (int s1 = 0; s1 < 2; ++s1) {
                         PRAGMA_UNROLL
@@ -349,9 +350,9 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
             const int warp_id = threadIdx.x / WARP_SIZE;
             const int lane_id = threadIdx.x % WARP_SIZE;
             PRAGMA_UNROLL
-            for (int k = 0; k < vK; ++k) {
+            for (int k = 0; k < V_K; ++k) {
                 PRAGMA_UNROLL
-                for (int m = 0; m < vM; ++m) {
+                for (int m = 0; m < V_M; ++m) {
                     const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
                     const int si = k * OP_K;
                     Lds(frag_P[k][m], &smem_P[SmemLayoutP::swizzle(qi, si)]);
@@ -365,7 +366,7 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
     {
         FragL tmp_L;
         PRAGMA_UNROLL
-        for (int m = 0; m < vM; ++m) {
+        for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
                 tmp_L[m][q] = fdividef(1.f, frag_L[m][q] + 1e-8f);
@@ -379,9 +380,9 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         const int nn = (lane_id & 4) * 2 + (lane_id & 2);
 
         PRAGMA_UNROLL
-        for (int m = 0; m < vM; ++m) {
+        for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
-            for (int n = 0; n < vN; ++n) {
+            for (int n = 0; n < V_N; ++n) {
                 PRAGMA_UNROLL
                 for (int d1 = 0; d1 < 2; ++d1) {
                     PRAGMA_UNROLL
