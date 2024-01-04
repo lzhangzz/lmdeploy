@@ -4,31 +4,20 @@
 
 #include "../gemm_s_f16/common.h"
 #include "array_ops.h"
-#include <type_traits>
-
-#include "policy.h"
 
 namespace turbomind {
 
-#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDACC_VER_MINOR__ >= 4)
-#define L2_CACHEHINT(size) ".L2::" #size "B"
-#else
-#define L2_CACHEHINT(size)
-#endif
-
-template<class T, class Map, class BlockSeqLen, class Swizzle, int Padding, int Stages>
-struct GmemIterator {
+template<class T, class Map, class BlockSeqLen, class SmemLayout, int Stages>
+struct BaseGmemIterator {
     using ElementType = T;
     using AccessType  = Array<T, Map::kAccessC>;
 
     static constexpr int kElementSize = sizeof(ElementType);
     static constexpr int kAccessSize  = sizeof(AccessType);
-    static constexpr int kSizePerTile = Map::kDimS * (Map::kDimC + Padding);
-    static constexpr int kIterCount   = Map::kIterS * Map::kIterC;
+
+    static constexpr int kIterCount = Map::kIterS * Map::kIterC;
 
     using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
-
-    Swizzle swizzle_;
 
     const T** block_ptrs_;
     const T*  block_;
@@ -43,8 +32,8 @@ struct GmemIterator {
     int init_offset_;
     int dst_offset_;
 
-    __device__
-    GmemIterator(const T** block_ptrs, BlockSeqLen block_seqlen, int local_offset, T* smem, int warp_id, int lane_id):
+    __device__ BaseGmemIterator(
+        const T** block_ptrs, BlockSeqLen block_seqlen, int local_offset, T* smem, int warp_id, int lane_id):
         block_ptrs_(block_ptrs),
         smem_(smem),
         smem_int_ptr_(cast_smem_ptr_to_uint(smem)),
@@ -53,7 +42,7 @@ struct GmemIterator {
     {
         int2 offsets = Map::get_offset(warp_id, lane_id);
         init_offset_ = offsets.x + offsets.y * Map::kDimC;
-        dst_offset_  = offsets.x + offsets.y * (Map::kDimC + Padding);
+        dst_offset_  = offsets.x + offsets.y * SmemLayout::kStride;
     }
 
     __device__ void AdjustBlockTileIdx(int tile_idx)  // Interprept step as (block_idx, local_tile_idx)
@@ -61,573 +50,110 @@ struct GmemIterator {
         // const int block_idx = tile_idx / (block_seqlen_ / Map::kDimS);
         // const int local_idx = tile_idx % (block_seqlen_ / Map::kDimS);
         // block_ = block_ptrs_[block_idx] + local_offset_ + local_idx * Map::kDimS * Map::kDimC + init_offset_;
-        block_ = block_ptrs_[tile_idx] + local_offset_ + init_offset_;
+
+        // block_ = block_ptrs_[tile_idx] + local_offset_ + init_offset_;
+        block_ = block_ptrs_[tile_idx];
     }
 
-    // Pass `I` by `std::integral_constant` to avoid explict template keyword at the call site
-    template<bool is_residue>
-    __device__ void PrefetchStage(std::bool_constant<is_residue>, int max_s, Fragment& rmem)
+    __device__ void ClearSmem()
     {
-        auto      src      = block_;
-        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            PRAGMA_UNROLL
-            for (int s = 0; s < Map::kIterS; ++s) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < Map::kIterC; ++c) {
-                    const int idx =
-                        swizzle_(dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC);
-                    if constexpr (is_residue) {
-                        Copy(idx,
-                             &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
-                             offset_s + s * Map::kDeltaS < max_s);
-                    }
-                    else {
-                        Copy(idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
-                    }
-                }
-            }
-        }
-        else {
-            PRAGMA_UNROLL
-            for (int s = 0; s < Map::kIterS; ++s) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < Map::kIterC; ++c) {
-                    if constexpr (!is_residue) {
-                        Ldg(rmem[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
-                    }
-                    else if (offset_s + s * Map::kDeltaS < max_s) {
-                        Ldg(rmem[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
-                    }
-                    else {
-                        clear(rmem[s][c]);
-                    }
-                }
-            }
-        }
-    }
-
-    // template<bool is_residue>
-    // __device__ void Load(Fragment& fragment, int max_s)
-    // {
-    //     auto      src      = block_;
-    //     const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-    //     PRAGMA_UNROLL
-    //     for (int s = 0; s < Map::kIterS; ++s) {
-    //         PRAGMA_UNROLL
-    //         for (int c = 0; c < Map::kIterC; ++c) {
-    //             if (!is_residue || offset_s + s * Map::kDeltaS < max_s) {
-    //                 Ldg(fragment[s][c], &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
-    //             }
-    //             else {
-    //                 clear(fragment[s][c]);
-    //             }
-    //         }
-    //     }
-    // }
-
-    __device__ void Save(const Fragment& rmem)
-    {
-        Array<int, Map::kIterC> idxs;
-        PRAGMA_UNROLL
-        for (int c = 0; c < Map::kIterC; ++c) {
-            const int idx0 = swizzle_(dst_offset_ + c * Map::kDeltaC);
-            idxs[c]        = idx0;
-        }
-        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+        auto dst = smem_;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&smem_[idxs[c]], rmem[s][c]);
+                constexpr Array<T, Map::kAccessC> kZeros{};
+                Store(&dst[dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC], kZeros);
             }
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                const int s0 = offset_s + s * Map::kDeltaS;
-                const int s1 = s0 + Map::kDeltaS;
-                idxs[c]      = swizzle_.AdvanceS<Map::kDeltaS>(idxs[c], s0, s1) + Map::kDeltaS * (Map::kDimC + Padding);
-            }
-        }
-    }
-
-    template<int I>
-    __device__ void ClearSmem(std::integral_constant<int, I>)
-    {
-        auto dst = smem_ + I * kSizePerTile;
-        PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                clear((Array<T, Map::kAccessC>&)
-                          dst[dst_offset_ + s * Map::kDeltaS * (Map::kDimC + Padding) + c * Map::kDeltaC]);
-            }
-        }
-    }
-
-    __device__ void CpAsync(int offset, const T* __restrict__ src, bool mask)
-    {
-        constexpr int cp_size = sizeof(AccessType);
-
-        offset = smem_int_ptr_ * kElementSize * offset;
-#if TURBOMIND_ARCH_SM80
-        // clang-format off
-        asm volatile("{\n"
-                     "  .reg .pred p;\n"
-                     "  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
-                     "}\n" ::"r"((int)mask),
-                     "r"(offset),
-                     "l"(src),
-                     "n"(cp_size));
-        // clang-format on
-        // " L2_CACHEHINT(128) "
-#else
-        assert(TURBOMIND_ARCH_SM80);
-#endif
-    }
-
-    __device__ void CpAsync(int offset, const T* __restrict__ src)
-    {
-        constexpr int cp_size = sizeof(AccessType);
-
-        offset = smem_int_ptr_ * kElementSize * offset;
-#if TURBOMIND_ARCH_SM80
-        asm volatile(
-            "cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(offset), "l"(src), "n"(cp_size));
-#else
-        assert(TURBOMIND_ARCH_SM80);
-#endif
-    }
-
-    __device__ void CpLdg(int offset, const T* __restrict__ src, bool mask)
-    {
-        if (mask) {
-            Ldg(*(AccessType*)&smem_[offset], src);
-        }
-    }
-
-    __device__ void CpLdg(int offset, const T* __restrict__ src)
-    {
-        Ldg(*(AccessType*)&smem_[offset], src);
-    }
-
-    __device__ void Copy(int offset, const T* __restrict__ src, bool mask)
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            CpAsync(offset, src, mask);
-        }
-        else {
-            CpLdg(offset, src, mask);
-        }
-    }
-
-    __device__ void Copy(int offset, const T* __restrict__ src)
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            CpAsync(offset, src);
-        }
-        else {
-            CpLdg(offset, src);
         }
     }
 };
 
-template<class T, int DIMS, class Swizzle, int Padding>
-struct SmemIterator {
-    static_assert(sizeof(T) == 2);
+template<int Stride, class _Swizzle>
+struct SmemLayout {
+    static constexpr int kStride = Stride;
+
+    using Swizzle = _Swizzle;
+
+    __forceinline__ __device__ static int offset(int s, int c)
+    {
+        return s * kStride + c;
+    }
+    __forceinline__ __device__ static int swizzle(int s, int c)
+    {
+        return Swizzle{}(s * kStride + c);
+    }
+    __forceinline__ __device__ static int swizzle(int offset)
+    {
+        return Swizzle{}(offset);
+    }
+};
+
+template<class T, class Layout>
+struct BaseSmemIterator {
     static constexpr int kElemSize = sizeof(T);
     const T*             smem_;
     uint32_t             smem_int_ptr_;
-    Swizzle              swizzle_;
 
-    template<int ITER_N>
-    __device__ void LoadK(Array<T, 4> (&frag_K)[ITER_N], int k)
+    __device__ explicit BaseSmemIterator(const T* smem): smem_{smem}, smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
+
+    __forceinline__ __device__ const T* ptr(int s, int c)
     {
-        static_assert(ITER_N % 2 == 0);
-        const int lane_id       = threadIdx.x % WARP_SIZE;
-        const int group_id      = lane_id / 16;
-        const int group_lane_id = lane_id % 16;
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N / 2; ++n) {  // Load (s16,d16) tiles
-            auto&     r   = (Array<uint32_t, 4>&)frag_K[n * 2];
-            const int s   = n * 16 + group_lane_id % 8 + group_id * 8;
-            const int c   = k * 16 + group_lane_id / 8 * 8;
-            const int idx = swizzle_(s * (DIMS + Padding) + c);
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
-        }
+        return &smem_[Layout::offset(s, c)];
     }
 
-    template<int ITER_K>
-    __device__ void LoadK_(Array<T, 4> (&frag_K)[ITER_K], int n)
+    __forceinline__ __device__ const T* ptr(int offset)
     {
-        static_assert(ITER_K % 2 == 0);
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int k = 0; k < ITER_K / 2; ++k) {  // Load (s16,d16) tiles
-            auto&     r   = (Array<uint32_t, 4>&)frag_K[k * 2];
-            const int s   = lane_id % 8 + n * 8;
-            const int c   = lane_id / 8 * 8 + k * 32;
-            const int idx = swizzle_(s * (DIMS + Padding) + c);
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
-        }
+        return &smem_[offset];
     }
 
-    template<int M>
-    __device__ void LoadQ_sm70(Array<half, 4> (&frag_Q)[M], int k)
+    __forceinline__ __device__ uint32_t uint_ptr(int s, int c)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int m = 0; m < M; ++m) {
-            const int mm = m * 16 + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * 16;
-            const int kk = k * 4;
-            Lds(frag_Q[m], &smem_[mm * (DIMS + Padding) + kk]);
-        }
-    }
-    template<int N>
-    __device__ void LoadK_sm70(Array<half, 4> (&frag_K)[N], int k)
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; ++n) {
-            const int s = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
-            const int c = k * 4;
-            Lds(frag_K[n], &smem_[s * (DIMS + Padding) + c]);
-        }
+        return smem_int_ptr_ + kElemSize * Layout::offset(s, c);
     }
 
-    Array<int, 4> idxs_;
-
-    __device__ SmemIterator(const T* smem): smem_(smem), smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+    __forceinline__ __device__ uint32_t uint_ptr(int offset)
     {
-        if constexpr (!std::is_same_v<Swizzle, Identity>) {
-            const int lane_id = threadIdx.x % WARP_SIZE;
-            PRAGMA_UNROLL
-            for (int n = 0; n < 8; n += 2) {
-                const int s  = 0 * 4 + lane_id % 4;
-                const int c  = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
-                idxs_[n / 2] = swizzle_(s * (DIMS) + c);
-            }
-        }
+        return smem_int_ptr_ + kElemSize * offset;
     }
 
-    template<int N>
-    __device__ void LoadV_sm70(Array<half, 4> (&frag_V)[N], int k)
+    __forceinline__ __device__ const T* swizzle_ptr(int s, int c)
     {
-        PRAGMA_UNROLL
-        for (int n = 0; n < N; n += 2) {
-            const int idx = idxs_[n / 2] + k * 4 * DIMS;
-            Lds((Array<half, 8>&)frag_V[n], &smem_[idx]);
-        }
-    }
-    template<int M>
-    __device__ void LoadP_sm70(Array<half, 4> (&frag_P)[M], int k)
-    {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int m = 0; m < M; ++m) {
-            const int qi = m * 16 + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * 16;
-            const int si = k * 4;
-            Lds(frag_P[m], &smem_[qi * (DIMS + Padding) + si]);
-        }
+        return &smem_[Layout::swizzle(s, c)];
     }
 
-    template<int ITER_M>
-    __device__ void LoadQ(Array<T, 8> (&frag_Q)[ITER_M], int k)
+    __forceinline__ __device__ const T* swizzle_ptr(int offset)
     {
-        constexpr int WARP_Q  = 16;
-        const int     lane_id = threadIdx.x % WARP_SIZE;
-        const int     warp_id = threadIdx.x / WARP_SIZE;
-
-        PRAGMA_UNROLL
-        for (int m = 0; m < ITER_M; ++m) {
-            auto&     Q   = (Array<uint32_t, 4>&)frag_Q[m];
-            const int mm  = m * 16 + lane_id % 16 + warp_id * WARP_Q;
-            const int kk  = k * 16 + lane_id / 16 * 8;
-            const int idx = swizzle_(mm * (DIMS + Padding) + kk);
-            ldmatrix_m8n8_x4_b16(Q[0], Q[1], Q[2], Q[3], smem_int_ptr_ + kElemSize * idx);
-        }
+        return &smem_[Layout::swizzle(offset)];
     }
 
-    template<int ITER_M>
-    __device__ void LoadQ_(Array<T, 8> (&frag_Q)[ITER_M], int k)
+    __forceinline__ __device__ uint32_t swizzle_uint_ptr(int s, int c)
     {
-        PRAGMA_UNROLL
-        for (int m = 0; m < ITER_M; ++m) {
-            Lds(frag_Q[m], &smem_[(k * 128 + m * 128 + threadIdx.x) * 8]);
-        }
+        return smem_int_ptr_ + kElemSize * Layout::swizzle(s, c);
     }
 
-    template<int ITER_N>  // 16
-    __device__ void LoadV(Array<T, 4> (&frag_V)[ITER_N], int k)
+    __forceinline__ __device__ uint32_t swizzle_uint_ptr(int offset)
     {
-        // __syncthreads();
-        static_assert(ITER_N % 2 == 0);
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N / 2; ++n) {  // Load (d16,s16) tiles
-            auto&     r   = (Array<uint32_t, 4>&)frag_V[n * 2];
-            const int kk  = k * 16 + lane_id % 16;      // s
-            const int nn  = n * 16 + lane_id / 16 * 8;  // d
-            const int idx = swizzle_(kk * (DIMS + Padding) + nn);
-            ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + kElemSize * idx);
-        }
+        return smem_int_ptr_ + kElemSize * Layout::swizzle(offset);
     }
 };
 
-template<int DIMS, class Swizzle, int Padding>
-struct SmemIterator<uint8_t, DIMS, Swizzle, Padding> {
-    uint32_t smem_int_ptr_;
-    Swizzle  swizzle_;
-
-    __device__ SmemIterator(const uint8_t* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)} {}
-
-    template<int ITER_N>
-    __device__ void LoadK(Array<uint8_t, 4> (&frag_K)[ITER_N], int k)
-    {
-        static_assert(ITER_N % 4 == 0);
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N; n += 4) {  // K16,N32 (1x4) per LDSM.x4
-            auto&     r   = (Array<uint32_t, 4>&)frag_K[n];
-            const int s   = n * 8 + lane_id;
-            const int c   = k * 16 + 0;
-            const int idx = swizzle_(s * (DIMS + Padding) + c);
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
-        }
-    }
-
-    template<int ITER_N>
-    __device__ void LoadV(Array<uint8_t, 4> (&frag_V)[ITER_N], int k)
-    {
-        static_assert(ITER_N % 4 == 0);
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N; n += 4) {  // K16,N32 (2x2) per LDSM.x4
-            auto&     r   = (Array<uint32_t, 4>&)frag_V[n];
-            const int s   = lane_id % 16 + k * 16;      // v
-            const int c   = lane_id / 16 * 16 + n * 8;  // d
-            const int idx = swizzle_(s * (DIMS + Padding) + c);
-            ldsm_x4_trans(r[0], r[1], r[2], r[3], smem_int_ptr_ + idx);
-        }
-    }
+template<class T>
+struct NullSmemIter {
+    __device__ explicit NullSmemIter(const T*){};
 };
 
-template<class T, int DIMS, class Swizzle, int Padding>
-struct SmemIteratorK {
-    static_assert(sizeof(T) == 2);
-    static constexpr int kElemSize = sizeof(T);
-    uint32_t             smem_int_ptr_;
-    int                  offset_;
-    Swizzle              swizzle_;
-    int                  k_{};
-
-    Array<int, 4> ptrs_;
-
-    __device__ SmemIteratorK(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+struct Identity {
+    template<class T>
+    __device__ T operator()(T offset)
     {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int group_id      = lane_id / 16;
-        const int group_lane_id = lane_id % 16;
-
-        const int s = group_lane_id % 8 + group_id * 8;
-        const int c = group_lane_id / 8 * 8;
-
-        auto fn = [](int offset) {
-            // sssSSSdDDDdddx
-            // DDD ^= SSS
-            constexpr int mask = 0x7 << 8;
-            return offset ^ ((offset & mask) >> 4);
-        };
-
-        PRAGMA_UNROLL
-        for (int n = 0; n < 4; ++n) {
-            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * ((n * 16 + s) * (DIMS + Padding) + c));
-        }
+        return offset;
     }
 
-    template<int ITER_N>
-    __device__ void LoadK(Array<T, 4> (&frag_K)[ITER_N], int k)
+    template<int D>
+    __device__ int AdvanceS(int offset, int s0, int s1)
     {
-        static_assert(ITER_N % 2 == 0);
-
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N / 2; ++n) {  // Load (s16,d16) tiles
-            auto& r = (Array<uint32_t, 4>&)frag_K[n * 2];
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], ptrs_[n]);
-        }
-
-        Advance(1);
-    }
-
-    __device__ void Advance(int offset_k)
-    {
-        // sssSSSdDD Ddddx
-        //   0   000 0000
-        //  16,  001 0000
-        //  32,  010 0000
-        //  48,  011 0000
-        //  64,  100 0000
-        //  80,  101 0000
-        //  96,  110 0000
-        //  112, 111 0000
-        //  128 1000 0000
-        offset_k *= 32;
-        int mask = (k_ ^ (k_ + offset_k)) & (0x7 << 5);
-        for (int n = 0; n < 4; ++n) {
-            ptrs_[n] ^= mask;
-        }
-        k_ += offset_k;
-    }
-
-    // 0 -> 1: ^ 001  (000 ^ 001)
-    // 1 -> 2: ^ 011  (001 ^ 010)
-    // 2 -> 3: ^ 001  (010 ^ 011)
-    // 3 -> 4: ^ 111  (011 ^ 100)
-    // 4 -> 5: ^ 001  (100 ^ 101)
-    // 5 -> 6: ^ 011  (101 ^ 110)
-    // 6 -> 7: ^ 001  (110 ^ 111)
-    // 7 -> 0: ^ 111  (111 ^ 000)
-};
-
-template<class T, int DIMS, class Swizzle, int Padding>
-struct SmemIteratorQ {
-    static_assert(sizeof(T) == 2);
-    static constexpr int kElemSize = sizeof(T);
-    uint32_t             smem_int_ptr_;
-    int                  offset_;
-    Swizzle              swizzle_;
-    int                  k_{};
-
-    Array<int, 4> ptrs_;
-
-    __device__ SmemIteratorQ(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
-    {
-        constexpr int WARP_Q  = 16;
-        const int     lane_id = threadIdx.x % WARP_SIZE;
-        const int     warp_id = threadIdx.x / WARP_SIZE;
-
-        // const int s = group_lane_id % 8 + group_id * 8;
-        // const int c = group_lane_id / 8 * 8;
-
-        const int s = lane_id % 16 + warp_id * WARP_Q;
-        const int c = lane_id / 16 * 8;
-
-        auto fn = [](int offset) {
-            // sssSSSdDDDdddx
-            // DDD ^= SSS
-            constexpr int mask = 0x7 << 8;
-            return offset ^ ((offset & mask) >> 4);
-        };
-
-        PRAGMA_UNROLL
-        for (int m = 0; m < 1; ++m) {
-            ptrs_[m] = smem_int_ptr_ + fn(kElemSize * ((m * 16 + s) * (DIMS + Padding) + c));
-        }
-    }
-
-    template<int ITER_M>
-    __device__ void LoadQ(Array<T, 8> (&frag_Q)[ITER_M], int k)
-    {
-        PRAGMA_UNROLL
-        for (int m = 0; m < ITER_M; ++m) {  // Load (s16,d16) tiles
-            auto& r = (Array<uint32_t, 4>&)frag_Q[m];
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], ptrs_[m]);
-        }
-
-        Advance(1);
-    }
-
-    __device__ void Advance(int offset_k)
-    {
-        // sssSSSdDD Ddddx
-        //   0   000 0000
-        //  16,  001 0000
-        //  32,  010 0000
-        //  48,  011 0000
-        //  64,  100 0000
-        //  80,  101 0000
-        //  96,  110 0000
-        //  112, 111 0000
-        //  128 1000 0000
-        offset_k *= 32;
-        int mask = (k_ ^ (k_ + offset_k)) & (0x7 << 5);
-        for (int m = 0; m < 1; ++m) {
-            ptrs_[m] ^= mask;
-        }
-        k_ += offset_k;
-    }
-
-    // 0 -> 1: ^ 001  (000 ^ 001)
-    // 1 -> 2: ^ 011  (001 ^ 010)
-    // 2 -> 3: ^ 001  (010 ^ 011)
-    // 3 -> 4: ^ 111  (011 ^ 100)
-    // 4 -> 5: ^ 001  (100 ^ 101)
-    // 5 -> 6: ^ 011  (101 ^ 110)
-    // 6 -> 7: ^ 001  (110 ^ 111)
-    // 7 -> 0: ^ 111  (111 ^ 000)
-};
-
-template<class T, int DIMS, class Swizzle, int Padding>
-struct SmemIteratorV {
-    static_assert(sizeof(T) == 2);
-    static constexpr int kElemSize = sizeof(T);
-    uint32_t             smem_int_ptr_;
-    int                  offset_;
-    Swizzle              swizzle_;
-    int                  k_{};
-
-    Array<int, 8> ptrs_;
-
-    __device__ SmemIteratorV(const T* smem): smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
-    {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-
-        const int s = lane_id % 16;      // s
-        const int c = lane_id / 16 * 8;  // d
-
-        auto fn = [](int offset) {
-            // sssSSSdDDDdddx
-            // DDD ^= SSS
-            constexpr int mask = 0x7 << 8;
-            return offset ^ ((offset & mask) >> 4);
-        };
-
-        PRAGMA_UNROLL
-        for (int n = 0; n < 8; ++n) {
-            ptrs_[n] = smem_int_ptr_ + fn(kElemSize * (s * (DIMS + Padding) + (n * 16 + c)));
-        }
-    }
-
-    template<int ITER_N>
-    __device__ void LoadV(Array<T, 4> (&frag_V)[ITER_N], int k)
-    {
-        static_assert(ITER_N % 2 == 0);
-
-        PRAGMA_UNROLL
-        for (int n = 0; n < ITER_N / 2; ++n) {  // Load (s16,d16) tiles
-            auto& r = (Array<uint32_t, 4>&)frag_V[n * 2];
-            ldsm_x4_trans(r[0], r[1], r[2], r[3], ptrs_[n]);
-        }
-
-        Advance(1);
-    }
-
-    __device__ void Advance(int offset_k)
-    {
-        //       sssSSSdDDDdddx
-        //   0   000 000 0000
-        //  16,  001 000 0000
-        //  32,  010 000 0000
-        //  48,  011 000 0000
-        //  64,  100 000 0000
-
-        offset_k *= 16;
-        for (int n = 0; n < 8; ++n) {
-            ptrs_[n] += kElemSize * offset_k * (DIMS + Padding);
-        }
+        return offset;
     }
 };
 

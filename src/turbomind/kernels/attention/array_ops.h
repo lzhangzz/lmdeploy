@@ -144,6 +144,33 @@ inline __device__ void clear(Array<T, N> (&x)[M])
     }
 }
 
+template<class T, int M1, int M0, int N>
+inline __device__ void clear(Array<T, N> (&x)[M1][M0])
+{
+    PRAGMA_UNROLL
+    for (int m1 = 0; m1 < M1; ++m1) {
+        PRAGMA_UNROLL
+        for (int m0 = 0; m0 < M0; ++m0) {
+            clear(x[m1][m0]);
+        }
+    }
+}
+
+template<class T, int N>
+inline __device__ void copy(const Array<T, N>& src, Array<T, N>& dst)
+{
+    dst = src;
+}
+
+template<class T, int M, int N>
+inline __device__ void copy(const Array<T, N> (&src)[M], Array<T, N> (&dst)[M])
+{
+    PRAGMA_UNROLL
+    for (int m = 0; m < M; ++m) {
+        dst[m] = src[m];
+    }
+}
+
 template<int N>
 struct RotaryEmbedding {
 

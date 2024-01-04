@@ -3,7 +3,6 @@
 #include "attention.h"
 #include "kv_cache.h"
 #include "src/turbomind/kernels/attention/reference.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "test_utils.h"
 #include <cmath>
 #include <iostream>
@@ -12,10 +11,6 @@
 #include <algorithm>
 #include <numeric>
 #include <random>
-
-#include "cuda_bf16.h"
-
-#include "quantization.h"
 
 using namespace turbomind;
 
@@ -120,55 +115,8 @@ void TestBlocks(const thrust::universal_vector<half>& k_cache,  // [B, H, S, D]
     }
 }
 
-__global__ void test_bf16(nv_bfloat16* out, int n)
-{
-    // #pragma unroll 8
-    for (int i = 0; i < n; ++i) {
-        Array<uint8_t, 4> v;
-        PRAGMA_UNROLL
-        for (int c = 0; c < 4; ++c) {
-            v[c] = unsigned((i * 4 + c) % 256);
-        }
-        auto u = cvt_bf16x4_u8(v);
-        Stcs(&out[i * 4], u);
-
-        // PRAGMA_UNROLL
-        // for (int c = 0; c < 4; ++c) {
-        //     printf("%d -> %f, diff = %f\n", i * 4 + c, (float)u[c], (float)u[c] - float((i * 4 + c) % 256));
-        // }
-    }
-}
-
 int main(int argc, char* argv[])
 {
-    for (int i = 0; i < 32; ++i) {
-        printf("%2d ", i);
-    }
-    printf("\n");
-
-    for (int i = 0; i < 32; ++i) {
-        printf("%2d ", (i & ~5) | (((i & 1) << 2) ^ ((i & 4) >> 2)));
-    }
-    printf("\n");
-
-    for (int i = 0; i < 32; ++i) {
-        printf("%2d ", (i & ~3) | (((i & 1) << 1) ^ ((i & 2) >> 1)));
-    }
-    printf("\n");
-
-    for (int i = 0; i < 32; ++i) {
-        printf("%2d ", ((i & 2) << 1) ^ i);
-    }
-    printf("\n");
-
-    for (int i = 0; i < 32; ++i) {
-        int x = i << 2;
-        x     = ((x & 8) << 2) ^ x;
-        x     = ((x & ~20) | (((x & 16) >> 2) | ((x & 4) << 2)));
-        printf("%2d ", x >> 2);
-    }
-    printf("\n");
-
     AttentionParams<half> params{};
 
     constexpr int kHeadNum = 16;
@@ -177,7 +125,7 @@ int main(int argc, char* argv[])
     constexpr int KvHeadNum  = kHeadNum;
     constexpr int kBatchSize = 2;
     // constexpr int kBatchSize = 1;
-    // constexpr int kInputLen  = 128;
+    // constexpr int kInputLen  = 64;
     constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;
@@ -190,6 +138,8 @@ int main(int argc, char* argv[])
     constexpr int kBlockSz    = 64;
     constexpr int kTestIter   = 10;
     constexpr int kMaxSplitK  = 1;
+
+    constexpr int kDump = 0;
 
     RNG rng{};
 
@@ -213,8 +163,8 @@ int main(int argc, char* argv[])
     thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
     thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
 
-    thrust::universal_vector<float> qk_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
-    thrust::universal_vector<half>  pr_buf((size_t)0 * kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<float> qk_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
+    thrust::universal_vector<half>  pr_buf((size_t)kDump * kBatchSize * kHeadNum * kInputLen * kContextLen);
 
     std::fill(semaphores.begin(), semaphores.end(), 0);
 
@@ -310,7 +260,7 @@ int main(int argc, char* argv[])
     params.qk = qk_buf.data().get();
     params.pr = pr_buf.data().get();
 
-    Reference<half> reference(Reference<half>::kFLASH_ATTENTION, {});
+    Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
     for (int i = 0; i < 10; ++i) {
@@ -319,7 +269,7 @@ int main(int argc, char* argv[])
 
     cudaDeviceSynchronize();
 
-    if constexpr (0) {
+    if constexpr (kDump) {
         for (int b = 0; b < kBatchSize; ++b) {
             for (int h = 0; h < kHeadNum; ++h) {
                 for (int q = 0; q < kInputLen; ++q) {
@@ -358,7 +308,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (0) {
+    if (kDump) {
         cudaDeviceSynchronize();
         for (int b = 0; b < kBatchSize; ++b) {
             for (int h = 0; h < kHeadNum; ++h) {
@@ -444,15 +394,3 @@ int main(int argc, char* argv[])
 
     return 0;
 }
-
-// if (0) {
-//     for (int i = 0; i < kBatchSize; ++i) {
-//         std::cout << "Compare Keys " << i << ": ";
-//         Compare((half*)params.k_cache_block_ptrs[cu_block_cnts[i]],                 // [H, s, D]
-//                 k_cache_ref.data().get() + i * KvHeadNum * kContextLen * kHeadDim,  // [H, S, D]
-//                 kHeadDim,
-//                 kHeadDim,
-//                 KvHeadNum * kContextLen,
-//                 1);
-//     }
-// }

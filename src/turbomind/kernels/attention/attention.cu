@@ -1,11 +1,14 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "attention_template.h"
-#include "src/turbomind/kernels/gemm_s_f16/common.h"
-#include "src/turbomind/models/llama/llama_utils.h"
+#include "src/turbomind/kernels/attention/impl_sm70.h"
+#include "src/turbomind/kernels/attention/impl_sm80.h"
+#include "src/turbomind/kernels/attention/mainloop_sm70.h"
+#include "src/turbomind/kernels/attention/mainloop_sm80.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <iostream>
+#include <type_traits>
 
 namespace turbomind {
 
@@ -28,41 +31,44 @@ void Print(TMap)
 
 }  // namespace
 
-template<typename T, typename Tkv, int HeadDim, int CTA_Q>
+template<typename T, typename Tkv, int HeadDim>
 void invokeAttention(const AttentionParams<T>& params)
 {
     auto invoke = [&](auto* type) {
-        using Attn                       = std::remove_reference_t<decltype(*type)>;
-        static const size_t kDynSmemSize = sizeof(typename Attn::SharedStorage);
+        using Kernel = std::remove_reference_t<decltype(*type)>;
+
+        static const size_t kDynSmemSize = sizeof(typename Kernel::SharedStorage);
 
         [[maybe_unused]] static const int _ = [&] {
             std::cout << "GmemMap:\n";
-            Print(RakedThreadMap<128, 64, 8, 4>{});
+            Print(typename Kernel::Impl::ThreadMapKV{});
             // std::cout << "\nSmemMap:\n";
             // Print(typename Attn::SmemMap{});
             std::cout << "\nDynamic smem size: " << kDynSmemSize << "\n";
             return 0;
         }();
 
+        constexpr int CTA_Q = Kernel::CTA_Q;
+
         // const int slice_count = (params.max_seq_len + Attn::kSliceLen - 1) / Attn::kSliceLen;
         // const int max_split_k = std::min(params.max_split_k, std::max(1, slice_count));
 
         const int max_q_tile = (params.max_input_len + CTA_Q - 1) / CTA_Q;
 
-        dim3 block(Attn::kWarpCount * WARP_SIZE);
+        dim3 block(Kernel::kWarpCount * WARP_SIZE);
         // dim3 grid(max_q_tile, params.num_heads, params.batch_size);
         dim3 grid(max_q_tile, params.batch_size, params.num_heads);
 
         std::cout << "(" << grid.x << " " << grid.y << " " << grid.z << ") " << block.x << "\n";
 
         auto err =
-            cudaFuncSetAttribute(attention_kernel<Attn>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
+            cudaFuncSetAttribute(attention_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynSmemSize);
         if (err) {
             std::cout << cudaGetErrorString(err) << "\n";
             std::abort();
         }
 
-        attention_kernel<Attn><<<grid, block, kDynSmemSize, params.stream>>>(params);
+        attention_kernel<Kernel><<<grid, block, kDynSmemSize, params.stream>>>(params);
 
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
@@ -70,9 +76,17 @@ void invokeAttention(const AttentionParams<T>& params)
         }
     };
 
-    if (params.arch >= 80) {
-        using Type = Attention<T, Tkv, std::integral_constant<int, 64>, CTA_Q, 64, 128, 2>;
-        invoke((Type*)0);
+    if (false && params.arch >= 80) {
+        using Impl     = attention::Impl<attention::Sm80_16816, half, half, 64, 64, 16, 64, 128>;
+        using Mainloop = attention::Mainloop<attention::Sm80_CpAsync, Impl>;
+        using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+        invoke((Kernel*)0);
+    }
+    else if (true || params.arch == 70) {
+        using Impl     = attention::Impl<attention::Sm70_884, half, half, 128, 64, 16, 64, 128>;
+        using Mainloop = attention::Mainloop<attention::Sm70_Ldg, Impl>;
+        using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+        invoke((Kernel*)0);
     }
 }
 
@@ -84,7 +98,7 @@ void dispatchAttention(const AttentionParams<T>& params)
     FT_CHECK(params.size_per_head == HeadDim);
 
     if constexpr (std::is_same_v<T, half>) {
-        invokeAttention<T, T, HeadDim, 128>(params);
+        invokeAttention<T, T, HeadDim>(params);
     }
 }
 

@@ -1,10 +1,16 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
+#pragma once
+
 #include "array_ops.h"
-#include "policy.h"
-#include "src/turbomind/kernels/custom_ar_kernels.h"
+#include "impl.h"
+#include "iterator_sm70.h"
+#include "src/turbomind/kernels/attention/iterator.h"
+#include "src/turbomind/kernels/attention/thread_map.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <cmath>
 
-namespace turbomind {
+namespace turbomind::attention {
 
 __inline__ __device__ void
 mma_m8n8k4_row_col(Array<float, 8>& d, const Array<half, 4>& a, const Array<half, 4>& b, Array<float, 8>& c)
@@ -48,20 +54,19 @@ mma_m8n8k4_row_row(Array<float, 8>& d, const Array<half, 4>& a, const Array<half
 #endif
 }
 
-template<class T, class Tkv, int CTA_Q, int CTA_S, int HeadDim>
-struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
-    static constexpr int kPadQ = 4;
-    static constexpr int kPadK = 4;
-    static constexpr int kPadP = 4;
-    static constexpr int kPadV = 0;
+template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
+struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
 
-    static constexpr bool kUseSmemQ = false;
-    static constexpr bool kUseSmemP = false;
+    using T   = T_;
+    using Tkv = T_;
 
-    static constexpr int WARP_S = CTA_S;
-    static constexpr int WARP_Q = 16;
+    static constexpr int CTA_Q    = CTA_Q_;
+    static constexpr int CTA_S    = CTA_S_;
+    static constexpr int kHeadDim = HeadDim;
 
-    static constexpr int kWarpCount = CTA_Q / WARP_Q;
+    static constexpr int kWarpCntQ  = CTA_Q / WARP_Q;
+    static constexpr int kWarpCntS  = CTA_S / WARP_S;
+    static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
     static constexpr int OP_M = 16;
     static constexpr int OP_N = 16;
@@ -95,7 +100,7 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     using FragM = Array<float, 2>[vM];      // (q2,q2,_2,_2,q2) (Qm)    (q2))
     using FragL = FragM;
 
-    using Swizzle = Identity;
+    // using Swizzle = Identity;
 
     struct SwizzleV {
         __device__ int operator()(int offset)
@@ -127,8 +132,36 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         }
     };
 
+    using SmemLayoutQ = SmemLayout<HeadDim + 4, Identity>;
+    using SmemLayoutK = SmemLayout<HeadDim + 4, Identity>;
+    using SmemLayoutP = SmemLayout<CTA_S + 4, Identity>;
+    using SmemLayoutV = SmemLayout<HeadDim, SwizzleV>;
+
+    struct SharedStorage {
+        union {
+            __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
+            struct {
+                __align__(16) T K[CTA_S * SmemLayoutK::kStride];
+                __align__(16) T V[CTA_S * SmemLayoutV::kStride];
+                __align__(16) T P[CTA_Q * SmemLayoutP::kStride];
+            };
+        };
+    };
+
+    using SmemIterQ = NullSmemIter<T>;
+    using SmemIterP = NullSmemIter<T>;
+
+    using SmemIterK = Sm70SmemIterK<T, SmemLayoutK, kN>;
+    using SmemIterV = Sm70SmemIterV<T, SmemLayoutV, vN>;
+
+    static constexpr bool kUseSmemQ = false;
+    static constexpr bool kUseSmemP = false;
+
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>;
+    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>;
+
     template<class Fragment, class Func>
-    static __device__ void ForeachS(Fragment& S, Func&& func)
+    __device__ static void ForeachS(Fragment& S, Func&& func)
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -152,7 +185,7 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         }
     }
 
-    __device__ void TransformQ(const T* smem_Q, FragQ& frag_Q)
+    __device__ static void TransformQ(const T* smem_Q, FragQ& frag_Q)
     {
         if constexpr (!kUseSmemQ) {
             const int warp_id = threadIdx.x / WARP_SIZE;
@@ -161,30 +194,31 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             for (int k = 0; k < kK; ++k) {
                 PRAGMA_UNROLL
                 for (int m = 0; m < kM; ++m) {
-                    const int mm = m * OP_M + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
-                    const int kk = k * 4 + 0;
-                    Lds(frag_Q[k][m], &smem_Q[mm * (HeadDim + kPadQ) + kk]);
+                    const int qi = m * OP_M + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * WARP_Q;
+                    const int di = k * 4;
+                    Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(qi, di)]);
                 }
             }
         }
     }
 
     template<class SmemQ, class SmemK>
-    static __device__ void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S)
+    __device__ static void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S)
     {
-        if constexpr (kUseSmemQ) {
-            smem_Q.LoadQ_sm70(frag_Q[0], 0);
-        }
         FragK frag_K;
-        smem_K.LoadK_sm70(frag_K[0], 0);
+
+        smem_K.Load(frag_K[0], 0);
+        if constexpr (kUseSmemQ) {
+            smem_Q.Load(frag_Q[0], 0);
+        }
 
         PRAGMA_UNROLL
         for (int k = 0; k < kK; ++k) {
             if (k < kK - 1) {
+                smem_K.Load(frag_K[k + 1], k + 1);
                 if constexpr (kUseSmemQ) {
-                    smem_Q.LoadQ_sm70(frag_Q[k + 1], k + 1);
+                    smem_Q.Load(frag_Q[k + 1], k + 1);
                 }
-                smem_K.LoadK_sm70(frag_K[k + 1], k + 1);
             }
             PRAGMA_UNROLL
             for (int m = 0; m < kM; ++m) {
@@ -196,22 +230,23 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         }
     }
 
-    template<class SmemP, class Smem>
-    __device__ void ComputePV(SmemP& smem_P, Smem& smem_V, FragP& frag_P, FragO& frag_O)
+    template<class SmemP, class SmemV>
+    __device__ static void ComputePV(SmemP& smem_P, SmemV& smem_V, FragP& frag_P, FragO& frag_O)
     {
-        if constexpr (kUseSmemP) {
-            smem_P.LoadP_sm70(frag_P[0], 0);
-        }
         FragV frag_V;
-        smem_V.LoadV_sm70(frag_V[0], 0);
+
+        smem_V.Load(frag_V[0], 0);
+        if constexpr (kUseSmemP) {
+            smem_P.Load(frag_P[0], 0);
+        }
 
         PRAGMA_UNROLL
         for (int k = 0; k < vK; ++k) {
             if (k < vK - 1) {
+                smem_V.Load(frag_V[k + 1], k + 1);
                 if constexpr (kUseSmemP) {
-                    smem_P.LoadP_sm70(frag_P[k + 1], k + 1);
+                    smem_P.Load(frag_P[k + 1], k + 1);
                 }
-                smem_V.LoadV_sm70(frag_V[k + 1], k + 1);
             }
             PRAGMA_UNROLL
             for (int m = 0; m < vM; ++m) {
@@ -224,8 +259,7 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     }
 
     template<bool is_residue>
-    static __device__ void
-    Softmax(FragS& frag_S, FragM& frag_M, FragM& frag_L, FragP& frag_P, FragO& frag_O, float qk_scale, T* smem_P)
+    __device__ static void Softmax(FragS& frag_S, FragM& frag_M, FragM& frag_L, FragO& frag_O, float qk_scale)
     {
         FragM prev_M;
         PRAGMA_UNROLL
@@ -275,7 +309,6 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                         }
                     }
                 }
-
                 frag_L[m][q] *= expdiff_M;
             }
         }
@@ -306,8 +339,11 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                 frag_L[m][q] = frag_L[m][q] + tmp_L;  // update L
             }
         }
+    }
 
-        ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[qi * (CTA_S + kPadP) + si] = half(p); });
+    __device__ static void ConvertStoP(FragS& frag_S, FragP& frag_P, T* smem_P)
+    {
+        ForeachS(frag_S, [&](int qi, int si, float p) { smem_P[SmemLayoutP::swizzle(qi, si)] = half(p); });
 
         if constexpr (!kUseSmemP) {
             const int warp_id = threadIdx.x / WARP_SIZE;
@@ -318,14 +354,14 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
                 for (int m = 0; m < vM; ++m) {
                     const int qi = m * OP_M + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * WARP_Q;
                     const int si = k * OP_K;
-                    Lds(frag_P[k][m], &smem_P[qi * (CTA_S + kPadP) + si]);
+                    Lds(frag_P[k][m], &smem_P[SmemLayoutP::swizzle(qi, si)]);
                 }
             }
         }
     }
 
     template<class Func>
-    static __device__ void StoreO(FragO& frag_O, const FragL& frag_L, Func&& func)
+    __device__ static void StoreO(FragO& frag_O, const FragL& frag_L, Func&& func)
     {
         FragL tmp_L;
         PRAGMA_UNROLL
@@ -366,4 +402,4 @@ struct AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
     }
 };
 
-}  // namespace turbomind
+}  // namespace turbomind::attention

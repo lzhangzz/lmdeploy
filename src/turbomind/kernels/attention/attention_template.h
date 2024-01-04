@@ -3,7 +3,6 @@
 #pragma once
 
 #include "array_ops.h"
-#include "iterator.h"
 #include "quantization.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
@@ -13,137 +12,82 @@
 #include <type_traits>
 
 #include "attention_params.h"
-#include "policy_sm70.h"
-#include "policy_sm80.h"
+
+// template<int Stages>
+// struct Sm80 {};
+// template<class OpClass, int Stages>
+// struct Sm80Decoding {};
+
+// struct Sm75 {};
+// template<class OpClass>
+// struct Sm75Decoding {};
+
+// struct Sm70 {};
+// template<class OpClass>
+// struct Sm70Decoding {};
 
 namespace turbomind {
 
-template<class T, class Tkv, class BlockSeqLen, int CTA_Q, int CTA_S, int HeadDim, int Stages>
-struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
-    using Policy    = AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim>;
+template<class Mainloop, class BlockSeqLen>
+struct Attention {
+
+    using T   = typename Mainloop::T;
+    using Tkv = typename Mainloop::Tkv;
+
+    using Impl = typename Mainloop::Impl;
+
+    static constexpr int kWarpCount = Impl::kWarpCount;
+
     using ParamType = AttentionParams<T>;
 
-    using Policy::kPadQ;
-    using Policy::kPadK;
-    using Policy::kPadP;
-    using Policy::kPadV;
-    using Policy::kWarpCount;
+    static constexpr int kHeadDim = Impl::kHeadDim;
 
-    using Policy::WARP_S;
-    using Policy::WARP_Q;
+    using FragQ = typename Impl::FragQ;
+    using FragO = typename Impl::FragO;
+    using FragM = typename Impl::FragM;
+    using FragL = typename Impl::FragL;
 
-    using typename Policy::FragQ;
-    using typename Policy::FragK;
-    using typename Policy::FragS;
-    using typename Policy::FragP;
-    using typename Policy::FragV;
-    using typename Policy::FragO;
-    using typename Policy::FragM;
-    using typename Policy::FragL;
+    using GmemIterK = typename Mainloop::template GmemIterK<BlockSeqLen>;
+    using GmemIterV = typename Mainloop::template GmemIterV<BlockSeqLen>;
 
-    using typename Policy::Swizzle;
+    static constexpr int CTA_Q = Impl::CTA_Q;
+    static constexpr int CTA_S = Impl::CTA_S;
 
-    using typename Policy::SwizzleV;
+    using SharedStorage = typename Impl::SharedStorage;
 
-    static constexpr int kHeadDim = HeadDim;
-    static constexpr int kStages  = Stages;
-
-    static_assert(kStages == 2);
-
-    struct SharedStorage {
-        // __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
-        // __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
-        // __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-        // __align__(16) T smem_P[CTA_Q][CTA_S + kPadQ];
-        union {
-            __align__(16) T smem_Q[CTA_Q][kHeadDim + kPadQ];
-            struct {
-                __align__(16) Tkv smem_K[CTA_S][kHeadDim + kPadK];
-                __align__(16) Tkv smem_V[CTA_S][kHeadDim + kPadV];
-                __align__(16) T smem_P[CTA_Q][CTA_S + kPadP];
-            };
-        };
-    };
-
-    const ParamType& params_;
-
-    int query_idx_;
-    int head_idx_;
-    int batch_idx_;
-    int warp_id_;
-    int lane_id_;
-
-    BlockSeqLen block_seqlen_;
-
-    const Tkv** k_cache_ptrs_;
-
-    Tkv* smem_K_;
-    Tkv* smem_V_;
-    T*   smem_Q_;
-    T*   smem_P_;
-
-    int max_context_len_{};
-
-    template<int I>
-    using Int = std::integral_constant<int, I>;
-
-    __device__ bool thread0()
+    __device__ void LoadQ(const ParamType& params,
+                          T*               smem_Q,
+                          FragQ&           frag_Q,
+                          int              qi_begin,
+                          int              qi_end,
+                          int              query_idx,
+                          int              head_idx,
+                          int              batch_idx,
+                          int              warp_id,
+                          int              lane_id)
     {
-        return blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0;
-    }
+        using Map = typename Impl::ThreadMapQ;
 
-    __device__ Attention(const ParamType& params, uint8_t* dsmem): params_(params)
-    {
-        SharedStorage* shared = (SharedStorage*)dsmem;
-
-        smem_Q_ = (T*)&shared->smem_Q;
-        smem_K_ = (Tkv*)&shared->smem_K;
-        smem_V_ = (Tkv*)&shared->smem_V;
-        smem_P_ = (T*)&shared->smem_P;
-
-        // [q, h, b]
-        query_idx_ = blockIdx.x * CTA_Q;  // local offset into `input_length`
-        head_idx_  = blockIdx.z;
-        batch_idx_ = blockIdx.y;
-
-        if constexpr (std::is_integral_v<BlockSeqLen>) {
-            block_seqlen_ = params.kv_cache_block_size;
-        }
-
-        max_context_len_ = params_.max_input_len + params_.max_seq_len;
-
-        warp_id_ = threadIdx.x / WARP_SIZE;
-        lane_id_ = threadIdx.x % WARP_SIZE;
-
-        k_cache_ptrs_ = (const Tkv**)params_.k_cache_block_ptrs + params_.cu_block_cnts[batch_idx_];
-    }
-
-    __device__ void LoadQ(FragQ& frag_Q)
-    {
-        constexpr int kVecSize = 4;  // sizeof(uint4) / sizeof(T);
+        constexpr int kVecSize = Map::kAccessC;
 
         using Vec = Array<T, kVecSize>;
-        using Map = RakedThreadMap<kHeadDim, CTA_Q, kVecSize, kWarpCount>;
 
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
         Vec vec_Q[ITER_S][ITER_C];
 
-        const int qi_beg = params_.cu_seqlens[batch_idx_] + query_idx_;  // global offset into `cu_seqlens`
-        const int qi_end = params_.cu_seqlens[batch_idx_ + 1];
-
-        const int2 offset = Map::get_offset(warp_id_, lane_id_);
+        const int2 offset = Map::get_offset(warp_id, lane_id);
 
         // Load Q
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int qi = offset.y + s * Map::kDeltaS + qi_beg;
+                const int qi = offset.y + s * Map::kDeltaS + qi_begin;
                 const int di = offset.x + c * Map::kDeltaC;
                 if (qi < qi_end) {
-                    Ldg(vec_Q[s][c], &params_.q[qi * params_.stride + head_idx_ * kHeadDim + di]);
+                    Ldg(vec_Q[s][c], &params.q[qi * params.stride + head_idx * kHeadDim + di]);
                 }
                 else {
                     clear(vec_Q[s][c]);
@@ -152,12 +96,12 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         }
 
         // Optionally apply bias to Q
-        if (params_.q_bias) {
+        if (params.q_bias) {
             Vec bias_Q[ITER_C];
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                Ldg(bias_Q[c], &params_.q_bias[head_idx_ * kHeadDim + di]);
+                Ldg(bias_Q[c], &params.q_bias[head_idx * kHeadDim + di]);
             }
             using namespace ops;
             PRAGMA_UNROLL
@@ -174,7 +118,7 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             for (int s = 0; s < ITER_S; ++s) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
-                    const int qi = offset.y + s * Map::kDeltaS + query_idx_;
+                    const int qi = offset.y + s * Map::kDeltaS + query_idx;
                     const int di = offset.x + c * Map::kDeltaC;
                     //
                     RotaryEmbedding<kVecSize> rope(10000.f, kHeadDim, qi, {di, 0});
@@ -183,6 +127,8 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             }
         }
 
+        using SmemLayoutQ = typename Impl::SmemLayoutQ;
+
         // Store to shared memory
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
@@ -190,124 +136,69 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di], vec_Q[s][c]);
-                // Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 0], (Array<T, 4>&)vec_Q[s][c][0]);
-                // Store(&smem_Q_[qi * (kHeadDim + kPadQ) + di + 4], (Array<T, 4>&)vec_Q[s][c][4]);
+                Store(&smem_Q[SmemLayoutQ::swizzle(qi, di)], vec_Q[s][c]);
             }
         }
 
-        Policy::TransformQ(smem_Q_, frag_Q);
+        Impl::TransformQ(smem_Q, frag_Q);
 
         __syncthreads();
     }
 
-    __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
+    __device__ void operator()(const ParamType& params, char* smem_buf)
     {
-        Policy::ForeachS(frag_S, [&](int qi, int si, float& score) {
-            if (offset_Q + qi < offset_K + si) {
-                score = -std::numeric_limits<float>::infinity();
-            }
-        });
-    }
+        // [q, h, b]
+        const int query_idx = blockIdx.x * CTA_Q;  // local offset into `input_length`
+        const int head_idx  = blockIdx.z;
+        const int batch_idx = blockIdx.y;
 
-    __device__ void StoreS(const FragS& frag_S, int offset_K)
-    {
-        Policy::ForeachS(frag_S, [&](int qi, int si, float score) {
-            qi += query_idx_;
-            si += offset_K;
-            if (qi < params_.max_input_len && si < max_context_len_) {
-                params_.qk[batch_idx_ * params_.num_heads * params_.max_input_len * max_context_len_
-                           + head_idx_ * params_.max_input_len * max_context_len_ + qi * max_context_len_ + si] = score;
-            }
-        });
-    }
-
-    __device__ void StoreP(FragP& frag_P, int offset_K)
-    {
-        Policy::ForeachP(frag_P, [&](int qi, int vi, float score) {
-            qi += query_idx_;
-            vi += offset_K;
-            if (qi < params_.max_input_len && vi < max_context_len_) {
-                params_.pr[batch_idx_ * params_.num_heads * params_.max_input_len * max_context_len_
-                           + head_idx_ * params_.max_input_len * max_context_len_ + qi * max_context_len_ + vi] = score;
-            }
-        });
-    }
-
-    __device__ void StoreO(FragO& frag_O, const FragL& frag_L)
-    {
-        const int qi_beg = params_.cu_seqlens[batch_idx_] + query_idx_;  // global offset into `cu_seqlens`
-        const int qi_end = params_.cu_seqlens[batch_idx_ + 1];
-        Policy::StoreO(frag_O, frag_L, [&](int qi, int di, const auto& vec) {
-            if (qi_beg + qi < qi_end) {
-                Store(&params_.out[(qi_beg + qi) * params_.num_heads * kHeadDim + head_idx_ * kHeadDim + di], vec);
-            }
-        });
-    }
-
-    __device__ void Run()
-    {
         // early exit if finished flag is set
-        if (params_.finished[batch_idx_]) {
+        if (params.finished[batch_idx]) {
             return;
         }
 
-        if (query_idx_ >= params_.input_length[batch_idx_]) {
+        if (query_idx >= params.input_length[batch_idx]) {
             return;
         }
-        using ThrMap = RakedThreadMap<kHeadDim, CTA_S, 4 /*sizeof(uint4) / sizeof(T)*/, kWarpCount>;
-        using GmemK  = GmemIterator<Tkv, ThrMap, BlockSeqLen, Swizzle, kPadK, kStages>;
-        using GmemV  = GmemIterator<Tkv, ThrMap, BlockSeqLen, SwizzleV, kPadV, kStages>;
-        using SmemQ  = SmemIterator<T, kHeadDim, Swizzle, kPadQ>;
-        using SmemK  = SmemIterator<T, kHeadDim, Swizzle, kPadK>;
-        using SmemP  = SmemIterator<T, CTA_S, SwizzleV, kPadQ>;
-        using SmemV  = SmemIterator<T, kHeadDim, SwizzleV, kPadV>;
+
+        const BlockSeqLen block_seq_len = [&]() -> BlockSeqLen {
+            if constexpr (std::is_integral_v<BlockSeqLen>) {
+                return params.kv_cache_block_size;
+            }
+            else {
+                return {};
+            }
+        }();
+
+        SharedStorage& storage = *(SharedStorage*)smem_buf;
+
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+        const int qi_begin = params.cu_seqlens[batch_idx] + query_idx;  // global offset into `cu_seqlens`
+        const int qi_end   = params.cu_seqlens[batch_idx + 1];
 
         FragQ frag_Q;
-        LoadQ(frag_Q);
+        LoadQ(params, storage.Q, frag_Q, qi_begin, qi_end, query_idx, head_idx, batch_idx, warp_id, lane_id);
+
+        const auto k_cache_ptrs = (const Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
 
         // [L, 2, H, s, D]
-        int local_key_offset = params_.key_offset + head_idx_ * block_seqlen_ * kHeadDim;
-        int local_val_offset = params_.val_offset + head_idx_ * block_seqlen_ * kHeadDim;
+        const int local_key_offset = params.key_offset + head_idx * block_seq_len * kHeadDim;
+        const int local_val_offset = params.val_offset + head_idx * block_seq_len * kHeadDim;
 
-        GmemK gmem_K{k_cache_ptrs_, block_seqlen_, local_key_offset, smem_K_, warp_id_, lane_id_};
-        GmemV gmem_V{k_cache_ptrs_, block_seqlen_, local_val_offset, smem_V_, warp_id_, lane_id_};
+        GmemIterK gmem_K{k_cache_ptrs, block_seq_len, local_key_offset, storage.K, warp_id, lane_id};
+        GmemIterV gmem_V{k_cache_ptrs, block_seq_len, local_val_offset, storage.V, warp_id, lane_id};
 
-        gmem_K.ClearSmem(Int<0>{});
-        gmem_V.ClearSmem(Int<0>{});
+        const int input_len   = params.input_length[batch_idx];
+        const int context_len = params.context_length[batch_idx];
+        const int history_len = context_len - input_len;
+        const int offset_Q    = history_len + query_idx;
 
-        __syncthreads();
+        const float qk_scale = params.inv_sqrt_dh;
 
-        SmemQ smem_Q{smem_Q_};
-        SmemK smem_K{smem_K_};
-        SmemV smem_V{smem_V_};
-        SmemP smem_P{smem_P_};
-        // SmemIteratorQ<T, kHeadDim, Swizzle> smem_Q{smem_Q_};
-        // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_K{smem_KV_};
-        // SmemIteratorV<Tkv, kHeadDim, Swizzle> smem_V{smem_KV_ + CTA_S * (kHeadDim + SMEM_PAD)};
-        // SmemIteratorK<Tkv, kHeadDim, Swizzle> smem_R{smem_R_};
-
-        const int input   = params_.input_length[batch_idx_];
-        const int context = params_.context_length[batch_idx_];
-        const int history = context - input;
-
-        const int offset_Q = history + query_idx_;
-
-        const float qk_scale = params_.inv_sqrt_dh;
-
-        // ceil(tiles) - 1
-        int iter = (history + min(query_idx_ + CTA_Q, input) + CTA_S - 1) / CTA_S - 1;
-
-        typename GmemK::Fragment fragment_K;
-        typename GmemV::Fragment fragment_V;
-
-        gmem_K.AdjustBlockTileIdx(iter);
-        gmem_K.PrefetchStage(std::true_type{}, context - iter * CTA_S, fragment_K);
-        CpAsyncCommit();
-        gmem_K.Save(fragment_K);
-        // gmem_K.Load<true>(fragment_K, context - iter * CTA_S);
-        // gmem_K.Save(fragment_K);
-        // // CpAsyncCommit();
+        int tile_iter = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S - 1;
+        int mask_iter = 2;
 
         __align__(16) FragO frag_O{};
 
@@ -315,86 +206,55 @@ struct Attention: AttentionPolicy<sm70_t, T, Tkv, CTA_Q, CTA_S, HeadDim> {
         FragM frag_M;
         fill(frag_M, -std::numeric_limits<float>::infinity());
 
-        auto loop = [&](auto is_residue, auto is_mask) {
-            const int offset_K = iter * CTA_S;
+        gmem_K.ClearSmem();
+        gmem_V.ClearSmem();
 
-            __align__(16) FragS frag_S{};
+        __syncthreads();
 
-            CpAsyncWait();
-            __syncthreads();  // Wait while smem_K being filled & smem_V being used
+        Mainloop mainloop;
+        mainloop(frag_Q,
+                 gmem_K,
+                 gmem_V,
+                 frag_O,
+                 frag_M,
+                 frag_L,
+                 offset_Q,
+                 context_len,
+                 tile_iter,
+                 mask_iter,
+                 qk_scale,
+                 storage,
+                 StoreS(params, query_idx, head_idx, batch_idx, context_len));
 
-            // Prefetch for V, gmem_V[i-1] -> smem_V
-            gmem_V.AdjustBlockTileIdx(iter);
-            gmem_V.PrefetchStage(is_residue, is_residue ? context - offset_K : CTA_S, fragment_V);
-            CpAsyncCommit();
+        StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params);
+    }
 
-            // gmem_V.Load<is_residue>(fragment_V, is_residue ? context - offset_K : CTA_S);
-
-            Policy::ComputeQK(smem_Q, smem_K, frag_Q, frag_S);
-
-            gmem_V.Save(fragment_V);
-
-            CpAsyncWait();
-            __syncthreads();  // Wait while trans_K being used & smem_K being filled
-
-            // Prefetch for next K, gmem_K[i - 1] -> smem_K
-            if (iter > 0) {
-                gmem_K.AdjustBlockTileIdx(iter - 1);
-                gmem_K.PrefetchStage(std::false_type{}, CTA_S, fragment_K);
-                CpAsyncCommit();
+    __device__ void
+    StoreO(FragO& frag_O, const FragL& frag_L, int qi_begin, int qi_end, int head_idx, const ParamType& params)
+    {
+        Impl::StoreO(frag_O, frag_L, [&](int qi, int di, const auto& vec) {
+            if (qi_begin + qi < qi_end) {
+                Store(&params.out[(qi_begin + qi) * params.num_heads * kHeadDim + head_idx * kHeadDim + di], vec);
             }
+        });
+    }
 
-            if constexpr (is_mask) {
-                // StoreS(frag_S, offset_K);
-                ApplyCasualMask(frag_S, offset_Q, offset_K);
-                // StoreS(frag_S, offset_K);
-            }
-
-            __align__(16) FragP frag_P;
-
-            Policy::Softmax<is_residue>(frag_S, frag_M, frag_L, frag_P, frag_O, qk_scale, smem_P_);
-            // StoreS(frag_S, offset_K);
-            // StoreP(frag_P, offset_K);
-
-            Policy::ComputePV(smem_P, smem_V, frag_P, frag_O);
-
-            gmem_K.Save(fragment_K);
+    __device__ auto StoreS(const ParamType& params,
+                           const int&       query_idx,
+                           const int&       head_idx,
+                           const int&       batch_idx,
+                           const int&       max_context_len)
+    {
+        return [&](auto& frag_S, int offset_K) {
+            Impl::ForeachS(frag_S, [&](int qi, int si, float score) {
+                qi += query_idx;
+                si += offset_K;
+                if (qi < params.max_input_len && si < max_context_len) {
+                    params.qk[batch_idx * params.num_heads * params.max_input_len * max_context_len
+                              + head_idx * params.max_input_len * max_context_len + qi * max_context_len + si] = score;
+                }
+            });
         };
-
-        int mask_iter = 4;
-
-        PRAGMA_UNROLL
-        for (; iter >= 0 && mask_iter != 0; --iter, --mask_iter) {
-            loop(std::true_type{}, std::true_type{});
-        }
-
-        for (; iter >= 0; --iter) {
-            loop(std::false_type{}, std::false_type{});
-        }
-
-        StoreO(frag_O, frag_L);
-    }
-
-    __device__ void CpAsyncWait()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_wait_prior(0);
-        }
-    }
-
-    __device__ void CpAsyncCommit()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_commit();
-        }
-    }
-
-    __device__ void CpAsyncFlush()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_commit();
-            __pipeline_wait_prior(0);
-        }
     }
 };
 
@@ -605,12 +465,13 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
     }
 }
 
-extern __shared__ uint8_t dynamic_smem[];
+extern __shared__ char dynamic_smem[];
 
-template<typename MHAType, typename ParamType = typename MHAType::ParamType>
+template<typename AttentionType, typename ParamType = typename AttentionType::ParamType>
 __global__ void __launch_bounds__(256, 1) attention_kernel(ParamType params)
 {
-    MHAType{params, dynamic_smem}.Run();
+    AttentionType{}(params, dynamic_smem);
+    // MHAType{params, dynamic_smem}.Run();
 }
 
 template<typename MHAType, typename ParamType = typename MHAType::ParamType>
