@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #pragma once
 
 #include "array_ops.h"
@@ -44,41 +46,39 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stage
 
     __device__ void Save(const Fragment& rmem)
     {
-        typename SmemLayout::Swizzle swizzle{};
+        // typename SmemLayout::Swizzle swizzle{};
 
-        Array<int, Map::kIterC> idxs;
-        PRAGMA_UNROLL
-        for (int c = 0; c < Map::kIterC; ++c) {
-            const int idx0 = swizzle(dst_offset_ + c * Map::kDeltaC);
-            idxs[c]        = idx0;
-        }
-        const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+        // Array<int, Map::kIterC> idxs;
+        // PRAGMA_UNROLL
+        // for (int c = 0; c < Map::kIterC; ++c) {
+        //     const int idx0 = swizzle(dst_offset_ + c * Map::kDeltaC);
+        //     idxs[c]        = idx0;
+        // }
+        // const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+        // PRAGMA_UNROLL
+        // for (int s = 0; s < Map::kIterS; ++s) {
+        //     PRAGMA_UNROLL
+        //     for (int c = 0; c < Map::kIterC; ++c) {
+        //         Store(&smem_[idxs[c]], rmem[s][c]);
+        //     }
+        //     PRAGMA_UNROLL
+        //     for (int c = 0; c < Map::kIterC; ++c) {
+        //         const int s0 = offset_s + s * Map::kDeltaS;
+        //         const int s1 = s0 + Map::kDeltaS;
+        //         idxs[c]      = swizzle.AdvanceS<Map::kDeltaS>(idxs[c], s0, s1) + Map::kDeltaS * SmemLayout::kStride;
+        //     }
+        // }
+
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                Store(&smem_[idxs[c]], rmem[s][c]);
-            }
-            PRAGMA_UNROLL
-            for (int c = 0; c < Map::kIterC; ++c) {
-                const int s0 = offset_s + s * Map::kDeltaS;
-                const int s1 = s0 + Map::kDeltaS;
-                idxs[c]      = swizzle.AdvanceS<Map::kDeltaS>(idxs[c], s0, s1) + Map::kDeltaS * SmemLayout::kStride;
+                Store(&smem_[SmemLayout::swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride
+                                                 + c * Map::kDeltaC)],
+                      rmem[s][c]);
             }
         }
     }
-
-    // __device__ void Copy(int offset, const T* __restrict__ src, bool mask)
-    // {
-    //     if (mask) {
-    //         Ldg(*(AccessType*)&smem_[offset], src);
-    //     }
-    // }
-
-    // __device__ void Copy(int offset, const T* __restrict__ src)
-    // {
-    //     Ldg(*(AccessType*)&smem_[offset], src);
-    // }
 };
 
 template<class T, class Layout, int M>

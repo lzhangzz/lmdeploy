@@ -72,7 +72,7 @@ struct Mainloop<Sm70_Ldg, Impl_> {
             gmem_V.AdjustBlockTileIdx(tile_iter);
 
             typename GmemIterV::Fragment frag_V;
-            gmem_V.Load(frag_V, std::false_type{}, is_residue ? max_step - offset_K : CTA_S);
+            gmem_V.Load(frag_V, is_residue, is_residue ? max_step - offset_K : CTA_S);
 
             FragS frag_S{};
 
@@ -86,6 +86,8 @@ struct Mainloop<Sm70_Ldg, Impl_> {
                 gmem_K.AdjustBlockTileIdx(tile_iter - 1);
                 gmem_K.Load(frag_K, std::false_type{}, CTA_S);
             }
+
+            // store_S(frag_S, offset_K);
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);

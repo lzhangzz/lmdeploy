@@ -1,6 +1,7 @@
 #pragma once
 
 #include "iterator.h"
+#include "src/turbomind/kernels/gemm_s_f16/common.h"
 
 namespace turbomind {
 
@@ -85,6 +86,22 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stage
     }
 };
 
+template<class T, class Layout, int M, int WARPS>
+struct Sm80SmemIterQ: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::smem_;
+
+    __device__ void Load(Array<T, 8> (&frag_Q)[M], int k)
+    {
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            Lds(frag_Q[m], &smem_[((k * M + m) * WARPS * WARP_SIZE + threadIdx.x) * 8]);
+        }
+    }
+};
+
 template<class T, class Layout, int N>
 struct Sm80SmemIterK: BaseSmemIterator<T, Layout> {
 
@@ -101,11 +118,10 @@ struct Sm80SmemIterK: BaseSmemIterator<T, Layout> {
         const int group_id      = lane_id / 16;
         const int group_lane_id = lane_id % 16;
         PRAGMA_UNROLL
-        for (int n = 0; n < N / 2; ++n) {  // Load (s16,d16) tiles
-            auto&     r = (Array<uint32_t, 4>&)frag_K[n * 2];
-            const int s = n * 16 + group_lane_id % 8 + group_id * 8;
+        for (int n = 0; n < N; n += 2) {  // Load (s16,d16) tiles
+            const int s = n * +8 + group_lane_id % 8 + group_id * 8;
             const int c = k * 16 + group_lane_id / 8 * 8;
-            ldmatrix_m8n8_x4_b16(r[0], r[1], r[2], r[3], swizzle_uint_ptr(s, c));
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], swizzle_uint_ptr(s, c));
         }
     }
 };
@@ -115,20 +131,44 @@ struct Sm80SmemIterV: BaseSmemIterator<T, Layout> {
 
     using Base = BaseSmemIterator<T, Layout>;
 
-    using Base::Base;
     using Base::swizzle_uint_ptr;
 
     static_assert(N % 2 == 0);
 
+    Array<int, N / 2> offsets_;
+
+    static constexpr bool kFlag = false;
+
+    __device__ Sm80SmemIterV(const T* smem): Base{smem}
+    {
+        if constexpr (kFlag) {
+            const int lane_id = threadIdx.x % WARP_SIZE;
+            PRAGMA_UNROLL
+            for (int n = 0; n < N; n += 2) {  //  (d16,s16) tiles
+                const int si    = 0 * 16 + lane_id % 16;
+                const int di    = n * +8 + lane_id / 16 * 8;
+                offsets_[n / 2] = swizzle_uint_ptr(si, di);
+            }
+        }
+    }
+
     __device__ void Load(Array<T, 4> (&frag_V)[N], int k)
     {
-        const int lane_id = threadIdx.x % WARP_SIZE;
-        PRAGMA_UNROLL
-        for (int n = 0; n < N / 2; ++n) {  // Load (d16,s16) tiles
-            auto&     r  = (Array<uint32_t, 4>&)frag_V[n * 2];
-            const int si = k * 16 + lane_id % 16;
-            const int di = n * 16 + lane_id / 16 * 8;
-            ldsm_x4_trans(r[0], r[1], r[2], r[3], swizzle_uint_ptr(si, di));
+        if constexpr (kFlag) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < N; n += 2) {  //  (d16,s16) tiles
+                const int offset = offsets_[n / 2] + sizeof(T) * k * 16 * Layout::kStride;
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], offset);
+            }
+        }
+        else {
+            const int lane_id = threadIdx.x % WARP_SIZE;
+            PRAGMA_UNROLL
+            for (int n = 0; n < N; n += 2) {  // Load (d16,s16) tiles
+                const int si = k * 16 + lane_id % 16;
+                const int di = n * +8 + lane_id / 16 * 8;
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], swizzle_uint_ptr(si, di));
+            }
         }
     }
 };
@@ -143,7 +183,7 @@ struct Sm80SmemIterK<uint8_t, Layout, N>: BaseSmemIterator<uint8_t, Layout> {
 
     static_assert(N % 4 == 0);
 
-    __device__ void LoadK(Array<uint8_t, 4> (&frag_K)[N], int k)
+    __device__ void Load(Array<uint8_t, 4> (&frag_K)[N], int k)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
@@ -166,7 +206,7 @@ struct Sm80SmemIterV<uint8_t, Layout, N>: BaseSmemIterator<uint8_t, Layout> {
 
     static_assert(N % 4 == 0);
 
-    __device__ void LoadK(Array<uint8_t, 4> (&frag_V)[N], int k)
+    __device__ void Load(Array<uint8_t, 4> (&frag_V)[N], int k)
     {
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL

@@ -114,7 +114,7 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
     {
         Impl::ForeachS(frag_S, [&](int qi, int si, float& score) {
             if (offset_Q + qi < offset_K + si) {
-                score = -std::numeric_limits<float>::infinity();
+                score -= std::numeric_limits<float>::infinity();
             }
         });
     }

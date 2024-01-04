@@ -125,7 +125,7 @@ int main(int argc, char* argv[])
     constexpr int KvHeadNum  = kHeadNum;
     constexpr int kBatchSize = 2;
     // constexpr int kBatchSize = 1;
-    // constexpr int kInputLen  = 64;
+    // constexpr int kInputLen  = 16;
     constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096 - 20;

@@ -1,8 +1,10 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "attention_template.h"
+#include "src/turbomind/kernels/attention/impl.h"
 #include "src/turbomind/kernels/attention/impl_sm70.h"
 #include "src/turbomind/kernels/attention/impl_sm80.h"
+#include "src/turbomind/kernels/attention/impl_sm75.h"
 #include "src/turbomind/kernels/attention/mainloop_sm70.h"
 #include "src/turbomind/kernels/attention/mainloop_sm80.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -76,17 +78,24 @@ void invokeAttention(const AttentionParams<T>& params)
         }
     };
 
-    if (false && params.arch >= 80) {
+    if (0) {}
+    else if (params.arch >= 80) {
         using Impl     = attention::Impl<attention::Sm80_16816, half, half, 64, 64, 16, 64, 128>;
         using Mainloop = attention::Mainloop<attention::Sm80_CpAsync, Impl>;
         using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
         invoke((Kernel*)0);
     }
-    else if (true || params.arch == 70) {
-        using Impl     = attention::Impl<attention::Sm70_884, half, half, 128, 64, 16, 64, 128>;
-        using Mainloop = attention::Mainloop<attention::Sm70_Ldg, Impl>;
-        using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
-        invoke((Kernel*)0);
+    else if (true || params.arch == 75) {
+        // using Impl     = attention::Impl<attention::Sm75_1688, half, half, 128, 64, 16, 64, 128>;
+        // using Mainloop = attention::Mainloop<attention::Sm70_Ldg, Impl>;
+        // using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+        // invoke((Kernel*)0);
+    }
+    else if (params.arch == 70) {
+        // using Impl     = attention::Impl<attention::Sm70_884, half, half, 128, 64, 16, 64, 128>;
+        // using Mainloop = attention::Mainloop<attention::Sm70_Ldg, Impl>;
+        // using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+        // invoke((Kernel*)0);
     }
 }
 

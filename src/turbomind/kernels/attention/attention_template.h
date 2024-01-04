@@ -468,7 +468,7 @@ __global__ void __launch_bounds__(128, 8) ProcessKV(ParamType params)
 extern __shared__ char dynamic_smem[];
 
 template<typename AttentionType, typename ParamType = typename AttentionType::ParamType>
-__global__ void __launch_bounds__(256, 1) attention_kernel(ParamType params)
+__global__ void attention_kernel(ParamType params)
 {
     AttentionType{}(params, dynamic_smem);
 }
