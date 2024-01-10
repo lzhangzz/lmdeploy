@@ -4,12 +4,15 @@
 
 #include "iterator_sm80.h"
 #include "mainloop.h"
+#include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include <cuda_pipeline_primitives.h>
 
 namespace turbomind::attention {
 
-template<class Impl_>
-struct Mainloop<Sm80_CpAsync, Impl_> {
+template<int Stages, class Impl_>
+struct Mainloop<Sm80_CpAsyncMultistage<Stages>, Impl_> {
+
+    static_assert(Stages > 2 && Stages % 2 == 1);
 
     using Impl = Impl_;
 
@@ -38,6 +41,19 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
+    static constexpr int kTileSizeKV = CTA_S * Impl::SmemLayoutK::kStride;
+    static constexpr int kSmemSizeKV = Stages * kTileSizeKV;
+
+    __device__ int SmemKVStep(int& offset)
+    {
+        auto ret = offset;
+        offset += kTileSizeKV;
+        if (offset >= kSmemSizeKV) {
+            offset -= kSmemSizeKV;
+        }
+        return ret;
+    }
+
     template<class GmemIterK, class GmemIterV, class StoreS>
     __device__ void operator()(FragQ&         frag_Q,
                                GmemIterK&     gmem_K,
@@ -53,42 +69,49 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
                                SharedStorage& storage,
                                const StoreS&  store_S)
     {
-        gmem_K.ClearSmem(0);
-        gmem_V.ClearSmem(0);
-
         SmemIterQ smem_Q{storage.Q};
-        SmemIterK smem_K{storage.K};
         SmemIterP smem_P{storage.P};
-        SmemIterV smem_V{storage.V};
+        SmemIterK smem_K{storage.KV};
+        SmemIterV smem_V{storage.KV};
 
-        gmem_K.AdjustBlockTileIdx(tile_iter);
-        gmem_K.Prefetch(std::true_type{}, max_step - tile_iter * CTA_S);
-        CpAsyncCommit();
+        PRAGMA_UNROLL
+        for (int i = 0; i < Stages; ++i) {
+            gmem_K.ClearSmem(i * kTileSizeKV);
+        }
+
+        int kv_offset_r = 0;
+        int kv_offset_w = 0;
+
+        auto     block_ptrs    = gmem_K.block_ptrs_;
+        int      prefetch_iter = tile_iter;
+        int      block_id      = prefetch_iter / (gmem_K.block_seqlen_ / CTA_S);
+        int      local_id      = prefetch_iter % (gmem_K.block_seqlen_ / CTA_S);
+        const T* block         = block_ptrs[block_id];
+
+        gmem_K.Prefetch(block, local_id, std::true_type{}, max_step - tile_iter * CTA_S, SmemKVStep(kv_offset_w));
+        __pipeline_commit();
+
+        gmem_V.Prefetch(block, local_id, std::true_type{}, max_step - tile_iter * CTA_S, SmemKVStep(kv_offset_w));
+        __pipeline_commit();
+
+        if (--prefetch_iter >= 0) {
+            block_id = prefetch_iter / (gmem_K.block_seqlen_ / CTA_S);
+            local_id = prefetch_iter % (gmem_K.block_seqlen_ / CTA_S);
+            block    = block_ptrs[block_id];
+        }
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
-            CpAsyncWait();
-            __syncthreads();
-
-            gmem_V.AdjustBlockTileIdx(tile_iter);
-            gmem_V.Prefetch(is_residue, is_residue ? max_step - offset_K : CTA_S);
-            CpAsyncCommit();
-
             __align__(16) FragS frag_S{};
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_S);
+            __pipeline_wait_prior(1);
 
-            CpAsyncWait();
-            __syncthreads();
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_S, SmemKVStep(kv_offset_r));
 
-            if (tile_iter > 0) {
-                gmem_K.AdjustBlockTileIdx(tile_iter - 1);
-                gmem_K.Prefetch(std::false_type{}, CTA_S);
-                CpAsyncCommit();
-            }
+            gmem_K.Prefetch(block, local_id, std::false_type{}, CTA_S, SmemKVStep(kv_offset_w));
 
-            // store_S(frag_S, offset_K);
+            __pipeline_commit();
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
@@ -100,7 +123,19 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_O);
+            __pipeline_wait_prior(1);
+
+            gmem_V.Prefetch(block, local_id, std::false_type{}, CTA_S, SmemKVStep(kv_offset_w));
+
+            if (--prefetch_iter >= 0) {
+                block_id = prefetch_iter / (gmem_K.block_seqlen_ / CTA_S);
+                local_id = prefetch_iter % (gmem_K.block_seqlen_ / CTA_S);
+                block    = block_ptrs[block_id];
+            }
+
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_O, SmemKVStep(kv_offset_r));
+
+            __pipeline_commit();
         };
 
         PRAGMA_UNROLL
@@ -108,9 +143,13 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
             loop(std::true_type{}, std::true_type{});
         }
 
+        PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
             loop(std::false_type{}, std::false_type{});
         }
+
+        __pipeline_commit();
+        __pipeline_wait_prior(0);
     }
 
     __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
@@ -120,28 +159,6 @@ struct Mainloop<Sm80_CpAsync, Impl_> {
                 score -= std::numeric_limits<float>::infinity();
             }
         });
-    }
-
-    __device__ void CpAsyncWait()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_wait_prior(0);
-        }
-    }
-
-    __device__ void CpAsyncCommit()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_commit();
-        }
-    }
-
-    __device__ void CpAsyncFlush()
-    {
-        if constexpr (TURBOMIND_ARCH_SM80) {
-            __pipeline_commit();
-            __pipeline_wait_prior(0);
-        }
     }
 };
 

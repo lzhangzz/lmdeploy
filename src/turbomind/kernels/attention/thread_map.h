@@ -74,6 +74,9 @@ struct RakedThreadMap {
     static constexpr int kIterC = kWarpIterC / kWarpC;
     static constexpr int kIterS = std::max(kWarpIterS / kWarpS, 1);
 
+    static_assert(kIterC > 0);
+    static_assert(kIterS > 0);
+
     static constexpr int kFootprintC = kWarpAccessC * kIterC;
     static constexpr int kFootprintS = kWarpAccessS * kIterS;
 

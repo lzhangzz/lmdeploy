@@ -20,7 +20,6 @@ namespace turbomind {
 #define TURBOMIND_ARCH_SM70 0
 #endif
 
-
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750))
 #define TURBOMIND_ARCH_SM75 1
 #else
@@ -447,6 +446,18 @@ __inline__ __device__ void ldsm_x4_trans(Array<uint32_t, 4>& d, uint32_t smem_in
 __inline__ __device__ void ldsm_x4(Array<uint32_t, 4>& d, uint32_t smem_int_ptr)
 {
     ldmatrix_m8n8_x4_b16(d[0], d[1], d[2], d[3], smem_int_ptr);
+}
+
+template<class T, int N>
+__device__ void CpAsync(T* dst, const Array<T, N>* __restrict__ src)
+{
+    const int     smem_int_ptr = cast_smem_ptr_to_uint(dst);
+    constexpr int cp_size      = sizeof(Array<T, N>);
+#if TURBOMIND_ARCH_SM80
+    asm volatile("cp.async.ca.shared.global [%0], [%1], %2;\n" ::"r"(smem_int_ptr), "l"(src), "n"(cp_size));
+#else
+    assert(TURBOMIND_ARCH_SM80);
+#endif
 }
 
 }  // namespace turbomind

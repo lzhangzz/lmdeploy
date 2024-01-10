@@ -7,15 +7,14 @@
 
 namespace turbomind {
 
-template<class T, class Map, class BlockSeqLen, class SmemLayout, int Stages>
+template<class T, class Map, class BlockSeqLen, class SmemLayout>
 struct BaseGmemIterator {
     using ElementType = T;
     using AccessType  = Array<T, Map::kAccessC>;
 
     static constexpr int kElementSize = sizeof(ElementType);
     static constexpr int kAccessSize  = sizeof(AccessType);
-
-    static constexpr int kIterCount = Map::kIterS * Map::kIterC;
+    static constexpr int kIterCount   = Map::kIterS * Map::kIterC;
 
     using Fragment = Array<T, Map::kAccessC>[Map::kIterS][Map::kIterC];
 
@@ -55,7 +54,7 @@ struct BaseGmemIterator {
         block_ = block_ptrs_[tile_idx];
     }
 
-    __device__ void ClearSmem()
+    __device__ void ClearSmem(int offset)
     {
         auto dst = smem_;
         PRAGMA_UNROLL
@@ -63,7 +62,7 @@ struct BaseGmemIterator {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 constexpr Array<T, Map::kAccessC> kZeros{};
-                Store(&dst[dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC], kZeros);
+                Store(&dst[dst_offset_ + offset + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC], kZeros);
             }
         }
     }

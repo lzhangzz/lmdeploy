@@ -7,9 +7,9 @@
 
 namespace turbomind {
 
-template<class T, class Map, class BlockSeqLen, class SmemLayout, int Stages>
-struct Sm70GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stages> {
-    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stages>;
+template<class T, class Map, class BlockSeqLen, class SmemLayout>
+struct Sm70GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
+    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout>;
 
     using typename Base::AccessType;
     using typename Base::Fragment;

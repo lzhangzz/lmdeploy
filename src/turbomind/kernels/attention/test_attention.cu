@@ -119,15 +119,15 @@ int main(int argc, char* argv[])
 {
     AttentionParams<half> params{};
 
-    constexpr int kHeadNum = 16;
+    constexpr int kHeadNum = 32;
     // constexpr int kHeadNum  = 1;
-    constexpr int kHeadDim   = 128;
-    constexpr int KvHeadNum  = kHeadNum;
-    constexpr int kBatchSize = 2;
+    constexpr int kHeadDim  = 128;
+    constexpr int KvHeadNum = kHeadNum;
+    constexpr int kBatchSize = 64;
     // constexpr int kBatchSize = 1;
     // constexpr int kInputLen  = 16;
-    constexpr int kInputLen    = 8192;
-    constexpr int kSequenceLen = 0;
+    constexpr int kInputLen    = 1;
+    constexpr int kSequenceLen = 2047;
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
     // constexpr int kSequenceLen = 983;
@@ -135,8 +135,8 @@ int main(int argc, char* argv[])
     // constexpr int kSequenceLen = 72;
     // constexpr int kInputLen    = 98;
     constexpr int kContextLen = kSequenceLen + kInputLen;
-    constexpr int kBlockSz    = 64;
-    constexpr int kTestIter   = 10;
+    constexpr int kBlockSz    = 128;
+    constexpr int kTestIter   = 20;
     constexpr int kMaxSplitK  = 1;
 
     constexpr int kDump = 0;

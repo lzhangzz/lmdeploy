@@ -2,11 +2,14 @@
 
 #include "attention_template.h"
 #include "src/turbomind/kernels/attention/impl.h"
+#include "src/turbomind/kernels/attention/impl_simt.h"
 #include "src/turbomind/kernels/attention/impl_sm70.h"
-#include "src/turbomind/kernels/attention/impl_sm80.h"
 #include "src/turbomind/kernels/attention/impl_sm75.h"
+#include "src/turbomind/kernels/attention/impl_sm80.h"
+#include "src/turbomind/kernels/attention/mainloop.h"
 #include "src/turbomind/kernels/attention/mainloop_sm70.h"
 #include "src/turbomind/kernels/attention/mainloop_sm80.h"
+#include "src/turbomind/kernels/attention/mainloop_sm80_multistage.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <iostream>
@@ -58,8 +61,11 @@ void invokeAttention(const AttentionParams<T>& params)
         const int max_q_tile = (params.max_input_len + CTA_Q - 1) / CTA_Q;
 
         dim3 block(Kernel::kWarpCount * WARP_SIZE);
-        // dim3 grid(max_q_tile, params.num_heads, params.batch_size);
-        dim3 grid(max_q_tile, params.batch_size, params.num_heads);
+        // dim3 grid(max_q_tile, params.num_heads, params.batch_size);  // QHB
+
+        // dim3 grid(max_q_tile, params.batch_size, params.num_heads);  // QBH
+
+        dim3 grid(params.num_heads, params.batch_size, 1);  // HBS
 
         std::cout << "(" << grid.x << " " << grid.y << " " << grid.z << ") " << block.x << "\n";
 
@@ -79,13 +85,19 @@ void invokeAttention(const AttentionParams<T>& params)
     };
 
     if (0) {}
-    else if (params.arch >= 80) {
-        using Impl     = attention::Impl<attention::Sm80_16816, half, half, 64, 64, 16, 64, 128>;
-        using Mainloop = attention::Mainloop<attention::Sm80_CpAsync, Impl>;
-        using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+    // else if (params.arch >= 80) {
+    //     using Impl     = attention::Impl<attention::Sm80_16816, half, half, 64, 64, 16, 64, 128>;
+    //     using Mainloop = attention::Mainloop<attention::Sm80_CpAsync, Impl>;
+    //     using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;
+    //     invoke((Kernel*)0);
+    // }
+    else if (1) {
+        using Impl     = attention::Impl<attention::Sm70_Simt, half, half, 1, 32, 1, 8, 128>;
+        using Mainloop = attention::Mainloop<attention::Sm80_CpAsyncMultistage<3>, Impl>;
+        using Kernel   = Attention<Mainloop, std::integral_constant<int, 128>, HBSCtaMap>;
         invoke((Kernel*)0);
     }
-    else if (true || params.arch == 75) {
+    else if (params.arch == 75) {
         // using Impl     = attention::Impl<attention::Sm75_1688, half, half, 128, 64, 16, 64, 128>;
         // using Mainloop = attention::Mainloop<attention::Sm70_Ldg, Impl>;
         // using Kernel   = Attention<Mainloop, std::integral_constant<int, 64>>;

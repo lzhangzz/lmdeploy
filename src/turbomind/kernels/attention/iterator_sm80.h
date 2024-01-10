@@ -11,16 +11,16 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class BlockSeqLen, class SmemLayout, int Stages>
-struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stages> {
+template<class T, class Map, class BlockSeqLen, class SmemLayout>
+struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
 
-    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stages>;
+    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout>;
 
     using typename Base::AccessType;
 
     using Base::kElementSize;
 
-    using Base::block_;
+    // using Base::block_;
     using Base::local_offset_;
     using Base::init_offset_;
     using Base::dst_offset_;
@@ -29,9 +29,9 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stage
     using Base::Base;
 
     template<bool is_residue>
-    __device__ void Prefetch(std::bool_constant<is_residue>, int max_s)
+    __device__ void Prefetch(const T* block, int local_id, std::bool_constant<is_residue>, int max_s, int offset)
     {
-        auto      src      = block_ + local_offset_ + init_offset_;
+        auto      src      = block + local_offset_ + local_id * Map::kDimS * Map::kDimC + init_offset_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
@@ -40,12 +40,12 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout, Stage
                 const int idx =
                     SmemLayout::swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC);
                 if constexpr (is_residue) {
-                    CpAsync(idx,
+                    CpAsync(offset + idx,
                             &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
                             offset_s + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    CpAsync(offset + idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
                 }
             }
         }

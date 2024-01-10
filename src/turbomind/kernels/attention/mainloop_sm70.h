@@ -22,9 +22,9 @@ struct Mainloop<Sm70_Ldg, Impl_> {
 
     using ThreadMapKV = typename Impl::ThreadMapKV;
     template<class BlockSeqLen>
-    using GmemIterK = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutK, 2>;
+    using GmemIterK = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutK>;
     template<class BlockSeqLen>
-    using GmemIterV = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutV, 2>;
+    using GmemIterV = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutV>;
 
     using FragQ = typename Impl::FragQ;
     using FragS = typename Impl::FragS;

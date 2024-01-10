@@ -13,22 +13,51 @@
 
 #include "attention_params.h"
 
-// template<int Stages>
-// struct Sm80 {};
-// template<class OpClass, int Stages>
-// struct Sm80Decoding {};
-
-// struct Sm75 {};
-// template<class OpClass>
-// struct Sm75Decoding {};
-
-// struct Sm70 {};
-// template<class OpClass>
-// struct Sm70Decoding {};
-
 namespace turbomind {
 
-template<class Mainloop, class BlockSeqLen>
+template<class SFINAE, template<class...> class Op, class... Args>
+struct is_detected: std::false_type {};
+
+template<template<class...> class Op, class... Args>
+struct is_detected<std::void_t<Op<Args...>>, Op, Args...>: std::true_type {};
+
+template<class T>
+using merge_t = decltype(T::Merge);
+
+template<class T>
+inline constexpr bool has_merge = is_detected<void, merge_t, T>::value;
+
+struct QHBCtaMap {
+    static __device__ int query_idx()
+    {
+        return blockIdx.x;
+    }
+    static __device__ int head_idx()
+    {
+        return blockIdx.y;
+    }
+    static __device__ int batch_idx()
+    {
+        return blockIdx.z;
+    }
+};
+
+struct HBSCtaMap {
+    static __device__ int query_idx()
+    {
+        return 0;
+    }
+    static __device__ int head_idx()
+    {
+        return blockIdx.x;
+    }
+    static __device__ int batch_idx()
+    {
+        return blockIdx.y;
+    }
+};
+
+template<class Mainloop, class BlockSeqLen, class CtaMap>
 struct Attention {
 
     using T   = typename Mainloop::T;
@@ -53,7 +82,7 @@ struct Attention {
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
 
-    using SharedStorage = typename Impl::SharedStorage;
+    using SharedStorage = typename Mainloop::SharedStorage;
 
     __device__ void LoadQ(const ParamType& params,
                           T*               smem_Q,
@@ -136,7 +165,9 @@ struct Attention {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                Store(&smem_Q[SmemLayoutQ::swizzle(qi, di)], vec_Q[s][c]);
+                if (qi < CTA_Q) {
+                    Store(&smem_Q[SmemLayoutQ::swizzle(qi, di)], vec_Q[s][c]);
+                }
             }
         }
 
@@ -148,9 +179,9 @@ struct Attention {
     __device__ void operator()(const ParamType& params, char* smem_buf)
     {
         // [q, h, b]
-        const int query_idx = blockIdx.x * CTA_Q;  // local offset into `input_length`
-        const int head_idx  = blockIdx.z;
-        const int batch_idx = blockIdx.y;
+        const int query_idx = CtaMap::query_idx() * CTA_Q;  // local offset into `input_length`
+        const int head_idx  = CtaMap::head_idx();
+        const int batch_idx = CtaMap::batch_idx();
 
         // early exit if finished flag is set
         if (params.finished[batch_idx]) {
@@ -187,8 +218,8 @@ struct Attention {
         const int local_key_offset = params.key_offset + head_idx * block_seq_len * kHeadDim;
         const int local_val_offset = params.val_offset + head_idx * block_seq_len * kHeadDim;
 
-        GmemIterK gmem_K{k_cache_ptrs, block_seq_len, local_key_offset, storage.K, warp_id, lane_id};
-        GmemIterV gmem_V{k_cache_ptrs, block_seq_len, local_val_offset, storage.V, warp_id, lane_id};
+        GmemIterK gmem_K{k_cache_ptrs, block_seq_len, local_key_offset, storage.KV, warp_id, lane_id};
+        GmemIterV gmem_V{k_cache_ptrs, block_seq_len, local_val_offset, storage.KV, warp_id, lane_id};
 
         const int input_len   = params.input_length[batch_idx];
         const int context_len = params.context_length[batch_idx];
@@ -206,9 +237,6 @@ struct Attention {
         FragM frag_M;
         fill(frag_M, -std::numeric_limits<float>::infinity());
 
-        gmem_K.ClearSmem();
-        gmem_V.ClearSmem();
-
         __syncthreads();
 
         Mainloop mainloop;
@@ -225,6 +253,10 @@ struct Attention {
                  qk_scale,
                  storage,
                  StoreS(params, query_idx, head_idx, batch_idx, context_len));
+
+        if constexpr (has_merge<Impl>) {
+            Impl::Merge(frag_O, frag_M, frag_L, qk_scale, storage);
+        }
 
         StoreO(frag_O, frag_L, qi_begin, qi_end, head_idx, params);
     }
