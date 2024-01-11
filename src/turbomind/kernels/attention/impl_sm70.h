@@ -4,7 +4,6 @@
 
 #include "array_ops.h"
 #include "impl.h"
-#include "iterator_sm70.h"
 #include "src/turbomind/kernels/attention/iterator.h"
 #include "src/turbomind/kernels/attention/thread_map.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
@@ -53,6 +52,97 @@ mma_m8n8k4_row_row(Array<float, 8>& d, const Array<half, 4>& a, const Array<half
 // clang-format on
 #endif
 }
+
+template<class T, class Layout, int M>
+struct Sm70SmemIterQ: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+
+    using Base::Base;
+    using Base::ptr;
+
+    __device__ void Load(Array<half, 4> (&frag_Q)[M], int k)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            const int qi = m * 16 + (lane_id & 8) + lane_id % 4 + lane_id / 16 * 4 + warp_id * 16;
+            const int di = k * 4;
+            Lds(frag_Q[m], ptr(qi, di));
+        }
+    }
+};
+
+template<class T, class Layout, int N>
+struct Sm70SmemIterK: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+
+    using Base::Base;
+    using Base::ptr;
+
+    __device__ void Load(Array<half, 4> (&frag_K)[N], int k)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            const int s = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2 + lane_id % 4;
+            const int c = k * 4;
+            Lds(frag_K[n], ptr(s, c));
+        }
+    }
+};
+
+template<class T, class Layout, int N>
+struct Sm70SmemIterV: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::ptr;
+
+    static_assert(N % 2 == 0);
+
+    Array<int, N / 2> idxs_;
+
+    __device__ explicit Sm70SmemIterV(const T* smem): Base{smem}
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < 8; n += 2) {
+            const int s  = 0 * 4 + lane_id % 4;
+            const int c  = n * 16 + lane_id / 16 * 4 + (lane_id & 4) * 2;
+            idxs_[n / 2] = Layout::swizzle(s, c);
+        }
+    }
+
+    __device__ void Load(Array<half, 4> (&frag_V)[N], int k)
+    {
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 2) {
+            const int idx = idxs_[n / 2] + k * 4 * Layout::kStride;
+            Lds((Array<half, 8>&)frag_V[n], ptr(idx));
+        }
+    }
+};
+
+template<class T, class Layout, int M>
+struct Sm70SmemIterP: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+
+    using Base::Base;
+    using Base::ptr;
+
+    __device__ void Load(Array<half, 4> (&frag_P)[M], int k)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            const int qi = m * 16 + lane_id / 16 * 4 + (lane_id & 8) + lane_id % 4 + warp_id * 16;
+            const int si = k * 4;
+            Lds(frag_P[m], ptr(qi, si));
+        }
+    }
+};
 
 template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
 struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
@@ -159,6 +249,11 @@ struct Impl<Sm70_884, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 4, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 4, kWarpCount>;
+
+    __device__ static void Sync()
+    {
+        __syncthreads();
+    }
 
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)

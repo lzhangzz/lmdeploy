@@ -4,6 +4,8 @@
 
 #include "../gemm_s_f16/common.h"
 
+#include <iostream>
+
 namespace turbomind {
 
 template<int C, int S, int AccessC, int WarpCount>
@@ -103,5 +105,24 @@ struct RakedThreadMap {
         return {cta_thread_offset_c, cta_thread_offset_s};
     }
 };
+
+namespace {
+
+template<class TMap>
+void Print(TMap)
+{
+    std::cout << "     warps: " << TMap::kWarpCount << "\n";
+    std::cout << "     shape: (" << TMap::kDimC << ", " << TMap::kDimS << ")\n";
+    std::cout << "    access: (" << TMap::kAccessC << ", " << 1 << ")\n";
+    std::cout << "warpThread: (" << TMap::kWarpThreadC << ", " << TMap::kWarpThreadS << ")\n";
+    std::cout << "warpAccess: (" << TMap::kWarpAccessC << ", " << TMap::kWarpAccessS << ")\n";
+    std::cout << "  warpIter: (" << TMap::kWarpIterC << ", " << TMap::kWarpIterS << ")\n";
+    std::cout << "      warp: (" << TMap::kWarpC << ", " << TMap::kWarpS << ")\n";
+    std::cout << "      iter: (" << TMap::kIterC << ", " << TMap::kIterS << ")\n";
+    std::cout << " footprint: (" << TMap::kFootprintC << ", " << TMap::kFootprintS << ")\n";
+    std::cout << "     delta: (" << TMap::kDeltaC << ", " << TMap::kDeltaS << ")\n";
+}
+
+}  // namespace
 
 }  // namespace turbomind

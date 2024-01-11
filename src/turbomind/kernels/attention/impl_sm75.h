@@ -4,11 +4,87 @@
 
 #include "impl.h"
 #include "impl_m16n8.h"
-#include "iterator_sm75.h"
+#include "iterator.h"
 #include "src/turbomind/kernels/attention/thread_map.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 
 namespace turbomind::attention {
+
+template<class T, class Layout, int N>
+struct Sm75SmemIterK: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+
+    using Base::Base;
+    using Base::swizzle_uint_ptr;
+
+    static_assert(N % 4 == 0);
+
+    __device__ void Load(Array<T, 2> (&frag_K)[N], int k)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {  // Load (s32,d8) tiles
+            const int s = n * 8 + lane_id;
+            const int c = k * 8;
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], swizzle_uint_ptr(s, c));
+        }
+    }
+};
+
+template<class T, class Layout, int N>
+struct Sm75SmemIterV0: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+
+    using Base::Base;
+    using Base::swizzle_uint_ptr;
+
+    static_assert(N % 4 == 0);
+
+    __device__ void Load(Array<T, 2> (&frag_V)[N], int k)
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {  // Load (d32,s8) tiles
+            const int si = k * 8 + lane_id % 8;
+            const int di = n * 8 + lane_id / 8 * 8;
+            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], swizzle_uint_ptr(si, di));
+        }
+    }
+};
+
+template<class T, class Layout, int N>
+struct Sm75SmemIterV: BaseSmemIterator<T, Layout> {
+
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::swizzle_uint_ptr;
+
+    static_assert(N % 4 == 0);
+
+    Array<int, N / 4> idxs_;
+
+    __device__ Sm75SmemIterV(T* smem): Base{smem}
+    {
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {  // Load (d32,s8) tiles
+            const int si = 0 * 8 + lane_id % 8;
+            const int di = n * 8 + lane_id / 8 * 8;
+            idxs_[n / 4] = swizzle_uint_ptr(si, di);
+        }
+    }
+
+    __device__ void Load(Array<T, 2> (&frag_V)[N], int k)
+    {
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; n += 4) {
+            const int idx = idxs_[n / 4] + sizeof(T) * k * 8 * Layout::kStride;
+            ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], idx);
+        }
+    }
+};
 
 template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
 struct Impl<Sm75_1688, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim>: Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim> {
@@ -96,6 +172,11 @@ struct Impl<Sm75_1688, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim>: Impl_m1
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+
+    __device__ static void Sync()
+    {
+        __syncthreads();
+    }
 
     __device__ static void TransformQ(T* smem_Q, FragQ& frag_Q)
     {

@@ -1,6 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-add_library(attention STATIC attention.cu kv_cache.cu)
+add_library(attention STATIC 
+            attention.cu 
+            decoding.cu 
+            kv_cache.cu
+            kv_cache_utils.cu
+            attention_128_f16_sm80.cu
+            decoding_128_f16_sm80.cu)
 # target_compile_options(attention PRIVATE
 #   --generate-line-info -O3 -use_fast_math -Xptxas=-v --expt-relaxed-constexpr --keep)
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)

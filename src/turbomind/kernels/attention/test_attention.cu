@@ -1,7 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "attention.h"
+#include "decoding.h"
 #include "kv_cache.h"
+#include "kv_cache_utils.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "test_utils.h"
 #include <cmath>
@@ -115,19 +117,27 @@ void TestBlocks(const thrust::universal_vector<half>& k_cache,  // [B, H, S, D]
     }
 }
 
+#define DECODING 0
+
 int main(int argc, char* argv[])
 {
     AttentionParams<half> params{};
 
-    constexpr int kHeadNum = 32;
-    // constexpr int kHeadNum  = 1;
+#if DECODING
+    constexpr int kHeadNum     = 32;
+    constexpr int kBatchSize   = 64;
+    constexpr int kInputLen    = 1;
+    constexpr int kSequenceLen = 511;
+#else
+    constexpr int kHeadNum     = 16;
+    constexpr int kBatchSize   = 2;
+    constexpr int kInputLen    = 8192;
+    constexpr int kSequenceLen = 0;
+#endif
+
     constexpr int kHeadDim  = 128;
     constexpr int KvHeadNum = kHeadNum;
-    constexpr int kBatchSize = 64;
-    // constexpr int kBatchSize = 1;
-    // constexpr int kInputLen  = 16;
-    constexpr int kInputLen    = 1;
-    constexpr int kSequenceLen = 2047;
+
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
     // constexpr int kSequenceLen = 983;
@@ -298,7 +308,11 @@ int main(int argc, char* argv[])
 
     for (int i = 0; i < std::max(kTestIter, 1); ++i) {
         invokeProcessKV<half>(params);
+#if DECODING
+        dispatchDecoding<half>(params);
+#else
         dispatchAttention<half>(params);
+#endif
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
             return -1;

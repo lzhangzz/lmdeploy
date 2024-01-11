@@ -453,7 +453,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
 
     {
         NvtxScope scope("decoder_multihead_attention");
-        dispatchAttention<T>(params);
+        // dispatchAttention<T>(params);
     }
 }
 

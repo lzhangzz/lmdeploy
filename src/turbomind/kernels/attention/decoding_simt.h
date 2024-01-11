@@ -4,12 +4,50 @@
 
 #include "array_ops.h"
 #include "impl.h"
-#include "iterator_simt.h"
+#include "iterator.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "thread_map.h"
 #include <limits>
 
 namespace turbomind::attention {
+
+template<class T, class Layout, int WARP_S, int N>
+struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::swizzle_ptr;
+
+    __device__ void Load(Array<T, 8> (&frag_K)[N], int k, int offset)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            const int si = n * +4 + lane_id / 8 + warp_id * WARP_S;
+            const int di = k * 64 + lane_id % 8 * 8;
+            Lds(frag_K[n], offset + swizzle_ptr(si, di));
+        }
+    }
+};
+
+template<class T, class Layout, int WARP_S, int N>
+struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::swizzle_ptr;
+
+    __device__ void Load(Array<T, 8> (&frag_V)[N], int k, int offset)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int n = 0; n < N; ++n) {
+            const int si = k * +4 + lane_id / 8 + warp_id * WARP_S;
+            const int di = n * 64 + lane_id % 8 * 8;
+            Lds(frag_V[n], offset + swizzle_ptr(si, di));
+        }
+    }
+};
 
 template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
 struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
@@ -76,11 +114,8 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
 
     union SharedStorage {
         __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
-        struct {
-            __align__(16) T K[CTA_S * SmemLayoutK::kStride];
-            __align__(16) T V[CTA_S * SmemLayoutV::kStride];
-        };
-        __align__(16) T KV[3 * CTA_S * SmemLayoutK::kStride];
+        __align__(16) T K[3 * CTA_S * SmemLayoutK::kStride];
+        __align__(16) T V[3 * CTA_S * SmemLayoutK::kStride];
         struct {
             __align__(16) SmemM M;
             __align__(16) SmemL L;
@@ -100,6 +135,8 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+
+    __device__ static void Sync() {}
 
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)

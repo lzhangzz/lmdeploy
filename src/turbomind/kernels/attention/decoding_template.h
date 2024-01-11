@@ -8,7 +8,7 @@
 namespace turbomind {
 
 template<class Kernel>
-void invokeAttention(const typename Kernel::ParamType& params)
+void invokeDecoding(const typename Kernel::ParamType& params)
 {
     static const size_t kDynamicSmemSize = sizeof(typename Kernel::SharedStorage);
 
@@ -26,7 +26,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
 
     using CtaMap = typename Kernel::CtaMap;
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_input_len, Kernel::CTA_Q);
+    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_split_k);
 
     auto err =
         cudaFuncSetAttribute(attention_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);

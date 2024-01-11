@@ -156,4 +156,53 @@ struct Identity {
     }
 };
 
+template<class BlockSeqLen, int CTA_S>
+struct Block {};
+
+template<int BLK_S, int CTA_S>
+struct Block<std::integral_constant<int, BLK_S>, CTA_S> {
+
+    __device__ Block(int) {}
+
+    __device__ void GetTile(int tile_id, int& block_id, int& local_id)
+    {
+        block_id = tile_id / (BLK_S / CTA_S);
+        local_id = tile_id % (BLK_S / CTA_S);
+    }
+
+    __device__ void NextTile(int& block_id, int& local_id)
+    {
+        --local_id;
+        if (local_id < 0) {
+            local_id += BLK_S / CTA_S;
+            block_id -= 1;
+        }
+    }
+};
+
+template<int CTA_S>
+struct Block<int, CTA_S> {
+
+    // int block_seqlen_;
+    const int tiles_per_block_;
+
+    __device__ Block(int block_seqlen): tiles_per_block_{block_seqlen / CTA_S} {}
+
+    __device__ void GetTile(int tile_id, int& block_id, int& local_id)
+    {
+
+        block_id = tile_id >> (31 - __clz(tiles_per_block_));
+        local_id = tile_id & (tiles_per_block_ - 1);
+    }
+
+    __device__ void NextTile(int& block_id, int& local_id)
+    {
+        --local_id;
+        if (local_id < 0) {
+            local_id += tiles_per_block_;
+            block_id -= 1;
+        }
+    }
+};
+
 }  // namespace turbomind

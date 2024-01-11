@@ -148,7 +148,7 @@ struct Impl_m16k8 {
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
-                tmp_L[m][q] = fdividef(1.f, frag_L[m][q] + 1e-8f);
+                tmp_L[m][q] = fdividef(1.f, frag_L[m][q]);
             }
         }
 

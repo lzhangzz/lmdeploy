@@ -6,7 +6,7 @@
 
 namespace turbomind {
 
-template<typename T>
-void dispatchAttention(const AttentionParams<T>& params);
+template<class T>
+void invokeProcessKV(const AttentionParams<T>& params);
 
 }

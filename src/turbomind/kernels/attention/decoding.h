@@ -6,7 +6,7 @@
 
 namespace turbomind {
 
-template<typename T>
-void dispatchAttention(const AttentionParams<T>& params);
+template<class T>
+void dispatchDecoding(const AttentionParams<T>& params);
 
 }
