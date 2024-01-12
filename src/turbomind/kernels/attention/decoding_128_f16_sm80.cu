@@ -2,13 +2,12 @@
 
 #include "decoding_config.h"
 #include "decoding_template.h"
-#include <type_traits>
 
 namespace turbomind {
 
-// using Kernel = typename attention::DecodingConfig<half, half, std::integral_constant<int, 128>, 128>::Kernel;
-using Kernel = typename attention::DecodingConfig<half, half, int, 128>::Kernel;
-
+// using Kernel =
+//     typename attention::DecodingConfig<arch::Sm80, half, half, std::integral_constant<int, 128>, 128>::Kernel;
+using Kernel = typename attention::DecodingConfig<arch::Sm80, half, half, int, 128>::Kernel;
 
 template void invokeDecoding<Kernel>(const typename Kernel::ParamType& params);
 

@@ -2,13 +2,14 @@
 
 #pragma once
 
+#include "arch.h"
 #include "iterator_sm70.h"
 #include "mainloop.h"
 
 namespace turbomind::attention {
 
 template<class Impl_>
-struct Mainloop<Sm70_Ldg, Impl_> {
+struct Mainloop<arch::Sm70, Impl_> {
 
     using Impl = Impl_;
 
@@ -21,10 +22,8 @@ struct Mainloop<Sm70_Ldg, Impl_> {
     using SmemIterV = typename Impl::SmemIterV;
 
     using ThreadMapKV = typename Impl::ThreadMapKV;
-    template<class BlockSeqLen>
-    using GmemIterK = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutK>;
-    template<class BlockSeqLen>
-    using GmemIterV = Sm70GmemIterator<T, ThreadMapKV, BlockSeqLen, typename Impl::SmemLayoutV>;
+    using GmemIterK   = Sm70GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutK>;
+    using GmemIterV   = Sm70GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutV>;
 
     using FragQ = typename Impl::FragQ;
     using FragS = typename Impl::FragS;
@@ -37,10 +36,11 @@ struct Mainloop<Sm70_Ldg, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
-    template<class GmemIterK, class GmemIterV, class StoreS>
+    template<class GmemIterK, class GmemIterV, class BlockIter, class StoreS>
     __device__ void operator()(FragQ&         frag_Q,
                                GmemIterK&     gmem_K,
                                GmemIterV&     gmem_V,
+                               BlockIter&     block_iter,
                                FragO&         frag_O,
                                FragM&         frag_M,
                                FragL&         frag_L,
@@ -52,54 +52,54 @@ struct Mainloop<Sm70_Ldg, Impl_> {
                                SharedStorage& storage,
                                const StoreS&  store_S)
     {
+        gmem_K.SetSmem(storage.KV);
+        gmem_V.SetSmem(storage.KV);
 
         SmemIterQ smem_Q{storage.Q};
-        SmemIterK smem_K{storage.K};
         SmemIterP smem_P{storage.P};
-        SmemIterV smem_V{storage.V};
+        SmemIterK smem_K{storage.KV};
+        SmemIterV smem_V{storage.KV};
 
         typename GmemIterK::Fragment frag_K;
 
-        gmem_K.AdjustBlockTileIdx(tile_iter);
-        gmem_K.Load(frag_K, std::true_type{}, max_step - tile_iter * CTA_S);
+        block_iter.SetTile(tile_iter);
+
+        gmem_K.Load<true>(block_iter, frag_K, max_step - tile_iter * CTA_S);
         gmem_K.Save(frag_K);
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
-            __syncthreads();
-
-            gmem_V.AdjustBlockTileIdx(tile_iter);
+            Impl::Sync();
 
             typename GmemIterV::Fragment frag_V;
-            gmem_V.Load(frag_V, is_residue, is_residue ? max_step - offset_K : CTA_S);
+            gmem_V.Load<is_residue>(block_iter, frag_V, is_residue ? max_step - offset_K : CTA_S);
+
+            block_iter.Advance();
 
             FragS frag_S{};
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_S);
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_S, 0);
 
             gmem_V.Save(frag_V);
 
-            __syncthreads();
+            Impl::Sync();
 
             if (tile_iter > 0) {
-                gmem_K.AdjustBlockTileIdx(tile_iter - 1);
-                gmem_K.Load(frag_K, std::false_type{}, CTA_S);
+                gmem_K.Load<false>(block_iter, frag_K, CTA_S);
             }
-
-            // store_S(frag_S, offset_K);
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
 
-            Impl::Softmax<is_residue>(frag_S, frag_M, frag_L, frag_O, qk_scale);
+            Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
             __align__(16) FragP frag_P;
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_O);
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_O, 0);
 
             gmem_K.Save(frag_K);
         };

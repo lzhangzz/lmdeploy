@@ -15,10 +15,10 @@ void dispatchDecoding(const AttentionParams<T>& params)
     if (params.size_per_head == 128) {
         if (0) {}
         else if (params.arch >= 80) {
-            // using Config = DecodingConfig<T, T, std::integral_constant<int, 128>, 128>;
-            using Config = DecodingConfig<T, T, int, 128>;
+            // using Config = DecodingConfig<arch::Sm80, T, T, std::integral_constant<int, 128>, 128>;
+            using Config = DecodingConfig<arch::Sm70, T, T, int, 128>;
             invokeDecoding<typename Config::Kernel>(params);
-        }
+        } 
     }
 }
 

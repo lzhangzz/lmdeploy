@@ -11,16 +11,15 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class BlockSeqLen, class SmemLayout>
-struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
+template<class T, class Map, class SmemLayout>
+struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
-    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout>;
+    using Base = BaseGmemIterator<T, Map, SmemLayout>;
 
     using typename Base::AccessType;
 
     using Base::kElementSize;
 
-    // using Base::block_;
     using Base::local_offset_;
     using Base::init_offset_;
     using Base::dst_offset_;
@@ -28,10 +27,10 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
 
     using Base::Base;
 
-    template<bool is_residue>
-    __device__ void Prefetch(const T* block, int local_id, std::bool_constant<is_residue>, int max_s, int offset)
+    template<bool is_residue, class BlockIter>
+    __device__ void Prefetch(const BlockIter& block_iter, int max_s, int offset)
     {
-        auto      src      = block + local_offset_ + local_id * Map::kDimS * Map::kDimC + init_offset_;
+        auto      src = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + init_offset_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {

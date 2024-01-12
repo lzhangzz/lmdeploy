@@ -49,8 +49,8 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
     }
 };
 
-template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
-struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
+template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim, int Stages>
+struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> {
     using T   = T_;
     using Tkv = T_;
 
@@ -114,8 +114,13 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
 
     union SharedStorage {
         __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
-        __align__(16) T K[3 * CTA_S * SmemLayoutK::kStride];
-        __align__(16) T V[3 * CTA_S * SmemLayoutK::kStride];
+
+        __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
+        struct {
+            __align__(16) T K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
+            __align__(16) T V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
+        };
+
         struct {
             __align__(16) SmemM M;
             __align__(16) SmemL L;
@@ -171,30 +176,6 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
         }
     }
 
-    template<class SmemP, class SmemV>
-    __device__ static void ComputePV(SmemP&, SmemV& smem_V, const FragP& frag_P, FragO& frag_O, int offset)
-    {
-        FragV frag_V;
-        smem_V.Load(frag_V[0], 0, offset);
-
-        PRAGMA_UNROLL
-        for (int k = 0; k < V_K; ++k) {
-            if (k < V_K - 1) {
-                smem_V.Load(frag_V[k + 1], k + 1, offset);
-            }
-            PRAGMA_UNROLL
-            for (int m = 0; m < V_M; ++m) {
-                PRAGMA_UNROLL
-                for (int n = 0; n < V_N; ++n) {
-                    PRAGMA_UNROLL
-                    for (int d = 0; d < 8; ++d) {
-                        frag_O[m][n][d] += static_cast<float>((Tpv)frag_P[m][k][0] * (Tpv)frag_V[k][n][d]);
-                    }
-                }
-            }
-        }
-    }
-
     template<class SmemQ, class SmemK>
     __device__ static void ComputeQK(SmemQ&, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S, int offset)
     {
@@ -224,6 +205,30 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim> {
                 frag_S[m][n][0] += __shfl_xor_sync(uint32_t(-1), frag_S[m][n][0], 1);
                 frag_S[m][n][0] += __shfl_xor_sync(uint32_t(-1), frag_S[m][n][0], 2);
                 frag_S[m][n][0] += __shfl_xor_sync(uint32_t(-1), frag_S[m][n][0], 4);
+            }
+        }
+    }
+
+    template<class SmemP, class SmemV>
+    __device__ static void ComputePV(SmemP&, SmemV& smem_V, const FragP& frag_P, FragO& frag_O, int offset)
+    {
+        FragV frag_V;
+        smem_V.Load(frag_V[0], 0, offset);
+
+        PRAGMA_UNROLL
+        for (int k = 0; k < V_K; ++k) {
+            if (k < V_K - 1) {
+                smem_V.Load(frag_V[k + 1], k + 1, offset);
+            }
+            PRAGMA_UNROLL
+            for (int m = 0; m < V_M; ++m) {
+                PRAGMA_UNROLL
+                for (int n = 0; n < V_N; ++n) {
+                    PRAGMA_UNROLL
+                    for (int d = 0; d < 8; ++d) {
+                        frag_O[m][n][d] += static_cast<float>((Tpv)frag_P[m][k][0] * (Tpv)frag_V[k][n][d]);
+                    }
+                }
             }
         }
     }

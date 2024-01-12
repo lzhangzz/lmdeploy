@@ -35,8 +35,8 @@ struct AttentionUniversal {
     using FragM = typename Impl::FragM;
     using FragL = typename Impl::FragL;
 
-    using GmemIterK = typename Mainloop::template GmemIterK<BlockSeqLen>;
-    using GmemIterV = typename Mainloop::template GmemIterV<BlockSeqLen>;
+    using GmemIterK = typename Mainloop::GmemIterK;
+    using GmemIterV = typename Mainloop::GmemIterV;
 
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
@@ -177,10 +177,10 @@ struct AttentionUniversal {
         const int local_key_offset = params.key_offset + head_idx * block_seq_len * kHeadDim;
         const int local_val_offset = params.val_offset + head_idx * block_seq_len * kHeadDim;
 
-        GmemIterK gmem_K{k_cache_ptrs, block_seq_len, local_key_offset, storage.K, warp_id, lane_id};
-        GmemIterV gmem_V{k_cache_ptrs, block_seq_len, local_val_offset, storage.V, warp_id, lane_id};
+        GmemIterK gmem_K{local_key_offset, warp_id, lane_id};
+        GmemIterV gmem_V{local_val_offset, warp_id, lane_id};
 
-        Block<BlockSeqLen, CTA_S> block_iter(params.kv_cache_block_size);
+        Block<Tkv, CTA_S, BlockSeqLen> block_iter(k_cache_ptrs, block_seq_len);
 
         const int input_len   = params.input_length[batch_idx];
         const int context_len = params.context_length[batch_idx];

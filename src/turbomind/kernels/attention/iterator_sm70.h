@@ -7,14 +7,13 @@
 
 namespace turbomind {
 
-template<class T, class Map, class BlockSeqLen, class SmemLayout>
-struct Sm70GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
-    using Base = BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout>;
+template<class T, class Map, class SmemLayout>
+struct Sm70GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
+    using Base = BaseGmemIterator<T, Map, SmemLayout>;
 
     using typename Base::AccessType;
     using typename Base::Fragment;
 
-    using Base::block_;
     using Base::local_offset_;
     using Base::init_offset_;
     using Base::dst_offset_;
@@ -22,10 +21,10 @@ struct Sm70GmemIterator: BaseGmemIterator<T, Map, BlockSeqLen, SmemLayout> {
 
     using Base::Base;
 
-    template<bool is_residue>
-    __device__ void Load(Fragment& rmem, std::bool_constant<is_residue>, int max_s)
+    template<bool is_residue, class BlockIter>
+    __device__ void Load(const BlockIter& block_iter, Fragment& rmem, int max_s)
     {
-        auto      src      = block_ + local_offset_ + init_offset_;
+        auto      src = block_iter.block + block_iter.local_id * Map::kDimS * Map::kDimC + local_offset_ + init_offset_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {

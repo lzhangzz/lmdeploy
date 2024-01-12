@@ -2,7 +2,6 @@
 
 #include "attention_config.h"
 #include "attention_template.h"
-#include <type_traits>
 
 namespace turbomind {
 

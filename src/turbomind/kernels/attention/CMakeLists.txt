@@ -6,6 +6,7 @@ add_library(attention STATIC
             kv_cache.cu
             kv_cache_utils.cu
             attention_128_f16_sm80.cu
+            decoding_128_f16_sm70.cu
             decoding_128_f16_sm80.cu)
 # target_compile_options(attention PRIVATE
 #   --generate-line-info -O3 -use_fast_math -Xptxas=-v --expt-relaxed-constexpr --keep)

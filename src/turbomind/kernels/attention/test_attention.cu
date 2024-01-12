@@ -124,10 +124,13 @@ int main(int argc, char* argv[])
     AttentionParams<half> params{};
 
 #if DECODING
+    // constexpr int kHeadNum     = 32;
+    // constexpr int kBatchSize   = 64;
     constexpr int kHeadNum     = 32;
-    constexpr int kBatchSize   = 64;
+    constexpr int kBatchSize   = 1;
     constexpr int kInputLen    = 1;
-    constexpr int kSequenceLen = 511;
+    constexpr int kSequenceLen = 8191;
+    // constexpr int kSequenceLen = 2047;
 #else
     constexpr int kHeadNum     = 16;
     constexpr int kBatchSize   = 2;
