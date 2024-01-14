@@ -11,7 +11,7 @@
 
 namespace turbomind::attention {
 
-template<class T, class Layout, int WARP_S, int N>
+template<class T, class Layout, int WARP_S, int WarpCntS, int N>
 struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
     using Base::Base;
@@ -19,18 +19,18 @@ struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
 
     __device__ void Load(Array<T, 8> (&frag_K)[N], int k, int offset)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int warp_id = (threadIdx.x / WARP_SIZE) % 4;
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int n = 0; n < N; ++n) {
-            const int si = n * +4 + lane_id / 8 + warp_id * WARP_S;
+            const int si = n * +4 + lane_id / 8 + warp_id % WarpCntS * WARP_S;
             const int di = k * 64 + lane_id % 8 * 8;
             Lds(frag_K[n], offset + swizzle_ptr(si, di));
         }
     }
 };
 
-template<class T, class Layout, int WARP_S, int N>
+template<class T, class Layout, int WARP_S, int WarpCntS, int N>
 struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
     using Base::Base;
@@ -42,7 +42,7 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
         const int lane_id = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int n = 0; n < N; ++n) {
-            const int si = k * +4 + lane_id / 8 + warp_id * WARP_S;
+            const int si = k * +4 + lane_id / 8 + warp_id % WarpCntS * WARP_S;
             const int di = n * 64 + lane_id % 8 * 8;
             Lds(frag_V[n], offset + swizzle_ptr(si, di));
         }
@@ -62,12 +62,13 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
     static constexpr int kHeadDim = HeadDim;
 
-    static constexpr int kWarpCntH  = CTA_H / WARP_H;
-    static constexpr int kWarpCntQ  = CTA_Q / WARP_Q;
-    static constexpr int kWarpCntS  = CTA_S / WARP_S;
-    static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
+    static constexpr int kWarpCntH = CTA_H / WARP_H;
+    static constexpr int kWarpCntQ = CTA_Q / WARP_Q;
+    static constexpr int kWarpCntS = CTA_S / WARP_S;
 
-    static_assert(kWarpCntQ == 1 && kWarpCntQ == 1 && kWarpCntS == 4);
+    static constexpr int kWarpCount = kWarpCntH * kWarpCntQ * kWarpCntS;
+
+    // static_assert(kWarpCntH == 2 && kWarpCntQ == 1 && kWarpCntS == 4);
 
     static_assert(kWarpCntQ == 1);
 
@@ -114,10 +115,10 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     using SmemLayoutP = SmemLayout<CTA_S, Identity>;
     using SmemLayoutV = SmemLayout<HeadDim, Identity>;
 
-    using SmemM = float[K_M][kWarpCntS];
-    using SmemL = float[K_M][kWarpCntS];
-    using SmemO = Array<float, 4>[V_M][V_N][2][kWarpCntS][8];  // (Qm, Dn, d2, Sw, d8), (d4)
-                                                               //   1  64   4  WS   8     1
+    using SmemM = float[K_M][kWarpCntH][kWarpCntS];
+    using SmemL = float[K_M][kWarpCntH][kWarpCntS];
+    using SmemO = Array<float, 4>[V_M][V_N][2][kWarpCntH][kWarpCntS][8];  // (Qm, Dn, d2, Hw, Sw, d8), (d4)
+                                                                          //   1  64   4  WH  WS   8     1
 
     union SharedStorage {
         __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
@@ -139,8 +140,8 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     using SmemIterQ = NullSmemIter<T>;
     using SmemIterP = NullSmemIter<T>;
 
-    using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, K_N>;
-    using SmemIterV = SimtSmemIterV<T, SmemLayoutV, WARP_S, V_N>;
+    using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, kWarpCntS, K_N>;
+    using SmemIterV = SimtSmemIterV<T, SmemLayoutV, WARP_S, kWarpCntS, V_N>;
 
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
@@ -161,9 +162,9 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     __device__ static void ForeachS(Fragment& S, Func&& func)
     {
         const int warp_id   = threadIdx.x / WARP_SIZE;
+        const int lane_id   = threadIdx.x % WARP_SIZE;
         const int warp_id_s = warp_id % kWarpCntS;
         const int warp_id_h = warp_id / kWarpCntS;
-        const int lane_id   = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
@@ -177,7 +178,10 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
     __device__ static void TransformQ(const T* smem_Q, FragQ& frag_Q)
     {
+        const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
+
+        const int warp_id_h = warp_id / kWarpCntS;
 
         __syncthreads();
 
@@ -185,7 +189,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         for (int k = 0; k < K_K; ++k) {
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
-                const int hi = m;
+                const int hi = m + warp_id_h * WARP_H;
                 const int di = k * 64 + lane_id % 8 * 8;
                 Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(hi, di)]);
             }
@@ -308,10 +312,11 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
     __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, SharedStorage& storage)
     {
-        const int warp_id   = threadIdx.x / WARP_SIZE;
-        const int warp_id_s = warp_id % kWarpCntS;
-        // const int warp_id_h = warp_id / kWarpCntS;
+        const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
+
+        const int warp_id_s = warp_id % kWarpCntS;
+        const int warp_id_h = warp_id / kWarpCntS;
 
         FragM prev_M;
         copy(frag_M, prev_M);
@@ -325,7 +330,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             frag_M[m][0] = fmaxf(frag_M[m][0], __shfl_xor_sync(uint32_t(-1), frag_M[m][0], 8));
             frag_M[m][0] = fmaxf(frag_M[m][0], __shfl_xor_sync(uint32_t(-1), frag_M[m][0], 16));
             if (lane_id == 0) {
-                storage.M[m][warp_id_s] = frag_M[m][0];
+                storage.M[m][warp_id_h][warp_id_s] = frag_M[m][0];
             }
         }
 
@@ -335,7 +340,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int w = 0; w < kWarpCntS - 1; ++w) {
-                frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][(warp_id_s + w + 1) % kWarpCntS]);
+                frag_M[m][0] = fmaxf(frag_M[m][0], storage.M[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS]);
             }
         }
 
@@ -358,7 +363,8 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
                 PRAGMA_UNROLL
                 for (int d = 0; d < 8; d += 4) {
                     if (lane_id < 8) {
-                        Store(storage.O[m][n][d / 4][warp_id_s][lane_id].data(), (Array<float, 4>&)frag_O[m][n][d]);
+                        Store(storage.O[m][n][d / 4][warp_id_h][warp_id_s][lane_id].data(),
+                              (Array<float, 4>&)frag_O[m][n][d]);
                     }
                 }
             }
@@ -366,7 +372,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             frag_L[m][0] += __shfl_xor_sync(uint32_t(-1), frag_L[m][0], 8);
             frag_L[m][0] += __shfl_xor_sync(uint32_t(-1), frag_L[m][0], 16);
             if (lane_id == 0) {
-                storage.L[m][warp_id_s] = frag_L[m][0];
+                storage.L[m][warp_id_h][warp_id_s] = frag_L[m][0];
             }
         }
 
@@ -384,7 +390,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
                     PRAGMA_UNROLL
                     for (int d = 0; d < 8; d += 4) {
                         Array<float, 4> tmp_O;
-                        Lds(tmp_O, storage.O[m][n][d / 4][s + lane_id / 8][lane_id % 8].data());
+                        Lds(tmp_O, storage.O[m][n][d / 4][warp_id_h][s + lane_id / 8][lane_id % 8].data());
                         using namespace ops;
                         (Array<float, 4>&)frag_O[m][n][d] = (Array<float, 4>&)frag_O[m][n][d] + tmp_O;
                     }
@@ -397,7 +403,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             }
             PRAGMA_UNROLL
             for (int w = 0; w < kWarpCntS - 1; ++w) {
-                frag_L[m][0] += storage.L[m][(warp_id_s + w + 1) % kWarpCntS];
+                frag_L[m][0] += storage.L[m][warp_id_h][(warp_id_s + w + 1) % kWarpCntS];
             }
         }
     }
@@ -412,11 +418,11 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             inv_L[m][0] = fdividef(1.f, frag_L[m][0]);
         }
 
-        // const int warp_id_s = threadIdx.x / WARP_SIZE;
-        const int warp_id   = threadIdx.x / WARP_SIZE;
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
         const int warp_id_s = warp_id % kWarpCntS;
         const int warp_id_h = warp_id / kWarpCntS;
-        const int lane_id   = threadIdx.x % WARP_SIZE;
 
         if (warp_id_s != 0) {
             return;

@@ -126,9 +126,10 @@ int main(int argc, char* argv[])
 #if DECODING
     constexpr int kHeadNum   = 32;
     constexpr int kBatchSize = 64;
-    // constexpr int kHeadNum   = 4;
-    // constexpr int kBatchSize = 1;
-    constexpr int kInputLen = 1;
+    // constexpr int kHeadNum     = 8;
+    // constexpr int kBatchSize   = 1;
+    constexpr int kInputLen    = 1;
+    // constexpr int kSequenceLen = 1;
     // constexpr int kSequenceLen = 8191;
     constexpr int kSequenceLen = 2047;
 #else
@@ -396,7 +397,7 @@ int main(int argc, char* argv[])
             kHeadNum * kHeadDim,
             kHeadNum * kHeadDim,
             kBatchSize * kInputLen,
-            0);
+            1);
 
     // [BH, SD]
     Compare(k_cache.data().get() + kSequenceLen * kHeadDim,

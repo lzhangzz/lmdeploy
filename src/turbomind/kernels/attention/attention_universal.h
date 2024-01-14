@@ -66,19 +66,14 @@ struct AttentionUniversal {
 
         Vec vec_Q[ITER_S][ITER_C];
 
-        const int warp_id_h = warp_id / (kWarpCount / Impl::kWarpCntH);
-        const int warp_id_q = warp_id % (kWarpCount / Impl::kWarpCntH);
-
-        const int2 offset = Map::get_offset(warp_id_q, lane_id);
-
-        constexpr int stride_q = Impl::kStrideQ;
-        constexpr int stride_h = stride_q ^ 1;
+        const int2 offset = Map::get_offset(warp_id, lane_id);
 
         // Load Q
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
-            const int qi = (offset.y + s * Map::kDeltaS) * stride_q + qi_begin;
-            const int hi = (offset.y + s * Map::kDeltaS) * stride_h + head_idx + warp_id_h * Impl::WARP_H;
+            const int si = offset.y + s * Map::kDeltaS;
+            const int qi = si % CTA_Q + qi_begin;
+            const int hi = si / CTA_Q + head_idx;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
@@ -128,21 +123,19 @@ struct AttentionUniversal {
         // Store to shared memory
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
-            const int qi = offset.y + s * Map::kDeltaS;
+            const int si = offset.y + s * Map::kDeltaS;
+            const int qi = si % CTA_Q;
+            const int hi = si / CTA_Q;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                if (qi * stride_q < CTA_Q && qi * stride_h < CTA_H) {
-                    Store(&smem_Q[SmemLayoutQ::swizzle(qi, di)], vec_Q[s][c]);
+                if (qi < CTA_Q && hi < CTA_H) {
+                    Store(&smem_Q[SmemLayoutQ::swizzle(hi * CTA_Q + qi, di)], vec_Q[s][c]);
                 }
             }
         }
 
-        __syncthreads();
-
         Impl::TransformQ(smem_Q, frag_Q);
-
-        __syncthreads();
     }
 
     __device__ void operator()(const ParamType& params, char* smem_buf)
