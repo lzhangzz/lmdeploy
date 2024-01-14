@@ -86,8 +86,9 @@ struct Sm75SmemIterV: BaseSmemIterator<T, Layout> {
     }
 };
 
-template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim>
-struct Impl<Sm75_1688, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim>: Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim> {
+template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H, int WARP_Q, int WARP_S, int HeadDim>
+struct Impl<Sm75_1688, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, HeadDim>:
+    Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim> {
 
     using Base = Impl_m16k8<T_, WARP_Q, WARP_S, HeadDim>;
 

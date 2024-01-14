@@ -24,11 +24,10 @@ struct AttentionCtaMap {
 };
 
 struct DecodingCtaMap {
-    static __host__ dim3 get_grid_shape(int head_num, int batch_size, int partitions)
+    static __host__ dim3 get_grid_shape(int head_num, int batch_size, int partitions, int cta_h)
     {
-        return dim3(head_num, batch_size, partitions);
+        return dim3(head_num / cta_h, batch_size, partitions);
     }
-
     static __device__ int query_idx()
     {
         return 0;

@@ -116,7 +116,7 @@ struct Mainloop<arch::Sm70, Impl_> {
 
     __device__ void ApplyCasualMask(FragS& frag_S, int offset_Q, int offset_K)
     {
-        Impl::ForeachS(frag_S, [&](int qi, int si, float& score) {
+        Impl::ForeachS(frag_S, [&](int hi, int qi, int si, float& score) {
             if (offset_Q + qi < offset_K + si) {
                 score -= std::numeric_limits<float>::infinity();
             }

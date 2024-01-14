@@ -38,6 +38,7 @@ struct AttentionUniversal {
     using GmemIterK = typename Mainloop::GmemIterK;
     using GmemIterV = typename Mainloop::GmemIterV;
 
+    static constexpr int CTA_H = Impl::CTA_H;
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
 
@@ -65,17 +66,24 @@ struct AttentionUniversal {
 
         Vec vec_Q[ITER_S][ITER_C];
 
-        const int2 offset = Map::get_offset(warp_id, lane_id);
+        const int warp_id_h = warp_id / (kWarpCount / Impl::kWarpCntH);
+        const int warp_id_q = warp_id % (kWarpCount / Impl::kWarpCntH);
+
+        const int2 offset = Map::get_offset(warp_id_q, lane_id);
+
+        constexpr int stride_q = Impl::kStrideQ;
+        constexpr int stride_h = stride_q ^ 1;
 
         // Load Q
         PRAGMA_UNROLL
         for (int s = 0; s < ITER_S; ++s) {
+            const int qi = (offset.y + s * Map::kDeltaS) * stride_q + qi_begin;
+            const int hi = (offset.y + s * Map::kDeltaS) * stride_h + head_idx + warp_id_h * Impl::WARP_H;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int qi = offset.y + s * Map::kDeltaS + qi_begin;
                 const int di = offset.x + c * Map::kDeltaC;
                 if (qi < qi_end) {
-                    Ldg(vec_Q[s][c], &params.q[qi * params.stride + head_idx * kHeadDim + di]);
+                    Ldg(vec_Q[s][c], &params.q[qi * params.stride + hi * kHeadDim + di]);
                 }
                 else {
                     clear(vec_Q[s][c]);
@@ -124,11 +132,13 @@ struct AttentionUniversal {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
                 const int di = offset.x + c * Map::kDeltaC;
-                if (qi < CTA_Q) {
+                if (qi * stride_q < CTA_Q && qi * stride_h < CTA_H) {
                     Store(&smem_Q[SmemLayoutQ::swizzle(qi, di)], vec_Q[s][c]);
                 }
             }
         }
+
+        __syncthreads();
 
         Impl::TransformQ(smem_Q, frag_Q);
 
@@ -139,7 +149,7 @@ struct AttentionUniversal {
     {
         // [q, h, b]
         const int query_idx = CtaMap::query_idx() * CTA_Q;  // local offset into `input_length`
-        const int head_idx  = CtaMap::head_idx();
+        const int head_idx  = CtaMap::head_idx() * CTA_H;
         const int batch_idx = CtaMap::batch_idx();
 
         // early exit if finished flag is set
@@ -173,9 +183,11 @@ struct AttentionUniversal {
 
         const auto k_cache_ptrs = (const Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
 
+        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
+
         // [L, 2, H, s, D]
-        const int local_key_offset = params.key_offset + head_idx * block_seq_len * kHeadDim;
-        const int local_val_offset = params.val_offset + head_idx * block_seq_len * kHeadDim;
+        const int local_key_offset = params.key_offset + kv_head_idx * block_seq_len * kHeadDim;
+        const int local_val_offset = params.val_offset + kv_head_idx * block_seq_len * kHeadDim;
 
         GmemIterK gmem_K{local_key_offset, warp_id, lane_id};
         GmemIterV gmem_V{local_val_offset, warp_id, lane_id};
@@ -226,9 +238,10 @@ struct AttentionUniversal {
     __device__ void
     StoreO(FragO& frag_O, const FragL& frag_L, int qi_begin, int qi_end, int head_idx, const ParamType& params)
     {
-        Impl::StoreO(frag_O, frag_L, [&](int qi, int di, const auto& vec) {
+        Impl::StoreO(frag_O, frag_L, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end) {
-                Store(&params.out[(qi_begin + qi) * params.num_heads * kHeadDim + head_idx * kHeadDim + di], vec);
+                Store(&params.out[(qi_begin + qi) * params.num_heads * kHeadDim + (head_idx + hi) * kHeadDim + di],
+                      vec);
             }
         });
     }
@@ -240,12 +253,13 @@ struct AttentionUniversal {
                            const int&       max_context_len)
     {
         return [&](auto& frag_S, int offset_K) {
-            Impl::ForeachS(frag_S, [&](int qi, int si, float score) {
+            Impl::ForeachS(frag_S, [&](int hi, int qi, int si, float score) {
                 qi += query_idx;
                 si += offset_K;
                 if (qi < params.max_input_len && si < max_context_len) {
                     params.qk[batch_idx * params.num_heads * params.max_input_len * max_context_len
-                              + head_idx * params.max_input_len * max_context_len + qi * max_context_len + si] = score;
+                              + (head_idx + hi) * params.max_input_len * max_context_len + qi * max_context_len + si] =
+                        score;
                 }
             });
         };

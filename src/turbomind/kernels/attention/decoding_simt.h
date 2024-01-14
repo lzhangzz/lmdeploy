@@ -49,34 +49,41 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
     }
 };
 
-template<class T_, int CTA_Q_, int CTA_S_, int WARP_Q, int WARP_S, int HeadDim, int Stages>
-struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> {
+template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H_, int WARP_Q, int WARP_S, int HeadDim, int Stages>
+struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
     using T   = T_;
     using Tkv = T_;
 
-    static constexpr int CTA_Q    = CTA_Q_;
-    static constexpr int CTA_S    = CTA_S_;
+    static constexpr int CTA_H = CTA_H_;
+    static constexpr int CTA_Q = CTA_Q_;
+    static constexpr int CTA_S = CTA_S_;
+
+    static constexpr int WARP_H = WARP_H_;
+
     static constexpr int kHeadDim = HeadDim;
 
+    static constexpr int kWarpCntH  = CTA_H / WARP_H;
     static constexpr int kWarpCntQ  = CTA_Q / WARP_Q;
     static constexpr int kWarpCntS  = CTA_S / WARP_S;
     static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
+    static_assert(kWarpCntQ == 1 && kWarpCntQ == 1 && kWarpCntS == 4);
+
     static_assert(kWarpCntQ == 1);
 
-    static constexpr int OP_Q = 1;
+    static constexpr int OP_H = 1;
     static constexpr int OP_S = 4;
     static constexpr int OP_D = 64;
 
-    static constexpr int K_M = WARP_Q / OP_Q;   // 1
+    static constexpr int K_M = WARP_H / OP_H;   // 1
     static constexpr int K_N = WARP_S / OP_S;   // 4
     static constexpr int K_K = HeadDim / OP_D;  // 2
 
-    static_assert(WARP_Q % OP_Q == 0 && K_M > 0);
+    static_assert(WARP_H % OP_H == 0 && K_M > 0);
     static_assert(WARP_S % OP_S == 0 && K_N > 0);
     static_assert(HeadDim % OP_D == 0 && K_K > 0);
 
-    static constexpr int V_M = WARP_Q / OP_Q;   // 1
+    static constexpr int V_M = WARP_H / OP_H;   // 1
     static constexpr int V_N = HeadDim / OP_D;  // 2
     static constexpr int V_K = WARP_S / OP_S;   // 4
 
@@ -113,7 +120,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
                                                                //   1  64   4  WS   8     1
 
     union SharedStorage {
-        __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
+        __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
 
         __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
         struct {
@@ -138,23 +145,32 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
-    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
+    using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
 
-    __device__ static void Sync() {}
+    static constexpr int kStrideQ = 0;
+
+    __device__ static void Sync()
+    {
+        if constexpr (kWarpCntH > 1) {
+            __syncthreads();
+        }
+    }
 
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int warp_id   = threadIdx.x / WARP_SIZE;
+        const int warp_id_s = warp_id % kWarpCntS;
+        const int warp_id_h = warp_id / kWarpCntS;
+        const int lane_id   = threadIdx.x % WARP_SIZE;
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < K_N; ++n) {
-                const int qi = m * OP_Q;
-                const int si = n * OP_S + lane_id / 8 + warp_id * WARP_S;
-                ((Func&&)func)(qi, si, S[m][n][0]);
+                const int hi = m * OP_H + warp_id_h * WARP_H;
+                const int si = n * OP_S + lane_id / 8 + warp_id_s * WARP_S;
+                ((Func&&)func)(hi, 0, si, S[m][n][0]);
             }
         }
     }
@@ -169,9 +185,9 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
         for (int k = 0; k < K_K; ++k) {
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
-                const int qi = m;
+                const int hi = m;
                 const int di = k * 64 + lane_id % 8 * 8;
-                Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(qi, di)]);
+                Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(hi, di)]);
             }
         }
     }
@@ -292,8 +308,10 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
 
     __device__ static void Merge(FragO& frag_O, FragM& frag_M, FragL& frag_L, float qk_scale, SharedStorage& storage)
     {
-        const int warp_id_s = threadIdx.x / WARP_SIZE;
-        const int lane_id   = threadIdx.x % WARP_SIZE;
+        const int warp_id   = threadIdx.x / WARP_SIZE;
+        const int warp_id_s = warp_id % kWarpCntS;
+        // const int warp_id_h = warp_id / kWarpCntS;
+        const int lane_id = threadIdx.x % WARP_SIZE;
 
         FragM prev_M;
         copy(frag_M, prev_M);
@@ -394,7 +412,10 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
             inv_L[m][0] = fdividef(1.f, frag_L[m][0]);
         }
 
-        const int warp_id_s = threadIdx.x / WARP_SIZE;
+        // const int warp_id_s = threadIdx.x / WARP_SIZE;
+        const int warp_id   = threadIdx.x / WARP_SIZE;
+        const int warp_id_s = warp_id % kWarpCntS;
+        const int warp_id_h = warp_id / kWarpCntS;
         const int lane_id   = threadIdx.x % WARP_SIZE;
 
         if (warp_id_s != 0) {
@@ -411,9 +432,9 @@ struct Impl<Sm70_Simt, T_, T_, CTA_Q_, CTA_S_, WARP_Q, WARP_S, HeadDim, Stages> 
                     tmp_O[d] = static_cast<T>(frag_O[m][n][d] * inv_L[m][0]);
                 }
                 if (lane_id < 8) {
-                    const int qi = m;
+                    const int hi = m * OP_H + warp_id_h * WARP_H;
                     const int di = n * OP_D + lane_id % 8 * 8;
-                    ((Func&&)func)(qi, di, tmp_O);
+                    ((Func&&)func)(hi, 0, di, tmp_O);
                 }
             }
         }

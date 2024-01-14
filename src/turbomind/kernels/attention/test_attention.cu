@@ -117,20 +117,20 @@ void TestBlocks(const thrust::universal_vector<half>& k_cache,  // [B, H, S, D]
     }
 }
 
-#define DECODING 0
+#define DECODING 1
 
 int main(int argc, char* argv[])
 {
     AttentionParams<half> params{};
 
 #if DECODING
-    // constexpr int kHeadNum     = 32;
-    // constexpr int kBatchSize   = 64;
-    constexpr int kHeadNum     = 32;
-    constexpr int kBatchSize   = 1;
-    constexpr int kInputLen    = 1;
-    constexpr int kSequenceLen = 8191;
-    // constexpr int kSequenceLen = 2047;
+    constexpr int kHeadNum   = 32;
+    constexpr int kBatchSize = 64;
+    // constexpr int kHeadNum   = 4;
+    // constexpr int kBatchSize = 1;
+    constexpr int kInputLen = 1;
+    // constexpr int kSequenceLen = 8191;
+    constexpr int kSequenceLen = 2047;
 #else
     constexpr int kHeadNum     = 16;
     constexpr int kBatchSize   = 2;
@@ -138,8 +138,9 @@ int main(int argc, char* argv[])
     constexpr int kSequenceLen = 0;
 #endif
 
-    constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum;
+    constexpr int kHeadDim = 128;
+    // constexpr int KvHeadNum = kHeadNum;
+    constexpr int KvHeadNum = kHeadNum / 8;
 
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile

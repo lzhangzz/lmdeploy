@@ -26,7 +26,7 @@ void invokeDecoding(const typename Kernel::ParamType& params)
 
     using CtaMap = typename Kernel::CtaMap;
 
-    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_split_k);
+    dim3 grid = CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_split_k, Kernel::CTA_H);
 
     auto err =
         cudaFuncSetAttribute(attention_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);
