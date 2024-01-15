@@ -11,6 +11,26 @@
 
 namespace turbomind::attention {
 
+template<class T, class Layout, int WARP_H, int WarpCntS, int M>
+struct SimtSmemIterQ: BaseSmemIterator<T, Layout> {
+    using Base = BaseSmemIterator<T, Layout>;
+    using Base::Base;
+    using Base::swizzle_ptr;
+
+    __device__ void Load(Array<T, 8> (&frag_Q)[M], int k)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < M; ++m) {
+            const int hi = m + warp_id / WarpCntS * WARP_H;
+            const int di = k * 64 + lane_id % 8 * 8;
+            Lds(frag_Q[m], swizzle_ptr(hi, di));
+        }
+    }
+};
+
 template<class T, class Layout, int WARP_S, int WarpCntS, int N>
 struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
@@ -138,6 +158,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     };
 
     using SmemIterQ = NullSmemIter<T>;
+    // using SmemIterQ = SimtSmemIterQ<T, SmemLayoutQ, WARP_H, kWarpCntS, K_M>;
     using SmemIterP = NullSmemIter<T>;
 
     using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, kWarpCntS, K_N>;
@@ -148,8 +169,6 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
-
-    static constexpr int kStrideQ = 0;
 
     __device__ static void Sync()
     {
@@ -197,14 +216,20 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     }
 
     template<class SmemQ, class SmemK>
-    __device__ static void ComputeQK(SmemQ&, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S, int offset)
+    __device__ static void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S, int offset)
     {
         FragK frag_K;
         smem_K.Load(frag_K[0], 0, offset);
+        // if constexpr (kUseSmemQ) {
+        //     smem_Q.Load(frag_Q[0], 0);
+        // }
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
+                // if constexpr (kUseSmemQ) {
+                //     smem_Q.Load(frag_Q[k + 1], k + 1);
+                // }
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
