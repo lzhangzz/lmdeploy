@@ -5,9 +5,9 @@
 namespace turbomind::attention {
 
 struct AttentionCtaMap {
-    static __host__ dim3 get_grid_shape(int head_num, int batch_size, int max_q_len, int cta_q)
+    static __host__ dim3 get_grid_shape(int head_num, int batch_size, int max_q_len, int cta_h, int cta_q)
     {
-        return dim3((max_q_len + cta_q - 1) / cta_q, batch_size, head_num);
+        return dim3((max_q_len + cta_q - 1) / cta_q, batch_size, head_num / cta_h);
     }
     static __device__ int query_idx()
     {

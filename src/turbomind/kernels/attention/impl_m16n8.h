@@ -7,8 +7,11 @@
 
 namespace turbomind::attention {
 
-template<class T, int WARP_Q, int WARP_S, int HeadDim>
+template<class T, int CTA_Q, int WARP_Q, int WARP_S, int HeadDim>
 struct Impl_m16k8 {
+
+    static constexpr int kWarpCntQ = CTA_Q / WARP_Q;
+
     static constexpr int OP_M = 16;
     static constexpr int OP_N = 8;
 
@@ -41,9 +44,9 @@ struct Impl_m16k8 {
                 for (int q = 0; q < 2; ++q) {
                     PRAGMA_UNROLL
                     for (int s = 0; s < 2; ++s) {
-                        const int qi = m * OP_M + lane_id / 4 + q * 8 + warp_id * WARP_Q;
+                        const int qi = m * OP_M + lane_id / 4 + q * 8 + (warp_id % kWarpCntQ) * WARP_Q;
                         const int ki = n * OP_N + lane_id % 4 * 2 + s;
-                        ((Func&&)func)(qi, ki, S[m][n][q * 2 + s]);
+                        ((Func&&)func)(warp_id / kWarpCntQ, qi, ki, S[m][n][q * 2 + s]);
                     }
                 }
             }
@@ -159,7 +162,7 @@ struct Impl_m16k8 {
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
-                const int qi = m * OP_M + q * 8 + lane_id / 4 + warp_id * WARP_Q;
+                const int qi = m * OP_M + q * 8 + lane_id / 4 + (warp_id % kWarpCntQ) * WARP_Q;
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_N; ++n) {
                     Array<T, 2> tmp_O;
@@ -168,7 +171,7 @@ struct Impl_m16k8 {
                         tmp_O[d] = (T)(frag_O[m][n][q * 2 + d] * tmp_L[m][q]);
                     }
                     const int di = n * 8 + lane_id % 4 * 2;
-                    ((Func&&)func)(qi, di, tmp_O);
+                    ((Func&&)func)(warp_id / kWarpCntQ, qi, di, tmp_O);
                 }
             }
         }

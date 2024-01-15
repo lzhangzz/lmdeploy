@@ -179,7 +179,7 @@ struct Block {
             block_id_ -= 1;
         }
         if (block_id_ >= 0) {
-            block = block_ptrs_[block_id_];
+            // block = block_ptrs_[block_id_];
         }
     }
 };

@@ -39,12 +39,12 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
                 const int idx =
                     SmemLayout::swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC);
                 if constexpr (is_residue) {
-                    CpAsync(offset + idx,
+                    CpAsync(offset + kElementSize * idx,
                             &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
                             offset_s + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(offset + idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    CpAsync(offset + kElementSize * idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
                 }
             }
         }
@@ -54,7 +54,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = smem_int_ptr_ + kElementSize * offset;
+        offset = smem_int_ptr_ + offset;
 #if TURBOMIND_ARCH_SM80
         // clang-format off
         asm volatile("{\n"
@@ -75,7 +75,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = smem_int_ptr_ + kElementSize * offset;
+        offset = smem_int_ptr_ + offset;
 #if TURBOMIND_ARCH_SM80
         asm volatile(
             "cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(offset), "l"(src), "n"(cp_size));

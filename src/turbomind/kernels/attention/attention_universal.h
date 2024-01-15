@@ -176,7 +176,8 @@ struct AttentionUniversal {
 
         const auto k_cache_ptrs = (const Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
 
-        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
+        // const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
+        const int kv_head_idx = head_idx;
 
         // [L, 2, H, s, D]
         const int local_key_offset = params.key_offset + kv_head_idx * block_seq_len * kHeadDim;

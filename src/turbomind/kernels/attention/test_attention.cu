@@ -117,7 +117,7 @@ void TestBlocks(const thrust::universal_vector<half>& k_cache,  // [B, H, S, D]
     }
 }
 
-#define DECODING 1
+#define DECODING 0
 
 int main(int argc, char* argv[])
 {
@@ -128,7 +128,7 @@ int main(int argc, char* argv[])
     constexpr int kBatchSize = 64;
     // constexpr int kHeadNum     = 8;
     // constexpr int kBatchSize   = 1;
-    constexpr int kInputLen    = 1;
+    constexpr int kInputLen = 1;
     // constexpr int kSequenceLen = 1;
     // constexpr int kSequenceLen = 8191;
     constexpr int kSequenceLen = 2047;
@@ -141,7 +141,7 @@ int main(int argc, char* argv[])
 
     constexpr int kHeadDim = 128;
     // constexpr int KvHeadNum = kHeadNum;
-    constexpr int KvHeadNum = kHeadNum / 8;
+    constexpr int KvHeadNum = kHeadNum;
 
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
@@ -150,7 +150,7 @@ int main(int argc, char* argv[])
     // constexpr int kSequenceLen = 72;
     // constexpr int kInputLen    = 98;
     constexpr int kContextLen = kSequenceLen + kInputLen;
-    constexpr int kBlockSz    = 128;
+    constexpr int kBlockSz    = 16384;
     constexpr int kTestIter   = 20;
     constexpr int kMaxSplitK  = 1;
 
@@ -397,7 +397,7 @@ int main(int argc, char* argv[])
             kHeadNum * kHeadDim,
             kHeadNum * kHeadDim,
             kBatchSize * kInputLen,
-            1);
+            0);
 
     // [BH, SD]
     Compare(k_cache.data().get() + kSequenceLen * kHeadDim,
