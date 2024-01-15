@@ -25,26 +25,37 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     using Base::dst_offset_;
     using Base::smem_int_ptr_;
 
-    using Base::Base;
+    // static constexpr int kStepS = kElementSize * Map::kDeltaS * SmemLayout::kStride;
+    // static constexpr int kStepC = kElementSize * Map::kDeltaC;
+
+    static constexpr int kStepS = Map::kDeltaS * SmemLayout::kStride;
+    static constexpr int kStepC = Map::kDeltaC;
+
+    __device__ Sm80GmemIterator(int local_offset, int warp_id, int lane_id): Base{local_offset, warp_id, lane_id}
+    {
+        // dst_offset_ *= kElementSize;
+    }
 
     template<bool is_residue, class BlockIter>
     __device__ void Prefetch(const BlockIter& block_iter, int max_s, int offset)
     {
         auto      src = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + init_offset_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
+        // const int dst_offset = dst_offset_ * kElementSize;
+        const int dst_offset = dst_offset_;
         PRAGMA_UNROLL
         for (int s = 0; s < Map::kIterS; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx =
-                    SmemLayout::swizzle(dst_offset_ + s * Map::kDeltaS * SmemLayout::kStride + c * Map::kDeltaC);
+                const int idx = SmemLayout::swizzle_x(kElementSize * (dst_offset + s * kStepS + c * kStepC));
+                // const int idx = SmemLayout::swizzle_x(dst_offset + s * kStepS + c * kStepC);
                 if constexpr (is_residue) {
-                    CpAsync(offset + kElementSize * idx,
+                    CpAsync(offset + idx,
                             &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
                             offset_s + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(offset + kElementSize * idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    CpAsync(offset + idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
                 }
             }
         }

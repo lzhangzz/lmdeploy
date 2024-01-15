@@ -128,13 +128,9 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             __align__(16) FragS frag_S{};
 
-            // __pipeline_wait_prior(Stages - 2);
-            // Impl::Sync();
-
-            gmem_K.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
-
             auto rv = SmemKVStep(kv_offset_r);
             Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, rk, [&] {
+                gmem_K.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
                 __pipeline_commit();
                 __pipeline_wait_prior(Stages - 2);
                 Impl::Sync();
@@ -151,15 +147,10 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            // __pipeline_wait_prior(Stages - 2);
-            // Impl::Sync();
-
-            gmem_V.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
-
-            block_iter.Advance();
-
             rk = SmemKVStep(kv_offset_r);
             Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, rv, [&] {
+                gmem_V.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
+                block_iter.Advance();
                 __pipeline_commit();
                 __pipeline_wait_prior(Stages - 2);
                 Impl::Sync();

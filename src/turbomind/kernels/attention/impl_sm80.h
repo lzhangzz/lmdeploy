@@ -46,7 +46,9 @@ struct Sm80SmemIterK: BaseSmemIterator<T, Layout> {
         for (int n = 0; n < N; n += 2) {  // Load (s16,d16) tiles
             const int s = n * +8 + group_lane_id % 8 + group_id * 8;
             const int c = k * 16 + group_lane_id / 8 * 8;
-            ldsm_x4((Array<uint32_t, 4>&)frag_K[n], offset + swizzle_uint_ptr(s, c));
+            ldsm_x4((Array<uint32_t, 4>&)frag_K[n],
+                    offset + Layout::swizzle_x(s * Layout::kStride * sizeof(T) + c * sizeof(T)));
+            // ldsm_x4((Array<uint32_t, 4>&)frag_K[n], offset + sizeof(T) * Layout::swizzle(s, c));
         }
     }
 };
@@ -92,7 +94,8 @@ struct Sm80SmemIterV: BaseSmemIterator<T, Layout> {
             for (int n = 0; n < N; n += 2) {  // Load (d16,s16) tiles
                 const int si = k * 16 + lane_id % 16;
                 const int di = n * +8 + lane_id / 16 * 8;
-                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], base + swizzle_uint_ptr(si, di));
+                // ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], base + swizzle_uint_ptr(si, di));
+                ldsm_x4_trans((Array<uint32_t, 4>&)frag_V[n], base + Layout::swizzle_x(si * Layout::kStride * sizeof(T) + di * sizeof(T)));
             }
         }
     }
@@ -203,6 +206,14 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
             // sssSSSdDDDddd
             // DDD ^= SSS
             constexpr int mask = 0x7 << 7;
+            return index ^ ((index & mask) >> 4);
+        }
+
+        __device__ int swizzle_x(int index)
+        {
+            // sssSSSdDDDddd
+            // DDD ^= SSS
+            constexpr int mask = 0x7 << 8;
             return index ^ ((index & mask) >> 4);
         }
     };
