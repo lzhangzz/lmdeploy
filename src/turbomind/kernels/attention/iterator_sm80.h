@@ -37,14 +37,14 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     }
 
     template<bool is_residue, class BlockIter>
-    __device__ void Prefetch(const BlockIter& block_iter, int max_s, int offset)
+    __device__ void Prefetch(const BlockIter& block_iter, int s_begin, int s_end, int max_s, int offset)
     {
         auto      src = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + init_offset_;
         const int offset_s = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
         // const int dst_offset = dst_offset_ * kElementSize;
         const int dst_offset = dst_offset_;
         PRAGMA_UNROLL
-        for (int s = 0; s < Map::kIterS; ++s) {
+        for (int s = s_begin; s < s_end; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
                 const int idx = SmemLayout::swizzle_x(kElementSize * (dst_offset + s * kStepS + c * kStepC));

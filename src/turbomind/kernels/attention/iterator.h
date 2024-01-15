@@ -170,7 +170,7 @@ struct Block {
     __device__ void SetTile(int tile_id)
     {
         if constexpr (std::is_integral_v<BlockSeqLen>) {
-            block_id_ = tile_id >> (31 - __clz(tiles_per_block_));  // this is some how faster than `__ffs`
+            block_id_ = tile_id >> (31 - __clz(tiles_per_block_));  // this is somehow faster than `__ffs`
             local_id  = tile_id & (tiles_per_block_ - 1);
         }
         else {
