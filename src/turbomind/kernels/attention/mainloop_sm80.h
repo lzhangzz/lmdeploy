@@ -117,16 +117,14 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             block_iter.Advance();
         }
 
+        FragK frag_K;
+        FragV frag_V;
+
         __pipeline_wait_prior(Stages - 2);
         Impl::Sync();
 
-        FragK frag_K;
-        FragV frag_V;
-        auto  rk = SmemKVStep(kv_offset_r);
+        auto rk = SmemKVStep(kv_offset_r);
         smem_K.Load(frag_K[0], 0, rk);
-        // if constexpr (Impl::kUseSmemQ) {
-        //     smem_Q.Load(frag_Q[0], 0);
-        // }
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
@@ -162,7 +160,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
 
-            Impl::Softmax<is_residue>(frag_S, frag_M, frag_L, frag_O, qk_scale);
+            Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
             __align__(16) FragP frag_P;
 
@@ -238,13 +236,13 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             gmem_K.ClearSmem(i * kTileSizeKV);
         }
 
+        int kv_offset_r = 0;
+        int kv_offset_w = 0;
+
         block_iter.SetTile(tile_iter);
 
-        gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, 0);
+        gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, SmemKVStep(kv_offset_w));
         __pipeline_commit();
-
-        FragK frag_K;
-        FragV frag_V;
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
@@ -254,21 +252,22 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             __align__(16) FragS frag_S{};
 
-            gmem_V.Prefetch<is_residue>(
-                block_iter, is_residue ? max_step - offset_K : CTA_S, sizeof(Tkv) * kTileSizeKV);
+            gmem_V.Prefetch<is_residue>(block_iter, is_residue ? max_step - offset_K : CTA_S, SmemKVStep(kv_offset_w));
             block_iter.Advance();
             __pipeline_commit();
 
+            auto rk = SmemKVStep(kv_offset_r);
+
+            FragK frag_K;
+            smem_K.Load(frag_K[0], 0, rk);
             Impl::ComputeQK(
-                smem_Q, smem_K, frag_Q, frag_K, frag_S, 0, [](int) {}, [] {}, [] {});
+                smem_Q, smem_K, frag_Q, frag_K, frag_S, rk, [](int) {}, [] {}, [] {});
 
             __pipeline_wait_prior(0);
             Impl::Sync();
 
-            if (tile_iter > 0) {
-                gmem_K.Prefetch<false>(block_iter, CTA_S, 0);
-                __pipeline_commit();
-            }
+            gmem_K.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
+            __pipeline_commit();
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
@@ -280,8 +279,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
+            auto rv = SmemKVStep(kv_offset_r);
+
+            FragV frag_V;
+            smem_V.Load(frag_V[0], 0, rv);
             Impl::ComputePV(
-                smem_P, smem_V, frag_P, frag_V, frag_O, sizeof(Tkv) * kTileSizeKV, [](int) {}, [] {}, [] {});
+                smem_P, smem_V, frag_P, frag_V, frag_O, rv, [](int) {}, [] {}, [] {});
         };
 
         PRAGMA_UNROLL

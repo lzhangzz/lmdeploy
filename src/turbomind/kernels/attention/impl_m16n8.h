@@ -57,11 +57,9 @@ struct Impl_m16k8 {
     __device__ static void Softmax(FragS& frag_S, FragM& frag_M, FragM& frag_L, FragO& frag_O, float qk_scale)
     {
         FragM prev_M;
-        copy(frag_M, prev_M);
-
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
-            frag_M[m] = prev_M[m];
+            prev_M[m] = frag_M[m];
         }
 
         // maximum
@@ -83,21 +81,56 @@ struct Impl_m16k8 {
             }
         }
 
+        // PRAGMA_UNROLL
+        // for (int m = 0; m < K_M; ++m) {
+        //     PRAGMA_UNROLL
+        //     for (int q = 0; q < 2; ++q) {
+        //         // exp(M - M'), isinf(frag_M) => isnan(expdiff_M)
+        //         float expdiff_M = exp2f((prev_M[m][q] - frag_M[m][q]) * qk_scale);
+        //         if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
+        //             expdiff_M = 0.f;
+        //         }
+        //         for (int n = 0; n < V_N; ++n) {
+        //             for (int d = 0; d < 2; ++d) {
+        //                 frag_O[m][n][q * 2 + d] = frag_O[m][n][q * 2 + d] * expdiff_M;  // Rescale previous output
+        //             }
+        //         }
+        //         frag_L[m][q] *= expdiff_M;
+        //     }
+        // }
+
+        FragM expdiff_M;
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
                 // exp(M - M'), isinf(frag_M) => isnan(expdiff_M)
-                float expdiff_M = exp2f((prev_M[m][q] - frag_M[m][q]) * qk_scale);
+                expdiff_M[m][q] = exp2f((prev_M[m][q] - frag_M[m][q]) * qk_scale);
                 if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
-                    expdiff_M = 0.f;
+                    expdiff_M[m][q] = 0.f;
                 }
-                for (int n = 0; n < V_N; ++n) {
+            }
+        }
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < V_N; ++n) {
+                PRAGMA_UNROLL
+                for (int q = 0; q < 2; ++q) {
+                    PRAGMA_UNROLL
                     for (int d = 0; d < 2; ++d) {
-                        frag_O[m][n][q * 2 + d] = frag_O[m][n][q * 2 + d] * expdiff_M;  // Rescale previous output
+                        frag_O[m][n][q * 2 + d] = frag_O[m][n][q * 2 + d] * expdiff_M[m][q];  // Rescale previous output
                     }
                 }
-                frag_L[m][q] *= expdiff_M;
+            }
+        }
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {
+                frag_L[m][q] *= expdiff_M[m][q];
             }
         }
 
