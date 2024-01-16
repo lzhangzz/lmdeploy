@@ -241,32 +241,41 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
         block_iter.SetTile(tile_iter);
 
-        gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, SmemKVStep(kv_offset_w));
+        gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
+
+        FragK frag_K;
+        FragV frag_V;
+
+        __pipeline_wait_prior(0);
+        Impl::Sync();
+        smem_K.Load(frag_K[0], 0, 0);
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
-            __pipeline_wait_prior(0);
-            Impl::Sync();
-
             __align__(16) FragS frag_S{};
 
-            gmem_V.Prefetch<is_residue>(block_iter, is_residue ? max_step - offset_K : CTA_S, SmemKVStep(kv_offset_w));
+            gmem_V.Prefetch<is_residue>(block_iter, max_step - offset_K, sizeof(Tkv) * kTileSizeKV);
             block_iter.Advance();
             __pipeline_commit();
 
-            auto rk = SmemKVStep(kv_offset_r);
-
-            FragK frag_K;
-            smem_K.Load(frag_K[0], 0, rk);
             Impl::ComputeQK(
-                smem_Q, smem_K, frag_Q, frag_K, frag_S, rk, [](int) {}, [] {}, [] {});
+                smem_Q,
+                smem_K,
+                frag_Q,
+                frag_K,
+                frag_S,
+                0,
+                [](int) {},
+                [&] {
+                    __pipeline_wait_prior(0);
+                    Impl::Sync();
+                    smem_V.Load(frag_V[0], 0, sizeof(Tkv) * kTileSizeKV);
+                },
+                [] {});
 
-            __pipeline_wait_prior(0);
-            Impl::Sync();
-
-            gmem_K.Prefetch<false>(block_iter, CTA_S, SmemKVStep(kv_offset_w));
+            gmem_K.Prefetch<false>(block_iter, CTA_S, 0);
             __pipeline_commit();
 
             if constexpr (is_mask) {
@@ -279,12 +288,20 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            auto rv = SmemKVStep(kv_offset_r);
-
-            FragV frag_V;
-            smem_V.Load(frag_V[0], 0, rv);
             Impl::ComputePV(
-                smem_P, smem_V, frag_P, frag_V, frag_O, rv, [](int) {}, [] {}, [] {});
+                smem_P,
+                smem_V,
+                frag_P,
+                frag_V,
+                frag_O,
+                sizeof(Tkv) * kTileSizeKV,
+                [](int) {},
+                [&] {
+                    __pipeline_wait_prior(0);
+                    Impl::Sync();
+                    smem_K.Load(frag_K[0], 0, 0);
+                },
+                [] {});
         };
 
         PRAGMA_UNROLL
@@ -309,13 +326,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             }
         });
     }
-
-    // __device__ void CommitAndWait()
-    // {
-    //     __pipeline_commit();
-    //     __pipeline_wait_prior(Stages - 2);
-    //     Impl::Sync();
-    // }
 };
 
 }  // namespace turbomind::attention
