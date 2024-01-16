@@ -61,11 +61,17 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
         }
     }
 
+    template<bool is_residue, class BlockIter>
+    __device__ void Prefetch(const BlockIter& block_iter, int max_s, int offset)
+    {
+        Prefetch<is_residue>(block_iter, 0, Map::kIterS, max_s, offset);
+    }
+
     __device__ void CpAsync(int offset, const T* __restrict__ src, bool mask)
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = smem_int_ptr_ + offset;
+        offset = 0 + offset;
 #if TURBOMIND_ARCH_SM80
         // clang-format off
         asm volatile("{\n"
@@ -86,7 +92,7 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = smem_int_ptr_ + offset;
+        offset = 0 + offset;
 #if TURBOMIND_ARCH_SM80
         asm volatile(
             "cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(offset), "l"(src), "n"(cp_size));

@@ -36,9 +36,9 @@ struct BaseGmemIterator {
 
     __device__ void SetSmem(T* smem)
     {
-        smem_ = smem;
-        // smem_int_ptr_ = cast_smem_ptr_to_uint(smem);
-        smem_int_ptr_ = 0;  // cast_smem_ptr_to_uint(smem);
+        smem_         = smem;
+        smem_int_ptr_ = cast_smem_ptr_to_uint(smem);
+        // smem_int_ptr_ = 0;
     }
 
     __device__ void ClearSmem(int offset)
@@ -83,12 +83,12 @@ struct SmemLayout {
 template<class T, class Layout>
 struct BaseSmemIterator {
     static constexpr int kElemSize = sizeof(T);
-    const T*             smem_;
+    T*                   smem_;
     uint32_t             smem_int_ptr_;
 
-    __device__ explicit BaseSmemIterator(const T* smem): smem_{smem}, smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
+    __device__ explicit BaseSmemIterator(T* smem): smem_{smem}, smem_int_ptr_{cast_smem_ptr_to_uint(smem)}
     {
-        smem_int_ptr_ = 0;
+        // smem_int_ptr_ = 0;
     }
 
     __forceinline__ __device__ const T* ptr(int s, int c)
@@ -148,6 +148,11 @@ struct Identity {
     __device__ int AdvanceS(int offset, int s0, int s1)
     {
         return offset;
+    }
+
+    __device__ int swizzle_x(int x)
+    {
+        return x;
     }
 };
 

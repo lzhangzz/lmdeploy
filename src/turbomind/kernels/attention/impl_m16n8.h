@@ -54,34 +54,32 @@ struct Impl_m16k8 {
     }
 
     template<bool is_residue>
-    __device__ static void
-    Softmax(FragS& frag_S, FragM& frag_M, FragM& prev_M, FragM& frag_L, FragO& frag_O, float qk_scale)
+    __device__ static void Softmax(FragS& frag_S, FragM& frag_M, FragM& frag_L, FragO& frag_O, float qk_scale)
     {
-        // FragM prev_M;
+        FragM prev_M;
+        copy(frag_M, prev_M);
 
-        if constexpr (is_residue) {
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            frag_M[m] = prev_M[m];
+        }
+
+        // maximum
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {  // Q
+            auto& row_M = frag_M[m];
             PRAGMA_UNROLL
-            for (int m = 0; m < K_M; ++m) {
-                frag_M[m] = prev_M[m];
+            for (int n = 0; n < K_N; ++n) {  // KV
+                auto& C = frag_S[m][n];
+                PRAGMA_UNROLL
+                for (int q = 0; q < 2; ++q) {
+                    row_M[q] = fmaxf(row_M[q], fmaxf(C[q * 2 + 0], C[q * 2 + 1]));  // reduce over local pair
+                }
             }
-
-            // maximum
             PRAGMA_UNROLL
-            for (int m = 0; m < K_M; ++m) {  // Q
-                auto& row_M = frag_M[m];
-                PRAGMA_UNROLL
-                for (int n = 0; n < K_N; ++n) {  // KV
-                    auto& C = frag_S[m][n];
-                    PRAGMA_UNROLL
-                    for (int q = 0; q < 2; ++q) {
-                        row_M[q] = fmaxf(row_M[q], fmaxf(C[q * 2 + 0], C[q * 2 + 1]));  // reduce over local pair
-                    }
-                }
-                PRAGMA_UNROLL
-                for (int q = 0; q < 2; ++q) {  // reduce over thread group within warp (within warp tiles)
-                    row_M[q] = fmaxf(row_M[q], __shfl_xor_sync(uint32_t(-1), row_M[q], 1));
-                    row_M[q] = fmaxf(row_M[q], __shfl_xor_sync(uint32_t(-1), row_M[q], 2));
-                }
+            for (int q = 0; q < 2; ++q) {  // reduce over thread group within warp (within warp tiles)
+                row_M[q] = fmaxf(row_M[q], __shfl_xor_sync(uint32_t(-1), row_M[q], 1));
+                row_M[q] = fmaxf(row_M[q], __shfl_xor_sync(uint32_t(-1), row_M[q], 2));
             }
         }
 
@@ -145,6 +143,48 @@ struct Impl_m16k8 {
                 }
             }
         }
+
+#if 0
+        if (!smem_P) {
+            FragS_<T>& frag_Ps = (FragS_<T>&)frag_P;
+            PRAGMA_UNROLL
+            for (int m = 0; m < K_M; ++m) {
+                PRAGMA_UNROLL
+                for (int n = 0; n < K_N; ++n) {
+                    PRAGMA_UNROLL
+                    for (int q = 0; q < 2; ++q) {
+                        PRAGMA_UNROLL
+                        for (int s = 0; s < 2; ++s) {
+                            frag_Ps[m][n][q * 2 + s] = static_cast<T>(frag_S[m][n][q * 2 + s]);
+                        }
+                    }
+                }
+            }
+        }
+        else {
+            PRAGMA_UNROLL
+            for (int m = 0; m < K_M; ++m) {
+                PRAGMA_UNROLL
+                for (int n = 0; n < K_N; n += 2) {
+                    Array<T, 8> tmp_P;
+                    PRAGMA_UNROLL
+                    for (int s1 = 0; s1 < 2; ++s1) {
+                        PRAGMA_UNROLL
+                        for (int q = 0; q < 2; ++q) {
+                            PRAGMA_UNROLL
+                            for (int s = 0; s < 2; ++s) {
+                                tmp_P[s1 * 4 + q * 2 + s] = static_cast<T>(frag_S[m][n + s1][q * 2 + s]);
+                            }
+                        }
+                    }
+                    const int     k        = n / 2;
+                    constexpr int kThreads = kWarpCntQ * WARP_SIZE;
+                    Store(&smem_P[(k * V_M * kThreads + m * kThreads + threadIdx.x) * 8], tmp_P);
+                }
+            }
+            __syncwarp();  // really?
+        }
+#endif
     }
 
     template<class Func>

@@ -124,6 +124,9 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         FragV frag_V;
         auto  rk = SmemKVStep(kv_offset_r);
         smem_K.Load(frag_K[0], 0, rk);
+        // if constexpr (Impl::kUseSmemQ) {
+        //     smem_Q.Load(frag_Q[0], 0);
+        // }
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
@@ -133,22 +136,14 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             auto rv = SmemKVStep(kv_offset_r);
             auto wk = SmemKVStep(kv_offset_w);
 
-            FragM prev_M;
-            PRAGMA_UNROLL
-            for (int m = 0; m < Impl::K_M; ++m) {
-                prev_M[m] = frag_M[m];
-            }
-
             Impl::ComputeQK(
                 smem_Q,
                 smem_K,
                 frag_Q,
                 frag_K,
                 frag_S,
-                frag_M,
                 rk,
                 [&](int k) {
-                    // constexpr int kBatch = (ThreadMapKV::kIterS + Impl::K_K - 1) / Impl::K_K;
                     constexpr int kBatch = ThreadMapKV::kIterS / 2;
                     if (k * kBatch < ThreadMapKV::kIterS) {
                         gmem_K.Prefetch<false>(block_iter, k * kBatch, (k + 1) * kBatch, CTA_S, wk);
@@ -159,7 +154,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 },
                 [&] { smem_V.Load(frag_V[0], 0, rv); },
                 [&] {
-                    // __pipeline_commit();
                     __pipeline_wait_prior(Stages - 2);
                     Impl::Sync();
                 });
@@ -168,7 +162,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
 
-            Impl::Softmax<is_residue>(frag_S, frag_M, prev_M, frag_L, frag_O, qk_scale);
+            Impl::Softmax<is_residue>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
             __align__(16) FragP frag_P;
 
@@ -184,7 +178,6 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 frag_O,
                 rv,
                 [&](int k) {
-                    // constexpr int kBatch = (ThreadMapKV::kIterS + Impl::V_K - 1) / Impl::V_K;
                     constexpr int kBatch = ThreadMapKV::kIterS / 2;
                     if (k * kBatch < ThreadMapKV::kIterS) {
                         gmem_V.Prefetch<false>(block_iter, k * kBatch, (k + 1) * kBatch, CTA_S, wv);
@@ -196,14 +189,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 },
                 [&] { smem_K.Load(frag_K[0], 0, rk); },
                 [&] {
-                    // block_iter.Advance();
-                    // __pipeline_commit();
                     __pipeline_wait_prior(Stages - 2);
                     Impl::Sync();
                 });
         };
 
-        PRAGMA_UNROLL
+        // PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
             loop(std::true_type{}, std::true_type{});
         }
@@ -234,57 +225,50 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         SharedStorage& storage,
                         const StoreS&  store_S)
     {
-        gmem_K.SetSmem(storage.K);
-        gmem_V.SetSmem(storage.V);
+        gmem_K.SetSmem(storage.KV);
+        gmem_V.SetSmem(storage.KV);
 
+        SmemIterK smem_K{storage.KV};
+        SmemIterV smem_V{storage.KV};
         SmemIterQ smem_Q{storage.Q};
-        SmemIterK smem_K{storage.K};
         SmemIterP smem_P{storage.P};
-        SmemIterV smem_V{storage.V};
 
-        gmem_K.ClearSmem(0);
-        gmem_V.ClearSmem(0);
+        PRAGMA_UNROLL
+        for (int i = 0; i < Stages; ++i) {
+            gmem_K.ClearSmem(i * kTileSizeKV);
+        }
 
         block_iter.SetTile(tile_iter);
 
         gmem_K.Prefetch<true>(block_iter, max_step - tile_iter * CTA_S, 0);
         __pipeline_commit();
 
-        __pipeline_wait_prior(0);
-        Impl::Sync();
-
         FragK frag_K;
         FragV frag_V;
-        smem_K.Load(frag_K[0], 0, 0);
 
         auto loop = [&](auto is_residue, auto is_mask) {
             const int offset_K = tile_iter * CTA_S;
 
-            // __pipeline_wait_prior(0);
-            // Impl::Sync();
+            __pipeline_wait_prior(0);
+            Impl::Sync();
 
             __align__(16) FragS frag_S{};
 
-            gmem_V.Prefetch<is_residue>(block_iter, is_residue ? max_step - offset_K : CTA_S, 0);
+            gmem_V.Prefetch<is_residue>(
+                block_iter, is_residue ? max_step - offset_K : CTA_S, sizeof(Tkv) * kTileSizeKV);
+            block_iter.Advance();
             __pipeline_commit();
 
-            block_iter.Advance();
+            Impl::ComputeQK(
+                smem_Q, smem_K, frag_Q, frag_K, frag_S, 0, [](int) {}, [] {}, [] {});
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, 0, [&] {
-                __pipeline_wait_prior(0);
-                Impl::Sync();
-                smem_V.Load(frag_V[0], 0, 0);
-            });
-
-            // __pipeline_wait_prior(0);
-            // Impl::Sync();
+            __pipeline_wait_prior(0);
+            Impl::Sync();
 
             if (tile_iter > 0) {
                 gmem_K.Prefetch<false>(block_iter, CTA_S, 0);
                 __pipeline_commit();
             }
-
-            // store_S(frag_S, offset_K);
 
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
@@ -296,11 +280,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, 0, [&] {
-                __pipeline_wait_prior(0);
-                Impl::Sync();
-                smem_K.Load(frag_K[0], 0, 0);
-            });
+            Impl::ComputePV(
+                smem_P, smem_V, frag_P, frag_V, frag_O, sizeof(Tkv) * kTileSizeKV, [](int) {}, [] {}, [] {});
         };
 
         PRAGMA_UNROLL
@@ -308,6 +289,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             loop(std::true_type{}, std::true_type{});
         }
 
+        PRAGMA_NO_UNROLL
         for (; tile_iter >= 0; --tile_iter) {
             loop(std::false_type{}, std::false_type{});
         }
@@ -325,12 +307,12 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         });
     }
 
-    __device__ void CommitAndWait()
-    {
-        __pipeline_commit();
-        __pipeline_wait_prior(Stages - 2);
-        Impl::Sync();
-    }
+    // __device__ void CommitAndWait()
+    // {
+    //     __pipeline_commit();
+    //     __pipeline_wait_prior(Stages - 2);
+    //     Impl::Sync();
+    // }
 };
 
 }  // namespace turbomind::attention
