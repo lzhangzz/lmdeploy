@@ -245,7 +245,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
         }
     }
 
-    template<class SmemQ, class SmemK, class Prefetch, class Preload, class Barrier>
+    template<class SmemQ, class SmemK, class Prefetch, class Preload>
     __device__ static void ComputeQK(SmemQ&,
                                      SmemK&     smem_K,
                                      FragQ&     frag_Q,
@@ -253,8 +253,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                                      FragS&     frag_S,
                                      int        offset,
                                      Prefetch&& prefetch,
-                                     Preload&&  preload,
-                                     Barrier&&  barrier)
+                                     Preload&&  preload)
     {
 
         PRAGMA_UNROLL
@@ -281,12 +280,11 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
             }
             if (k == K_K - 2) {
                 ((Prefetch&&)prefetch)(K_K - 1);
-                ((Barrier&&)barrier)();
             }
         }
     }
 
-    template<class SmemP, class SmemV, class Prefetch, class Preload, class Barrier>
+    template<class SmemP, class SmemV, class Prefetch, class Preload>
     __device__ static void ComputePV(SmemP&,
                                      SmemV&     smem_V,
                                      FragP&     frag_P,
@@ -294,8 +292,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
                                      FragO&     frag_O,
                                      int        offset,
                                      Prefetch&& prefetch,
-                                     Preload&&  preload,
-                                     Barrier&&  barrier)
+                                     Preload&&  preload)
     {
 
         PRAGMA_UNROLL
@@ -319,7 +316,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
             }
             if (k == V_K - 2) {
                 ((Prefetch&&)prefetch)(V_K - 1);
-                ((Barrier&&)barrier)();
             }
         }
     }

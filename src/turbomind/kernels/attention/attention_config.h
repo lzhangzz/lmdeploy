@@ -22,8 +22,8 @@ struct AttentionConfig<arch::Sm80, T, Tkv, BlockSeqLen, HeadDim> {
     static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = 64;
     //
-    using Attention = Impl<Sm80_16816, T, Tkv, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, HeadDim, 2>;
-    using Mainloop  = Mainloop<Sm80_CpAsync<2>, Attention>;
+    using Attention = Impl<Sm80_16816, T, Tkv, 1, CTA_Q, CTA_S, 1, WARP_Q, WARP_S, HeadDim, 3>;
+    using Mainloop  = Mainloop<Sm80_CpAsync<3>, Attention>;
     using Kernel    = AttentionUniversal<Mainloop, BlockSeqLen, AttentionCtaMap>;
 };
 
