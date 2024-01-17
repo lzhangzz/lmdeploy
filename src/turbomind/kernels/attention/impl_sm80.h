@@ -182,13 +182,15 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
     using SmemLayoutP = SmemLayout<CTA_S, Identity>;
 
-    union SharedStorage {
+    struct SharedStorage {
         __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
-        __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
-        __align__(16) T P[CTA_Q * SmemLayoutP::kStride];
+        union {
+            __align__(16) T Q[CTA_Q * SmemLayoutQ::kStride];
+            __align__(16) T P[CTA_Q * SmemLayoutP::kStride * 0 + 1];
+        };
     };
 
-    static constexpr bool kUseSmemQ = false;
+    static constexpr bool kUseSmemQ = true;
     static constexpr bool kUseSmemP = false;
 
     using SmemIterQ = std::conditional_t<kUseSmemQ, Sm80SmemIterQ<T, Identity, K_M, kWarpCount>, T*>;
@@ -246,7 +248,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&,
+    __device__ static void ComputeQK(SmemQ&     smem_Q,
                                      SmemK&     smem_K,
                                      FragQ&     frag_Q,
                                      FragK&     frag_K,
@@ -260,9 +262,7 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
-                // if constexpr (kUseSmemQ) {
-                //     smem_Q.Load(frag_Q[k + 1], k + 1);
-                // }
+                smem_Q.Load(frag_Q[k + 1], k + 1);
             }
             else {
                 ((Preload&&)preload)();

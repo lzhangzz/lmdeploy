@@ -17,7 +17,7 @@ struct AttentionConfig {
 
 template<class T, class Tkv, class BlockSeqLen, int HeadDim>
 struct AttentionConfig<arch::Sm80, T, Tkv, BlockSeqLen, HeadDim> {
-    static constexpr int CTA_Q  = 64;
+    static constexpr int CTA_Q  = 128;
     static constexpr int CTA_S  = 64;
     static constexpr int WARP_Q = 16;
     static constexpr int WARP_S = 64;

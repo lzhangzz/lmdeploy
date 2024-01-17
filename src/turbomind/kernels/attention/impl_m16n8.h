@@ -55,8 +55,8 @@ struct Impl_m16k8 {
         }
     }
 
-    template<bool is_residue>
-    __device__ static void Softmax(FragS& frag_S, FragM& frag_M, FragM& frag_L, FragO& frag_O, float qk_scale)
+    template<bool is_residue, int U>
+    __device__ static void Softmax(FragS (&frag_S)[U], FragM& frag_M, FragM& frag_L, FragO& frag_O, float qk_scale)
     {
         FragM prev_M;
         PRAGMA_UNROLL
@@ -69,11 +69,14 @@ struct Impl_m16k8 {
         for (int m = 0; m < K_M; ++m) {  // Q
             auto& row_M = frag_M[m];
             PRAGMA_UNROLL
-            for (int n = 0; n < K_N; ++n) {  // KV
-                auto& C = frag_S[m][n];
+            for (int u = 0; u < U; ++u) {
                 PRAGMA_UNROLL
-                for (int q = 0; q < 2; ++q) {
-                    row_M[q] = fmaxf(row_M[q], fmaxf(C[q * 2 + 0], C[q * 2 + 1]));  // reduce over local pair
+                for (int n = 0; n < K_N * 2; ++n) {  // KV
+                    auto& C = frag_S[u][m][n];
+                    PRAGMA_UNROLL
+                    for (int q = 0; q < 2; ++q) {
+                        row_M[q] = fmaxf(row_M[q], fmaxf(C[q * 2 + 0], C[q * 2 + 1]));  // reduce over local pair
+                    }
                 }
             }
             PRAGMA_UNROLL
@@ -110,16 +113,19 @@ struct Impl_m16k8 {
             for (int q = 0; q < 2; ++q) {
                 float tmp_L{};
                 PRAGMA_UNROLL
-                for (int n = 0; n < K_N; ++n) {
+                for (int u = 0; u < U; ++u) {
                     PRAGMA_UNROLL
-                    for (int s = 0; s < 2; ++s) {
-                        // unnormalized prob, optimized to FFMA
-                        float p = exp2f(frag_S[m][n][q * 2 + s] * qk_scale - frag_M[m][q] * qk_scale);
-                        if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
-                            p = 0.f;
+                    for (int n = 0; n < K_N; ++n) {
+                        PRAGMA_UNROLL
+                        for (int s = 0; s < 2; ++s) {
+                            // unnormalized prob, optimized to FFMA
+                            float p = exp2f(frag_S[u][m][n][q * 2 + s] * qk_scale - frag_M[m][q] * qk_scale);
+                            if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
+                                p = 0.f;
+                            }
+                            tmp_L += p;
+                            frag_S[u][m][n][q * 2 + s] = p;
                         }
-                        tmp_L += p;
-                        frag_S[m][n][q * 2 + s] = p;
                     }
                 }
                 if constexpr (!kDeferReduceL) {

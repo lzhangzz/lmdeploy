@@ -196,7 +196,7 @@ struct AttentionUniversal {
         const float qk_scale = params.inv_sqrt_dh;
 
         int tile_iter = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S - 1;
-        int mask_iter = 1;
+        int mask_iter = 2;
 
         __align__(16) FragO frag_O{};
 
