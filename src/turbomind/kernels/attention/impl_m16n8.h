@@ -31,6 +31,8 @@ struct Impl_m16k8 {
     using FragS = FragS_<float>;
     using FragL = FragM;
 
+    static constexpr bool kDeferReduceL = false;
+
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)
     {
@@ -81,24 +83,6 @@ struct Impl_m16k8 {
             }
         }
 
-        // PRAGMA_UNROLL
-        // for (int m = 0; m < K_M; ++m) {
-        //     PRAGMA_UNROLL
-        //     for (int q = 0; q < 2; ++q) {
-        //         // exp(M - M'), isinf(frag_M) => isnan(expdiff_M)
-        //         float expdiff_M = exp2f((prev_M[m][q] - frag_M[m][q]) * qk_scale);
-        //         if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
-        //             expdiff_M = 0.f;
-        //         }
-        //         for (int n = 0; n < V_N; ++n) {
-        //             for (int d = 0; d < 2; ++d) {
-        //                 frag_O[m][n][q * 2 + d] = frag_O[m][n][q * 2 + d] * expdiff_M;  // Rescale previous output
-        //             }
-        //         }
-        //         frag_L[m][q] *= expdiff_M;
-        //     }
-        // }
-
         FragM expdiff_M;
         PRAGMA_UNROLL
         for (int m = 0; m < K_M; ++m) {
@@ -108,20 +92,6 @@ struct Impl_m16k8 {
                 expdiff_M[m][q] = exp2f((prev_M[m][q] - frag_M[m][q]) * qk_scale);
                 if (is_residue && frag_M[m][q] == -std::numeric_limits<float>::infinity()) {
                     expdiff_M[m][q] = 0.f;
-                }
-            }
-        }
-
-        PRAGMA_UNROLL
-        for (int m = 0; m < K_M; ++m) {
-            PRAGMA_UNROLL
-            for (int n = 0; n < V_N; ++n) {
-                PRAGMA_UNROLL
-                for (int q = 0; q < 2; ++q) {
-                    PRAGMA_UNROLL
-                    for (int d = 0; d < 2; ++d) {
-                        frag_O[m][n][q * 2 + d] = frag_O[m][n][q * 2 + d] * expdiff_M[m][q];  // Rescale previous output
-                    }
                 }
             }
         }
@@ -152,9 +122,25 @@ struct Impl_m16k8 {
                         frag_S[m][n][q * 2 + s] = p;
                     }
                 }
-                tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 1);
-                tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 2);
-                frag_L[m][q] = frag_L[m][q] + tmp_L;  // update L
+                if constexpr (!kDeferReduceL) {
+                    tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 1);
+                    tmp_L += __shfl_xor_sync(uint32_t(-1), tmp_L, 2);
+                }
+                frag_L[m][q] += tmp_L;  // update L
+            }
+        }
+
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {
+            PRAGMA_UNROLL
+            for (int n = 0; n < V_N; ++n) {
+                PRAGMA_UNROLL
+                for (int q = 0; q < 2; ++q) {
+                    PRAGMA_UNROLL
+                    for (int d = 0; d < 2; ++d) {
+                        frag_O[m][n][q * 2 + d] *= expdiff_M[m][q];  // Rescale previous output
+                    }
+                }
             }
         }
     }
@@ -221,13 +207,17 @@ struct Impl_m16k8 {
     }
 
     template<class Func>
-    __device__ static void StoreO(FragO& frag_O, const FragL& frag_L, Func&& func)
+    __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Func&& func)
     {
         FragL tmp_L;
         PRAGMA_UNROLL
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int q = 0; q < 2; ++q) {
+                if constexpr (kDeferReduceL) {
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 1);
+                    frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
+                }
                 tmp_L[m][q] = fdividef(1.f, frag_L[m][q]);
             }
         }

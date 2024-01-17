@@ -230,7 +230,7 @@ struct AttentionUniversal {
     }
 
     __device__ void
-    StoreO(FragO& frag_O, const FragL& frag_L, int qi_begin, int qi_end, int head_idx, const ParamType& params)
+    StoreO(FragO& frag_O, FragL& frag_L, int qi_begin, int qi_end, int head_idx, const ParamType& params)
     {
         Impl::StoreO(frag_O, frag_L, [&](int hi, int qi, int di, const auto& vec) {
             if (qi_begin + qi < qi_end) {
