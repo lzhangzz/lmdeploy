@@ -194,9 +194,6 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     using SmemIterQ = std::conditional_t<kUseSmemQ, Sm80SmemIterQ<T, Identity, K_M, kWarpCount>, T*>;
     using SmemIterP = std::conditional_t<kUseSmemP, Sm80SmemIterQ<T, Identity, V_M, kWarpCount>, T*>;
 
-    // using SmemIterQ = NullSmemIter<T>;
-    // using SmemIterP = NullSmemIter<T>;
-
     using SmemIterK = Sm80SmemIterK<T, SmemLayoutK, K_N>;
     using SmemIterV = Sm80SmemIterV<T, SmemLayoutV, V_N>;
 
