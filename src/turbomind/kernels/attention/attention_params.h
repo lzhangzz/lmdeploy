@@ -44,6 +44,7 @@ struct AttentionParams {
     T* kv_cache_quant_data;  // [B,H,2,S,2]
 
     // batch-level params
+    int token_num;
     int batch_size;
     int max_input_len;
     int max_seq_len;
@@ -63,6 +64,7 @@ struct AttentionParams {
     bool use_logn_attn;
 
     int    max_split_k;
+    int*   split_cnt;
     float* partial_O;
     float* partial_M;
     float* partial_L;

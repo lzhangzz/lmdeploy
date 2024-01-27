@@ -163,13 +163,7 @@ __inline__ __device__ uint4 dequantize_s4_to_fp16x2_v2(uint32_t const& source)
 
 __inline__ __device__ uint32_t cast_smem_ptr_to_uint(void const* const ptr)
 {
-    uint32_t smem_int_ptr;
-
-    asm("{.reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 %0, smem_ptr; }\n"
-        : "=r"(smem_int_ptr)
-        : "l"(ptr));
-
-    return smem_int_ptr;
+    return (uint32_t)__cvta_generic_to_shared(ptr);
 }
 
 __inline__ __device__ void ldmatrix_m8n8_x4_b16(uint& d0, uint& d1, uint& d2, uint& d3, uint32_t smem_int_ptr)

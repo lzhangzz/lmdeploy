@@ -18,42 +18,31 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
     using typename Base::AccessType;
 
+    using Base::Base;
     using Base::kElementSize;
-
     using Base::local_offset_;
-    using Base::init_offset_;
+    using Base::src_offset_;
     using Base::dst_offset_;
-    using Base::smem_int_ptr_;
-
-    // static constexpr int kStepS = kElementSize * Map::kDeltaS * SmemLayout::kStride;
-    // static constexpr int kStepC = kElementSize * Map::kDeltaC;
-
-    static constexpr int kStepS = Map::kDeltaS * SmemLayout::kStride;
-    static constexpr int kStepC = Map::kDeltaC;
-
-    __device__ Sm80GmemIterator(int local_offset, int warp_id, int lane_id): Base{local_offset, warp_id, lane_id}
-    {
-        // dst_offset_ *= kElementSize;
-    }
+    using Base::offset_c_;
+    using Base::offset_s_;
+    using Base::smem_;
 
     template<bool is_residue, class BlockIter>
     __device__ void Prefetch(const BlockIter& block_iter, int s_begin, int s_count, int max_s, int offset)
     {
-        auto      src = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + init_offset_;
-        const int offset_s   = Map::get_offset(threadIdx.x / WARP_SIZE, threadIdx.x % WARP_SIZE).y;
-        const int dst_offset = dst_offset_;
+        auto src_data = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + src_offset_;
+
         PRAGMA_UNROLL
         for (int s = s_begin; s < s_begin + s_count; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < Map::kIterC; ++c) {
-                const int idx = SmemLayout::swizzle_x(kElementSize * (dst_offset + s * kStepS + c * kStepC));
+                auto dst = SmemLayout::apply(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
+                auto src = &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC];
                 if constexpr (is_residue) {
-                    CpAsync(offset + idx,
-                            &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC],
-                            offset_s + s * Map::kDeltaS < max_s);
+                    CpAsync(dst + offset, src, offset_s_ + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(offset + idx, &src[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC]);
+                    CpAsync(dst + offset, src);
                 }
             }
         }
@@ -65,19 +54,19 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
         Prefetch<is_residue>(block_iter, 0, Map::kIterS, max_s, offset);
     }
 
-    __device__ void CpAsync(int offset, const T* __restrict__ src, bool mask)
+    __device__ void CpAsync(int dst, const T* __restrict__ src, bool mask)
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = 0 + offset;
+        uint32_t ptr = dst;
 #if TURBOMIND_ARCH_SM80
         // clang-format off
         asm volatile("{\n"
                      "  .reg .pred p;\n"
                      "  setp.ne.b32 p, %0, 0;\n"
-                     "  @p cp.async.cg.shared.global " L2_CACHEHINT(128) " [%1], [%2], %3;\n"
+                     "  @p cp.async.cg.shared.global" L2_CACHEHINT(128) " [%1], [%2], %3;\n"
                      "}\n" ::"r"((int)mask),
-                     "r"(offset),
+                     "r"(ptr),
                      "l"(src),
                      "n"(cp_size));
         // clang-format on
@@ -86,14 +75,14 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 #endif
     }
 
-    __device__ void CpAsync(int offset, const T* __restrict__ src)
+    __device__ void CpAsync(int dst, const T* __restrict__ src)
     {
         constexpr int cp_size = sizeof(AccessType);
 
-        offset = 0 + offset;
+        uint32_t ptr = dst;
 #if TURBOMIND_ARCH_SM80
         asm volatile(
-            "cp.async.cg.shared.global " L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(offset), "l"(src), "n"(cp_size));
+            "cp.async.cg.shared.global" L2_CACHEHINT(128) " [%0], [%1], %2;\n" ::"r"(ptr), "l"(src), "n"(cp_size));
 #else
         assert(TURBOMIND_ARCH_SM80);
 #endif

@@ -323,8 +323,6 @@ struct LogNScaling {
 template<typename T, int N>
 inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
 {
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
         *(uint4*)dst = (const uint4&)src;
     }
@@ -333,6 +331,13 @@ inline __device__ void Store(T* __restrict__ dst, const Array<T, N>& src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
         *(uint1*)dst = (const uint1&)src;
+    }
+    else if constexpr (sizeof(Array<T, N>) % sizeof(uint4) == 0) {  //  uncoalesced
+        constexpr int M = sizeof(Array<T, N>) / sizeof(uint4);
+        PRAGMA_UNROLL
+        for (int i = 0; i < M; ++i) {
+            *((uint4*)dst + i) = *((uint4*)&src + i);
+        }
     }
     else {
         static_assert(!std::is_same_v<T, T>);
@@ -345,7 +350,6 @@ inline __device__ void Stcs(T* __restrict__ dst, const Array<T, N>& src)
     static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
 
     if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        // *(uint4*)dst = (const uint4&)src;
         __stcs((uint4*)dst, (const uint4&)src);
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
@@ -379,7 +383,7 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
 }
 
 template<typename T, int N>
-inline __device__ void Lds(Array<T, N>& dst, const T* src)
+inline __device__ void Load(Array<T, N>& dst, const T* src)
 {
     static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
 
@@ -391,6 +395,35 @@ inline __device__ void Lds(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
         (uint1&)dst = *(const uint1*)src;
+    }
+    else {
+        static_assert(!std::is_same_v<T, T>);
+    }
+}
+
+template<typename T, int N>
+inline __device__ void Lds(Array<T, N>& dst, const T* src)
+{
+    Load(dst, src);
+}
+
+template<typename T, int N>
+inline __device__ void LdShared(Array<T, N>& dst, uint32_t uintptr)
+{
+    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
+    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
+        uint4& p = (uint4&)dst;
+        // clang-format off
+        asm volatile("ld.shared.v4.b32 {%0,%1,%2,%3}, [%4];\n" : "=r"(p.x), "=r"(p.y), "=r"(p.z), "=r"(p.w) : "r"(uintptr));
+        // clang-format on
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
+        uint2& p = (uint2&)dst;
+        asm volatile("ld.shared.v2.b32 {%0,%1}, [%2];\n" : "=r"(p.x), "=r"(p.y) : "r"(uintptr));
+    }
+    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
+        uint& p = (uint&)dst;
+        asm volatile("ld.shared.b32 %0, [%1];\n" : "=r"(p) : "r"(uintptr));
     }
     else {
         static_assert(!std::is_same_v<T, T>);

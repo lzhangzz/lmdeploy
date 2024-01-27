@@ -26,12 +26,27 @@ struct Impl_m16k8 {
                                               //    1   2    16   8     8   1
     using FragO = Array<float, 4>[V_M][V_N];  // ((q8, d4), (Qm, Dn), (q2, d2))
                                               //    1   2    16   8     8   1
-    using FragM = Array<float, 2>[V_M];       // ((q8, x4), Qm, q2) => FragS with all S dim reduced
+    using FragM = Array<float, 2>[V_M];       // ((q8, _4), Qm, q2) => FragS with all S dim reduced
                                               //    1   0   16   8
     using FragS = FragS_<float>;
     using FragL = FragM;
 
     static constexpr bool kDeferReduceL = false;
+
+    template<class Func>
+    __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)
+    {
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {  // Q
+            PRAGMA_UNROLL
+            for (int q = 0; q < 2; ++q) {
+                const int qi = m * OP_M + lane_id / 4 + q * 8 + (warp_id % kWarpCntQ) * WARP_Q;
+                ((Func&&)func)(0, qi, lane_id % 4, frag_M[m][q], frag_L[m][q]);
+            }
+        }
+    }
 
     template<class Fragment, class Func>
     __device__ static void ForeachS(Fragment& S, Func&& func)
@@ -206,10 +221,10 @@ struct Impl_m16k8 {
 #endif
     }
 
-    template<class Func>
+    template<bool is_norm, class Func>
     __device__ static void StoreO(FragO& frag_O, FragL& frag_L, Func&& func)
     {
-        FragL tmp_L;
+        FragL inv_L;
         PRAGMA_UNROLL
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
@@ -218,7 +233,7 @@ struct Impl_m16k8 {
                     frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 1);
                     frag_L[m][q] += __shfl_xor_sync(uint32_t(-1), frag_L[m][q], 2);
                 }
-                tmp_L[m][q] = fdividef(1.f, frag_L[m][q]);
+                inv_L[m][q] = fdividef(1.f, frag_L[m][q]);
             }
         }
 
@@ -232,13 +247,14 @@ struct Impl_m16k8 {
                 const int qi = m * OP_M + q * 8 + lane_id / 4 + (warp_id % kWarpCntQ) * WARP_Q;
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_N; ++n) {
-                    Array<T, 2> tmp_O;
-                    PRAGMA_UNROLL
-                    for (int d = 0; d < 2; ++d) {
-                        tmp_O[d] = (T)(frag_O[m][n][q * 2 + d] * tmp_L[m][q]);
+                    if constexpr (is_norm) {
+                        PRAGMA_UNROLL
+                        for (int d = 0; d < 2; ++d) {
+                            frag_O[m][n][q * 2 + d] *= inv_L[m][q];
+                        }
                     }
                     const int di = n * 8 + lane_id % 4 * 2;
-                    ((Func&&)func)(warp_id / kWarpCntQ, qi, di, tmp_O);
+                    ((Func&&)func)(warp_id / kWarpCntQ, qi, di, (Array<float, 2>&)frag_O[m][n][q * 2]);
                 }
             }
         }

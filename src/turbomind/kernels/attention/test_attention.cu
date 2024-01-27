@@ -124,24 +124,36 @@ int main(int argc, char* argv[])
     AttentionParams<half> params{};
 
 #if DECODING
-    constexpr int kHeadNum   = 32;
-    constexpr int kBatchSize = 64;
-    // constexpr int kHeadNum     = 8;
-    // constexpr int kBatchSize   = 1;
-    constexpr int kInputLen = 1;
-    // constexpr int kSequenceLen = 1;
+    // constexpr int kHeadNum   = 32;
+    // constexpr int kBatchSize = 64;
+    constexpr int kHeadNum   = 4;
+    constexpr int kBatchSize = 1;
+    constexpr int kInputLen  = 1;
     // constexpr int kSequenceLen = 8191;
-    constexpr int kSequenceLen = 2047;
+    // constexpr int kSequenceLen = 16383;
+    // constexpr int kSequenceLen = 32767;
+    // constexpr int kSequenceLen = 65535;
+    // constexpr int kSequenceLen = 131071;
+    // constexpr int kSequenceLen = 262143;
+    constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
+    // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
+    // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
+    // constexpr int kSequenceLen = 2047;
+    constexpr int kBlockSz   = 128;
+    constexpr int kMaxSplitK = 1024;
 #else
     constexpr int kHeadNum     = 16;
     constexpr int kBatchSize   = 2;
     constexpr int kInputLen    = 8192;
     constexpr int kSequenceLen = 0;
+    // constexpr int kInputLen    = 4096;
+    // constexpr int kSequenceLen = 8192;
+    constexpr int kBlockSz   = 16384;
+    constexpr int kMaxSplitK = 1;
 #endif
 
-    constexpr int kHeadDim = 128;
-    // constexpr int KvHeadNum = kHeadNum;
-    constexpr int KvHeadNum = kHeadNum;
+    constexpr int kHeadDim  = 128;
+    constexpr int KvHeadNum = kHeadNum / 4;
 
     // constexpr int kInputLen    = 4096 - 20;
     // constexpr int kSequenceLen = 32 + 16 + 8 + 4;  // force partial tile
@@ -149,10 +161,10 @@ int main(int argc, char* argv[])
     // constexpr int kInputLen    = 2387;
     // constexpr int kSequenceLen = 72;
     // constexpr int kInputLen    = 98;
+
     constexpr int kContextLen = kSequenceLen + kInputLen;
-    constexpr int kBlockSz    = 16384;
+    constexpr int kTokenNum   = kBatchSize * kInputLen;
     constexpr int kTestIter   = 20;
-    constexpr int kMaxSplitK  = 1;
 
     constexpr int kDump = 0;
 
@@ -170,10 +182,11 @@ int main(int argc, char* argv[])
     thrust::universal_vector<int>  context_length(kBatchSize);
     thrust::universal_vector<int>  cu_seqlens(kBatchSize + 1);
 
-    thrust::universal_vector<float> partial_M(kBatchSize * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_L(kBatchSize * kHeadNum * kMaxSplitK);
-    thrust::universal_vector<float> partial_O(kBatchSize * kHeadNum * kMaxSplitK * kHeadDim);
-    thrust::universal_vector<int>   semaphores(kBatchSize * kHeadNum * kMaxSplitK);
+    thrust::universal_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::universal_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
+    thrust::universal_vector<float> partial_O(kTokenNum * kHeadNum * kMaxSplitK * kHeadDim);
+    thrust::universal_vector<int>   split_cnt(kTokenNum);
+    thrust::universal_vector<int>   semaphores(kTokenNum * kHeadNum * kMaxSplitK);
 
     thrust::universal_vector<half> kv_cache_quant_data(kBatchSize * KvHeadNum * 2 * kContextLen * 2);
     thrust::fill(kv_cache_quant_data.begin(), kv_cache_quant_data.end(), 0);
@@ -236,6 +249,7 @@ int main(int argc, char* argv[])
     params.v      = params.k + KvHeadNum * kHeadDim;
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
 
+    params.token_num     = kTokenNum;
     params.batch_size    = kBatchSize;
     params.max_input_len = kInputLen;
     params.max_seq_len   = kSequenceLen;
@@ -264,6 +278,7 @@ int main(int argc, char* argv[])
     params.rotary_embedding_dim  = kHeadDim;
     params.rotary_embedding_base = 10000.f;
 
+    params.split_cnt = split_cnt.data().get();
     params.partial_L = partial_L.data().get();
     params.partial_M = partial_M.data().get();
     params.partial_O = partial_O.data().get();
@@ -278,7 +293,7 @@ int main(int argc, char* argv[])
     Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
     }
 

@@ -11,7 +11,7 @@
 
 namespace turbomind::attention {
 
-template<class T, class Layout, int WARP_H, int WarpCntS, int M>
+template<class T, class Layout, int M>
 struct SimtSmemIterQ: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
     using Base::Base;
@@ -19,52 +19,55 @@ struct SimtSmemIterQ: BaseSmemIterator<T, Layout> {
 
     __device__ void Load(Array<T, 8> (&frag_Q)[M], int k)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
         PRAGMA_UNROLL
         for (int m = 0; m < M; ++m) {
-            const int hi = m + warp_id / WarpCntS * WARP_H;
+            const int hi = m;  // + warp_id / WarpCntS;
             const int di = k * 64 + lane_id % 8 * 8;
             Lds(frag_Q[m], swizzle_ptr(hi, di));
         }
     }
 };
 
-template<class T, class Layout, int WARP_S, int WarpCntS, int N>
+template<class T, class Layout, int WARP_S, int N>
 struct SimtSmemIterK: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
     using Base::Base;
-    using Base::swizzle_ptr;
+    using Base::smem_;
 
     __device__ void Load(Array<T, 8> (&frag_K)[N], int k, int offset)
     {
-        const int warp_id = (threadIdx.x / WARP_SIZE) % 4;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int warp_id  = threadIdx.x / WARP_SIZE;
+        const int lane_id  = threadIdx.x % WARP_SIZE;
+        const int offset_s = lane_id / 8 + warp_id * WARP_S;
+        const int offset_c = lane_id % 8 * 8;
         PRAGMA_UNROLL
         for (int n = 0; n < N; ++n) {
-            const int si = n * +4 + lane_id / 8 + warp_id % WarpCntS * WARP_S;
-            const int di = k * 64 + lane_id % 8 * 8;
-            Lds(frag_K[n], offset + swizzle_ptr(si, di));
+            const int si = n * 4 + offset_s;
+            const int di = k * 64 + offset_c;
+            LdShared(frag_K[n], offset + Layout::apply(si, di));
         }
     }
 };
 
-template<class T, class Layout, int WARP_S, int WarpCntS, int N>
+template<class T, class Layout, int WARP_S, int N>
 struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
     using Base = BaseSmemIterator<T, Layout>;
     using Base::Base;
-    using Base::swizzle_ptr;
+    using Base::smem_;
 
     __device__ void Load(Array<T, 8> (&frag_V)[N], int k, int offset)
     {
-        const int warp_id = threadIdx.x / WARP_SIZE;
-        const int lane_id = threadIdx.x % WARP_SIZE;
+        const int warp_id  = threadIdx.x / WARP_SIZE;
+        const int lane_id  = threadIdx.x % WARP_SIZE;
+        const int offset_s = lane_id / 8 + warp_id * WARP_S;
+        const int offset_c = lane_id % 8 * 8;
         PRAGMA_UNROLL
         for (int n = 0; n < N; ++n) {
-            const int si = k * +4 + lane_id / 8 + warp_id % WarpCntS * WARP_S;
-            const int di = n * 64 + lane_id % 8 * 8;
-            Lds(frag_V[n], offset + swizzle_ptr(si, di));
+            const int si = k * 4 + offset_s;
+            const int di = n * 64 + offset_c;
+            LdShared(frag_V[n], offset + Layout::apply(si, di));
         }
     }
 };
@@ -86,9 +89,9 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     static constexpr int kWarpCntQ = CTA_Q / WARP_Q;
     static constexpr int kWarpCntS = CTA_S / WARP_S;
 
-    static constexpr int kWarpCount = kWarpCntH * kWarpCntQ * kWarpCntS;
+    static constexpr int kWarpCount = kWarpCntQ * kWarpCntS;
 
-    // static_assert(kWarpCntH == 2 && kWarpCntQ == 1 && kWarpCntS == 4);
+    static_assert(CTA_H_ == WARP_H_);
 
     static_assert(kWarpCntQ == 1);
 
@@ -157,12 +160,11 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         T P[1];
     };
 
-    using SmemIterQ = NullSmemIter<T>;
-    // using SmemIterQ = SimtSmemIterQ<T, SmemLayoutQ, WARP_H, kWarpCntS, K_M>;
-    using SmemIterP = NullSmemIter<T>;
+    using SmemIterQ = T*;
+    using SmemIterP = T*;
 
-    using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, kWarpCntS, K_N>;
-    using SmemIterV = SimtSmemIterV<T, SmemLayoutV, WARP_S, kWarpCntS, V_N>;
+    using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, K_N>;
+    using SmemIterV = SimtSmemIterV<T, SmemLayoutV, WARP_S, V_N>;
 
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
@@ -174,6 +176,15 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     {
         if constexpr (kWarpCntH > 1) {
             __syncthreads();
+        }
+    }
+
+    template<class Func>
+    __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)
+    {
+        PRAGMA_UNROLL
+        for (int m = 0; m < K_M; ++m) {  // Q
+            ((Func&&)func)(m * OP_H, 0, threadIdx.x, frag_M[m][0], frag_L[m][0]);
         }
     }
 
@@ -195,7 +206,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         }
     }
 
-    __device__ static void TransformQ(const T* smem_Q, FragQ& frag_Q)
+    __device__ static void TransformQ(T* smem_Q, FragQ& frag_Q)
     {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
@@ -204,32 +215,37 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
         __syncthreads();
 
+        SmemAccessor<T, SmemLayoutQ> sQ{smem_Q};
+
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
                 const int hi = m + warp_id_h * WARP_H;
                 const int di = k * 64 + lane_id % 8 * 8;
-                Lds(frag_Q[k][m], &smem_Q[SmemLayoutQ::swizzle(hi, di)]);
+                Lds(frag_Q[k][m], &sQ(hi, di));
             }
         }
     }
 
-    template<class SmemQ, class SmemK>
-    __device__ static void ComputeQK(SmemQ& smem_Q, SmemK& smem_K, FragQ& frag_Q, FragS& frag_S, int offset)
+    template<class SmemQ, class SmemK, class Prefetch, class Preload>
+    __device__ static void ComputeQK(SmemQ&     smem_Q,
+                                     SmemK&     smem_K,
+                                     FragQ&     frag_Q,
+                                     FragK&     frag_K,
+                                     FragS&     frag_S,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
-        FragK frag_K;
-        smem_K.Load(frag_K[0], 0, offset);
-        // if constexpr (kUseSmemQ) {
-        //     smem_Q.Load(frag_Q[0], 0);
-        // }
+
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
             if (k < K_K - 1) {
                 smem_K.Load(frag_K[k + 1], k + 1, offset);
-                // if constexpr (kUseSmemQ) {
-                //     smem_Q.Load(frag_Q[k + 1], k + 1);
-                // }
+            }
+            else {
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
@@ -240,6 +256,12 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
                         frag_S[m][n][0] += static_cast<float>((Tqk)frag_Q[k][m][c] * (Tqk)frag_K[k][n][c]);
                     }
                 }
+            }
+            if (k < K_K - 1) {
+                ((Prefetch&&)prefetch)(k);
+            }
+            if (k == K_K - 2) {
+                ((Prefetch&&)prefetch)(K_K - 1);
             }
         }
 
@@ -254,16 +276,23 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         }
     }
 
-    template<class SmemP, class SmemV>
-    __device__ static void ComputePV(SmemP&, SmemV& smem_V, const FragP& frag_P, FragO& frag_O, int offset)
+    template<class SmemP, class SmemV, class Prefetch, class Preload>
+    __device__ static void ComputePV(SmemP&,
+                                     SmemV&     smem_V,
+                                     FragP&     frag_P,
+                                     FragV&     frag_V,
+                                     FragO&     frag_O,
+                                     int        offset,
+                                     Prefetch&& prefetch,
+                                     Preload&&  preload)
     {
-        FragV frag_V;
-        smem_V.Load(frag_V[0], 0, offset);
-
         PRAGMA_UNROLL
         for (int k = 0; k < V_K; ++k) {
             if (k < V_K - 1) {
                 smem_V.Load(frag_V[k + 1], k + 1, offset);
+            }
+            else {
+                ((Preload&&)preload)();
             }
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {
@@ -275,13 +304,18 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
                     }
                 }
             }
+            if (k < V_K - 1) {
+                ((Prefetch&&)prefetch)(k);
+            }
+            if (k == V_K - 2) {
+                ((Prefetch&&)prefetch)(V_K - 1);
+            }
         }
     }
 
     template<bool is_residue>
     __device__ static void Softmax(FragS& frag_S, FragM& frag_M, FragL& frag_L, FragO& frag_O, float qk_scale)
     {
-
         FragM prev_M;
         copy(frag_M, prev_M);
 
@@ -433,7 +467,7 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         }
     }
 
-    template<class Func>
+    template<bool is_norm, class Func>
     __device__ static void StoreO(FragO& frag_O, const FragL& frag_L, Func&& func)
     {
         FragL inv_L;
@@ -457,15 +491,17 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
         for (int m = 0; m < V_M; ++m) {
             PRAGMA_UNROLL
             for (int n = 0; n < V_N; ++n) {
-                Array<T, 8> tmp_O;
-                PRAGMA_UNROLL
-                for (int d = 0; d < 8; ++d) {
-                    tmp_O[d] = static_cast<T>(frag_O[m][n][d] * inv_L[m][0]);
+                if constexpr (is_norm) {
+                    PRAGMA_UNROLL
+                    for (int d = 0; d < 8; ++d) {
+                        frag_O[m][n][d] *= inv_L[m][0];
+                    }
                 }
+
                 if (lane_id < 8) {
                     const int hi = m * OP_H + warp_id_h * WARP_H;
                     const int di = n * OP_D + lane_id % 8 * 8;
-                    ((Func&&)func)(hi, 0, di, tmp_O);
+                    ((Func&&)func)(hi, 0, di, frag_O[m][n]);
                 }
             }
         }

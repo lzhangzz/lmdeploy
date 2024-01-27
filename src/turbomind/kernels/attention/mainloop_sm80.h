@@ -42,6 +42,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
     static constexpr int CTA_S = Impl::CTA_S;
 
+    static constexpr auto kBatchKV = ThreadMapKV::kIterS / 2;
+
     static constexpr int kTileSizeKV = CTA_S * Impl::SmemLayoutK::kStride;
     static constexpr int kSmemSizeKV = Stages * kTileSizeKV;
 
@@ -49,7 +51,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     {
         auto ret = offset;
         offset += sizeof(Tkv) * kTileSizeKV;
-        if (offset >= sizeof(Tkv) * kSmemSizeKV) {
+        if (offset == sizeof(Tkv) * kSmemSizeKV) {
             offset -= sizeof(Tkv) * kSmemSizeKV;
         }
         return ret;
@@ -118,8 +120,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
         FragK frag_K;
         FragV frag_V;
 
-        __pipeline_wait_prior(Stages - 2);
-        Impl::Sync();
+        Wait();
 
         auto rk = SmemKVStep(kv_offset_r);
         smem_K.Load(frag_K[0], 0, rk);
@@ -133,12 +134,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             auto wk = SmemKVStep(kv_offset_w);
 
             auto prefetch_K = [&](int k) {
-                constexpr int kBatch = ThreadMapKV::kIterS / 2;
-                const int     begin  = k * kBatch;
+                const int begin = k * kBatchKV;
                 if (begin < ThreadMapKV::kIterS) {
-                    gmem_K.Prefetch<false>(block_iter, begin, kBatch, CTA_S, wk);
+                    gmem_K.Prefetch<false>(block_iter, begin, kBatchKV, CTA_S, wk);
                 }
-                if (begin + kBatch == ThreadMapKV::kIterS) {
+                if (begin + kBatchKV == ThreadMapKV::kIterS) {
                     __pipeline_commit();
                 }
             };
@@ -162,12 +162,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             auto wv = SmemKVStep(kv_offset_w);
 
             auto prefetch_V = [&](int k) {
-                constexpr int kBatch = ThreadMapKV::kIterS / 2;
-                const int     begin  = k * kBatch;
+                const int begin = k * kBatchKV;
                 if (begin < ThreadMapKV::kIterS) {
-                    gmem_V.Prefetch<false>(block_iter, begin, kBatch, CTA_S, wv);
+                    gmem_V.Prefetch<false>(block_iter, begin, kBatchKV, CTA_S, wv);
                 }
-                if (begin + kBatch == ThreadMapKV::kIterS) {
+                if (begin + kBatchKV == ThreadMapKV::kIterS) {
                     block_iter.Advance();
                     __pipeline_commit();
                 }
