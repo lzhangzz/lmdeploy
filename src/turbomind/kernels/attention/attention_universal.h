@@ -48,17 +48,25 @@ struct AttentionUniversal {
 
     using SeparateReduce = attention::Reduce<T, 1, kHeadDim, 4>;
 
-    __device__ void LoadQ(const ParamType& params,
-                          T*               smem_Q,
-                          FragQ&           frag_Q,
-                          int              qi_begin,
-                          int              qi_end,
-                          int              query_idx,
-                          int              head_idx,
-                          int              batch_idx,
-                          int              warp_id,
-                          int              lane_id)
+    __device__ void Prologue(const ParamType& params,
+                             T*               smem_Q,
+                             FragQ&           frag_Q,
+                             int              qi_begin,
+                             int              qi_end,
+                             int              query_idx,
+                             int              head_idx,
+                             int              kv_head_idx,
+                             int              batch_idx,
+                             Tkv**            block_ptrs,
+                             BlockSeqLen      block_seq_len,
+                             int              local_k_offset,
+                             int              local_v_offset,
+                             int              history_len,
+                             int              warp_id,
+                             int              lane_id)
     {
+        constexpr bool kProcessKV = CTA_Q == 1;
+
         using Map = typename Impl::ThreadMapQ;
 
         constexpr int kVecSize = Map::kAccessC;
@@ -68,7 +76,9 @@ struct AttentionUniversal {
         constexpr int ITER_C = Map::kIterC;
         constexpr int ITER_S = Map::kIterS;
 
-        Vec vec_Q[ITER_S][ITER_C];
+        Vec vec_Q[ITER_S][ITER_C]{};
+        Vec vec_K[ITER_S][ITER_C];
+        Vec vec_V[ITER_S][ITER_C];
 
         const int2 offset = Map::get_offset(warp_id, lane_id);
 
@@ -80,30 +90,56 @@ struct AttentionUniversal {
             const int hi = si / CTA_Q + head_idx;
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int di = offset.x + c * Map::kDeltaC;
+                const int di    = offset.x + c * Map::kDeltaC;
+                const int q_idx = qi * params.stride + hi * kHeadDim + di;
+                const int k_idx = qi * params.stride + kv_head_idx * kHeadDim + di;
                 if (qi < qi_end) {
-                    Ldg(vec_Q[s][c], &params.q[qi * params.stride + hi * kHeadDim + di]);
-                }
-                else {
-                    clear(vec_Q[s][c]);
+                    Ldg(vec_Q[s][c], &params.q[q_idx]);
+                    if constexpr (kProcessKV) {
+                        Ldg(vec_K[s][c], &params.k[k_idx]);
+                        Ldg(vec_V[s][c], &params.v[k_idx]);
+                    }
                 }
             }
         }
 
-        // Optionally apply bias to Q
-        if (params.q_bias) {
-            Vec bias_Q[ITER_C];
+        Vec bias_Q[ITER_C];
+        Vec bias_K[ITER_C];
+        Vec bias_V[ITER_C];
+
+        PRAGMA_UNROLL
+        for (int c = 0; c < ITER_C; ++c) {
+            const int di    = offset.x + c * Map::kDeltaC;
+            const int q_idx = head_idx * kHeadDim + di;
+            const int k_idx = kv_head_idx * kHeadDim + di;
+            if (params.q_bias) {
+                Ldg(bias_Q[c], &params.q_bias[q_idx]);
+            }
+            if constexpr (kProcessKV) {
+                if (params.k_bias) {
+                    Ldg(bias_K[c], &params.k_bias[k_idx]);
+                }
+                if (params.v_bias) {
+                    Ldg(bias_V[c], &params.v_bias[k_idx]);
+                }
+            }
+        }
+
+        PRAGMA_UNROLL
+        for (int s = 0; s < ITER_S; ++s) {
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                const int di = offset.x + c * Map::kDeltaC;
-                Ldg(bias_Q[c], &params.q_bias[head_idx * kHeadDim + di]);
-            }
-            using namespace ops;
-            PRAGMA_UNROLL
-            for (int s = 0; s < ITER_S; ++s) {
-                PRAGMA_UNROLL
-                for (int c = 0; c < ITER_C; ++c) {
+                using namespace ops;
+                if (params.q_bias) {
                     vec_Q[s][c] = vec_Q[s][c] + bias_Q[c];
+                }
+                if constexpr (kProcessKV) {
+                    if (params.k_bias) {
+                        vec_K[s][c] = vec_K[s][c] + bias_K[c];
+                    }
+                    if (params.v_bias) {
+                        vec_V[s][c] = vec_V[s][c] + bias_V[c];
+                    }
                 }
             }
         }
@@ -119,6 +155,24 @@ struct AttentionUniversal {
                     RotaryEmbedding<kVecSize> rope(10000.f, kHeadDim, qi, {di, 0});
                     rope.apply(vec_Q[s][c]);
                 }
+            }
+        }
+
+        if constexpr (kProcessKV) {
+            static_assert(ITER_S == 1);
+            const int              ti           = history_len;
+            const int              block_index  = ti >> (31 - __clz(block_seq_len));
+            const int              block_offset = ti & (block_seq_len - 1);
+            Tkv*                   block        = block_ptrs[block_index];
+            ConvertKvCache<T, Tkv> transform_K{params.kv_quant_params[0], params.kv_quant_params[1]};
+            ConvertKvCache<T, Tkv> transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
+            PRAGMA_UNROLL
+            for (int c = 0; c < ITER_C; ++c) {
+                int       di    = offset.x + c * Map::kDeltaC;
+                const int idx_k = local_k_offset + block_offset * kHeadDim + di;
+                const int idx_v = local_v_offset + block_offset * kHeadDim + di;
+                Store(&block[idx_k], transform_K(vec_K[0][c]));
+                Store(&block[idx_v], transform_V(vec_V[0][c]));
             }
         }
 
@@ -178,17 +232,17 @@ struct AttentionUniversal {
         const int qi_begin = params.cu_seqlens[batch_idx] + query_idx;  // global offset into `cu_seqlens`
         const int qi_end   = params.cu_seqlens[batch_idx + 1];
 
-        FragQ frag_Q;
-        LoadQ(params, storage.Q, frag_Q, qi_begin, qi_end, query_idx, head_idx, batch_idx, warp_id, lane_id);
+        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
+
+        // [L, 2, H, s, D]
+        const int local_k_offset = params.key_offset + kv_head_idx * block_seq_len * kHeadDim;
+        const int local_v_offset = params.val_offset + kv_head_idx * block_seq_len * kHeadDim;
+
+        const auto k_cache_ptrs = (Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
 
         const int input_len   = params.input_length[batch_idx];
         const int context_len = params.context_length[batch_idx];
         const int history_len = context_len - input_len;
-        const int offset_Q    = history_len + query_idx;
-
-        const auto k_cache_ptrs = (const Tkv**)params.k_cache_block_ptrs + params.cu_block_cnts[batch_idx];
-
-        const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
 
         const int tile_count = (history_len + min(query_idx + CTA_Q, input_len) + CTA_S - 1) / CTA_S;
 
@@ -200,20 +254,37 @@ struct AttentionUniversal {
             return;
         }
 
+        FragQ frag_Q;
+        Prologue(params,
+                 storage.Q,
+                 frag_Q,
+                 qi_begin,
+                 qi_end,
+                 query_idx,
+                 head_idx,
+                 kv_head_idx,
+                 batch_idx,
+                 k_cache_ptrs,
+                 block_seq_len,
+                 local_k_offset,
+                 local_v_offset,
+                 history_len,
+                 warp_id,
+                 lane_id);
+
+        const int offset_Q = history_len + query_idx;
+
         int tile_iter = iter_end - iter_begin - 1;
         int mask_iter = 1;
 
-        // [L, 2, H, s, D]
-        const int local_key_offset = params.key_offset + kv_head_idx * block_seq_len * kHeadDim;
-        const int local_val_offset = params.val_offset + kv_head_idx * block_seq_len * kHeadDim;
-
-        GmemIterK gmem_K{local_key_offset, warp_id, lane_id};
-        GmemIterV gmem_V{local_val_offset, warp_id, lane_id};
+        GmemIterK gmem_K{local_k_offset, warp_id, lane_id};
+        GmemIterV gmem_V{local_v_offset, warp_id, lane_id};
 
         TransformK transform_K{params.kv_quant_params[0], params.kv_quant_params[1]};
         TransformV transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
 
-        Block<Tkv, CTA_S, BlockSeqLen> block_iter(k_cache_ptrs + iter_begin * CTA_S / block_seq_len, block_seq_len);
+        Block<Tkv, CTA_S, BlockSeqLen> block_iter((const Tkv**)k_cache_ptrs + iter_begin * CTA_S / block_seq_len,
+                                                  block_seq_len);
 
         __align__(16) FragO frag_O{};
 

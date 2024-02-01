@@ -160,8 +160,8 @@ int main(int argc, char* argv[])
 #if DECODING
     // constexpr int kHeadNum   = 32;
     // constexpr int kBatchSize = 64;
-    constexpr int kHeadNum     = 2;
-    constexpr int kBatchSize   = 2;
+    constexpr int kHeadNum     = 32;
+    constexpr int kBatchSize   = 8;
     constexpr int kInputLen    = 1;
     constexpr int kSequenceLen = 8191;
     // constexpr int kSequenceLen = 16383;
@@ -197,7 +197,7 @@ int main(int argc, char* argv[])
 #endif
 
     constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum;
+    constexpr int KvHeadNum = kHeadNum / 4;
 
     static_assert(KvHeadNum > 0);
 
@@ -400,10 +400,11 @@ int main(int argc, char* argv[])
     std::vector<thrust::universal_vector<half>> outputs;
 
     for (int i = 0; i < std::max(kTestIter, 1); ++i) {
-        invokeProcessKV_<half>(params);
+
 #if DECODING
         dispatchDecoding<half>(params);
 #else
+        invokeProcessKV_<half>(params);
         dispatchAttention<half>(params);
 #endif
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
@@ -473,7 +474,7 @@ int main(int argc, char* argv[])
             kHeadNum * kHeadDim,
             kHeadNum * kHeadDim,
             kBatchSize * kInputLen,
-            1);
+            0);
 
     // [BH, SD]
     Compare(k_cache.data().get() + kSequenceLen * kHeadDim,
