@@ -141,7 +141,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
     cudaDeviceSynchronize();
 
-    if (0) {
+    if (1) {
         std::cout << ">>> Compare\n";
         Compare(
             kv_cache_2.data().get(), kv_cache.data().get(), head_dim, head_dim, batch_size * 2 * head_num * seq_len, 0);
@@ -151,7 +151,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
 
 #define KV_INT8 0
 
-#define DECODING 1
+#define DECODING 0
 
 int main(int argc, char* argv[])
 {
@@ -182,10 +182,8 @@ int main(int argc, char* argv[])
     constexpr int kSequenceLen = 0;
     // constexpr int kInputLen    = 4096;
     // constexpr int kSequenceLen = 8192;
-    constexpr int kBlockSz     = 16384;
-    constexpr int kMaxSplitK   = 1;
-    constexpr int kQuantPolicy = 0;
-    using Tkv                  = half;
+    constexpr int kBlockSz   = 16384;
+    constexpr int kMaxSplitK = 1;
 #endif
 
 #if KV_INT8
@@ -197,7 +195,7 @@ int main(int argc, char* argv[])
 #endif
 
     constexpr int kHeadDim  = 128;
-    constexpr int KvHeadNum = kHeadNum / 4;
+    constexpr int KvHeadNum = kHeadNum;
 
     static_assert(KvHeadNum > 0);
 
@@ -218,6 +216,8 @@ int main(int argc, char* argv[])
 
     thrust::universal_vector<half> k_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
     thrust::universal_vector<half> v_cache(kBatchSize * KvHeadNum * kContextLen * kHeadDim);
+
+    thrust::universal_vector<half> kv_cache(KvHeadNum * 2 * kBatchSize * kContextLen * kHeadDim);
 
     thrust::universal_vector<half> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
     thrust::universal_vector<half> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
@@ -313,16 +313,19 @@ int main(int argc, char* argv[])
 
     // getchar();
 
-    params.out    = output_ref.data().get();
-    params.q      = qkv.data().get();
-    params.k      = params.q + kHeadNum * kHeadDim;
-    params.v      = params.k + KvHeadNum * kHeadDim;
+    params.out = output_ref.data().get();
+    params.q   = qkv.data().get();
+    params.k   = params.q + kHeadNum * kHeadDim;
+    params.v   = params.k + KvHeadNum * kHeadDim;
+
     params.stride = (kHeadNum + 2 * KvHeadNum) * kHeadDim;
+
+    params.kv = kv_cache.data().get();
 
     params.token_num     = kTokenNum;
     params.batch_size    = kBatchSize;
-    params.max_input_len = kInputLen;
-    params.max_seq_len   = kSequenceLen;
+    params.max_q_len     = kInputLen;
+    params.max_k_len     = kContextLen;
     params.cu_block_cnts = cu_block_cnts.data().get();
 
     params.k_cache_block_ptrs  = (void**)k_ptrs.data().get();
@@ -337,7 +340,8 @@ int main(int argc, char* argv[])
     params.finished       = finished.data().get();
     params.input_length   = input_length.data().get();
     params.context_length = context_length.data().get();
-    params.cu_seqlens     = cu_seqlens.data().get();
+    params.cu_q_len       = cu_seqlens.data().get();
+    params.cu_k_len       = cu_kv_lens.data().get();
     // params.layer_offset   = 0;
     // [L, 2, H, s, D]
     params.key_offset = 0;
@@ -405,6 +409,24 @@ int main(int argc, char* argv[])
         dispatchDecoding<half>(params);
 #else
         invokeProcessKV_<half>(params);
+        invokeFlattenKV(kv_cache.data().get(),  // [H, 2, cuS, D]
+                        kv_cache.data().get() + cu_kv_lens[kBatchSize] * kHeadDim,
+                        (const void**)k_ptrs.data().get(),
+                        cu_kv_lens.data().get(),
+                        cu_block_cnts.data().get(),
+                        context_length.data().get(),
+                        0,
+                        1,
+                        2 * cu_kv_lens[kBatchSize],
+                        1,
+                        kBlockSz,
+                        0,
+                        KvHeadNum * kBlockSz * kHeadDim,
+                        kContextLen,
+                        KvHeadNum,
+                        kBatchSize,
+                        kQuantPolicy,
+                        quant_params_kv.data());
         dispatchAttention<half>(params);
 #endif
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
@@ -456,7 +478,6 @@ int main(int argc, char* argv[])
                     kBatchSize,
                     kQuantPolicy,
                     quant_params_kv.data());
-
     cudaDeviceSynchronize();
 
     if (outputs.size() > 1) {

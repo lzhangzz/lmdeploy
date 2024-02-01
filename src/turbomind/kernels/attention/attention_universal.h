@@ -229,8 +229,8 @@ struct AttentionUniversal {
         const int warp_id = threadIdx.x / WARP_SIZE;
         const int lane_id = threadIdx.x % WARP_SIZE;
 
-        const int qi_begin = params.cu_seqlens[batch_idx] + query_idx;  // global offset into `cu_seqlens`
-        const int qi_end   = params.cu_seqlens[batch_idx + 1];
+        const int qi_begin = params.cu_q_len[batch_idx] + query_idx;  // global offset into `cu_seqlens`
+        const int qi_end   = params.cu_q_len[batch_idx + 1];
 
         const int kv_head_idx = head_idx * params.num_kv_heads / params.num_heads;
 
@@ -275,16 +275,30 @@ struct AttentionUniversal {
         const int offset_Q = history_len + query_idx;
 
         int tile_iter = iter_end - iter_begin - 1;
-        int mask_iter = 1;
+        int mask_iter = (CTA_Q + CTA_S - 1) / CTA_S + 1;
 
-        GmemIterK gmem_K{local_k_offset, warp_id, lane_id};
-        GmemIterV gmem_V{local_v_offset, warp_id, lane_id};
+        GmemIterK gmem_K{warp_id, lane_id};
+        GmemIterV gmem_V{warp_id, lane_id};
 
         TransformK transform_K{params.kv_quant_params[0], params.kv_quant_params[1]};
         TransformV transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
 
-        Block<Tkv, CTA_S, BlockSeqLen> block_iter((const Tkv**)k_cache_ptrs + iter_begin * CTA_S / block_seq_len,
-                                                  block_seq_len);
+        auto block_iter = [&] {
+            if constexpr (CTA_Q == 1) {
+                // [H, s, D]
+                auto block_ptrs = (const Tkv**)k_cache_ptrs + iter_begin * CTA_S / block_seq_len;
+                return BlockTileIter<Tkv, CTA_S, kHeadDim, BlockSeqLen>{
+                    block_ptrs, block_seq_len, {local_k_offset, local_v_offset}};
+            }
+            else {
+                // [H, 2, cuS, D]
+                const int total_k  = params.cu_k_len[params.batch_size];
+                const int offset_k = params.cu_k_len[batch_idx];
+                const int stride_h = 2 * total_k * kHeadDim;
+                return LinearTileIter2<Tkv, CTA_S, kHeadDim>{
+                    (const Tkv*)params.kv + stride_h * kv_head_idx + offset_k * kHeadDim, total_k * kHeadDim};
+            }
+        }();
 
         __align__(16) FragO frag_O{};
 
@@ -390,9 +404,9 @@ struct AttentionUniversal {
             Impl::ForeachS(frag_S, [&](int hi, int qi, int si, float score) {
                 qi += query_idx;
                 si += offset_K;
-                if (qi < params.max_input_len && si < max_context_len) {
-                    params.qk[batch_idx * params.num_heads * params.max_input_len * max_context_len
-                              + (head_idx + hi) * params.max_input_len * max_context_len + qi * max_context_len + si] =
+                if (qi < params.max_q_len && si < max_context_len) {
+                    params.qk[batch_idx * params.num_heads * params.max_q_len * max_context_len
+                              + (head_idx + hi) * params.max_q_len * max_context_len + qi * max_context_len + si] =
                         score;
                 }
             });

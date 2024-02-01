@@ -11,7 +11,7 @@ namespace turbomind {
 #define L2_CACHEHINT(size)
 #endif
 
-template<class T, class Map, class SmemLayout>
+template<class T, class Map, class SmemLayout, int Idx>
 struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
     using Base = BaseGmemIterator<T, Map, SmemLayout>;
@@ -20,17 +20,16 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
 
     using Base::Base;
     using Base::kElementSize;
-    using Base::local_offset_;
     using Base::src_offset_;
     using Base::dst_offset_;
     using Base::offset_c_;
     using Base::offset_s_;
     using Base::smem_;
 
-    template<bool is_residue, class BlockIter>
-    __device__ void Prefetch(const BlockIter& block_iter, int s_begin, int s_count, int max_s, int offset)
+    template<bool is_residue, class TileIter>
+    __device__ void Prefetch(const TileIter& tile_iter, int s_begin, int s_count, int max_s, int offset)
     {
-        auto src_data = block_iter.block + local_offset_ + block_iter.local_id * Map::kDimS * Map::kDimC + src_offset_;
+        auto src_data = tile_iter.OffsetData<Idx>(src_offset_);
 
         PRAGMA_UNROLL
         for (int s = s_begin; s < s_begin + s_count; ++s) {
@@ -39,19 +38,19 @@ struct Sm80GmemIterator: BaseGmemIterator<T, Map, SmemLayout> {
                 auto dst = SmemLayout::apply(offset_s_ + s * Map::kDeltaS, offset_c_ + c * Map::kDeltaC);
                 auto src = &src_data[s * Map::kDeltaS * Map::kDimC + c * Map::kDeltaC];
                 if constexpr (is_residue) {
-                    CpAsync(dst + offset, src, offset_s_ + s * Map::kDeltaS < max_s);
+                    CpAsync(dst + offset, (const T*)src, offset_s_ + s * Map::kDeltaS < max_s);
                 }
                 else {
-                    CpAsync(dst + offset, src);
+                    CpAsync(dst + offset, (const T*)src);
                 }
             }
         }
     }
 
-    template<bool is_residue, class BlockIter>
-    __device__ void Prefetch(const BlockIter& block_iter, int max_s, int offset)
+    template<bool is_residue, class TileIter>
+    __device__ void Prefetch(const TileIter& tile_iter, int max_s, int offset)
     {
-        Prefetch<is_residue>(block_iter, 0, Map::kIterS, max_s, offset);
+        Prefetch<is_residue>(tile_iter, 0, Map::kIterS, max_s, offset);
     }
 
     __device__ void CpAsync(int dst, const T* __restrict__ src, bool mask)

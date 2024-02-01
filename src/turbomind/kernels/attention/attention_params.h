@@ -19,9 +19,11 @@ struct AttentionParams {
     T* k_bias;
     T* v_bias;
 
-    const int* cu_seqlens;
+    const void* kv;
 
     // sequence-level buffers
+    const int*   cu_q_len;
+    const int*   cu_k_len;
     const int*   context_length;
     const int*   input_length;
     const bool*  finished;
@@ -45,8 +47,8 @@ struct AttentionParams {
     // batch-level params
     int token_num;
     int batch_size;
-    int max_input_len;
-    int max_seq_len;
+    int max_q_len;
+    int max_k_len;
 
     // instance-level params
     int   num_heads;
@@ -62,7 +64,7 @@ struct AttentionParams {
     // log(n) attention
     bool use_logn_attn;
 
-    int quant_policy;
+    int   quant_policy;
     float kv_quant_params[4];
 
     int    max_split_k;

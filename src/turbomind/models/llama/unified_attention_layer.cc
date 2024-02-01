@@ -441,7 +441,7 @@ void UnifiedAttentionLayer<T>::decode(T*                output,
     max_split_k = std::max(1, (int)std::ceil(max_split_k / avg_batch_size));
 
     params.max_split_k = max_split_k;
-    params.max_seq_len = dc_max_seq_len;
+    params.max_k_len   = dc_max_seq_len;
 
     params.arch   = arch_;
     params.stream = stream_;

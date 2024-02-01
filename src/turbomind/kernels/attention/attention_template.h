@@ -27,7 +27,7 @@ void invokeAttention(const typename Kernel::ParamType& params)
     using CtaMap = typename Kernel::CtaMap;
 
     dim3 grid =
-        CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_input_len, Kernel::CTA_H, Kernel::CTA_Q);
+        CtaMap::get_grid_shape(params.num_heads, params.batch_size, params.max_q_len, Kernel::CTA_H, Kernel::CTA_Q);
 
     auto err =
         cudaFuncSetAttribute(attention_kernel<Kernel>, cudaFuncAttributeMaxDynamicSharedMemorySize, kDynamicSmemSize);

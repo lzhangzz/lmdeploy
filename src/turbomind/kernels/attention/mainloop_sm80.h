@@ -26,8 +26,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     using SmemIterV = typename Impl::SmemIterV;
 
     using ThreadMapKV = typename Impl::ThreadMapKV;
-    using GmemIterK   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK>;
-    using GmemIterV   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV>;
+    using GmemIterK   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK, 0>;
+    using GmemIterV   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV, 1>;
 
     using TransformK = typename Impl::TransformK;
     using TransformV = typename Impl::TransformV;
@@ -185,7 +185,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             });
         };
 
-        PRAGMA_UNROLL
+        // PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
             loop(std::true_type{}, std::true_type{});
         }
@@ -277,7 +277,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             });
         };
 
-        PRAGMA_UNROLL
+        // PRAGMA_UNROLL
         for (; tile_iter >= 0 && mask_iter != 0; --tile_iter, --mask_iter) {
             loop(std::true_type{}, std::true_type{});
         }

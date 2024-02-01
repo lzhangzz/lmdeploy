@@ -37,7 +37,7 @@ void invokeProcessKV_(const AttentionParams<T>& params)
                     params.v,
                     params.k_bias,
                     params.v_bias,
-                    params.cu_seqlens,
+                    params.cu_q_len,
                     params.cu_block_cnts,
                     params.context_length,
                     0,                                     // stride b
@@ -47,7 +47,7 @@ void invokeProcessKV_(const AttentionParams<T>& params)
                     params.kv_cache_block_size,
                     params.key_offset,
                     params.val_offset,
-                    params.max_seq_len,
+                    params.max_q_len,
                     params.num_kv_heads,
                     params.batch_size,
                     params.quant_policy,

@@ -21,7 +21,7 @@ void invokeDecoding(const typename Kernel::ParamType& params)
         return 0;
     }();
 
-    const int tile_count      = (params.max_seq_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
+    const int tile_count      = (params.max_k_len + Kernel::CTA_S - 1) / Kernel::CTA_S;
     const int max_split_count = std::min(params.max_split_k, tile_count);
 
     dim3 block(Kernel::kWarpCount * WARP_SIZE);

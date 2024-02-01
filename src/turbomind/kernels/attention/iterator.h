@@ -21,14 +21,12 @@ struct BaseGmemIterator {
 
     T* smem_;
 
-    const int local_offset_;
-
     int src_offset_;
     int dst_offset_;
     int offset_c_;
     int offset_s_;
 
-    __device__ BaseGmemIterator(int local_offset, int warp_id, int lane_id): local_offset_{local_offset}
+    __device__ BaseGmemIterator(int warp_id, int lane_id)
     {
         int2 offsets = Map::get_offset(warp_id, lane_id);
         src_offset_  = offsets.x + offsets.y * Map::kDimC;
@@ -136,8 +134,8 @@ struct BaseSmemIterator {
     __device__ explicit BaseSmemIterator(T* smem): smem_{smem} {}
 };
 
-template<class T, int CTA_S, class BlockSeqLen>
-struct Block {
+template<class T, int CTA_S, int HeadDim, class BlockSeqLen>
+struct BlockTileIter {
 
     const int tiles_per_block_;
     const T** block_ptrs_;
@@ -147,8 +145,10 @@ struct Block {
     const T* block;
     int      local_id;
 
-    __device__ Block(const T** block_ptrs, BlockSeqLen block_seqlen):
-        block_ptrs_{block_ptrs}, tiles_per_block_{block_seqlen / CTA_S}
+    Array<int, 2> kv_offset_;
+
+    __device__ BlockTileIter(const T** block_ptrs, BlockSeqLen block_seqlen, Array<int, 2> kv_offset):
+        block_ptrs_{block_ptrs}, tiles_per_block_{block_seqlen / CTA_S}, kv_offset_{kv_offset}
     {
     }
 
@@ -174,6 +174,49 @@ struct Block {
         }
         if (block_id_ >= 0) {
             block = block_ptrs_[block_id_];
+        }
+    }
+
+    template<int Idx>
+    __device__ const T* OffsetData(int offset) const
+    {
+        return block + local_id * CTA_S * HeadDim + kv_offset_[Idx] + offset;
+    }
+};
+
+template<class T, int CTA_S, int HeadDim>
+struct LinearTileIter2 {
+
+    const T* key_;
+    const T* key_ptr_;
+
+    int tile_id_;
+    int offset_to_val_;
+
+    __device__ LinearTileIter2(const T* key, int offset_to_val): key_{key}, offset_to_val_{offset_to_val} {}
+
+    __device__ void SetTile(int tile_id)
+    {
+        key_ptr_ = key_ + tile_id * CTA_S * HeadDim;
+        tile_id_ = tile_id;
+    }
+
+    __device__ void Advance()
+    {
+        --tile_id_;
+        if (tile_id_ >= 0) {
+            key_ptr_ -= CTA_S * HeadDim;
+        }
+    }
+
+    template<int Idx>
+    __device__ const T* OffsetData(int offset) const
+    {
+        if constexpr (Idx == 0) {
+            return key_ptr_ + offset;
+        }
+        else {
+            return key_ptr_ + offset + offset_to_val_;
         }
     }
 };
