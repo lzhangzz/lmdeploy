@@ -81,36 +81,6 @@ inline __device__ Array<half, 4> cvt_f16x4_u8(const Array<uint8_t, 4>& src)
     return (Array<half, 4>&)dst;
 }
 
-// inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& src)
-// {
-//     // 01234567 01234567
-//     // SEEEEEEE EMMMMMMM
-//     //      1MM XXXXXXXX
-//     // (1 + x/2^7) * 2^(e-127) -> e-127=7 -> e=134 -> 01000011 -> 0x43
-//     static constexpr uint32_t bf16_magic = 0x43004200;  // 128
-
-//     uint32_t tmp = ((uint32_t&)src & 0x7f7f7f7f);
-
-//     Array<uint32_t, 2> dst;
-//     dst[0] = __byte_perm(tmp, bf16_magic, 0x7170);
-//     dst[1] = __byte_perm(tmp, bf16_magic, 0x7372);
-
-//     auto& vec = (Array<nv_bfloat16, 4>&)dst;
-
-//     // Do not fuse these 2 loops, it's faster
-//     PRAGMA_UNROLL
-//     for (int i = 0; i < 4; ++i) {
-//         vec[i] -= __ushort_as_bfloat16(0x4300U);
-//     }
-//     PRAGMA_UNROLL
-//     for (int i = 0; i < 4; ++i) {
-//         if ((uint32_t&)src & (0x80 << (i * 8))) {
-//             vec[i] += __ushort_as_bfloat16(0x4300U);
-//         }
-//     }
-//     return (Array<nv_bfloat16, 4>&)dst;
-// }
-
 inline __device__ Array<nv_bfloat16, 4> cvt_bf16x4_u8(const Array<uint8_t, 4>& src)
 {
     // 01234567 01234567 01234567 01234567
@@ -266,7 +236,7 @@ dequantize(Array<T, N> (&dst)[S][C], const Array<Q, N> (&src)[S][C], const Array
                 for (int i = 0; i < N; i += 4) {
                     using namespace ops;
                     (Array<T, 4>&)dst[s][c][i] =
-                        cast<T>(cast<P>(cvt_f16x4_u8<false>((Array<Q, 4>&)src[s][c][i])) * scale + zero);
+                        cast<T>(cast<P>(cvt_f16x4_u8<true>((Array<Q, 4>&)src[s][c][i])) * scale + zero);
                 }
             }
             else {

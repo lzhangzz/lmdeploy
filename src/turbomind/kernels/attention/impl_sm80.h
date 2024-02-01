@@ -162,10 +162,10 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     using Swizzle = Swizzle<3, 4, 4>;
 
-    using SmemLayoutQ = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutK = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutV = SmemLayout<HeadDim, Swizzle>;
-    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
+    using SmemLayoutQ = SmemLayout<T, HeadDim, Swizzle>;
+    using SmemLayoutP = SmemLayout<T, CTA_S, Identity>;
+    using SmemLayoutK = SmemLayout<Tkv, HeadDim, Swizzle>;
+    using SmemLayoutV = SmemLayout<Tkv, HeadDim, Swizzle>;
 
     union SharedStorage {
         __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
@@ -184,6 +184,9 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_Q, 8, kWarpCount>;
     using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+
+    using TransformK = float2;
+    using TransformV = float2;
 
     static constexpr int kBatchKV = std::min(4, ThreadMapKV::kIterS);
 
@@ -230,11 +233,12 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&     smem_Q,
-                                     SmemK&     smem_K,
-                                     FragQ&     frag_Q,
-                                     FragK&     frag_K,
-                                     FragS&     frag_S,
+    __device__ static void ComputeQK(SmemQ& smem_Q,
+                                     SmemK& smem_K,
+                                     FragQ& frag_Q,
+                                     FragK& frag_K,
+                                     FragS& frag_S,
+                                     TransformK&,
                                      int        offset,
                                      Prefetch&& prefetch,
                                      Preload&&  preload)
@@ -270,10 +274,11 @@ struct Impl<Sm80_16816, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H, WARP_Q, WARP_S, 
 
     template<class SmemP, class SmemV, class Prefetch, class Preload>
     __device__ static void ComputePV(SmemP&,
-                                     SmemV&     smem_V,
-                                     FragP&     frag_P,
-                                     FragV&     frag_V,
-                                     FragO&     frag_O,
+                                     SmemV& smem_V,
+                                     FragP& frag_P,
+                                     FragV& frag_V,
+                                     FragO& frag_O,
+                                     TransformV&,
                                      int        offset,
                                      Prefetch&& prefetch,
                                      Preload&&  preload)

@@ -67,283 +67,26 @@ __inline__ __device__ void ConvertBlockSize(const Tin** __restrict__ src_block_p
     // *reinterpret_cast<uint4*>(dst_block + dst_block_offset) = data;
 }
 
-template<typename T>
-__global__ void LinearToBlocksKernel(const T*   src,
-                                     T**        dst_block_ptrs,
-                                     const int* dst_cu_block_cnts,
-                                     const int* seq_lens,
-                                     int        dst_offset,
-                                     int        src_block_len,
-                                     int        dst_block_len,
-                                     int        head_num,
-                                     int        head_dim,
-                                     int        batch_size)
-{
-    extern __shared__ void* smem[];
-
-    const T** src_block_ptrs    = (const T**)smem;
-    int*      src_cu_block_cnts = (int*)(src_block_ptrs + batch_size);
-
-    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
-        src_cu_block_cnts[i] = i;
-        src_block_ptrs[i]    = src + blockIdx.z * head_num * src_block_len * head_dim;
-    }
-
-    __syncthreads();
-
-    ConvertBlockSize(src_block_ptrs,
-                     dst_block_ptrs,
-                     src_cu_block_cnts,
-                     dst_cu_block_cnts,
-                     seq_lens,
-                     0,
-                     dst_offset,
-                     src_block_len,
-                     dst_block_len,
-                     head_dim);
-}
-
-template<typename T>
-void ConvertLinearToBlocks(const T*     src,
-                           T**          dst_block_ptrs,
-                           const int*   dst_cu_block_cnts,
-                           const int*   seq_lens,
-                           int          dst_offset,
-                           int          src_max_len,
-                           int          dst_block_len,
-                           int          head_num,
-                           int          head_dim,
-                           int          batch_size,
-                           cudaStream_t st)
-{
-    constexpr int kVecSize = sizeof(uint4) / sizeof(T);
-
-    constexpr int threads = 128;
-    const dim3    blocks((src_max_len * head_dim / kVecSize + threads - 1) / threads, head_num, batch_size);
-
-    const auto smem_sz = (sizeof(void*) + sizeof(int)) * batch_size;
-
-    auto fn = [&](auto head_dim) {
-        LinearToBlocksKernel<<<blocks, threads, smem_sz, st>>>(src,
-                                                               dst_block_ptrs,
-                                                               dst_cu_block_cnts,
-                                                               seq_lens,
-                                                               dst_offset,
-                                                               src_max_len,
-                                                               dst_block_len,
-                                                               head_num,
-                                                               head_dim,
-                                                               batch_size);
-    };
-
-    switch (head_dim) {
-        case 128:
-            fn(std::integral_constant<int, 128>{});
-            break;
-        default:
-            fn(head_dim);
-    }
-}
-
-template void ConvertLinearToBlocks(const half*  src,
-                                    half**       dst_block_ptrs,
-                                    const int*   dst_cu_block_cnts,
-                                    const int*   seq_lens,
-                                    int          dst_offset,
-                                    int          src_seq_len,
-                                    int          dst_block_len,
-                                    int          head_num,
-                                    int          head_dim,
-                                    int          batch_size,
-                                    cudaStream_t st);
-
-template<typename T, typename HeadDim>
-__global__ void BlocksToLinearKernel(const T**  src_block_ptrs,
-                                     T*         dst,
-                                     const int* src_cu_block_cnts,
-                                     const int* seq_lens,
-                                     int        src_offset,
-                                     int        src_block_len,
-                                     int        dst_block_len,
-                                     int        head_num,
-                                     HeadDim    head_dim,
-                                     int        batch_size)
-{
-    extern __shared__ void* smem[];
-
-    T**  dst_block_ptrs    = (T**)smem;
-    int* dst_cu_block_cnts = (int*)(dst_block_ptrs + batch_size);
-
-    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
-        dst_cu_block_cnts[i] = i;
-        dst_block_ptrs[i]    = dst + blockIdx.z * head_num * dst_block_len * head_dim;
-    }
-
-    __syncthreads();
-
-    ConvertBlockSize(src_block_ptrs,
-                     dst_block_ptrs,
-                     src_cu_block_cnts,
-                     dst_cu_block_cnts,
-                     seq_lens,
-                     src_offset,
-                     0,
-                     src_block_len,
-                     dst_block_len,
-                     head_dim);
-}
-
-template<typename T>
-void ConvertBlocksToLinear(const T**    src_block_ptrs,
-                           T*           dst,
-                           const int*   src_cu_block_cnts,
-                           const int*   seq_lens,
-                           int          src_offset,
-                           int          src_block_len,
-                           int          dst_max_len,
-                           int          head_num,
-                           int          head_dim,
-                           int          batch_size,
-                           cudaStream_t st)
-{
-    constexpr int kVecSize = sizeof(uint4) / sizeof(T);
-
-    constexpr int threads = 256;
-    const dim3    blocks((dst_max_len * head_dim / kVecSize + threads - 1) / threads, head_num, batch_size);
-
-    const auto smem_sz = (sizeof(void*) + sizeof(int)) * batch_size;
-
-    auto fn = [&](auto head_dim) {
-        BlocksToLinearKernel<<<blocks, threads, smem_sz, st>>>(src_block_ptrs,
-                                                               dst,
-                                                               src_cu_block_cnts,
-                                                               seq_lens,
-                                                               src_offset,
-                                                               src_block_len,
-                                                               dst_max_len,
-                                                               head_num,
-                                                               head_dim,
-                                                               batch_size);
-    };
-
-    switch (head_dim) {
-        case 128:
-            fn(std::integral_constant<int, 128>{});
-            break;
-        default:
-            fn(head_dim);
-    }
-}
-
-template void ConvertBlocksToLinear(const half** src_block_ptrs,
-                                    half*        dst,
-                                    const int*   src_cu_block_cnts,
-                                    const int*   seq_lens,
-                                    int          src_offset,
-                                    int          src_block_len,
-                                    int          dst_max_seq_len,
-                                    int          head_num,
-                                    int          head_dim,
-                                    int          batch_size,
-                                    cudaStream_t st);
-
-template<typename T, typename SrcBlockLen, typename DstBlockLen, typename HeadDim>
-__global__ void KvCacheBlocksToLinearKernel(const T**   src_k_block_ptrs,
-                                            const T**   src_v_block_ptrs,
-                                            T**         dst_k_ptrs,
-                                            T**         dst_v_ptrs,
-                                            const int*  src_cu_block_cnts,
-                                            const int*  seq_lens,
-                                            int         src_offset,
-                                            SrcBlockLen src_block_len,
-                                            DstBlockLen dst_block_len,
-                                            int         head_num,
-                                            HeadDim     head_dim,
-                                            int         batch_size)
-{
-    extern __shared__ int dst_cu_block_cnts[];
-
-    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
-        dst_cu_block_cnts[i] = i;
-    }
-
-    __syncthreads();
-
-    ConvertBlockSize(src_k_block_ptrs,
-                     dst_k_ptrs,
-                     src_cu_block_cnts,
-                     dst_cu_block_cnts,
-                     seq_lens,
-                     src_offset,
-                     0,
-                     src_block_len,
-                     dst_block_len,
-                     head_dim);
-
-    ConvertBlockSize(src_v_block_ptrs,
-                     dst_v_ptrs,
-                     src_cu_block_cnts,
-                     dst_cu_block_cnts,
-                     seq_lens,
-                     src_offset,
-                     0,
-                     src_block_len,
-                     dst_block_len,
-                     head_dim);
-}
-
-void ConvertKvCacheBlocksToLinear(const void** src_k_block_ptrs,
-                                  const void** src_v_block_ptrs,
-                                  void**       dst_k_ptrs,
-                                  void**       dst_v_ptrs,
-                                  const int*   src_cu_block_cnts,
-                                  const int*   seq_lens,
-                                  int          src_offset,
-                                  int          src_block_len,
-                                  int          dst_block_len,
-                                  int          head_num,
-                                  int          head_dim,
-                                  int          batch_size,
-                                  int          elem_bits,
-                                  cudaStream_t st)
-{
-    auto fn = [&](auto value) {
-        using T = decltype(value);
-
-        constexpr int kVecSize = sizeof(uint4) / sizeof(T);
-        constexpr int kThreads = 256;
-
-        const dim3 blocks((dst_block_len * head_dim / kVecSize + kThreads - 1) / kThreads, head_num, batch_size);
-        const auto smem_sz = sizeof(int) * batch_size;
-
-        KvCacheBlocksToLinearKernel<<<blocks, kThreads, smem_sz, st>>>((const T**)src_k_block_ptrs,
-                                                                       (const T**)src_v_block_ptrs,
-                                                                       (T**)dst_k_ptrs,
-                                                                       (T**)dst_v_ptrs,
-                                                                       src_cu_block_cnts,
-                                                                       seq_lens,
-                                                                       src_offset,
-                                                                       src_block_len,
-                                                                       dst_block_len,
-                                                                       head_num,
-                                                                       head_dim,
-                                                                       batch_size);
-    };
-
-    switch (elem_bits) {
-        case 8:
-            fn(uint8_t{});
-            break;
-        case 16:
-            fn(uint16_t{});
-            break;
-        case 32:
-            fn(uint32_t{});
-            break;
-        default:
-            fprintf(stderr, "unsupported elem bits: %d\n", elem_bits);
-    }
-}
+// template<class Tin, class Tout, int CTA_S, class DstBlockLen, class HeadDim, class TransformK, class TransformV>
+// __global__ void KvCacheLinearToBlocksKernel(const Tin*  src_k,
+//                                             const Tin*  src_v,
+//                                             int         src_stride,
+//                                             const int*  src_cu_seq_lens,
+//                                             Tout**      dst_k_block_ptrs,
+//                                             Tout**      dst_v_block_ptrs,
+//                                             const int*  dst_cu_block_nums,
+//                                             int         dst_offset,
+//                                             DstBlockLen dst_block_len,
+//                                             int         head_num,
+//                                             HeadDim     head_dim,
+//                                             int         batch_size,
+//                                             TransformK  transform_k,
+//                                             TransformV  transform_v)
+// {
+//     const int token_idx = blockIdx.x;
+//     const int head_idx  = blockIdx.y;
+//     const int batch_idx = blockIdx.z;
+// }
 
 template<typename Tin,
          typename Tout,
@@ -477,5 +220,192 @@ template void ConvertKvCacheBlocksToLinear2(const void** src_k_block_ptrs,
                                             int          quant_policy,
                                             const float* kv_params,
                                             cudaStream_t st);
+
+#if 0
+
+template<class Tin, class Tout, class Transform>
+__global__ void LinearToBlocksKernel(const Tin* src,
+                                     Tout**     dst_block_ptrs,
+                                     const int* dst_cu_block_cnts,
+                                     const int* seq_lens,
+                                     int        dst_offset,
+                                     int        src_block_len,
+                                     int        dst_block_len,
+                                     int        head_num,
+                                     int        head_dim,
+                                     int        batch_size,
+                                     Transform  transform)
+{
+    extern __shared__ void* smem[];
+
+    const Tout** src_block_ptrs    = (const Tout**)smem;
+    int*         src_cu_block_cnts = (int*)(src_block_ptrs + batch_size);
+
+    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
+        src_cu_block_cnts[i] = i;
+        src_block_ptrs[i]    = src + blockIdx.z * head_num * src_block_len * head_dim;
+    }
+
+    __syncthreads();
+
+    ConvertBlockSize(src_block_ptrs,
+                     dst_block_ptrs,
+                     src_cu_block_cnts,
+                     dst_cu_block_cnts,
+                     seq_lens,
+                     0,
+                     dst_offset,
+                     src_block_len,
+                     dst_block_len,
+                     head_dim,
+                     transform);
+}
+
+template<typename T>
+void ConvertLinearToBlocks(const T*     src,
+                           void**       dst_block_ptrs,
+                           const int*   dst_cu_block_cnts,
+                           const int*   seq_lens,
+                           int          dst_offset,
+                           int          src_max_len,
+                           int          dst_block_len,
+                           int          head_num,
+                           int          head_dim,
+                           int          batch_size,
+                           int          quant_policy,
+                           const float* quant_params,
+                           cudaStream_t st)
+{
+    auto fn = [&](auto tout) {
+        using Tout = decltype(tout);
+
+        constexpr int kVecSize = sizeof(uint4) / sizeof(T);
+
+        constexpr int threads = 128;
+        const dim3    blocks((src_max_len * head_dim / kVecSize + threads - 1) / threads, head_num, batch_size);
+
+        const auto smem_sz = (sizeof(void*) + sizeof(int)) * batch_size;
+
+        LinearToBlocksKernel<<<blocks, threads, smem_sz, st>>>(
+            src,
+            dst_block_ptrs,
+            dst_cu_block_cnts,
+            seq_lens,
+            dst_offset,
+            src_max_len,
+            dst_block_len,
+            head_num,
+            head_dim,
+            batch_size,
+            ConvertKvCache<T, Tout>{quant_params[0], quant_params[1]});
+    };
+
+    (quant_policy & QuantPolicy::kCacheKVInt8) ? fn(int8_t{}) : fn(T{});
+}
+
+template void ConvertLinearToBlocks(const half*  src,
+                                    void**       dst_block_ptrs,
+                                    const int*   dst_cu_block_cnts,
+                                    const int*   seq_lens,
+                                    int          dst_offset,
+                                    int          src_seq_len,
+                                    int          dst_block_len,
+                                    int          head_num,
+                                    int          head_dim,
+                                    int          batch_size,
+                                    int          quant_policy,
+                                    const float* quant_params,
+                                    cudaStream_t st);
+
+template<typename T, typename HeadDim>
+__global__ void BlocksToLinearKernel(const T**  src_block_ptrs,
+                                     T*         dst,
+                                     const int* src_cu_block_cnts,
+                                     const int* seq_lens,
+                                     int        src_offset,
+                                     int        src_block_len,
+                                     int        dst_block_len,
+                                     int        head_num,
+                                     HeadDim    head_dim,
+                                     int        batch_size)
+{
+    extern __shared__ void* smem[];
+
+    T**  dst_block_ptrs    = (T**)smem;
+    int* dst_cu_block_cnts = (int*)(dst_block_ptrs + batch_size);
+
+    for (int i = threadIdx.x; i < batch_size; i += blockDim.x) {
+        dst_cu_block_cnts[i] = i;
+        dst_block_ptrs[i]    = dst + blockIdx.z * head_num * dst_block_len * head_dim;
+    }
+
+    __syncthreads();
+
+    ConvertBlockSize(src_block_ptrs,
+                     dst_block_ptrs,
+                     src_cu_block_cnts,
+                     dst_cu_block_cnts,
+                     seq_lens,
+                     src_offset,
+                     0,
+                     src_block_len,
+                     dst_block_len,
+                     head_dim);
+}
+
+template<typename T>
+void ConvertBlocksToLinear(const T**    src_block_ptrs,
+                           T*           dst,
+                           const int*   src_cu_block_cnts,
+                           const int*   seq_lens,
+                           int          src_offset,
+                           int          src_block_len,
+                           int          dst_max_len,
+                           int          head_num,
+                           int          head_dim,
+                           int          batch_size,
+                           cudaStream_t st)
+{
+    constexpr int kVecSize = sizeof(uint4) / sizeof(T);
+
+    constexpr int threads = 256;
+    const dim3    blocks((dst_max_len * head_dim / kVecSize + threads - 1) / threads, head_num, batch_size);
+
+    const auto smem_sz = (sizeof(void*) + sizeof(int)) * batch_size;
+
+    auto fn = [&](auto head_dim) {
+        BlocksToLinearKernel<<<blocks, threads, smem_sz, st>>>(src_block_ptrs,
+                                                               dst,
+                                                               src_cu_block_cnts,
+                                                               seq_lens,
+                                                               src_offset,
+                                                               src_block_len,
+                                                               dst_max_len,
+                                                               head_num,
+                                                               head_dim,
+                                                               batch_size);
+    };
+
+    switch (head_dim) {
+        case 128:
+            fn(std::integral_constant<int, 128>{});
+            break;
+        default:
+            fn(head_dim);
+    }
+}
+
+template void ConvertBlocksToLinear(const half** src_block_ptrs,
+                                    half*        dst,
+                                    const int*   src_cu_block_cnts,
+                                    const int*   seq_lens,
+                                    int          src_offset,
+                                    int          src_block_len,
+                                    int          dst_max_seq_len,
+                                    int          head_num,
+                                    int          head_dim,
+                                    int          batch_size,
+                                    cudaStream_t st);
+#endif
 
 }  // namespace turbomind

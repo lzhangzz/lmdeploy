@@ -23,7 +23,7 @@ struct SimtSmemIterQ: BaseSmemIterator<T, Layout> {
 
         PRAGMA_UNROLL
         for (int m = 0; m < M; ++m) {
-            const int hi = m;  // + warp_id / WarpCntS;
+            const int hi = m;
             const int di = k * 64 + lane_id % 8 * 8;
             Lds(frag_Q[m], swizzle_ptr(hi, di));
         }
@@ -72,10 +72,19 @@ struct SimtSmemIterV: BaseSmemIterator<T, Layout> {
     }
 };
 
-template<class T_, int CTA_H_, int CTA_Q_, int CTA_S_, int WARP_H_, int WARP_Q, int WARP_S, int HeadDim, int Stages>
-struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
+template<class T_,
+         class Tkv_,
+         int CTA_H_,
+         int CTA_Q_,
+         int CTA_S_,
+         int WARP_H_,
+         int WARP_Q,
+         int WARP_S,
+         int HeadDim,
+         int Stages>
+struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, HeadDim, Stages> {
     using T   = T_;
-    using Tkv = T_;
+    using Tkv = Tkv_;
 
     static constexpr int CTA_H = CTA_H_;
     static constexpr int CTA_Q = CTA_Q_;
@@ -114,29 +123,29 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     using Tqk = float;
     using Tpv = float;
 
-    using FragQ = Array<T, 8>[K_K][K_M];      // (q4, d8), (Dk, Qm), (d8)
-                                              //   0   8    64   1     1
-    using FragK = Array<T, 8>[K_K][K_N];      // (s4, d8), (Dk, Sn), (d8)
-                                              //   1   8    64   4     1
-    using FragS = Array<float, 1>[K_M][K_N];  // (s4, d8), (Qm, Sn)
-                                              //   1   8     1   4
-                                              // (s4, _8), (Qm, Sn)       [after redsum]
-                                              //   1   0     1   4
-    using FragM = Array<float, 1>[K_M];       // (s4, _8), (Qm)
-                                              //   1   0     1
-    using FragP = Array<T, 1>[V_M][V_K];      // (s4, _8), (Qm, Sk), (s1)
-                                              //   1   0     1   4     1
-    using FragV = Array<T, 8>[V_K][V_N];      // (s4, d8), (Sk, Dn), (d8)
-                                              //   1   8     4  64     1
-    using FragO = Array<float, 8>[V_M][V_N];  // (s4, d8), (Qm, Dn), (d8)
-                                              //   1   8     1  64     1
+    using FragQ = Array<T, 8>[K_K][K_M];    // (q4, d8), (Dk, Qm), (d8)
+                                            //   0   8    64   1     1
+    using FragK = Array<Tkv, 8>[K_K][K_N];  // (s4, d8), (Dk, Sn), (d8)
+                                            //   1   8    64   4     1
+    using FragS = Array<Tqk, 1>[K_M][K_N];  // (s4, d8), (Qm, Sn)
+                                            //   1   8     1   4
+                                            // (s4, _8), (Qm, Sn)       [after redsum]
+                                            //   1   0     1   4
+    using FragM = Array<Tqk, 1>[K_M];       // (s4, _8), (Qm)
+                                            //   1   0     1
+    using FragP = Array<T, 1>[V_M][V_K];    // (s4, _8), (Qm, Sk), (s1)
+                                            //   1   0     1   4     1
+    using FragV = Array<Tkv, 8>[V_K][V_N];  // (s4, d8), (Sk, Dn), (d8)
+                                            //   1   8     4  64     1
+    using FragO = Array<Tpv, 8>[V_M][V_N];  // (s4, d8), (Qm, Dn), (d8)
+                                            //   1   8     1  64     1
     using FragSp = Array<T, 1>[K_M][K_N];
     using FragL  = FragM;
 
-    using SmemLayoutQ = SmemLayout<HeadDim, Identity>;
-    using SmemLayoutK = SmemLayout<HeadDim, Identity>;
-    using SmemLayoutP = SmemLayout<CTA_S, Identity>;
-    using SmemLayoutV = SmemLayout<HeadDim, Identity>;
+    using SmemLayoutQ = SmemLayout<T, HeadDim, Identity>;
+    using SmemLayoutP = SmemLayout<T, CTA_S, Identity>;
+    using SmemLayoutK = SmemLayout<Tkv, HeadDim, Identity>;
+    using SmemLayoutV = SmemLayout<Tkv, HeadDim, Identity>;
 
     using SmemM = float[K_M][kWarpCntH][kWarpCntS];
     using SmemL = float[K_M][kWarpCntH][kWarpCntS];
@@ -146,10 +155,10 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     union SharedStorage {
         __align__(16) T Q[CTA_H * SmemLayoutQ::kStride];
 
-        __align__(16) T KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
+        __align__(16) Tkv KV[Stages * CTA_S * (SmemLayoutK::kStride + SmemLayoutV::kStride) / 2];
         struct {
-            __align__(16) T K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
-            __align__(16) T V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
+            __align__(16) Tkv K[Stages == 2 ? CTA_S * SmemLayoutK::kStride : 1];
+            __align__(16) Tkv V[Stages == 2 ? CTA_S * SmemLayoutV::kStride : 1];
         };
 
         struct {
@@ -163,20 +172,27 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     using SmemIterQ = T*;
     using SmemIterP = T*;
 
-    using SmemIterK = SimtSmemIterK<T, SmemLayoutK, WARP_S, K_N>;
-    using SmemIterV = SimtSmemIterV<T, SmemLayoutV, WARP_S, V_N>;
+    using SmemIterK = SimtSmemIterK<Tkv, SmemLayoutK, WARP_S, K_N>;
+    using SmemIterV = SimtSmemIterV<Tkv, SmemLayoutV, WARP_S, V_N>;
 
     static constexpr bool kUseSmemQ = false;
     static constexpr bool kUseSmemP = false;
 
     using ThreadMapQ  = RakedThreadMap<HeadDim, CTA_H, 8, kWarpCount>;
-    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 8, kWarpCount>;
+    using ThreadMapKV = RakedThreadMap<HeadDim, CTA_S, 16 / sizeof(Tkv), kWarpCount>;
+
+    using TransformK = ConvertKvCache<Tkv, Tqk>;
+    using TransformV = ConvertKvCache<Tkv, Tpv>;
 
     __device__ static void Sync()
     {
         if constexpr (kWarpCntH > 1) {
             __syncthreads();
         }
+        else {
+            __syncwarp();
+        }
+        __syncthreads();
     }
 
     template<class Func>
@@ -229,15 +245,17 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
     }
 
     template<class SmemQ, class SmemK, class Prefetch, class Preload>
-    __device__ static void ComputeQK(SmemQ&     smem_Q,
-                                     SmemK&     smem_K,
-                                     FragQ&     frag_Q,
-                                     FragK&     frag_K,
-                                     FragS&     frag_S,
-                                     int        offset,
-                                     Prefetch&& prefetch,
-                                     Preload&&  preload)
+    __device__ static void ComputeQK(SmemQ&      smem_Q,
+                                     SmemK&      smem_K,
+                                     FragQ&      frag_Q,
+                                     FragK&      frag_K,
+                                     FragS&      frag_S,
+                                     TransformK& transform,
+                                     int         offset,
+                                     Prefetch&&  prefetch,
+                                     Preload&&   preload)
     {
+        Array<Tqk, 8> transformed_K[K_K][K_N];
 
         PRAGMA_UNROLL
         for (int k = 0; k < K_K; ++k) {
@@ -247,13 +265,19 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             else {
                 ((Preload&&)preload)();
             }
+
+            PRAGMA_UNROLL
+            for (int n = 0; n < K_N; ++n) {
+                transformed_K[k][n] = transform(frag_K[k][n]);
+            }
+
             PRAGMA_UNROLL
             for (int m = 0; m < K_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < K_N; ++n) {
                     PRAGMA_UNROLL
                     for (int c = 0; c < 8; ++c) {
-                        frag_S[m][n][0] += static_cast<float>((Tqk)frag_Q[k][m][c] * (Tqk)frag_K[k][n][c]);
+                        frag_S[m][n][0] += static_cast<float>((Tqk)frag_Q[k][m][c] * transformed_K[k][n][c]);
                     }
                 }
             }
@@ -278,14 +302,17 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
 
     template<class SmemP, class SmemV, class Prefetch, class Preload>
     __device__ static void ComputePV(SmemP&,
-                                     SmemV&     smem_V,
-                                     FragP&     frag_P,
-                                     FragV&     frag_V,
-                                     FragO&     frag_O,
-                                     int        offset,
-                                     Prefetch&& prefetch,
-                                     Preload&&  preload)
+                                     SmemV&      smem_V,
+                                     FragP&      frag_P,
+                                     FragV&      frag_V,
+                                     FragO&      frag_O,
+                                     TransformV& transform,
+                                     int         offset,
+                                     Prefetch&&  prefetch,
+                                     Preload&&   preload)
     {
+        Array<Tpv, 8> transformed_V[V_K][V_N];
+
         PRAGMA_UNROLL
         for (int k = 0; k < V_K; ++k) {
             if (k < V_K - 1) {
@@ -294,13 +321,19 @@ struct Impl<Sm70_Simt, T_, T_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S, 
             else {
                 ((Preload&&)preload)();
             }
+
+            PRAGMA_UNROLL
+            for (int n = 0; n < V_N; ++n) {
+                transformed_V[k][n] = transform(frag_V[k][n]);
+            }
+
             PRAGMA_UNROLL
             for (int m = 0; m < V_M; ++m) {
                 PRAGMA_UNROLL
                 for (int n = 0; n < V_N; ++n) {
                     PRAGMA_UNROLL
                     for (int d = 0; d < 8; ++d) {
-                        frag_O[m][n][d] += static_cast<float>((Tpv)frag_P[m][k][0] * (Tpv)frag_V[k][n][d]);
+                        frag_O[m][n][d] += static_cast<float>((Tpv)frag_P[m][k][0] * transformed_V[k][n][d]);
                     }
                 }
             }

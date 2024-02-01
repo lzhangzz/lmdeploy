@@ -12,16 +12,26 @@
 
 namespace turbomind::attention {
 
-template<class Arch, class T, class Tkv, class BlockSeqLen, int HeadDim>
+template<class Arch, class T, class Tkv, int Qh, int HeadDim>
 struct DecodingConfig {
     static_assert(sizeof(T) == 0, "config not found");
 };
 
-template<class T, class Tkv, class BlockSeqLen, int HeadDim>
-struct DecodingConfig<arch::Sm80, T, Tkv, BlockSeqLen, HeadDim> {
-    using Attention = Impl<Sm70_Simt, T, Tkv, 4, 1, 64, 4, 1, 16, HeadDim, 3>;
+template<class Arch, class T, class Tkv, int Qh, int HeadDim>
+using Decoding = typename DecodingConfig<Arch, T, Tkv, Qh, HeadDim>::Kernel;
+
+template<class T, class Tkv, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm80, T, Tkv, Qh, HeadDim> {
+    using Attention = Impl<Sm70_Simt, T, Tkv, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
     using Mainloop  = Mainloop<Sm80_CpAsync<3>, Attention>;
-    using Kernel    = AttentionUniversal<Mainloop, BlockSeqLen, DecodingCtaMap>;
+    using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
+};
+
+template<class T, int Qh, int HeadDim>
+struct DecodingConfig<arch::Sm80, T, int8_t, Qh, HeadDim> {
+    using Attention = Impl<Sm70_Simt, T, int8_t, Qh, 1, 64, Qh, 1, 16, HeadDim, 3>;
+    using Mainloop  = Mainloop<Sm80_CpAsync<3>, Attention>;
+    using Kernel    = AttentionUniversal<Mainloop, int, DecodingCtaMap>;
 };
 
 // template<class T, class Tkv, class BlockSeqLen, int HeadDim>
@@ -38,12 +48,12 @@ struct DecodingConfig<arch::Sm80, T, Tkv, BlockSeqLen, HeadDim> {
 //     using Kernel    = AttentionUniversal<Mainloop, BlockSeqLen, DecodingCtaMap>;
 // };
 
-template<class T, class Tkv, class BlockSeqLen, int HeadDim>
-struct DecodingConfig<arch::Sm70, T, Tkv, BlockSeqLen, HeadDim> {
-    using Attention = Impl<Sm70_Simt, T, Tkv, 1, 1, 64, 1, 1, 16, HeadDim, 1>;
-    using Mainloop  = Mainloop<arch::Sm70, Attention>;
-    using Kernel    = AttentionUniversal<Mainloop, BlockSeqLen, DecodingCtaMap>;
-};
+// template<class T, class Tkv, class BlockSeqLen, int HeadDim>
+// struct DecodingConfig<arch::Sm70, T, Tkv, BlockSeqLen, HeadDim> {
+//     using Attention = Impl<Sm70_Simt, T, Tkv, 1, 1, 64, 1, 1, 16, HeadDim, 1>;
+//     using Mainloop  = Mainloop<arch::Sm70, Attention>;
+//     using Kernel    = AttentionUniversal<Mainloop, BlockSeqLen, DecodingCtaMap>;
+// };
 
 // template<class T, class Tkv, class BlockSeqLen, int HeadDim>
 // struct DecodingConfig<arch::Sm70, T, Tkv, BlockSeqLen, HeadDim> {

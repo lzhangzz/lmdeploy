@@ -37,6 +37,9 @@ struct AttentionUniversal {
     using GmemIterK = typename Mainloop::GmemIterK;
     using GmemIterV = typename Mainloop::GmemIterV;
 
+    using TransformK = typename Impl::TransformK;
+    using TransformV = typename Impl::TransformV;
+
     static constexpr int CTA_H = Impl::CTA_H;
     static constexpr int CTA_Q = Impl::CTA_Q;
     static constexpr int CTA_S = Impl::CTA_S;
@@ -207,6 +210,9 @@ struct AttentionUniversal {
         GmemIterK gmem_K{local_key_offset, warp_id, lane_id};
         GmemIterV gmem_V{local_val_offset, warp_id, lane_id};
 
+        TransformK transform_K{params.kv_quant_params[0], params.kv_quant_params[1]};
+        TransformV transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
+
         Block<Tkv, CTA_S, BlockSeqLen> block_iter(k_cache_ptrs + iter_begin * CTA_S / block_seq_len, block_seq_len);
 
         __align__(16) FragO frag_O{};
@@ -221,6 +227,8 @@ struct AttentionUniversal {
         mainloop(frag_Q,
                  gmem_K,
                  gmem_V,
+                 transform_K,
+                 transform_V,
                  block_iter,
                  frag_O,
                  frag_M,

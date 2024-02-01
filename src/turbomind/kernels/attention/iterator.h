@@ -96,7 +96,7 @@ struct Identity {
     }
 };
 
-template<int Stride, class Swizzle_>
+template<class T, int Stride, class Swizzle_>
 struct SmemLayout {
     static constexpr int kStride = Stride;
 
@@ -104,7 +104,7 @@ struct SmemLayout {
 
     __forceinline__ __device__ static int apply(int s, int c, int offset = 0)
     {
-        return Swizzle::apply(sizeof(half) * (s * kStride + c + offset));
+        return Swizzle::apply(sizeof(T) * (s * kStride + c + offset));
     }
 
     __forceinline__ __device__ int operator()(int s, int c, int offset = 0)
@@ -172,9 +172,9 @@ struct Block {
             local_id += tiles_per_block_;
             block_id_ -= 1;
         }
-        // if (block_id_ >= 0) {
-        //     block = block_ptrs_[block_id_];
-        // }
+        if (block_id_ >= 0) {
+            block = block_ptrs_[block_id_];
+        }
     }
 };
 

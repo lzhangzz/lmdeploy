@@ -37,9 +37,8 @@ struct AttentionParams {
     /// S: [s0/x, s1/x, s2/x, ..., sn-1/x], si <- block
     /// 1. [L,sum(S),H,x,D]
     void** k_cache_block_ptrs;  // S,[L,H,s,D]
-    // void** v_cache_block_ptrs;  // S,[L,H,s,D]
-    int* cu_block_cnts;  // [B+1]
-    int  kv_cache_block_size;
+    int*   cu_block_cnts;       // [B+1]
+    int    kv_cache_block_size;
 
     T* kv_cache_quant_data;  // [B,H,2,S,2]
 
@@ -62,6 +61,9 @@ struct AttentionParams {
 
     // log(n) attention
     bool use_logn_attn;
+
+    int quant_policy;
+    float kv_quant_params[4];
 
     int    max_split_k;
     int*   split_cnt;

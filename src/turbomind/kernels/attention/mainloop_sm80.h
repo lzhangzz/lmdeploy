@@ -26,8 +26,11 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
     using SmemIterV = typename Impl::SmemIterV;
 
     using ThreadMapKV = typename Impl::ThreadMapKV;
-    using GmemIterK   = Sm80GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutK>;
-    using GmemIterV   = Sm80GmemIterator<T, ThreadMapKV, typename Impl::SmemLayoutV>;
+    using GmemIterK   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutK>;
+    using GmemIterV   = Sm80GmemIterator<Tkv, ThreadMapKV, typename Impl::SmemLayoutV>;
+
+    using TransformK = typename Impl::TransformK;
+    using TransformV = typename Impl::TransformV;
 
     using FragQ = typename Impl::FragQ;
     using FragK = typename Impl::FragK;
@@ -68,6 +71,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         FragQ&         frag_Q,
                         GmemIterK&     gmem_K,
                         GmemIterV&     gmem_V,
+                        TransformK&    transform_K,
+                        TransformV&    transform_V,
                         BlockIter&     block_iter,
                         FragO&         frag_O,
                         FragM&         frag_M,
@@ -143,7 +148,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 }
             };
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, rk, prefetch_K, [&] {
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, rk, prefetch_K, [&] {
                 Wait();
                 smem_V.Load(frag_V[0], 0, rv);
             });
@@ -151,6 +156,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             if constexpr (is_mask) {
                 ApplyCasualMask(frag_S, offset_Q, offset_K);
             }
+
+            // store_S(frag_S, offset_K);
 
             Impl::Softmax<is_mask>(frag_S, frag_M, frag_L, frag_O, qk_scale);
 
@@ -172,7 +179,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                 }
             };
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, rv, prefetch_V, [&] {
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, rv, prefetch_V, [&] {
                 Wait();
                 smem_K.Load(frag_K[0], 0, rk);
             });
@@ -197,6 +204,8 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
                         FragQ&         frag_Q,
                         GmemIterK&     gmem_K,
                         GmemIterV&     gmem_V,
+                        TransformK&    transform_K,
+                        TransformV&    transform_V,
                         BlockIter&     block_iter,
                         FragO&         frag_O,
                         FragM&         frag_M,
@@ -244,7 +253,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
             block_iter.Advance();
             __pipeline_commit();
 
-            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, 0, nop, [&] {
+            Impl::ComputeQK(smem_Q, smem_K, frag_Q, frag_K, frag_S, transform_K, 0, nop, [&] {
                 Wait();
                 smem_V.Load(frag_V[0], 0, sizeof(Tkv) * kTileSizeKV);
             });
@@ -262,7 +271,7 @@ struct Mainloop<Sm80_CpAsync<Stages>, Impl_> {
 
             Impl::ConvertStoP(frag_S, frag_P, storage.P);
 
-            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, sizeof(Tkv) * kTileSizeKV, nop, [&] {
+            Impl::ComputePV(smem_P, smem_V, frag_P, frag_V, frag_O, transform_V, sizeof(Tkv) * kTileSizeKV, nop, [&] {
                 Wait();
                 smem_K.Load(frag_K[0], 0, 0);
             });
