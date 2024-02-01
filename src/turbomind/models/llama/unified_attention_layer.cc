@@ -21,7 +21,6 @@
 
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/kernels/attention/attention.h"
-#include "src/turbomind/kernels/attention/kv_cache.h"
 #include "src/turbomind/kernels/bert_preprocess_kernels.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
 #include "src/turbomind/macro.h"
@@ -328,22 +327,22 @@ void UnifiedAttentionLayer<T>::prefill(T*                output,
 
     const int kv_cache_elem_bits = quant_policy_ & QuantPolicy::kCacheKVInt8 ? 8 : sizeof(T) * 8;
 
-    FT_CHECK(weights->past_kv_scale.size() == 4);
-    ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
-                                  (const void**)v_cache_ptrs,
-                                  (T**)tmp_k_ptrs,
-                                  (T**)tmp_v_ptrs,
-                                  cu_block_count,
-                                  context_length,
-                                  layer_offset,
-                                  kv_cache_block_len_,
-                                  pf_session_len,
-                                  local_kv_head_num_,
-                                  size_per_head_,
-                                  pf_batch_size,
-                                  quant_policy_,
-                                  weights->past_kv_scale.data(),
-                                  stream_);
+    // FT_CHECK(weights->past_kv_scale.size() == 4);
+    // ConvertKvCacheBlocksToLinear2((const void**)k_cache_ptrs,
+    //                               (const void**)v_cache_ptrs,
+    //                               (T**)tmp_k_ptrs,
+    //                               (T**)tmp_v_ptrs,
+    //                               cu_block_count,
+    //                               context_length,
+    //                               layer_offset,
+    //                               kv_cache_block_len_,
+    //                               pf_session_len,
+    //                               local_kv_head_num_,
+    //                               size_per_head_,
+    //                               pf_batch_size,
+    //                               quant_policy_,
+    //                               weights->past_kv_scale.data(),
+    //                               stream_);
     sync_check_cuda_error();
 
     if (use_fmha_) {

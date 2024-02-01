@@ -2,7 +2,6 @@
 
 #include "attention.h"
 #include "decoding.h"
-#include "kv_cache.h"
 #include "kv_cache_utils.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -150,7 +149,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
     }
 }
 
-#define KV_INT8 1
+#define KV_INT8 0
 
 #define DECODING 1
 

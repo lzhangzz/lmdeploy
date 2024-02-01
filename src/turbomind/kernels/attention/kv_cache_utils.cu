@@ -1,7 +1,6 @@
 
 #include "array_ops.h"
 #include "kv_cache_utils.h"
-#include "quantization.h"
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "thread_map.h"
@@ -86,12 +85,6 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
             if (qi < input_len) {
                 Ldg(vec_K[s][c], &k[index]);
                 Ldg(vec_V[s][c], &v[index]);
-
-                // int index = (batch_idx * stride_b + qi * stride_s + head_idx * stride_h) * HeadDim + di;
-                // PRAGMA_UNROLL
-                // for (int i = 0; i < kVecSize; ++i) {
-                //     printf("fuck %d %d %d v %f\n", batch_idx, qi, index + i, (float)vec_V[s][c][i]);
-                // }
             }
         }
     }
@@ -120,54 +113,13 @@ __global__ void __launch_bounds__(128) ProcessKV(Tkv**      blocks,
     Array<Tkv, kVecSize> out_K[ITER_S][ITER_C];
     Array<Tkv, kVecSize> out_V[ITER_S][ITER_C];
 
-    // quant param
-    using PType = T;
-    Array<PType, 2> param_K[ITER_S];
-    Array<PType, 2> param_V[ITER_S];
-
-    if constexpr (std::is_same_v<T, Tkv>) {
+    PRAGMA_UNROLL
+    for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
-        for (int s = 0; s < ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                out_K[s][c] = vec_K[s][c];
-                out_V[s][c] = vec_V[s][c];
-            }
+        for (int c = 0; c < ITER_C; ++c) {
+            out_K[s][c] = transform_k(vec_K[s][c]);
+            out_V[s][c] = transform_v(vec_V[s][c]);
         }
-    }
-    else if constexpr (1) {
-        // quantize(out_K, vec_K, param_K, n_bits);
-        // quantize(out_V, vec_V, param_V, n_bits);
-        PRAGMA_UNROLL
-        for (int s = 0; s < ITER_S; ++s) {
-            PRAGMA_UNROLL
-            for (int c = 0; c < ITER_C; ++c) {
-                out_K[s][c] = transform_k(vec_K[s][c]);
-                out_V[s][c] = transform_v(vec_V[s][c]);
-            }
-        }
-    }
-    else if constexpr (0) {
-        // constexpr std::integral_constant<int, sizeof(Tkv) * 8> n_bits{};
-        // warp_stats<Map::kWarpThreadC>(param_K, vec_K, n_bits);
-        // warp_stats<Map::kWarpThreadC>(param_V, vec_V, n_bits);
-        // // printf("%f %f %f %f\n", (float)param_K[0][0], (float)param_K[0][1], (float)param_V[0][0],
-        // (float)param_V[0][1]); quantize(out_K, vec_K, param_K, n_bits); quantize(out_V, vec_V, param_V, n_bits);
-        // fuse_magic(param_K);
-        // fuse_magic(param_V);
-    }
-    else {
-        // using QType = uint8_t;
-        // constexpr std::integral_constant<int, sizeof(QType) * 8> n_bits{};
-        // // quant data
-        // Array<QType, kVecSize> quant_K[ITER_S][ITER_C];
-        // Array<QType, kVecSize> quant_V[ITER_S][ITER_C];
-        // warp_stats<Map::kWarpThreadC>(param_K, vec_K, n_bits);
-        // warp_stats<Map::kWarpThreadC>(param_V, vec_V, n_bits);
-        // quantize(quant_K, vec_K, param_K, n_bits);
-        // quantize(quant_V, vec_V, param_V, n_bits);
-        // dequantize(out_K, quant_K, param_K, n_bits);
-        // dequantize(out_V, quant_V, param_V, n_bits);
     }
 
     Tkv** k_cache_block_ptrs = blocks + cu_blk_nums[batch_idx];
