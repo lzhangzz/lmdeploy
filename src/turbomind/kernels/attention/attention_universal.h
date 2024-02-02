@@ -144,16 +144,31 @@ struct AttentionUniversal {
             }
         }
 
-        if constexpr (0) {
+        const float rope_base = params.rope_theta ? params.rope_theta[batch_idx] : params.rotary_embedding_base;
+        PRAGMA_UNROLL
+        for (int c = 0; c < ITER_C; ++c) {
+            const int di = offset.x + c * Map::kDeltaC;
+            FastRoPE  rope(
+                di, std::integral_constant<int, kHeadDim>{}, rope_base, std::integral_constant<int, kVecSize>{});
             PRAGMA_UNROLL
             for (int s = 0; s < ITER_S; ++s) {
+                const int ti = (offset.y + s * Map::kDeltaS) % CTA_Q + query_idx + history_len;
+                rope.apply(vec_Q[s][c], ti);
+                if constexpr (kProcessKV) {
+                    static_assert(ITER_S == 1);
+                    rope.apply(vec_K[0][c], ti);
+                }
+            }
+        }
+
+        if (params.use_logn_attn) {
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                const int   ti = (offset.y + s * Map::kDeltaS) % CTA_Q + query_idx + history_len;
+                LogNScaling logn_scaling(ti, params.max_position_embeddings);
                 PRAGMA_UNROLL
                 for (int c = 0; c < ITER_C; ++c) {
-                    const int qi = offset.y + s * Map::kDeltaS + query_idx;
-                    const int di = offset.x + c * Map::kDeltaC;
-                    //
-                    RotaryEmbedding<kVecSize> rope(10000.f, kHeadDim, qi, {di, 0});
-                    rope.apply(vec_Q[s][c]);
+                    logn_scaling.apply(vec_Q[c][s]);
                 }
             }
         }
@@ -168,12 +183,13 @@ struct AttentionUniversal {
             ConvertKvCache<T, Tkv> transform_V{params.kv_quant_params[2], params.kv_quant_params[3]};
             PRAGMA_UNROLL
             for (int c = 0; c < ITER_C; ++c) {
-                int       di    = offset.x + c * Map::kDeltaC;
+                const int di    = offset.x + c * Map::kDeltaC;
                 const int idx_k = local_k_offset + block_offset * kHeadDim + di;
                 const int idx_v = local_v_offset + block_offset * kHeadDim + di;
                 Store(&block[idx_k], transform_K(vec_K[0][c]));
                 Store(&block[idx_v], transform_V(vec_V[0][c]));
             }
+            __syncthreads();
         }
 
         using SmemLayoutQ = typename Impl::SmemLayoutQ;

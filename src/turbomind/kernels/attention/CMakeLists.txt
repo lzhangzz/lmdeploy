@@ -16,8 +16,8 @@ target_compile_options(attention PRIVATE
 # target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
 
 add_executable(test_attention test_utils.cu test_attention.cu reference.cu)
-# target_compile_options(test_attention PRIVATE
-#   --generate-line-info -O3 -use_fast_math -Xptxas=-v --expt-relaxed-constexpr)
+target_compile_options(test_attention PRIVATE
+  --generate-line-info -O3 -use_fast_math -Xptxas=-v --expt-relaxed-constexpr)
 target_link_libraries(test_attention PRIVATE
     attention
     flash_attention2

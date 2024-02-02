@@ -4,6 +4,7 @@
 #include "src/turbomind/kernels/gemm_s_f16/common.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "thread_map.h"
+#include <type_traits>
 
 namespace turbomind {
 
@@ -229,21 +230,22 @@ template void invokeProcessKV(void**       blocks,
                               cudaStream_t stream);
 
 template<int CTA_S, int HeadDim, int WarpCnt, class T, class Tkv, class Offset, class TransformK, class TransformV>
-__global__ void __launch_bounds__(128) flattenKV(T*          k,
-                                                 T*          v,
-                                                 const Tkv** blocks,
-                                                 const int*  cu_seq_lens,
-                                                 const int*  cu_block_nums,
-                                                 const int*  context_lens,
-                                                 int         stride_b,
-                                                 int         stride_c,
-                                                 int         stride_h,
-                                                 int         stride_s,
-                                                 int         block_seq_len,
-                                                 Offset      block_k_offset,
-                                                 Offset      block_v_offset,
-                                                 TransformK  transform_k,
-                                                 TransformV  transform_v)
+__global__ void __launch_bounds__(128) flattenKV(T*           k,
+                                                 T*           v,
+                                                 const Tkv**  blocks,
+                                                 const int*   cu_seq_lens,
+                                                 const int*   cu_block_nums,
+                                                 const int*   context_lens,
+                                                 const float* rope_theta,
+                                                 int          stride_b,
+                                                 int          stride_c,
+                                                 int          stride_h,
+                                                 int          stride_s,
+                                                 int          block_seq_len,
+                                                 Offset       block_k_offset,
+                                                 Offset       block_v_offset,
+                                                 TransformK   transform_k,
+                                                 TransformV   transform_v)
 {
     constexpr int kVecSize = sizeof(uint4) / sizeof(T);
 
@@ -308,6 +310,21 @@ __global__ void __launch_bounds__(128) flattenKV(T*          k,
         }
     }
 
+    if (rope_theta) {
+        float rope_base = rope_theta[batch_idx];
+        PRAGMA_UNROLL
+        for (int c = 0; c < ITER_C; ++c) {
+            const int di = offset.x + c * Map::kDeltaC;
+            FastRoPE  rope(
+                di, std::integral_constant<int, HeadDim>{}, rope_base, std::integral_constant<int, kVecSize>{});
+            PRAGMA_UNROLL
+            for (int s = 0; s < ITER_S; ++s) {
+                const int ti = offset.y + s * Map::kDeltaS + token_idx;  // sequence local
+                rope.apply(out_K[s][c], ti);
+            }
+        }
+    }
+
     PRAGMA_UNROLL
     for (int s = 0; s < ITER_S; ++s) {
         PRAGMA_UNROLL
@@ -331,6 +348,7 @@ void invokeFlattenKV(T*           k,
                      const int*   cu_seq_lens,
                      const int*   cu_block_nums,
                      const int*   context_lens,
+                     const float* rope_theta,
                      int          stride_b,
                      int          stride_c,
                      int          stride_h,
@@ -363,6 +381,7 @@ void invokeFlattenKV(T*           k,
                                                                          cu_seq_lens,
                                                                          cu_block_nums,
                                                                          context_lens,
+                                                                         rope_theta,
                                                                          stride_b,
                                                                          stride_c,
                                                                          stride_h,
@@ -383,6 +402,7 @@ template void invokeFlattenKV(half*        k,
                               const int*   cu_seq_lens,
                               const int*   cu_block_nums,
                               const int*   context_lens,
+                              const float* rope_theta,
                               int          stride_b,
                               int          stride_c,
                               int          stride_h,

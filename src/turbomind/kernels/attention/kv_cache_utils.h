@@ -62,6 +62,7 @@ void invokeFlattenKV(T*           k,
                      const int*   cu_seq_lens,
                      const int*   cu_block_nums,
                      const int*   context_lens,
+                     const float* rope_theta,
                      int          stride_b,
                      int          stride_c,  // cumulative len
                      int          stride_h,

@@ -188,7 +188,8 @@ struct RotaryEmbedding {
         }
     }
 
-    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
+    // ! depending on the context, this function may generate different result when inlined
+    static __device__ __noinline__ float2 get_coefficient(int idx, int dims, float base, int timestep)
     {
         const float inv_freq = timestep / powf(base, idx / (float)dims);
         float2      cs;
@@ -232,20 +233,25 @@ struct FastRoPE {
 
     Array<float, N / 2> inv_freq_;
 
-    static __device__ inline float2 get_coefficient(int idx, int dims, float base, int timestep)
-    {
-        const float inv_freq = timestep / powf(base, idx / (float)dims);
-        float2      cs;
-        sincosf(inv_freq, &cs.y, &cs.x);
-        return cs;
-    }
-
     __device__ FastRoPE(int idx, D dims, float base, std::integral_constant<int, N>)
     {
-        constexpr float inv_dims = 1.f / dims;
+        // constexpr float inv_dims = 1.f / dims;
+        // PRAGMA_UNROLL
+        // for (int i = 0; i < N; i += 2) {
+        //     inv_freq_[i / 2] = fdividef(1.f, powf(base, (idx + i) * inv_dims));
+        // }
+
+        // const float scale_factor = log2f(base) / dims;
+        // PRAGMA_UNROLL
+        // for (int i = 0; i < N; i += 2) {
+        //     inv_freq_[i / 2] = fdividef(1.f, exp2f((idx + i) * scale_factor));
+        // }
+
+        // ! Check compiler CSE
+        const float scale_factor = -log2f(base) / dims;
         PRAGMA_UNROLL
-        for (int i = 0; i < N / 2; ++i) {
-            inv_freq_[i] = fdividef(1.f, powf(base, (idx + i * 2) * inv_dims));
+        for (int i = 0; i < N; i += 2) {
+            inv_freq_[i / 2] = exp2f((idx + i) * scale_factor);
         }
     }
 
@@ -253,11 +259,11 @@ struct FastRoPE {
     __device__ void apply(Array<T, N>& x, int timestep)
     {
         PRAGMA_UNROLL
-        for (int i = 0; i < N / 2; ++i) {
+        for (int i = 0; i < N; i += 2) {
             float c, s;
-            sincosf(timestep * inv_freq_[i], &s, &c);
-            float tmp0 = c * (float)x[i * 2] - s * (float)x[i * 2 + 1];
-            float tmp1 = c * (float)x[i * 2 + 1] + s * (float)x[i * 2];
+            sincosf(timestep * inv_freq_[i / 2], &s, &c);
+            float tmp0 = c * (float)x[i] - s * (float)x[i + 1];
+            float tmp1 = c * (float)x[i + 1] + s * (float)x[i];
             x[i]       = (T)tmp0;
             x[i + 1]   = (T)tmp1;
         }

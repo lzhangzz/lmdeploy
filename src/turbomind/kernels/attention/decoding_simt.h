@@ -184,16 +184,7 @@ struct Impl<Sm70_Simt, T_, Tkv_, CTA_H_, CTA_Q_, CTA_S_, WARP_H_, WARP_Q, WARP_S
     using TransformK = ConvertKvCache<Tkv, Tqk>;
     using TransformV = ConvertKvCache<Tkv, Tpv>;
 
-    __device__ static void Sync()
-    {
-        if constexpr (kWarpCntH > 1) {
-            __syncthreads();
-        }
-        else {
-            __syncwarp();
-        }
-        __syncthreads();
-    }
+    __device__ static void Sync() {}
 
     template<class Func>
     __device__ static void ForeachML(FragM& frag_M, FragL& frag_L, Func&& func)

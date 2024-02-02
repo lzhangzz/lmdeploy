@@ -19,6 +19,46 @@ __global__ void createCausalMasks(T* mask, const int* q_lens, const int* k_lens,
     }
 }
 
+// [B, H, S, D]
+template<class T>
+__global__ void applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base)
+{
+    const int    ti = blockIdx.x;
+    const size_t hi = blockIdx.y;
+    const size_t bi = blockIdx.z;
+
+    constexpr int kVecSize = 2;
+    const int     history  = 0;
+
+    for (int d = threadIdx.x * kVecSize; d < head_dim; d += blockDim.x * kVecSize) {
+        const size_t idx =
+            bi * head_num * max_k_len * head_dim + hi * max_k_len * head_dim + (history + ti) * head_dim + d;
+
+        Array<T, kVecSize> vec_K;
+
+        Load(vec_K, &k_cache[idx]);
+
+        RotaryEmbedding<kVecSize> rope(rope_base, head_dim, history + ti, {d, 0});
+
+        rope.apply(vec_K);
+
+        Store(&k_cache[idx], vec_K);
+    }
+}
+
+template<class T>
+void invokeApplyRotaryEmbedding(
+    T* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream)
+{
+    int  threads = 128;
+    dim3 blocks(max_k_len, head_num, batch_size);
+
+    applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base);
+}
+
+template void invokeApplyRotaryEmbedding(
+    half* k_cache, int max_k_len, int head_num, int head_dim, float rope_base, int batch_size, cudaStream_t stream);
+
 template<class T>
 __global__ void processQKV(T*       q_out,    // [B, H, s, D]
                            T*       k_cache,  // [B, H, S, D]
@@ -43,12 +83,14 @@ __global__ void processQKV(T*       q_out,    // [B, H, s, D]
     auto k = q + head_num * head_dim;
     auto v = k + kv_head_num * head_dim;
 
-    for (int d = threadIdx.x * 2; d < head_dim; d += blockDim.x * 2) {
-        const auto  idx = bi * head_num * max_q_len * head_dim + hi * max_q_len * head_dim + ti * head_dim + d;
-        Array<T, 2> vec;
+    constexpr int kVecSize = 2;
+
+    for (int d = threadIdx.x * kVecSize; d < head_dim; d += blockDim.x * kVecSize) {
+        const auto         idx = bi * head_num * max_q_len * head_dim + hi * max_q_len * head_dim + ti * head_dim + d;
+        Array<T, kVecSize> vec;
         Ldg(vec, &q[hi * head_dim + d]);
         if (rope_theta) {
-            RotaryEmbedding<2> rope(rope_theta, head_dim, ti, {d, 0});
+            RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
             rope.apply(vec);
         }
         Store(&q_out[idx], vec);
@@ -58,15 +100,15 @@ __global__ void processQKV(T*       q_out,    // [B, H, s, D]
         return;
     }
 
-    for (int d = threadIdx.x * 2; d < head_dim; d += blockDim.x * 2) {
+    for (int d = threadIdx.x * kVecSize; d < head_dim; d += blockDim.x * kVecSize) {
         const auto idx =
             bi * kv_head_num * max_k_len * head_dim + hi * max_k_len * head_dim + (history + ti) * head_dim + d;
-        Array<T, 2> vec_K;
-        Array<T, 2> vec_V;
+        Array<T, kVecSize> vec_K;
+        Array<T, kVecSize> vec_V;
         Ldg(vec_K, &k[hi * head_dim + d]);
         Ldg(vec_V, &v[hi * head_dim + d]);
         if (rope_theta) {
-            RotaryEmbedding<2> rope(rope_theta, head_dim, ti, {d, 0});
+            RotaryEmbedding<kVecSize> rope(rope_theta, head_dim, history + ti, {d, 0});
             rope.apply(vec_K);
         }
         Store(&k_cache[idx], vec_K);
@@ -104,11 +146,11 @@ void Reference<T>::Reshape(
         key_cache_ptrs_.resize(batch_size);
         val_cache_ptrs_.resize(batch_size);
         cu_q_seqlens_.resize(batch_size + 1);
-        for (int i = 0; i <= batch_size; ++i) {
+        for (size_t i = 0; i <= batch_size; ++i) {
             cu_q_seqlens_[i] = i * max_q_len;
         }
         k_seqlens_.resize(batch_size);
-        for (int i = 0; i < batch_size; ++i) {
+        for (size_t i = 0; i < batch_size; ++i) {
             k_seqlens_[i] = max_k_len;
         }
     }
@@ -140,7 +182,7 @@ void Reference<T>::Execute(T* output, T* k_cache, T* v_cache, const T* qkv)
                                                     head_num_,
                                                     head_dim_,
                                                     kv_head_num_,
-                                                    0 * 10000.f);
+                                                    10000.f);
 
         cudaDeviceSynchronize();
     }

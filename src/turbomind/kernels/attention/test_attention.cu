@@ -125,6 +125,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,  // [B, H, S, D]
                         cu_seq_lens.data().get(),
                         cu_block_cnts.data().get(),
                         seq_lens.data().get(),
+                        nullptr,
                         2 * head_num * seq_len,
                         0,
                         seq_len,
@@ -158,17 +159,17 @@ int main(int argc, char* argv[])
     AttentionParams<half> params{};
 
 #if DECODING
-    // constexpr int kHeadNum   = 32;
-    // constexpr int kBatchSize = 64;
-    constexpr int kHeadNum     = 32;
-    constexpr int kBatchSize   = 8;
-    constexpr int kInputLen    = 1;
-    constexpr int kSequenceLen = 8191;
-    // constexpr int kSequenceLen = 16383;
-    // constexpr int kSequenceLen = 32767;
-    // constexpr int kSequenceLen = 65535;
-    // constexpr int kSequenceLen = 131071;
-    // constexpr int kSequenceLen = 262143;
+    // constexpr size_t kHeadNum   = 32;
+    // constexpr size_t kBatchSize = 64;
+    constexpr size_t kHeadNum     = 32;
+    constexpr size_t kBatchSize   = 4;
+    constexpr size_t kInputLen    = 1;
+    constexpr size_t kSequenceLen = 8191;
+    // constexpr size_t kSequenceLen = 16383;
+    // constexpr size_t kSequenceLen = 32767;
+    // constexpr size_t kSequenceLen = 65535;
+    // constexpr size_t kSequenceLen = 131071;
+    // constexpr size_t kSequenceLen = 262143;
     // constexpr size_t kSequenceLen = (1 << 20) - 1;  // 1M
     // constexpr size_t kSequenceLen = (1 << 22) - 1;  // 4M
     // constexpr size_t kSequenceLen = (1 << 24) - 1;  // 16M
@@ -176,12 +177,12 @@ int main(int argc, char* argv[])
     constexpr int kBlockSz   = 128;
     constexpr int kMaxSplitK = 1;
 #else
-    constexpr int kHeadNum     = 16;
-    constexpr int kBatchSize   = 2;
-    constexpr int kInputLen    = 8192;
-    constexpr int kSequenceLen = 0;
-    // constexpr int kInputLen    = 4096;
-    // constexpr int kSequenceLen = 8192;
+    constexpr size_t kHeadNum     = 16;
+    constexpr size_t kBatchSize   = 2;
+    constexpr size_t kInputLen    = 8192;
+    constexpr size_t kSequenceLen = 0;
+    // constexpr size_t kInputLen    = 4096;
+    // constexpr size_t kSequenceLen = 8192;
     constexpr int kBlockSz   = 16384;
     constexpr int kMaxSplitK = 1;
 #endif
@@ -210,7 +211,8 @@ int main(int argc, char* argv[])
     constexpr int kTokenNum   = kBatchSize * kInputLen;
     constexpr int kTestIter   = 20;
 
-    constexpr int kDump = 0;
+    constexpr float kRoPEBase = 10000.f;
+    constexpr int   kDump     = 0;
 
     RNG rng{};
 
@@ -222,12 +224,13 @@ int main(int argc, char* argv[])
     thrust::universal_vector<half> qkv(kBatchSize * kInputLen * (kHeadNum + KvHeadNum * 2) * kHeadDim);
     thrust::universal_vector<half> output(kBatchSize * kInputLen * kHeadNum * kHeadDim);
 
-    thrust::universal_vector<bool> finished(kBatchSize);
-    thrust::universal_vector<int>  sequence_length(kBatchSize);
-    thrust::universal_vector<int>  input_length(kBatchSize);
-    thrust::universal_vector<int>  context_length(kBatchSize);
-    thrust::universal_vector<int>  cu_seqlens(kBatchSize + 1);
-    thrust::universal_vector<int>  cu_kv_lens(kBatchSize + 1);
+    thrust::universal_vector<bool>  finished(kBatchSize);
+    thrust::universal_vector<int>   sequence_length(kBatchSize);
+    thrust::universal_vector<int>   input_length(kBatchSize);
+    thrust::universal_vector<int>   context_length(kBatchSize);
+    thrust::universal_vector<float> rope_base(kBatchSize);
+    thrust::universal_vector<int>   cu_seqlens(kBatchSize + 1);
+    thrust::universal_vector<int>   cu_kv_lens(kBatchSize + 1);
 
     thrust::universal_vector<float> partial_M(kTokenNum * kHeadNum * kMaxSplitK);
     thrust::universal_vector<float> partial_L(kTokenNum * kHeadNum * kMaxSplitK);
@@ -263,6 +266,13 @@ int main(int argc, char* argv[])
                           kBatchSize * KvHeadNum);
     }
 
+#if DECODING
+    invokeApplyRotaryEmbedding(k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kBatchSize);
+#endif
+
+    thrust::universal_vector<half> k_cache_ref = k_cache;
+    thrust::universal_vector<half> v_cache_ref = v_cache;
+
     thrust::universal_vector<Tkv>  blocks;
     thrust::universal_vector<Tkv*> k_ptrs;
     thrust::universal_vector<Tkv*> v_ptrs;
@@ -290,25 +300,24 @@ int main(int argc, char* argv[])
 
     // return 0;
 
-    thrust::universal_vector<half>  k_cache_ref = k_cache;
-    thrust::universal_vector<half>  v_cache_ref = v_cache;
-    thrust::universal_vector<half>  output_ref  = output;
+    thrust::universal_vector<half>  output_ref = output;
     thrust::universal_vector<void*> k_cache_ref_ptrs(kBatchSize);
     thrust::universal_vector<void*> v_cache_ref_ptrs(kBatchSize);
 
     cudaDeviceSynchronize();
 
-    for (int i = 0; i <= kBatchSize; ++i) {
+    for (size_t i = 0; i <= kBatchSize; ++i) {
         cu_seqlens[i] = i * kInputLen;
         cu_kv_lens[i] = i * kContextLen;
     }
 
-    for (int i = 0; i < kBatchSize; ++i) {
+    for (size_t i = 0; i < kBatchSize; ++i) {
         input_length[i]     = kInputLen;
         sequence_length[i]  = kSequenceLen;
         context_length[i]   = kContextLen;
         k_cache_ref_ptrs[i] = k_cache_ref.data().get() + i * k_cache_ref.size() / kBatchSize;
         v_cache_ref_ptrs[i] = v_cache_ref.data().get() + i * v_cache_ref.size() / kBatchSize;
+        rope_base[i]        = kRoPEBase;
     }
 
     // getchar();
@@ -340,6 +349,7 @@ int main(int argc, char* argv[])
     params.finished       = finished.data().get();
     params.input_length   = input_length.data().get();
     params.context_length = context_length.data().get();
+    params.rope_theta     = rope_base.data().get();
     params.cu_q_len       = cu_seqlens.data().get();
     params.cu_k_len       = cu_kv_lens.data().get();
     // params.layer_offset   = 0;
@@ -353,7 +363,7 @@ int main(int argc, char* argv[])
     params.inv_sqrt_dh   = M_LOG2E / std::sqrt((float)params.size_per_head);
 
     params.rotary_embedding_dim  = kHeadDim;
-    params.rotary_embedding_base = 10000.f;
+    params.rotary_embedding_base = kRoPEBase;
 
     params.split_cnt = split_cnt.data().get();
     params.partial_L = partial_L.data().get();
@@ -370,6 +380,11 @@ int main(int argc, char* argv[])
     Reference<half> reference(kDump ? Reference<half>::kUNFUSED : Reference<half>::kFLASH_ATTENTION, {});
     reference.Reshape(kInputLen, kContextLen, kHeadNum, kHeadDim, KvHeadNum, kBatchSize);
 
+#if !DECODING
+    invokeApplyRotaryEmbedding(
+        k_cache_ref.data().get(), kContextLen, KvHeadNum, kHeadDim, params.rotary_embedding_base, kBatchSize);
+#endif
+
     for (int i = 0; i < 1; ++i) {
         reference.Execute(params.out, k_cache_ref.data().get(), v_cache_ref.data().get(), qkv.data().get());
     }
@@ -377,12 +392,12 @@ int main(int argc, char* argv[])
     cudaDeviceSynchronize();
 
     if constexpr (kDump) {
-        for (int b = 0; b < kBatchSize; ++b) {
-            for (int h = 0; h < kHeadNum; ++h) {
-                for (int q = 0; q < kInputLen; ++q) {
+        for (size_t b = 0; b < kBatchSize; ++b) {
+            for (size_t h = 0; h < kHeadNum; ++h) {
+                for (size_t q = 0; q < kInputLen; ++q) {
                     auto qk = reference.qk() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
                               + q * kContextLen;
-                    for (int k = 0; k < kContextLen; ++k) {
+                    for (size_t k = 0; k < kContextLen; ++k) {
                         std::cout << qk[k] * params.inv_sqrt_dh << " ";
                     }
                     std::cout << "\n";
@@ -408,13 +423,16 @@ int main(int argc, char* argv[])
 #if DECODING
         dispatchDecoding<half>(params);
 #else
+        // input -> blocked
         invokeProcessKV_<half>(params);
+        // blocked -> linear
         invokeFlattenKV(kv_cache.data().get(),  // [H, 2, cuS, D]
                         kv_cache.data().get() + cu_kv_lens[kBatchSize] * kHeadDim,
                         (const void**)k_ptrs.data().get(),
                         cu_kv_lens.data().get(),
                         cu_block_cnts.data().get(),
                         context_length.data().get(),
+                        params.rope_theta,
                         0,
                         1,
                         2 * cu_kv_lens[kBatchSize],
@@ -440,14 +458,14 @@ int main(int argc, char* argv[])
 
     if (kDump) {
         cudaDeviceSynchronize();
-        for (int b = 0; b < kBatchSize; ++b) {
-            for (int h = 0; h < kHeadNum; ++h) {
-                for (int q = 0; q < kInputLen; ++q) {
+        for (size_t b = 0; b < kBatchSize; ++b) {
+            for (size_t h = 0; h < kHeadNum; ++h) {
+                for (size_t q = 0; q < kInputLen; ++q) {
                     auto ref = reference.pr() + b * kHeadNum * kInputLen * kContextLen + h * kInputLen * kContextLen
                                + q * kContextLen;
                     auto data = qk_buf.data().get() + b * kHeadNum * kInputLen * kContextLen
                                 + h * kInputLen * kContextLen + q * kContextLen;
-                    for (int k = 0; k < kContextLen; ++k) {
+                    for (size_t k = 0; k < kContextLen; ++k) {
                         // std::cout << std::max(0.f, std::abs(data[k] - (float)ref[k]) - 1e-5f) << " ";
                         std::cout << data[k] * params.inv_sqrt_dh << " ";
                         // std::cout << (float)data[k] << " ";
@@ -466,6 +484,7 @@ int main(int argc, char* argv[])
                     cu_kv_lens.data().get(),
                     cu_block_cnts.data().get(),
                     context_length.data().get(),
+                    DECODING ? nullptr : params.rope_theta,
                     KvHeadNum * kContextLen,
                     0,
                     kContextLen,
@@ -502,7 +521,8 @@ int main(int argc, char* argv[])
             k_cache_ref.data().get() + kSequenceLen * kHeadDim,
             kContextLen * kHeadDim,
             kInputLen * kHeadDim,
-            kBatchSize * KvHeadNum);
+            kBatchSize * KvHeadNum,
+            0);
     Compare(v_cache.data().get() + kSequenceLen * kHeadDim,
             v_cache_ref.data().get() + kSequenceLen * kHeadDim,
             kContextLen * kHeadDim,
