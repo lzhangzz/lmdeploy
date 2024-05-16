@@ -11,9 +11,11 @@
 #include "test_utils.h"
 #include <algorithm>
 #include <cmath>
+#include <cuda_runtime.h>
 #include <iostream>
 #include <numeric>
 #include <random>
+#include <thrust/device_vector.h>
 #include <thrust/universal_vector.h>
 #include <utility>
 
@@ -194,9 +196,9 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     }
 }
 
-#define KV_INT8 1
+#define KV_INT8 0
 
-#define KV_INT4 0
+#define KV_INT4 1
 
 #define DECODING 1
 
@@ -210,15 +212,17 @@ int test_attention()
 #if DECODING
     // constexpr size_t kHeadNum   = 32;
     // constexpr size_t kBatchSize = 64;
-    constexpr size_t kHeadNum   = 40;
-    constexpr size_t KvHeadNum  = kHeadNum / 5;
+    constexpr size_t kHeadNum   = 32;
+    constexpr size_t KvHeadNum  = kHeadNum;
     constexpr size_t kBatchSize = 128;
     constexpr size_t kInputLen  = 1;
+
+    constexpr size_t kSequenceLen = 1023;
     // constexpr size_t kSequenceLen = 63;
     // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 511;
     // constexpr size_t kSequenceLen = 2047;
-    constexpr size_t kSequenceLen = 4095;
+    // constexpr size_t kSequenceLen = 4095;
     // constexpr size_t kSequenceLen = 8191;
     // constexpr size_t kSequenceLen = 32767;
     // constexpr size_t kSequenceLen = 65535;
@@ -255,7 +259,7 @@ int test_attention()
     constexpr size_t kSequenceLen = 0;
     constexpr int    kMaxSplitK   = 1;
 
-    constexpr int kBlockSz     = 128;
+    constexpr int kBlockSz = 128;
 
 #endif
 
@@ -274,7 +278,7 @@ int test_attention()
 
     constexpr size_t kContextLen = kSequenceLen + kInputLen;
     constexpr size_t kTokenNum   = kBatchSize * kInputLen;
-    constexpr int    kTestIter   = 10;
+    constexpr int    kTestIter   = 50;
 
     constexpr float kRoPEBase = 10000.f;
     constexpr int   kDump     = 0;
@@ -463,7 +467,45 @@ int test_attention()
 
     std::vector<thrust::universal_vector<T>> outputs;
 
+    auto size_in_bytes = kHeadDim * KvHeadNum * kBatchSize * (kSequenceLen + 1) * 2;
+    if (kQuantPolicy == 4) {
+        size_in_bytes *= 0.5 * 1.0625;
+    }
+    else if (kQuantPolicy == 8) {
+        size_in_bytes *= 1 * 1.03125;
+    }
+    else if (kQuantPolicy == 0) {
+        size_in_bytes *= 2;
+    }
+    auto print = [&](float ms) {
+        std::cout << kHeadDim << " " << kHeadNum << " " << KvHeadNum << " " << kBatchSize << " " << kSequenceLen + 1
+                  << " " << (int)kQuantPolicy << " " << ms << " " << size_in_bytes / ms * 1000 / 1e9 << " "
+                  << size_in_bytes / 1e9 << std::endl;
+    };
+
+    cudaDeviceProp prop{};
+    cudaGetDeviceProperties(&prop, 0);
+
+    thrust::device_vector<int> l2_cache((prop.l2CacheSize + 3) / 4);
+
+    cudaStream_t stream;
+    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    params.stream = stream;
+
+    cudaEvent_t ev_start;
+    cudaEvent_t ev_end;
+    cudaEventCreate(&ev_start);
+    cudaEventCreate(&ev_end);
+
+    std::vector<float> durations;
+
+    cudaDeviceSynchronize();
+
     for (int i = 0; i < std::max(kTestIter, 1); ++i) {
+
+        cudaMemsetAsync(l2_cache.data().get(), 0, sizeof(int) * l2_cache.size(), stream);
+
+        cudaEventRecord(ev_start, stream);
 
 #if DECODING
         dispatchDecoding<T>(params);
@@ -477,14 +519,32 @@ int test_attention()
         dispatchAttention(params);
         // params.linear_iter_params.kv_cache = std::exchange(tmp, nullptr);
 #endif
+
+        cudaEventRecord(ev_end, stream);
+
         if (auto err = cudaGetLastError(); err != cudaSuccess) {
             std::cout << cudaGetErrorString(err) << "\n";
             return -1;
         }
-        if (1) {
-            outputs.push_back(output);
-        }
+
+        cudaEventSynchronize(ev_end);
+
+        float ms{};
+        cudaEventElapsedTime(&ms, ev_start, ev_end);
+
+        // print(ms);
+
+        durations.push_back(ms);
+
+        // if (1) {
+        //     outputs.push_back(output);
+        // }
     }
+
+    const float mean = std::accumulate(durations.begin(), durations.end(), 0.f) / (float)durations.size();
+    std::cout << "\n -----> ";
+    print(mean);
+    std::cout << "total: " << size_in_bytes / 1e9 << " GB\n";
 
     if (kDump) {
         cudaDeviceSynchronize();
