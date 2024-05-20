@@ -23,7 +23,7 @@ struct Identity {
     static __inline__ __device__ void apply(uint data, int m, int n, half* C, int M, int N)
     {
         if (n < N) {
-            (uint&)C[n * M + m] = (uint&)data;
+            (half2&)C[n * M + m] += (half2&)data;
         }
     }
 };

@@ -17,8 +17,7 @@ namespace turbomind {
 template<typename T>
 class LlamaLinear {
 public:
-    enum Type
-    {
+    enum Type {
         kGemm,
         kFusedSiluFfn
     };
@@ -130,6 +129,9 @@ private:
     void forwardInt4(T* output_data, const T* input_data, int batch_size, const LlamaDenseWeight<T>& weight, Type type)
     {
         if constexpr (std::is_same_v<T, half>) {
+            if (type == GemmS4F16::kGemm) {
+                cudaMemsetAsync(output_data, 0, sizeof(half) * batch_size * weight.output_dims, stream_);
+            }
             gemm_s4_f16_.Run(output_data,
                              (const uint*)weight.kernel,
                              input_data,
