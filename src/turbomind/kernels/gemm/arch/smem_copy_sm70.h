@@ -14,6 +14,8 @@ struct SmemCopy_MMA_884_A {
     static constexpr int M = 8;
     static constexpr int K = 8;
 
+    static constexpr int kThreadCount = WARP_SIZE;
+
     static constexpr int kFragNum = 1;
 
     using Frag = Array<T, K>;
@@ -49,6 +51,8 @@ struct SmemCopy_MMA_884_B {
     static constexpr int M = 32;
     static constexpr int K = 8;
 
+    static constexpr int kThreadCount = WARP_SIZE;
+
     static constexpr int kFragNum = 1;
 
     using Frag = Array<T, K>;
@@ -82,6 +86,8 @@ struct SmemCopy_MMA_884_V {
     // static constexpr int M = 16;
     static constexpr int M = 32;
     static constexpr int K = K_;
+
+    static constexpr int kThreadCount = WARP_SIZE;
 
     static constexpr int kFragNum = 1;
 

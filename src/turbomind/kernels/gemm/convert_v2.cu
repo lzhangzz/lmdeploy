@@ -60,7 +60,7 @@ struct Config {
     static constexpr int CTA_M = 64;
     static constexpr int CTA_K = 32;
 
-    static constexpr int BLOCK_SIZE = 32;
+    static constexpr int BLOCK_SIZE = Operand::SmemCopyAtom::kThreadCount;
 
     using Stype = typename Operand::Dtype;
     using Dtype = Dtype_;

@@ -44,7 +44,7 @@ struct ConvertOperand {
     static constexpr int ITER_K = ceil_div(K, Atom::K);
 
     /// TODO: generailize this
-    static constexpr int WARP_CNT = 1;
+    static constexpr int kGroupCount = 1;
 
     using PtrD = get_pointer_type<Td>;
 
@@ -88,7 +88,8 @@ struct ConvertOperand {
         const int cta_offset_m = cta_idx_m * M;
         const int residue_m    = min(M, param.m - cta_offset_m);
 
-        const int warp_id = threadIdx.x / WARP_SIZE;
+        // const int warp_id = threadIdx.x / WARP_SIZE;
+        const int group_id = threadIdx.x / Atom::kThreadCount;
 
         const int warp_offset_m = 0;
 
@@ -150,7 +151,7 @@ struct ConvertOperand {
 
                     // Logical pack coords
                     const int pack_idx_k = cta_idx_k * ITER_K + k;
-                    const int pack_idx_m = ((cta_idx_m * WARP_CNT + warp_id) * kFragNum + m) / Pack_M;
+                    const int pack_idx_m = ((cta_idx_m * kGroupCount + group_id) * kFragNum + m) / Pack_M;
 
                     // Linear pack index
                     const int pack_index = cs2idx(_mk2cs(pack_idx_m, pack_idx_k),  //

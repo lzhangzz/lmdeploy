@@ -51,13 +51,6 @@ struct Operand_A {
     static constexpr Pack  kPack  = 0;
     static constexpr Order kOrder = order;
 
-    // using SmemCopyAtom =
-    //     std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_A<T, false>, SmemCopy_MMA_16816_B<T, true>>;
-
-    // using SmemCopyAtom = std::conditional_t<order == kRowMajor,
-    //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kRowMajor>,
-    //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kColMajor>>;
-
     using SmemCopyAtom = LDSM_SM75_8x8<T, 16, 16, ~order, order>;
 
     using GetSmemLayout = GetSmemLayoutV2<kOrder>;
@@ -71,12 +64,6 @@ struct Operand_B {
 
     static constexpr Pack  kPack  = 0;
     static constexpr Order kOrder = order;
-
-    // using SmemCopyAtom =
-    //     std::conditional_t<order == kRowMajor, SmemCopy_MMA_16816_B<T, false>, SmemCopy_MMA_16816_A<T, true>>;
-    // using SmemCopyAtom = std::conditional_t<order == kRowMajor,  //
-    //                                         LDSM_SM75_8x8<T, 16, 16, kRowMajor, kRowMajor>,
-    //                                         LDSM_SM75_8x8<T, 16, 16, kColMajor, kColMajor>>;
 
     using SmemCopyAtom = LDSM_SM75_8x8<T, N, 16, order, order>;
 
@@ -156,16 +143,13 @@ struct GetSmemLayout_Pack {
     }
 };
 
-template<class T, Order order>
+template<class T, Order order, int Pack_M>
 struct Operand_A_Pack {
     using Dtype = T;
-
-    static constexpr int Pack_M = 2;
 
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_A | Pack_M;
     static constexpr Order kOrder = order;
 
-    // using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
     using _SCp         = typename Operand_A<T, order>::SmemCopyAtom;
     using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, _SCp, order, Pack_M>;
 
@@ -182,7 +166,9 @@ struct Operand_B_Pack {
     static constexpr Pack  kPack  = HMMA_16816 | OPERAND_B | Pack_M;
     static constexpr Order kOrder = order;
 
-    using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+    // using SmemCopyAtom = SmemCopyAtom_Pack_v2<T, kOrder, 16 * Pack_M, 16, 8, Pack_M>;
+    using _SCp = typename Operand_B<T, order, 16>::SmemCopyAtom;
+    using SmemCopyAtom = SmemCopyAtom_Pack_v3<T, _SCp, order, Pack_M>;
 
     using GetSmemLayout = GetSmemLayout_Pack<kOrder>;
     using GetGmemIter   = GetGmemIter;

@@ -12,7 +12,7 @@ namespace turbomind::gemm {
 using namespace sm80_s16816;
 template<int N>
 using Config_ = Sm80_s16816<Sm80,
-                            Operand_A_Pack<uint4_t, kColMajor>,  // A
+                            Operand_A_Pack<uint4_t, kColMajor, 2>,  // A
                             Transform_HMMA_16816<0, 1>,          // tarnsform A
                             Operand_UV_Pack<uint32_t, false>,    // U
                             Operand_B<half, kRowMajor, N>,       // B

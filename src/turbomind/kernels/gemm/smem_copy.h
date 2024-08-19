@@ -58,33 +58,33 @@ struct SmemAccessorV2<T, Layout, kColMajor> {
     }
 };
 
-template<class T, Order order, int M_, int K_, int FragSize, int FragNum_, int RepeatC = 1>
-struct SmemCopyAtom_Pack_v2 {
-    static constexpr int M = M_;
-    static constexpr int K = K_;
+// template<class T, Order order, int M_, int K_, int FragSize, int FragNum_, int RepeatC = 1>
+// struct SmemCopyAtom_Pack_v2 {
+//     static constexpr int M = M_;
+//     static constexpr int K = K_;
 
-    static constexpr int kFragNum = FragNum_;
+//     static constexpr int kFragNum = FragNum_;
 
-    using Frag = Array<T, FragSize * kFragNum>;
+//     using Frag = Array<T, FragSize * kFragNum>;
 
-    __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
-    {
-        const int lane_id = thread_idx % WARP_SIZE;
+//     __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
+//     {
+//         const int lane_id = thread_idx % WARP_SIZE;
 
-        const int c = lane_id / RepeatC * Frag::size();
+//         const int c = lane_id / RepeatC * Frag::size();
 
-        return order == kRowMajor ? int2{0, c} : int2{c, 0};
-    }
+//         return order == kRowMajor ? int2{0, c} : int2{c, 0};
+//     }
 
-    template<class S, class D>
-    __device__ static void copy(S src_ptr, D dst_ptr, bool mask)
-    {
-        auto dst_raw_ptr = (T*)dst_ptr;  // SubBytePtr<T> -> T*
-        if (mask) {
-            Lds(*(Frag*)dst_raw_ptr, src_ptr);
-        }
-    }
-};
+//     template<class S, class D>
+//     __device__ static void copy(S src_ptr, D dst_ptr, bool mask)
+//     {
+//         auto dst_raw_ptr = (T*)dst_ptr;  // SubBytePtr<T> -> T*
+//         if (mask) {
+//             Lds(*(Frag*)dst_raw_ptr, src_ptr);
+//         }
+//     }
+// };
 
 template<class T, class CopyAtom, Order order, int FragNum_>
 struct SmemCopyAtom_Pack_v3 {

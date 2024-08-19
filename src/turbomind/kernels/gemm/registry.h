@@ -30,6 +30,7 @@ private:
     void f16_u4g128_f16_tnt_sm75_s16816();
     void f16_u4g128_f16_tnt_sm80_s16816();
     void f16_u4g128_f16_tnt_sm90_s16816();
+    void f16_u4g128_f16_sm90a_s64n16();
 
     void u4g128_f16_f16_nnn_sm80_s16816();
 

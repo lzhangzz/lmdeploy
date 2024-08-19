@@ -32,6 +32,7 @@ typedef enum MMA_Tag
     HMMA_1688  = 0x200,  // sm75
     HMMA_884   = 0x300,  // sm70
     HMMA_SIMT  = 0x400,  // sm75-
+    HGMMA_64n16 = 0x500, // sm90a
 } MMA_Tag;
 
 typedef enum Op_Tag

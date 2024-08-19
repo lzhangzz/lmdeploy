@@ -17,6 +17,8 @@ struct SmemCopy_MMA_SIMT_A {
 
     static constexpr int OP_N = simt::OP_N;
 
+    static constexpr int kThreadCount = WARP_SIZE;
+
     static constexpr int kFragNum = 1;
 
     using Frag = Array<T, K>;
@@ -47,6 +49,8 @@ struct SmemCopy_MMA_SIMT_B {
 
     static constexpr int OP_N = simt::OP_N;
 
+    static constexpr int kThreadCount = WARP_SIZE;
+
     static constexpr int kFragNum = 1;
 
     using Frag = Array<T, K>;
@@ -76,6 +80,8 @@ struct SmemCopy_MMA_SIMT_V {
     static constexpr int K = K_;
 
     static constexpr int OP_N = simt::OP_N;
+
+    static constexpr int kThreadCount = WARP_SIZE;
 
     static constexpr int kFragNum = 1;
 
