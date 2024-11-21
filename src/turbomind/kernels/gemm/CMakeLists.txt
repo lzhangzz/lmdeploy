@@ -41,6 +41,9 @@ target_compile_options(gemm2 PRIVATE
 set_property(TARGET gemm2 PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gemm2 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
+add_executable(tma_test test/tma_test.cu)
+target_compile_options(tma_test PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>)
+
 if (BUILD_TEST)
         add_executable(gemm_test
                 test/gemm_test.cu
