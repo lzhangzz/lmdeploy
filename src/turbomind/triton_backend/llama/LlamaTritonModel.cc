@@ -21,6 +21,7 @@
 #include <cctype>
 #include <optional>
 
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <yaml-cpp/yaml.h>
 
@@ -163,9 +164,11 @@ LlamaTritonModel<T>::~LlamaTritonModel()
 
     for (int device_id = 0; device_id < (int)engines_.size(); ++device_id) {
         // Set device id before destructing CUDA resources
-        check_cuda_error(cudaSetDevice(device_id));
+        // check_cuda_error(cudaSetDevice(device_id));
+        CudaContextGuard guard{cuctxs_[device_id]};
         engines_[device_id].reset();
         weights_[device_id].reset();
+        // cuCtxDestroy(cuctxs_[device_id]);
     }
 }
 
@@ -183,7 +186,6 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
     engine_param_{},
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
-    weights_(getDeviceCount()),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     FT_CHECK_WITH_INFO(!(config.empty() && model_dir.empty()), "invalid init options");
@@ -295,7 +297,22 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t                                 ten
 
     gateway_ = std::make_shared<Gateway>(ffi_ctx_factory);
 
-    const auto device_count = getDeviceCount();
+    int device_count{};
+    cuDeviceGetCount(&device_count);
+
+    CUcontext prev{};
+    cuCtxGetCurrent(&prev);
+    for (int i = 0; i < device_count; ++i) {
+        CUdevice dev{};
+        cuDeviceGet(&dev, i);
+        CUcontext ctx{};
+        // cuCtxCreate(&ctx, 0, dev);
+        cuDevicePrimaryCtxRetain(&ctx, dev);
+        cuctxs_.push_back(ctx);
+    }
+    cuCtxSetCurrent(prev);
+
+    weights_.resize(device_count);
     engines_.resize(device_count);
 
     const std::string weight_type_str = model_reader["weight_type"].as<std::string>();
@@ -336,7 +353,9 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
                                                std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
                                                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    // check_cuda_error(cudaSetDevice(device_id));
+    CudaContextGuard guard{cuctxs_[device_id]};
+
     const int comms_rank = device_id % (tensor_para_size_ * pipeline_para_size_);
 
     auto ctx = std::make_unique<Context<T>>(device_id);
@@ -379,7 +398,8 @@ LlamaTritonModel<T>::createSharedModelInstance(int                              
 template<typename T>
 std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int device_id)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    // check_cuda_error(cudaSetDevice(device_id));
+    CudaContextGuard guard{cuctxs_[device_id]};
 
     FT_CHECK(engines_[device_id] != nullptr);
 
@@ -393,9 +413,10 @@ std::unique_ptr<ModelRequest> LlamaTritonModel<T>::createModelInstance(int devic
 template<typename T>
 void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
-    const int tensor_para_rank   = rank % tensor_para_size_;
-    const int pipeline_para_rank = rank / tensor_para_size_;
+    // check_cuda_error(cudaSetDevice(device_id));
+    CudaContextGuard guard{cuctxs_[device_id]};
+    const int        tensor_para_rank   = rank % tensor_para_size_;
+    const int        pipeline_para_rank = rank / tensor_para_size_;
     FT_CHECK(pipeline_para_size_ == 1 && pipeline_para_rank == 0);
     weights_[device_id] =
         std::make_shared<LlamaWeight<T>>(model_param_, lora_param_, moe_param_, tensor_para_size_, tensor_para_rank);
@@ -409,7 +430,8 @@ void LlamaTritonModel<T>::createSharedWeights(int device_id, int rank)
 template<typename T>
 std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int deviceId, int rank)
 {
-    check_cuda_error(cudaSetDevice(deviceId));
+    // check_cuda_error(cudaSetDevice(deviceId));
+    CudaContextGuard guard{cuctxs_[deviceId]};
 
     // shared_weight should be created before getParams
     FT_CHECK(weights_[deviceId] != nullptr);
@@ -427,7 +449,9 @@ std::unordered_map<std::string, Tensor> LlamaTritonModel<T>::getParams(int devic
 template<typename T>
 void LlamaTritonModel<T>::processWeights(int device_id, int rank)
 {
-    check_cuda_error(cudaSetDevice(device_id));
+    // check_cuda_error(cudaSetDevice(device_id));
+    CudaContextGuard guard{cuctxs_[device_id]};
+
     FT_CHECK(weights_[device_id] != nullptr);
 
     cudaDeviceProp props{};
@@ -443,6 +467,7 @@ void LlamaTritonModel<T>::createEngine(int                                      
                                        std::pair<std::vector<NcclParam>, std::vector<NcclParam>> nccl_params,
                                        std::shared_ptr<AbstractCustomComm>                       custom_all_reduce_comm)
 {
+    CudaContextGuard guard{cuctxs_[device_id]};
 
     auto engine = createSharedModelInstance(device_id, rank, nccl_params, custom_all_reduce_comm);
 
@@ -486,6 +511,69 @@ void LlamaTritonModel<T>::createCustomComms(std::vector<std::shared_ptr<Abstract
 {
     using commDataType = typename CustomARCommTypeConverter<T>::Type;
     initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
+}
+
+template<class T>
+std::pair<std::vector<NcclParam>, std::vector<NcclParam>>
+LlamaTritonModel<T>::createNcclParams(const int node_id, const int device_id_start, const bool multi_node)
+{
+    const int gpu_count          = cuctxs_.size();
+    const int tensor_para_size   = getTensorParaSize();
+    const int pipeline_para_size = getPipelineParaSize();
+    const int local_comm_size    = multi_node ? gpu_count : tensor_para_size * pipeline_para_size;
+    FT_CHECK(tensor_para_size > 0 && pipeline_para_size > 0);
+    FT_CHECK(device_id_start + (int)local_comm_size <= gpu_count);
+
+    std::vector<NcclUid> nccl_ids;
+    if (tensor_para_size > 1 || pipeline_para_size > 1) {
+        nccl_ids.resize(tensor_para_size + pipeline_para_size);
+        if (node_id == 0) {
+            for (uint32_t i = 0; i < nccl_ids.size(); i++) {
+                ftNcclGetUniqueId(nccl_ids[i]);
+            }
+        }
+    }
+
+    std::vector<NcclParam> tensor_para_params(local_comm_size);
+    std::vector<NcclParam> pipeline_para_params(local_comm_size);
+    // Don't init comm when size == 1
+    if (tensor_para_size > 1) {
+        const auto group_id = ftNcclNextGroupId();
+        ftNcclGroupStart();
+        for (int gid = device_id_start; gid < device_id_start + local_comm_size; gid++) {
+            int rank               = node_id * gpu_count + gid - device_id_start;
+            int tensor_para_rank   = rank % tensor_para_size;
+            int pipeline_para_rank = rank / tensor_para_size;
+
+            NcclUid tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
+            // check_cuda_error(cudaSetDevice(gid));
+            CudaContextGuard guard{cuctxs_[gid]};
+            ftNcclCommInitRank(
+                tensor_para_params[gid - device_id_start], tensor_para_rank, tensor_para_size, tensor_para_nccl_uid);
+            tensor_para_params[gid - device_id_start].group_id_ = group_id;
+        }
+        ftNcclGroupEnd();
+    }
+    if (pipeline_para_size > 1) {
+        const auto group_id = ftNcclNextGroupId();
+        ftNcclGroupStart();
+        for (int gid = device_id_start; gid < device_id_start + local_comm_size; gid++) {
+            int rank               = node_id * gpu_count + gid - device_id_start;
+            int tensor_para_rank   = rank % tensor_para_size;
+            int pipeline_para_rank = rank / tensor_para_size;
+
+            NcclUid pipeline_para_nccl_uid = nccl_ids[pipeline_para_size + tensor_para_rank];
+            // check_cuda_error(cudaSetDevice(gid));
+            CudaContextGuard guard{cuctxs_[gid]};
+            ftNcclCommInitRank(pipeline_para_params[gid - device_id_start],
+                               pipeline_para_rank,
+                               pipeline_para_size,
+                               pipeline_para_nccl_uid);
+            pipeline_para_params[gid - device_id_start].group_id_ = group_id;
+        }
+        ftNcclGroupEnd();
+    }
+    return std::pair<std::vector<NcclParam>, std::vector<NcclParam>>(tensor_para_params, pipeline_para_params);
 }
 
 template<typename T>

@@ -923,7 +923,8 @@ LlamaBatch<T>::~LlamaBatch()
     internal_thread_.join();
 
     // The dtor maybe called from unknown thread, set device id before CUDA calls
-    check_cuda_error(cudaSetDevice(device_id_));
+    // check_cuda_error(cudaSetDevice(device_id_));
+    CudaContextGuard guard{context_->ctx};
     check_cuda_error(cudaStreamSynchronize(stream_));
 
     FreeBuffer();
@@ -1560,7 +1561,8 @@ template<typename T>
 void LlamaBatch<T>::InternalThreadEntry()
 {
     // TM_LOG_INFO("[InternalThreadEntry] %d", (int)rank_);
-    check_cuda_error(cudaSetDevice(device_id_));
+    // check_cuda_error(cudaSetDevice(device_id_));
+    CudaContextGuard guard{context_->ctx};
 
     // Initialize `AnomalyHandler`
     AnomalyHandler::instance().Init(rank_, model_->vocab_size_padded_, model_->end_id_, max_batch_size_, stream_);

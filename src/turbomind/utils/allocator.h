@@ -235,7 +235,7 @@ public:
         void* ptr      = nullptr;
         int   o_device = 0;
 
-        check_cuda_error(getSetDevice(device_id_, &o_device));
+        // check_cuda_error(getSetDevice(device_id_, &o_device));
         if (is_host) {
             check_cuda_error(cudaMallocHost(&ptr, (size_t)(ceil(size / 32.)) * 32));
         }
@@ -249,7 +249,7 @@ public:
         if (is_set_zero) {
             check_cuda_error(cudaMemsetAsync(ptr, 0, (size_t)(ceil(size / 32.)) * 32, stream_));
         }
-        check_cuda_error(getSetDevice(o_device));
+        // check_cuda_error(getSetDevice(o_device));
         TM_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
         pointer_mapping_.insert({getAddress(ptr), {size, is_host ? MemoryType::HOST : MemoryType::DEVICE}});
@@ -266,7 +266,7 @@ public:
             if (pointer_mapping_.count(address)) {
                 const auto is_host = pointer_mapping_.at(address).second == MemoryType::HOST;
                 TM_LOG_DEBUG("Free buffer %p", address);
-                check_cuda_error(getSetDevice(device_id_, &o_device));
+                // check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
                     check_cuda_error(cudaFreeHost(*ptr));
                 }
@@ -277,7 +277,7 @@ public:
                     check_cuda_error(cudaFreeAsync(*ptr, stream_));
 #endif
                 }
-                check_cuda_error(getSetDevice(o_device));
+                // check_cuda_error(getSetDevice(o_device));
                 pointer_mapping_.erase(address);
             }
             else {

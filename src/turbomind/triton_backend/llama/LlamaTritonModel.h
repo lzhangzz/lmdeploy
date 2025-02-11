@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "cuda.h"
+
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
@@ -41,6 +43,9 @@ struct LlamaTritonModel: public AbstractTransformerModel {
                      std::function<std::shared_ptr<void>()> ffi_ctx_factory);
 
     ~LlamaTritonModel() override;
+
+    std::pair<std::vector<NcclParam>, std::vector<NcclParam>>
+    createNcclParams(const int node_id, const int device_id_start, const bool multi_node) override;
 
     std::unique_ptr<ModelRequest> createModelInstance(int deviceId) override;
 
@@ -85,6 +90,7 @@ private:
     // Weights & engine instances for the ranks
     std::vector<std::shared_ptr<LlamaWeight<T>>> weights_;
     std::vector<std::shared_ptr<Engine<T>>>      engines_;
+    std::vector<CUcontext>                       cuctxs_;
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;

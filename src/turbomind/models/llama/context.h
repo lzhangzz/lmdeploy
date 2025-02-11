@@ -7,6 +7,7 @@
 #include "src/turbomind/utils/cublasMMWrapper.h"
 #include <cublasLt.h>
 #include <cublas_v2.h>
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <memory>
@@ -15,6 +16,7 @@ namespace turbomind {
 
 template<class T>
 struct Context {
+    CUcontext                                       ctx;
     cudaStream_t                                    stream;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> allocator;
     std::unique_ptr<Allocator<AllocatorType::CUDA>> peer_allocator;
@@ -27,7 +29,8 @@ struct Context {
     cudaDeviceProp                                  cuda_device_prop;
 
     Context(int device_id)
-    {
+    {   
+        cuCtxGetCurrent(&ctx);
         check_cuda_error(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
         allocator = std::make_unique<Allocator<AllocatorType::CUDA>>(device_id, false);

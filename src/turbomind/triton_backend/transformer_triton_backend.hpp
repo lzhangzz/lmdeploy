@@ -68,7 +68,7 @@ struct AbstractTransformerModel {
     virtual ~AbstractTransformerModel() = default;
 
     virtual std::pair<std::vector<NcclParam>, std::vector<NcclParam>>
-    createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);
+    createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false) = 0;
 
     virtual void createCustomComms(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
                                    int                                               world_size) = 0;

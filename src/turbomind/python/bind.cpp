@@ -253,7 +253,7 @@ static void safe_memcpy(void* dst, const void* src, size_t size)
             }
             else {
                 // Same device, switch to the device first (this is unlikely)
-                ft::CudaDeviceGuard guard(dat.device);
+                // ft::CudaDeviceGuard guard(dat.device);
                 ft::check_cuda_error(cudaMemcpy(dst, src, size, cudaMemcpyDefault));
             }
         }

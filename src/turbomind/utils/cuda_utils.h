@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cublasLt.h>
 #include <cublas_v2.h>
+#include <cuda.h>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <iostream>
@@ -501,6 +502,28 @@ public:
 
 private:
     int last_device_id_{-1};
+};
+
+class CudaContextGuard {
+public:
+    CudaContextGuard(CUcontext ctx): ctx_{ctx}
+    {
+        cuCtxGetCurrent(&prev_);
+        if (prev_ != ctx_) {
+            cuCtxSetCurrent(ctx_);
+        }
+    }
+
+    ~CudaContextGuard()
+    {
+        if (prev_ != ctx_) {
+            cuCtxSetCurrent(prev_);
+        }
+    }
+
+private:
+    CUcontext ctx_;
+    CUcontext prev_;
 };
 
 /* ************************** end of common utils ************************** */
