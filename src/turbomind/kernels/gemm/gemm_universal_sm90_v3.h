@@ -37,6 +37,23 @@
 
 namespace turbomind::gemm {
 
+inline __device__ void mbarrier_wait(void* mbar, uint32_t phase)
+{
+    uint32_t smem_addr = cast_smem_ptr_to_uint(mbar);
+    // uint32_t ticks     = 0x989680;
+    uint32_t ticks = 1000000;
+    asm volatile("{\n\t"
+                 ".reg .pred       P1; \n\t"
+                 "LAB_WAIT: \n\t"
+                 "mbarrier.try_wait.parity.shared::cta.b64 P1, [%0], %1, %2; \n\t"
+                 "@P1 bra DONE; \n\t"
+                 "bra     LAB_WAIT; \n\t"
+                 "DONE: \n\t"
+                 "}"
+                 :
+                 : "r"(smem_addr), "r"(phase), "r"(ticks));
+}
+
 template<Order raster_order, int multicast_a, int multicast_b, bool is_grouped_gemm_>
 struct GemmUniversalSm90_v3 {
 
@@ -191,6 +208,8 @@ struct GemmUniversalSm90_v3 {
 
             if (warp_id % 4 == 0) {
 
+                int pred = cute::elect_one_sync();
+
                 Cluster cluster(cute::block_id_in_cluster().x);
 
                 const int mc_offset_m = cluster.cta_n() * (TILE_M / kMulticastA);
@@ -225,8 +244,8 @@ struct GemmUniversalSm90_v3 {
                             const int m1 = tile->m1;
 
                             Array<void*, 3> global_addrs;
-                            global_addrs[0] = (Ta*)param_A.ptr + m0 * (int64_t)param_A.stride;
-                            global_addrs[1] = ((void**)param_B.ptr)[g];
+                            global_addrs[0]            = (Ta*)param_A.ptr + m0 * (int64_t)param_A.stride;
+                            (uint64_t&)global_addrs[1] = __ldg((uint64_t*)param_B.ptr + g);
 
                             const int beg_u = m0 / kAlignmentU * kAlignmentU;
                             const int end_u = round_up(m1, kAlignmentU);
@@ -241,14 +260,9 @@ struct GemmUniversalSm90_v3 {
                             Adesc      = &descs[0];
                             Bdesc      = &descs[1];
                             Udesc      = &descs[2];
-
-                            PRAGMA_UNROLL
-                            for (int i = 0; i < 3; ++i) {
-                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)&descs[i]);
-                            }
                         }
 
-                        if (cute::elect_one_sync()) {
+                        if (pred) {
                             const int offset_k = 0;
 
                             const uint16_t mask_A = cluster.mask_m();
@@ -269,13 +283,20 @@ struct GemmUniversalSm90_v3 {
                             GmemIteratorSm90<kMulticastU> gmem_U{
                                 Udesc, {offset_m + mc_offset_u, offset_k / 128}, {0, 1}};
 
+                            if constexpr (is_grouped_gemm) {
+                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Adesc);
+                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Bdesc);
+                                cute::tma_descriptor_fence_acquire((cute::TmaDescriptor*)Udesc);
+                            }
+
                             for (; k_iter > 0; --k_iter) {
                                 int pipe = write_state.index();
-                                ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
+                                // ConsumerBar::wait(&consumer_bar[pipe], write_state.phase());
+                                mbarrier_wait(&consumer_bar[pipe], write_state.phase());
                                 ProducerBar::arrive_and_expect_tx(&producer_bar[pipe], kTmaTxBytes);
                                 gmem_A.Step(&producer_bar[pipe], &smem_A[pipe * TILE_M * TILE_K], mask_A);
                                 gmem_B.Step(&producer_bar[pipe], &smem_B[pipe * TILE_N * TILE_K], mask_B);
-                                gmem_U.Step(&producer_bar[pipe], &smem_U[pipe][0] + mc_offset_u, mask_A);
+                                gmem_U.Step(&producer_bar[pipe], &smem_U[pipe] + mc_offset_u, mask_A);
                                 ++write_state;
                             }
                         }
@@ -334,14 +355,26 @@ struct GemmUniversalSm90_v3 {
             const int warp_id = cutlass::canonical_warp_idx_sync();
             const int lane_id = cutlass::canonical_lane_idx();
 
+            uint64_t* pbar;  // = &producer_bar[pipe_state.index()];
+            const int offset_to_cbar = consumer_bar - producer_bar;
+
+            auto pbar_step = [&] {
+                if (++pbar == &producer_bar[Stages]) {
+                    pbar = producer_bar;
+                }
+            };
+
             auto consumer_arrive = [&] {
+                uint64_t* cbar = pbar + offset_to_cbar;
                 __syncwarp();
                 if constexpr (kClusterSize > 1) {
-                    ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
+                    // ConsumerBar::arrive(&consumer_bar[pipe_state.index()], lane_id, lane_id < kClusterSize);
+                    ConsumerBar::arrive(cbar, lane_id, lane_id < kClusterSize);
                 }
                 else {
                     if (lane_id == 0) {
-                        ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                        // ConsumerBar::arrive(&consumer_bar[pipe_state.index()]);
+                        ConsumerBar::arrive(cbar);
                     }
                 }
             };
@@ -367,26 +400,26 @@ struct GemmUniversalSm90_v3 {
 
                     fetch_V();
 
-                    float scale_V[2];
-                    int   iter_V{};
-                    auto  Load_V = [&] {
-                        scale_V[0] = storage.source.V[0][iter_V];
+                    float     scale_V[2];
+                    const Tv* smem_V   = storage.source.V[0];
+                    const int stride_V = storage.source.V[1] - smem_V;
+                    auto      Load_V   = [&] {
+                        scale_V[0] = *smem_V;
                         if (pred_V) {
-                            scale_V[1] = storage.source.V[1][iter_V];
+                            scale_V[1] = *(smem_V + stride_V);
                         }
-                        ++iter_V;
+                        ++smem_V;
                     };
 
-                    float     scale_U[MMA_ITER_M][2];
-                    const int offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
-                    int       align_U  = 0;
+                    float scale_U[MMA_ITER_M][2];
+                    int   offset_U = wg_idx_m * WG_TILE_M + warp_id % 4 * 16 + lane_id / 4;
                     if constexpr (is_grouped_gemm) {
-                        align_U = tile->m0 % kAlignmentU;
+                        offset_U += tile->m0 % kAlignmentU;
                     }
                     auto Load_U = [&] {
                         for (int m = 0; m < MMA_ITER_M; ++m) {
-                            scale_U[m][0] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M];
-                            scale_U[m][1] = smem_U[pipe_state.index()][align_U + offset_U + m * MMA_ATOM_M + 8];
+                            scale_U[m][0] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M];
+                            scale_U[m][1] = smem_U[pipe_state.index()][offset_U + m * MMA_ATOM_M + 8];
                         }
                     };
 
@@ -444,7 +477,10 @@ struct GemmUniversalSm90_v3 {
 
                     int k_iter = sched.k_iters_;
 
-                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    pbar = &producer_bar[pipe_state.index()];
+
+                    // mbarrier_wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    mbarrier_wait(pbar, pipe_state.phase());
                     Load_U();
                     smem_iter_A.Reset(pipe_state.index());
                     smem_iter_B.Reset(pipe_state.index());
@@ -458,27 +494,36 @@ struct GemmUniversalSm90_v3 {
                     cute::warpgroup_wait<0>();
                     scale_accum();
                     consumer_arrive();
+                    smem_iter_A.Advance(pipe_state.index());
+                    smem_iter_B.Advance(pipe_state.index());
                     ++pipe_state;
+                    pbar_step();
                     --k_iter;
 
                     Load_V();
-                    ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    // mbarrier_wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                    mbarrier_wait(pbar, pipe_state.phase());
                     Load_U();
-                    smem_iter_A.Reset(pipe_state.index());
-                    smem_iter_B.Reset(pipe_state.index());
+                    // smem_iter_A.Reset(pipe_state.index());
+                    // smem_iter_B.Reset(pipe_state.index());
 
+                    PRAGMA_NO_UNROLL
                     for (; k_iter > 1; --k_iter) {
                         cute::warpgroup_arrive();
                         gmma();
                         cute::warpgroup_wait<0>();
                         scale_accum();
                         consumer_arrive();
+                        smem_iter_A.Advance(pipe_state.index());
+                        smem_iter_B.Advance(pipe_state.index());
                         ++pipe_state;
+                        pbar_step();
                         Load_V();
-                        ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                        // mbarrier_wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                        mbarrier_wait(pbar, pipe_state.phase());
                         Load_U();
-                        smem_iter_A.Reset(pipe_state.index());
-                        smem_iter_B.Reset(pipe_state.index());
+                        // smem_iter_A.Reset(pipe_state.index());
+                        // smem_iter_B.Reset(pipe_state.index());
                     }
 
                     const int thread_idx = threadIdx.x % kMathGroupSize;
@@ -568,11 +613,14 @@ struct GemmUniversalSm90_v3 {
                 else {
                     if constexpr (kClusterSize > 1) {
                         if (tile->is_valid_cluster) {
+                            pbar       = &producer_bar[pipe_state.index()];
                             int k_iter = sched.k_iters_;
                             for (; k_iter > 0; --k_iter) {
-                                ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                                // ProducerBar::wait(&producer_bar[pipe_state.index()], pipe_state.phase());
+                                ProducerBar::wait(pbar, pipe_state.phase());
                                 consumer_arrive();
                                 ++pipe_state;
+                                pbar_step();
                             }
                         }
                     }
@@ -674,7 +722,8 @@ struct GemmUniversalSm90_v3 {
 
         const Tv* gmem_V = (const Tv*)param_V.ptr;
         if constexpr (is_grouped_gemm) {
-            gmem_V = ((Tv**)gmem_V)[tile->group_idx];
+            static_assert(sizeof(uint64_t) == sizeof(void*));
+            (uint64_t&)gmem_V = __ldg((uint64_t*)gmem_V + tile->group_idx);
         }
         gmem_V += (offset_n / 128) * param_V.stride + (offset_k / 128);
 

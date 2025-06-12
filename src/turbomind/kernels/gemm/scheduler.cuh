@@ -33,7 +33,8 @@ TM_DEVICE void mbarrier_arrive_cluster(uint64_t* mbar, int cta_id, int pred)
 TM_DEVICE void mbarrier_wait_cluster(uint64_t* mbar, uint32_t phase)
 {
     uint32_t smem_addr = cast_smem_ptr_to_uint(mbar);
-    uint32_t ticks     = 0x989680;
+    // uint32_t ticks     = 0x989680;
+    uint32_t ticks = 0x1000000;
     asm volatile("{\n"
                  ".reg .pred       P1; \n"
                  "LAB_WAIT: \n"
@@ -74,7 +75,7 @@ template<Order order,
          bool is_grouped_gemm>
 struct TileScheduler {
 
-    static constexpr bool is_dynamic = is_grouped_gemm;
+    static constexpr bool is_dynamic = true;  // is_grouped_gemm;
     static constexpr int  Stages     = Stages_;
 
     static constexpr int2 tile_{tile_m, tile_n};
@@ -136,6 +137,8 @@ struct TileScheduler {
 
     struct ConsumerState {
         PipelineState  pipe;
+        Tile*          tile_ptr;
+        uint64_t*      bar_ptr;
         Storage&       store;
         TileScheduler& sched;
 
@@ -270,6 +273,8 @@ public:
     {
         return {
             PipelineState{},
+            (Tile*)store.tile,
+            (uint64_t*)store.producer_bar,
             store,
             *this,
         };
@@ -452,14 +457,16 @@ public:
         auto& store = state.store;
         auto& pipe  = state.pipe;
 
+        // tile = &store.tile[pipe.index()];
+        tile = state.tile_ptr;
+
         if constexpr (Cluster::size == 1) {
             cutlass::arch::ClusterBarrier::wait(&store.producer_bar[pipe.index()], pipe.phase());
         }
         else {
-            mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
+            // mbarrier_wait_cluster(&store.producer_bar[pipe.index()], pipe.phase());
+            mbarrier_wait_cluster(state.bar_ptr, pipe.phase());
         }
-
-        tile = &store.tile[pipe.index()];
 
         return tile->alive;
     }
@@ -469,15 +476,25 @@ public:
         auto& store = state.store;
         auto& pipe  = state.pipe;
 
-        __syncwarp();
+        int pred = cute::elect_one_sync();
+
+        uint64_t* bar = state.bar_ptr + ((uint64_t*)store.consumer_bar - (uint64_t*)store.producer_bar);
 
         if constexpr (Cluster::size == 1) {
-            if (cutlass::elect_one_sync()) {
+            if (pred) {
                 cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()]);
             }
         }
         else {
-            cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()], 0, cutlass::elect_one_sync());
+            // cutlass::arch::ClusterBarrier::arrive(&store.consumer_bar[pipe.index()], 0, pred);
+            cutlass::arch::ClusterBarrier::arrive(bar, 0, pred);
+        }
+
+        if (++state.tile_ptr == &store.tile[Stages]) {
+            state.tile_ptr = store.tile;
+        }
+        if (++state.bar_ptr == &store.producer_bar[Stages]) {
+            state.bar_ptr = store.producer_bar;
         }
 
         pipe.advance(step);

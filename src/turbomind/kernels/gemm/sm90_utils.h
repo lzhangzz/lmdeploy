@@ -45,7 +45,8 @@ struct SmemDescIterV2 {
     {
         u32_[0] += Step;
         if (stage == Stages - 1) {
-            u32_[0] = base_;
+            // u32_[0] = base_;
+            u32_[0] -= Stages * Step;
         }
     }
 
