@@ -46,20 +46,6 @@ public:
             int                          max_batch_size,
             std::shared_ptr<LlamaWeight> weights);
 
-    size_t vocab_size() const noexcept
-    {
-        return vocab_size_;
-    }
-
-private:
-    void updateEmbedding(char*            decoder_input,
-                         const int        bsz,
-                         const int*       h_input_length,
-                         const Sequence** sequences,
-                         int              token_num,
-                         int*             lora_mask,
-                         bool*            have_embeddings);
-
     void Forward(Buffer_<int>     input_ids,
                  Tensor           hidden_states_out,
                  Tensor           decoder_out,
@@ -92,6 +78,20 @@ private:
                        Buffer sampled_nums,
                        int    step,
                        int    max_context_len);
+
+    size_t vocab_size() const noexcept
+    {
+        return vocab_size_;
+    }
+
+private:
+    void updateEmbedding(char*            decoder_input,
+                         const int        bsz,
+                         const int*       h_input_length,
+                         const Sequence** sequences,
+                         int              token_num,
+                         int*             lora_mask,
+                         bool*            have_embeddings);
 
 private:
     friend class LlamaBatch;

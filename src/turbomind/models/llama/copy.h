@@ -9,13 +9,19 @@ namespace turbomind {
 
 class BatchedCopy {
 public:
-    template<class T, std::enable_if_t<alignof(T) <= alignof(uint32_t), int> = 0>
+    template<class T>
     T* Add(const T* src, int size, T* dst)
     {
         src_.push_back((void*)src);
         dst_.push_back((void*)dst);
         size_.push_back(sizeof(T) * size);
         return dst + size;
+    }
+
+    template<class T>
+    T* operator()(const T* src, int size, T* dst)
+    {
+        return Add(src, size, dst);
     }
 
     void Submit(cudaStream_t stream)
@@ -30,6 +36,10 @@ public:
         src_.clear();
         dst_.clear();
         size_.clear();
+    }
+
+    void Launch(cudaStream_t stream) {
+        Submit(stream);
     }
 
 private:

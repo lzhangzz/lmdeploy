@@ -13,8 +13,7 @@ namespace turbomind {
 
 struct Sequence {
 
-    enum Status
-    {
+    enum Status {
         kCached = 0,
         kLocked,
         kActive
