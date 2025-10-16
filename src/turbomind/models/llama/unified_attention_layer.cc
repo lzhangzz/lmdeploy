@@ -154,6 +154,76 @@ void UnifiedAttentionLayer::Finalize()
     event_.Sync();
 }
 
+struct AttentionStates {
+    Buffer_<float> rope_base;
+
+    Tensor_<int> mrope_position_ids;
+    Buffer_<int> mrope_position_delta;
+    Buffer_<int> mrope_length;
+};
+
+// O(1) constant (scalar param, flags)
+// --- Init ---
+// Append([input], [index], H_BUF)  # inplace
+// --- Setup ---
+// Gather(h_buf, [perm], h_buf')
+// Swap(h_buf, h_buf')
+// HtoD(h_buf, d_buf)
+
+
+// O(1) mutable (q/k length, random state)
+// --- Init ---
+// Append([input], [index], H_BUF)         # inplace
+// --- Setup ---
+// Gather(H_BUF, [perm], h_buf')           # permutation
+// Swap(h_buf', H_BUF)
+// HtoD(H_BUF, d_buf)                      # release
+// --- Prepare ---
+// Gather(D_STATE, [perm], [mask], d_buf)  # acquire
+// Swap(d_buf, D_STATE)
+// ----------------
+// DtoD(D_STATE, d_buf)                    # release
+// --- Sync ---
+// DtoH(d_buf, h_buf')                     # acquire
+// Gather(h_buf', [perm], [mask], h_buf)
+
+
+// O(n) constant varlen (input embeds, mrope_position_ids)
+// --- Init ---
+// Append([input], [index], D_BUF, [D_LEN])        # acquire, inplace
+// --- Setup ---
+// Gather(D_BUF, [D_LEN], [perm], d_buf', [d_len'])
+// Swap(d_buf'<->D_BUF, [d_len']<->[D_LEN])        # release
+
+
+// O(n) mutable varlen (token_ids，input_ids)
+// --- Init ---
+// Append([input], [index], D_BUF, [D_LEN])        # acquire, inplace
+// --- Setup ---
+// Gather(D_BUF, [D_LEN], [perm], d_buf', d_len')
+// Swap(d_buf'<->D_BUF, d_len'<->D_LEN)            # release
+// --- Prepare ---
+// Gather(D_STATE, [D_SLEN], [perm], [mask], d_buf, [d_len])
+// Swap()
+
+
+
+void UnifiedAttentionLayer::Setup(const std::shared_ptr<AttentionStates>& states, const TensorMap& args)
+{
+    const int bsz = args.at("requests").size();
+
+    const auto inputs = args.at("inputs").data<TensorMap>();
+
+    if (rope_param_.type == RopeType::kDynamic) {
+        Copy(args.at("rope_base").buffer(), bsz, states->rope_base);
+    }
+    else if (rope_param_.type == RopeType::kMrope) {
+        for (int i = 0; i < bsz; ++i) {
+            // inputs->at("position_")
+        }
+    }
+}
+
 void UnifiedAttentionLayer::Forward(ForwardParam p)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);

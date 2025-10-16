@@ -35,6 +35,8 @@
 
 namespace turbomind {
 
+struct AttentionStates;
+
 class UnifiedAttentionLayer {
 public:
     using WeightType = LlamaAttentionWeight;
@@ -57,6 +59,8 @@ public:
                           const LoraParam&      lora,
                           int                   tp_size,
                           const Context&        context);
+
+    void Setup(const std::shared_ptr<AttentionStates>& states, const TensorMap& args);
 
     void Forward(ForwardParam p);
 

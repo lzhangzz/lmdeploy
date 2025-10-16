@@ -11,6 +11,8 @@
 
 namespace turbomind {
 
+struct TransformerStates;
+
 class UnifiedDecoder {
 public:
     using WeightType = LlamaDecoderLayerWeight;
@@ -21,6 +23,8 @@ public:
                    const MoeParam&       moe,
                    const LoraParam&      lora,
                    const Context&        ctx);
+
+    void Setup(const std::shared_ptr<TransformerStates>& states, const TensorMap& args);
 
     void Forward(TensorMap& args, const std::vector<WeightType*>& weights);
 

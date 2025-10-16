@@ -21,6 +21,7 @@
 
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/sampling_states.h"
 
 #include "src/turbomind/core/tensor.h"
 
@@ -28,18 +29,19 @@ namespace turbomind {
 
 class DynamicDecodeLayer {
 public:
-    DynamicDecodeLayer(DataType              data_type,
-                       int                   max_batch_size,
-                       int                   vocab_size,
-                       int                   vocab_size_padded,
-                       cudaStream_t          stream,
-                       const cudaDeviceProp* device_prop);
+    DynamicDecodeLayer(DataType                                            data_type,
+                       int                                                 max_batch_size,
+                       int                                                 vocab_size,
+                       int                                                 vocab_size_padded,
+                       const std::vector<std::shared_ptr<SamplingStates>>& states,
+                       cudaStream_t                                        stream,
+                       const cudaDeviceProp*                               device_prop);
 
     ~DynamicDecodeLayer();
 
-    void Setup(const std::vector<const Request*>& rs, const TensorMap& args);
+    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args);
 
-    void Forward(TensorMap& args);
+    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args);
 
 private:
     std::vector<std::unique_ptr<BaseDynamicDecodeLayer>> layers_;

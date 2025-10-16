@@ -20,6 +20,7 @@
 
 #include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include "src/turbomind/layers/sampling_layers/sampling_states.h"
 #include "src/turbomind/macro.h"
 
 #include "src/turbomind/engine/request.h"
@@ -29,11 +30,11 @@ namespace turbomind {
 template<typename T>
 class LogitsProcessorLayer: public BaseDynamicDecodeLayer {
 public:
-    explicit LogitsProcessorLayer(const BaseParam& param);
+    explicit LogitsProcessorLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states);
 
-    void Setup(const std::vector<const Request*>& rs, const TensorMap& args) override;
+    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args) override;
 
-    void Forward(TensorMap& args) override;
+    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const override;
 
 private:
     // repetition penalty type
@@ -45,16 +46,6 @@ private:
     Buffer_<float> temperature_;
     Buffer_<int>   bad_words_;
     Buffer_<int>   end_ids_;
-
-    // device buffer
-    Buffer_<float> repetition_penalty_buf_;
-    Buffer_<int>   min_lengths_buf_;
-    Buffer_<float> temperature_buf_;
-    Buffer_<int>   bad_words_buf_;
-    Buffer_<int>   end_ids_buf_;
-
-    Tensor_<int> bad_words_ten_;
-    Tensor_<int> end_ids_ten_;
 };
 
 }  // namespace turbomind

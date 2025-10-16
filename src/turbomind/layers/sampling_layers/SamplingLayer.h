@@ -28,11 +28,11 @@ namespace turbomind {
 template<typename T>
 class SamplingLayer: public BaseDynamicDecodeLayer {
 public:
-    explicit SamplingLayer(const BaseParam& param);
+    explicit SamplingLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states);
 
-    void Setup(const std::vector<const Request*>& rs, const TensorMap&) override;
+    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap&) override;
 
-    void Forward(TensorMap& args) override;
+    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const override;
 
 private:
     // host buffer
@@ -40,18 +40,6 @@ private:
     Buffer_<int>   top_k_;
     Buffer_<float> top_p_;
     Buffer_<float> min_p_;
-
-    int   max_topk_;
-    int   min_topk_;
-    float min_topp_;
-    float max_minp_;
-
-    // device buffer
-    Buffer_<int>   top_k_buf_;
-    Buffer_<float> top_p_buf_;
-    Buffer_<float> min_p_buf_;
-
-    Buffer_<int> kept_buf_;  // kept sample
 };
 
 }  // namespace turbomind

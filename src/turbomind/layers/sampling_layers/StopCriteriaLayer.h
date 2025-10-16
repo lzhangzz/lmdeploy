@@ -19,22 +19,21 @@
 #include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
 
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/layers/sampling_layers/sampling_states.h"
 
 namespace turbomind {
 
 template<typename T>
 class StopCriteriaLayer: public BaseDynamicDecodeLayer {
 public:
-    explicit StopCriteriaLayer(const BaseParam& param);
+    explicit StopCriteriaLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states);
 
-    void Setup(const std::vector<const Request*>& rs, const TensorMap&) override;
+    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap&) override;
 
-    void Forward(TensorMap& args) override;
+    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const override;
 
 private:
     Buffer_<int> stop_words_;
-    Buffer_<int> stop_words_buf_;
-    Tensor_<int> stop_words_ten_;
 };
 
 }  // namespace turbomind

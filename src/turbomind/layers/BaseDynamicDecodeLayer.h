@@ -17,9 +17,11 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <memory>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/layers/sampling_layers/sampling_states.h"
 
 namespace turbomind {
 
@@ -44,9 +46,9 @@ public:
         device_prop_       = param.device_prop;
     };
 
-    virtual void Setup(const std::vector<const Request*>& rs, const TensorMap& args) = 0;
+    virtual void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args) = 0;
 
-    virtual void Forward(TensorMap& args) = 0;
+    virtual void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const = 0;
 
 protected:
     int                   max_batch_size_;

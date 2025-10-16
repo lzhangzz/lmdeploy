@@ -186,10 +186,10 @@ struct Buffer_: public Buffer {
 
     Buffer_(ssize_t size, Device device): Buffer{size, data_type_v<T>, device} {}
 
-    Buffer_(const Buffer_&) = default;
+    Buffer_(const Buffer_&)            = default;
     Buffer_& operator=(const Buffer_&) = default;
 
-    Buffer_(Buffer_&&) noexcept = default;
+    Buffer_(Buffer_&&) noexcept            = default;
     Buffer_& operator=(Buffer_&&) noexcept = default;
 
     Buffer_(const Buffer& b)
@@ -283,7 +283,7 @@ private:
     static decltype(auto) ensure_dtype(U&& u) noexcept
     {
         TM_CHECK_EQ(u.dtype(), data_type_v<T>);
-        return (U &&) u;
+        return (U&&)u;
     }
 };
 
@@ -325,13 +325,25 @@ inline void Copy_(const Buffer_<T>& a, ssize_t n, Buffer_<T>& b_)
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream);
 
 template<class T>
-inline T* Copy(const T* a, ssize_t n, T* b, const Stream& stream)
+inline T* Copy_(const T* a, ssize_t n, T* b, const Stream& stream)
 {
     return (T*)Copy((const void*)a, sizeof(T) * n, (void*)b, stream);
 }
 
 template<class T>
-inline T* Copy(const T* a, ssize_t n, T* b)
+inline T* Copy_(const T* a, ssize_t n, T* b)
+{
+    return Copy(a, n, b, Context::stream());
+}
+
+template<class T>
+[[deprecated]] inline T* Copy(const T* a, ssize_t n, T* b, const Stream& stream)
+{
+    return (T*)Copy((const void*)a, sizeof(T) * n, (void*)b, stream);
+}
+
+template<class T>
+[[deprecated]] inline T* Copy(const T* a, ssize_t n, T* b)
 {
     return Copy(a, n, b, Context::stream());
 }

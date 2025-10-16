@@ -31,16 +31,16 @@ using std::shared_ptr;
 
 void ModelExecutor::InternalThreadEntry()
 {
-    shared_ptr<Batch> batch;
+    shared_ptr<SchedBatch> batch;
     while (inbound_.pop(batch)) {
-        core::Context::stream().Wait(batch->event);
+        core::Context::stream().Wait(batch->forward_ready_event);
         // Update MUTABLE fields
-        batch->event.Record(core::Context::stream());
+        batch->forward_ready_event.Record(core::Context::stream());
         outbound_.push(batch);
     }
 }
 
-void ModelExecutor::Forward(Batch& batch)
+void ModelExecutor::Forward(SchedBatch& batch)
 {
     // Forward
     // ---
@@ -82,13 +82,15 @@ void ModelExecutor::Forward(Batch& batch)
                     {}  // skip
     );
 
+    batch.sampling_ready_signal.get();
+
+    core::Context::stream().Wait(batch.sampling_ready_event);
+
     if (const auto bsz = batch.active_size - batch.partial_size) {
 
         Tensor logits = model_->postDecodeEmbedding(decoder_output_, symm_local_logits_.buffer());
 
-        if (batch.init_sampling) {
-            // TODO
-        }
+
 
         auto sampling_logits = sampling_logits_.slice(0, bsz);
         invokeCastFloat2D(logits, sampling_logits, stream_);

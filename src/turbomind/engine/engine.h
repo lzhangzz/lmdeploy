@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <future>
 #include <memory>
 #include <thread>
 
@@ -25,6 +26,7 @@ struct RequestInfo {
     int* token_ids;  // alias of "output_ids" buffer in request
 };
 
+#if 0
 struct Batch {
     Event event;
 
@@ -68,6 +70,42 @@ struct Batch {
     // std::vector<std::shared_ptr<Request>> requests;
     // std::vector<const Sequence*>          sequences;
 };
+#endif
+
+struct ModelStates;
+
+struct SchedBatch {
+    int size;
+
+    int active_size;
+    int partial_size;
+
+    int prefill_size;
+    int decode_size;
+
+    Event forward_ready_event;
+
+    Buffer_<int> permutation;
+    Buffer_<int> local_token_nums;
+
+    Buffer_<int> input_ids;
+    Buffer_<int> input_ids_offsets;
+
+    Tensor       input_embeds;
+    Buffer_<int> input_embeds_offsets;
+
+    Buffer_<int> token_ids;
+    Buffer_<int> token_ids_offsets;
+
+    Buffer_<uint64_t> block_ptrs;
+    Buffer_<int>      block_ptrs_offsets;
+
+    Buffer_<int> is_finished;
+
+    std::shared_ptr<ModelStates> model_states;
+};
+
+struct FeedbackBatch;
 
 // sched batch
 // ----
@@ -167,19 +205,19 @@ private:
 
     void ProcessKillRequests(const Requests& rs, std::vector<Signal>& signals);
 
-    void Accept(Batch& batch, const Requests& rs, std::vector<Signal>& signals);
-
     void FindCanceledIndices(std::vector<int>& indices);
 
     void ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals);
 
-    void Schedule(Batch& b);
+    void Accept(const Requests& rs, std::vector<Signal>& signals);
 
-    void Update(const Batch& b);
+    void Schedule(SchedBatch& b);
 
-    void Synchronize(Batch& b, std::vector<Signal>& signals);
+    void SetupBatch(SchedBatch& b);
 
-    void CopyBatch(const Batch& a, const std::vector<int>& idxs, Batch& b);
+    void SetupSampling(SchedBatch& b);
+
+    void Synchronize(const FeedbackBatch& b, std::vector<Signal>& signals);
 
 private:
     Gateway& gateway_;
@@ -197,17 +235,40 @@ private:
 
     std::shared_ptr<SequenceManager> seq_mgr_;
 
-    std::shared_ptr<Batch> state_;
+    Queue<std::shared_ptr<FeedbackBatch>>& inbound_;
+    Queue<std::shared_ptr<SchedBatch>>&    outbound_;
+
+    std::thread internal_thread_;
 
     int batch_size_{};
 
-    Queue<std::shared_ptr<Batch>>& inbound_;
-    Queue<std::shared_ptr<Batch>>& outbound_;
+    std::vector<std::shared_ptr<RequestInfo>> info_;
+
+    struct State {
+        Buffer_<int> h_context_length;
+        Buffer_<int> h_is_finished;
+    };
+
+    std::shared_ptr<State> state_;
+    std::shared_ptr<State> back_;
+
+    Buffer_<int> h_prompt_length_;
+    Buffer_<int> h_input_length_;
 
     Buffer_<int> h_input_ids_;
     Buffer_<int> h_input_ids_offset_;
 
-    std::thread internal_thread_;
+    Buffer_<int> h_token_ids_;
+
+    Buffer_<int> h_output_ids_;
+    Buffer_<int> h_output_ids_offset_;
+
+    Buffer_<uint64_t> h_block_ptrs_;
+    Buffer_<int>      h_block_ptrs_offsets_;
+
+    Buffer_<float> h_rope_theta_;
+
+    Buffer_<int> h_perm_;
 };
 
 }  // namespace turbomind

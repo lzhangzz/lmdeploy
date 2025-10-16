@@ -34,6 +34,8 @@ namespace turbomind {
 
 class LlamaBatch;
 
+struct ModelStates;
+
 class LlamaV2 {
 public:
     LlamaV2(DataType                     dtype,
@@ -45,6 +47,8 @@ public:
             const Context&               ctx,
             int                          max_batch_size,
             std::shared_ptr<LlamaWeight> weights);
+
+    void Setup(const std::shared_ptr<ModelStates>& states, const TensorMap& args);
 
     void Forward(Buffer_<int>     input_ids,
                  Tensor           hidden_states_out,

@@ -5,22 +5,41 @@
 
 namespace turbomind {
 
-struct Batch;
 class LlamaV2;
 
+struct SchedBatch;
+struct FeedbackBatch {
+    int size;
+
+    Buffer_<int> context_length;
+
+    Buffer_<int> is_finished;
+
+    Buffer_<int> output_ids;
+    Buffer_<int> output_ids_offsets;
+
+    Event ready_event;
+};
+
 class ModelExecutor {
+public:
+    ModelExecutor(Queue<std::shared_ptr<SchedBatch>>& inbound, Queue<std::shared_ptr<FeedbackBatch>>& outbound):
+        session_len_{}, inbound_{inbound}, outbound_{outbound}
+    {
+    }
+
 private:
     void InternalThreadEntry();
 
-    void Forward(Batch& batch);
+    void Forward(SchedBatch& batch);
 
 private:
     cudaStream_t stream_;
 
     const int session_len_;
 
-    Queue<std::shared_ptr<Batch>>& inbound_;
-    Queue<std::shared_ptr<Batch>>& outbound_;
+    Queue<std::shared_ptr<SchedBatch>>&    inbound_;
+    Queue<std::shared_ptr<FeedbackBatch>>& outbound_;
 
     Buffer_<int> input_ids_;
     Buffer_<int> input_ids_offsets_;

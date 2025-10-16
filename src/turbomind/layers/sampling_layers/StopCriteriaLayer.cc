@@ -15,40 +15,62 @@
  */
 
 #include "src/turbomind/layers/sampling_layers/StopCriteriaLayer.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
+#include "src/turbomind/layers/sampling_layers/sampling_states.h"
 #include "src/turbomind/layers/sampling_layers/utils.h"
 #include "src/turbomind/macro.h"
 
 namespace turbomind {
 
+struct StopCriteriaStates {
+    Buffer_<int> stop_words_buf;
+    Tensor_<int> stop_words_ten;
+};
+
 template<typename T>
-StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam& param): BaseDynamicDecodeLayer{param}
+StopCriteriaLayer<T>::StopCriteriaLayer(const BaseParam&                                    param,
+                                        const std::vector<std::shared_ptr<SamplingStates>>& states):
+    BaseDynamicDecodeLayer{param}
 {
-    stop_words_     = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
-    stop_words_buf_ = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
+    stop_words_ = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kCPUpinned};
+
+    for (auto& state : states) {
+        auto s = std::make_shared<StopCriteriaStates>();
+
+        s->stop_words_buf = {max_batch_size_ * 2 * kMaxStopBadWordsLen, kDEVICE};
+
+        state->stop_criteria = std::move(s);
+    }
 }
 
 template<typename T>
-void StopCriteriaLayer<T>::Setup(const std::vector<const Request*>& rs, const TensorMap&)
+void StopCriteriaLayer<T>::Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args)
 {
-    stop_words_ten_ = {};
+    Buffer_<const Request*> rs = args.at("requests").buffer();
+
+    auto& s = states->stop_criteria;
+
+    s->stop_words_ten = {};
     init_stop_bad_words(&GenerationConfig::stop_ids,  //
                         "stop_words",
                         rs,
                         stop_words_.data(),
-                        stop_words_buf_.data(),
-                        stop_words_ten_);
+                        s->stop_words_buf.data(),
+                        s->stop_words_ten);
 }
 
 template<typename T>
-void StopCriteriaLayer<T>::Forward(TensorMap& args)
+void StopCriteriaLayer<T>::Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const
 {
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
     const int batch_size = args.at("logits").shape(0);
     const int step       = *args.at("step").data<int>();
 
-    if (auto& stop_words = stop_words_ten_) {
+    auto& s = states->stop_criteria;
+
+    if (auto& stop_words = s->stop_words_ten) {
         TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
         size_t stop_words_len = stop_words.shape(2);
         invokeStopWordsCriterion(args.at("output_ids").data<int>(),

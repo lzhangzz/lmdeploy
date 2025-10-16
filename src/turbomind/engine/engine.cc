@@ -1,6 +1,7 @@
 
 #include "nvtx3/nvToolsExt.h"
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/model_executor.h"
@@ -20,11 +21,10 @@ struct RequestData {
     bool        abort;
 };
 
-void Engine::Accept(Batch& batch, const Requests& rs, std::vector<Signal>& signals)
+void Engine::Accept(const Requests& rs, std::vector<Signal>& signals)
 {
-
     auto get_next_idx = [&, idx = 0]() mutable {
-        while (idx < max_batch_size_ && batch.info[idx] && ++idx) {}
+        while (idx < max_batch_size_ && info_[idx] && ++idx) {}
         return idx;
     };
 
@@ -69,7 +69,7 @@ void Engine::Accept(Batch& batch, const Requests& rs, std::vector<Signal>& signa
 
         const int idx = get_next_idx();
 
-        TM_CHECK(batch.info[idx] == nullptr);
+        TM_CHECK(info_[idx] == nullptr);
 
         auto& seq = *ptr;
 
@@ -78,6 +78,18 @@ void Engine::Accept(Batch& batch, const Requests& rs, std::vector<Signal>& signa
         if (step < seq.tokens.size()) {
             seq.tokens.resize(step);
             seq.cache_len = std::min(seq.cache_len, step);
+        }
+
+        {
+            const int* input_ids = r->inputs.at("input_ids").data<int>();
+
+            info->token_ids = r->output_ids.data();
+            int* token_ids  = info->token_ids;
+
+            token_ids = std::copy_n(seq.tokens.data(), seq.tokens.size(), token_ids);
+            token_ids = std::copy_n(input_ids, input_length, token_ids);
+
+            (void)token_ids;
         }
 
         info->request        = r;
@@ -106,13 +118,13 @@ void Engine::Accept(Batch& batch, const Requests& rs, std::vector<Signal>& signa
 
         info->max_seq_len = max_seq_len;
 
-        batch.info[idx] = info;
+        info_[idx] = info;
     }
 
-    batch.size = std::max(batch.size, get_next_idx());
+    batch_size_ = std::max(batch_size_, get_next_idx());
 }
 
-void Engine::Schedule(Batch& batch)
+void Engine::Schedule(SchedBatch& batch)
 {
     vector<const Sequence*>  sequences;
     vector<Sequence::Status> status;
@@ -120,7 +132,7 @@ void Engine::Schedule(Batch& batch)
     vector<int>              context_lengths;
 
     for (int i = 0; i < batch.size; ++i) {
-        const auto& info = batch.info[i];
+        const auto& info = info_[i];
         sequences.push_back(info->sequence);
         status.push_back(info->sequence->status);
         priorities.push_back(info->request->unique_id);
@@ -162,29 +174,100 @@ void Engine::Schedule(Batch& batch)
         return sequences[i]->input_length < sequences[j]->input_length;
     });
 
+    // [x] token_ids
+    // [x] input_ids
+    // [x] h_prompt_length
+    // [x] h_context_length
+    // [x] h_is_finished
+    // [x] h_rope_theta
+    // [x] h_block_ptrs
+    // [x] h_block_ptrs_offsets
+    // [ ] curand_state
+    // [ ] seq_len_limit
+
+    vector<shared_ptr<RequestInfo>> info;
+
     for (int i = 0; i < idxs.size(); ++i) {
         const int j = idxs[i];
+
+        back_->h_context_length[i] = state_->h_context_length[j];
+        back_->h_is_finished[i]    = state_->h_is_finished[j];
+
+        info[i] = info_[j];
+
+        h_prompt_length_[i] = info[i]->prompt_length;
+        h_rope_theta_[i]    = info[i]->sequence->rope_theta;
     }
+
+    const int size = idxs.size();
+
+    Copy_(back_->h_is_finished, size, batch.is_finished);
+
+    if (async_) {
+        std::copy_n(idxs.begin(), size, h_perm_.data());
+        Copy_(h_perm_, size, batch.permutation);
+    }
+
+    auto input_ids = h_input_ids_.data();
+    for (int i = 0; i < size; ++i) {
+        const auto ids = info[i]->token_ids + back_->h_context_length[i] - info[i]->sequence->input_length;
+        input_ids      = std::copy_n(ids, info[i]->sequence->input_length, input_ids);
+    }
+    Copy_(h_input_ids_, input_ids - h_input_ids_.data(), batch.input_ids);
+
+    auto token_ids = h_token_ids_.data();
+    for (int i = 0; i < size; ++i) {
+        token_ids = std::copy_n(info[i]->token_ids, back_->h_context_length[i], token_ids);
+    }
+    Copy_(h_token_ids_, token_ids - h_token_ids_.data(), batch.token_ids);
+
+    auto h_block_ptrs        = h_block_ptrs_.data();
+    h_block_ptrs_offsets_[0] = 0;
+    for (int i = 0; i < size; ++i) {
+        const auto& s                = *info[i]->sequence;
+        h_block_ptrs_offsets_[i + 1] = h_block_ptrs_offsets_[i] + s.blocks.size();
+        h_block_ptrs = std::transform(s.blocks.cbegin(), s.blocks.cend(), h_block_ptrs, [&](int block_id) {
+            return reinterpret_cast<uintptr_t>(seq_mgr_->GetBlockPtr(block_id));
+        });
+    }
+
+    Copy_(h_block_ptrs_, h_block_ptrs_offsets_[size], batch.block_ptrs);
+    Copy_(h_block_ptrs_offsets_, size + 1, batch.block_ptrs_offsets);
+
+    info_.swap(info);
+    state_.swap(back_);
 }
 
-void Engine::Update(const Batch& batch)
+void Engine::SetupBatch(SchedBatch& batch) {}
+
+void Engine::SetupSampling(SchedBatch& batch) {}
+
+void Engine::Synchronize(const FeedbackBatch& b, std::vector<Signal>& signals)
 {
-    Buffer_<int> h_is_finished;
-    Buffer_<int> h_output_ids;
-    Buffer_<int> h_seq_len;
+    Copy_(b.is_finished, b.size, back_->h_is_finished);
+    Copy_(b.context_length, b.size, back_->h_context_length);
+    Copy_(b.output_ids, b.size, h_output_ids_);
 
-    Copy(batch.is_finished, h_is_finished);
-    Copy(batch.output_ids, h_output_ids);
-    Copy(batch.)
+    // perm :: curr -> prev
+    for (int i = 0; i < batch_size_; ++i) {
+        if (const int j = h_perm_[i]; j < b.size && state_->h_is_finished[i] == 0) {
 
-        core::Context::stream()
-            .Sync();
+            state_->h_is_finished[i]    = back_->h_is_finished[j];
+            state_->h_context_length[i] = back_->h_context_length[j];
+
+            info_[i]->token_ids[state_->h_context_length[i] - 1] = h_output_ids_[j];
+        }
+    }
+
+    for (int i = 0; i < batch_size_; ++i) {
+        auto& r = info_[i]->request;
+    }
+
+    core::Context::stream().Sync();
 }
 
 void Engine::InternalThreadEntry()
 {
-    shared_ptr<Batch> batch = std::make_shared<Batch>();
-
     while (true) {
         shared_ptr<RequestData> rs;
 
@@ -202,32 +285,46 @@ void Engine::InternalThreadEntry()
 
         vector<Signal> signals;
         // ProcessKillRequests(rs->kill, signals);
-        Accept(*batch, rs->infer, signals);
+        Accept(rs->infer, signals);
         // ProcessCancelRequests(rs->cancel, signals);
         if (tp_rank_ == 0) {
             gateway_.notify(std::move(signals));
         }
         signals.clear();
 
-        batch->event.Record(core::Context::stream());
-        outbound_.push(batch);
+        shared_ptr<SchedBatch> sched = std::make_shared<SchedBatch>();
 
-        if (!inbound_.pop(batch)) {
+        Schedule(*sched);
+
+        SetupBatch(*sched);
+
+        sched->batch_ready_event.Record(core::Context::stream());
+
+        // Reset host signal before sending to the executor
+        std::promise<void> sampling_promise;
+        sched->sampling_ready_signal = sampling_promise.get_future();
+
+        outbound_.push(sched);
+
+        // Setup sampling (CPU | HtoD)
+        SetupSampling(*sched);
+
+        sched->sampling_ready_event.Record(core::Context::stream());
+
+        // Signal the executor that the event is ready to be waited on.
+        sampling_promise.set_value();
+
+        shared_ptr<FeedbackBatch> feedback;
+        if (!inbound_.pop(feedback)) {
             break;
         }
 
-        core::Context::stream().Wait(batch->event);
+        core::Context::stream().Wait(TM_CHECK_NOTNULL(feedback)->ready_event);
 
-        Synchronize(*batch, signals);
+        Synchronize(*feedback, signals);
+
         if (tp_rank_ == 0) {
             gateway_.notify(std::move(signals));
-        }
-
-        if (async_) {
-            Update(*batch);
-        }
-        else {
-            state_ = batch;
         }
     }
 }

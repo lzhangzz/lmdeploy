@@ -24,32 +24,33 @@
 
 namespace turbomind {
 
-DynamicDecodeLayer::DynamicDecodeLayer(DataType              dtype,
-                                       int                   max_batch_size,
-                                       int                   vocab_size,
-                                       int                   vocab_size_padded,
-                                       cudaStream_t          stream,
-                                       const cudaDeviceProp* device_prop)
+DynamicDecodeLayer::DynamicDecodeLayer(DataType                                            dtype,
+                                       int                                                 max_batch_size,
+                                       int                                                 vocab_size,
+                                       int                                                 vocab_size_padded,
+                                       const std::vector<std::shared_ptr<SamplingStates>>& states,
+                                       cudaStream_t                                        stream,
+                                       const cudaDeviceProp*                               device_prop)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     TM_CHECK(dtype == kFloat32);
     BaseDynamicDecodeLayer::BaseParam param{max_batch_size, vocab_size, vocab_size_padded, stream, device_prop};
-    layers_.emplace_back(new LogitsProcessorLayer<float>{param});
-    layers_.emplace_back(new SamplingLayer<float>{param});
-    layers_.emplace_back(new StopCriteriaLayer<float>{param});
+    layers_.emplace_back(new LogitsProcessorLayer<float>{param, states});
+    layers_.emplace_back(new SamplingLayer<float>{param, states});
+    layers_.emplace_back(new StopCriteriaLayer<float>{param, states});
 }
 
 DynamicDecodeLayer::~DynamicDecodeLayer() {}
 
-void DynamicDecodeLayer::Setup(const std::vector<const Request*>& rs, const TensorMap& args)
+void DynamicDecodeLayer::Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args)
 {
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
     for (const auto& layer : layers_) {
-        layer->Setup(rs, args);
+        layer->Setup(states, args);
     }
 }
 
-void DynamicDecodeLayer::Forward(TensorMap& args)
+void DynamicDecodeLayer::Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args)
 {
     /**
      * @brief
@@ -79,7 +80,7 @@ void DynamicDecodeLayer::Forward(TensorMap& args)
      */
 
     for (const auto& layer : layers_) {
-        layer->Forward(args);
+        layer->Forward(states, args);
     }
 }
 

@@ -17,6 +17,15 @@
 
 namespace turbomind {
 
+struct TransformerStates {
+    std::shared_ptr<AttentionStates> attention;
+};
+
+void UnifiedDecoder::Setup(const std::shared_ptr<TransformerStates>& states, const TensorMap& args)
+{
+    attn_layer_->Setup(states->attention, args);
+}
+
 UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
                                const EngineParam&    engine,
                                const AttentionParam& attn,
