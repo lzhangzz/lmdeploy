@@ -260,17 +260,32 @@ struct ConstVarlenState0_ {
     void Add(int i, const T* value, int n)
     {
         // set data
-        Copy_(value, n * vec_size, data_0.data() + h_offset_0[i] * vec_size);
+        // Copy_(value, n * vec_size, data_0.data() + h_offset_0[i] * vec_size);
 
         // set length
         h_offset_0[i + 1] = h_offset_0[i] + n;
 
-        size = i + 1;
+        // size = i + 1;
+
+        // Copy_(value, n *vec_size, )
     }
 
-    void Reorder(const Buffer_<int> h_perm)
+    void Reorder(const Buffer_<int>& h_perm)
     {
-        
+        h_offset_1[0] = 0;
+        for (int i = 0; i < h_perm.size(); ++i) {
+            const auto j = h_perm[i];
+            const auto n = h_offset_0[j + 1] - h_offset_0[j];
+            h_offset_1[i + 1] = h_offset_1[i] + n;
+            if (j >= size) {
+                // core::Copy_()
+            }
+        }
+
+    }
+
+    void Release(Tensor_<T>& outgoing, Buffer_<int>& offsets, ssize_t size) {
+        // Copy_(data_0, )
     }
 };
 
