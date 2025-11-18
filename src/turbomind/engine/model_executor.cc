@@ -1,34 +1,95 @@
 
 #include "src/turbomind/engine/model_executor.h"
-#include "src/turbomind/engine/engine.h"
 
-#include "src/turbomind/models/llama/LlamaV2.h"
+#include <memory>
+
+#include "src/turbomind/core/check.h"
+#include "src/turbomind/core/exchange.h"
+#include "src/turbomind/engine/engine.h"
+#include "src/turbomind/models/language_model.h"
 
 namespace turbomind {
 
 using std::shared_ptr;
+using std::unique_ptr;
 
-// Match   ::  prompt_ids                         -> token_ids, input_ids
-// ---
-// Forward ::   token_ids,  input_ids             -> output_ids
-// Draft   ::   token_ids,  input_ids, output_ids -> draft_ids
-// ---
-// Update  ::   token_ids, output_ids             -> token_ids'
-// Next    ::  output_ids,  draft_ids             -> input_ids'
+struct ModelExecutor::Impl {
 
+    LanguageModel& model_;
 
-// Match(token_ids):
-//   cache_ids, input_ids = Split(token_ids)
-//
-// Forward(cache_ids, input_ids):
-//   output_ids = Model(cache_ids, input_ids)
-// 
-// Update(token_ids, output_ids):
-//   cache_ids' = cache_ids ++ input_ids
-//   input_ids'  = output_ids
-//
-// TODO: add Draft
+    Queue<unique_ptr<BatchData>>& inbound_;
+    Queue<unique_ptr<BatchData>>& outbound_;
 
+    std::thread internal_thread_;
+
+    void InternalThreadEntry()
+    {
+        Stream    stream  = Stream::create();
+        Allocator h_alloc = Allocator(kCPU);
+        Allocator d_alloc = Allocator(kDEVICE);
+
+        core::ContextGuard ctx{stream, h_alloc, d_alloc};
+
+        unique_ptr<BatchData> d;
+
+        while (inbound_.pop(d)) {
+            TM_CHECK_NOTNULL(d);
+            core::Context::stream().Wait(d->ready);
+            Run(*d);
+            d->done.Record(core::Context::stream());
+            outbound_.push(std::move(d));
+        }
+    }
+
+    void Run(BatchData& d)
+    {
+        TensorMap env{{"bs0", Buffer{&d.bs0, 1, kCPU}},  //
+                      {"bsz", Buffer{&d.bsz, 1, kCPU}},
+                      {"permutation", Buffer{d.perm.data(), d.bsz, kCPU}},
+                      {"local_token_nums", Buffer{d.local_token_num.data(), (int)d.local_token_num.size(), kCPU}},
+                      {"global_token_num", Buffer{&d.global_token_num, 1, kCPU}}};
+        model_.Run(BatchOp::kPrepare, d.phase, env);
+        model_.Run(BatchOp::kForward, d.phase, env);
+        model_.Run(BatchOp::kUnprep, d.phase, env);
+    }
+
+    Impl(LanguageModel& model, Queue<unique_ptr<BatchData>>& inbound, Queue<unique_ptr<BatchData>>& outbound):
+        model_{model}, inbound_{inbound}, outbound_{outbound}
+    {
+    }
+
+    ~Impl()
+    {
+        if (internal_thread_.joinable()) {
+            internal_thread_.join();
+        }
+    }
+
+    void Start()
+    {
+        internal_thread_ = std::thread(&Impl::InternalThreadEntry, this);
+    }
+};
+
+ModelExecutor::~ModelExecutor() = default;
+
+ModelExecutor::ModelExecutor()                                    = default;
+ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept            = default;
+ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
+
+ModelExecutor::ModelExecutor(LanguageModel&                model,
+                             Queue<unique_ptr<BatchData>>& inbound,
+                             Queue<unique_ptr<BatchData>>& outbound):
+    impl_{std::make_unique<Impl>(model, inbound, outbound)}
+{
+}
+
+void ModelExecutor::Start()
+{
+    return impl_->Start();
+}
+
+#if 0
 void ModelExecutor::InternalThreadEntry()
 {
     shared_ptr<SchedBatch> batch;
@@ -40,7 +101,7 @@ void ModelExecutor::InternalThreadEntry()
     }
 }
 
-void ModelExecutor::Forward(SchedBatch& batch)
+void ModelExecutor::Forward(BatchData& batch)
 {
     // Forward
     // ---
@@ -138,5 +199,6 @@ void ModelExecutor::Forward(SchedBatch& batch)
     // Other
     // output_ids         MUTABLE (bsz, session_len) * 3
 }
+#endif
 
 }  // namespace turbomind

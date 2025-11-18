@@ -15,26 +15,25 @@
  */
 #pragma once
 
+#include <cstdint>
+
 #include <cuda_runtime.h>
 
 namespace turbomind {
 
-void invokeStopWordsCriterion(const int*   output_ids,
-                              const int*   parent_ids,
-                              const int*   stop_words,
-                              bool*        finished,
-                              size_t       id_offset,
-                              size_t       stop_words_len,
-                              int          batch_size,
-                              int          beam_width,
-                              int          step,
-                              cudaStream_t stream);
+void invokeStopWordsCriterion_v2(const int*   token_ids,
+                                 const int*   sequence_length,
+                                 const int*   stop_words,
+                                 bool*        finished,
+                                 int64_t      token_ids_stride,
+                                 int          stop_words_len,
+                                 int          batch_size,
+                                 cudaStream_t stream);
 
-void invokeLengthCriterion(bool*        finished,  //
-                           const int*   sequence_limit_length,
-                           int          batch_size,
-                           int          beam_width,
-                           int          step,
-                           cudaStream_t stream);
+void invokeLengthCriterion_v2(bool*        finished,  //
+                              const int*   sequence_length,
+                              const int*   sequence_length_limit,
+                              int          batch_size,
+                              cudaStream_t stream);
 
 }  // namespace turbomind

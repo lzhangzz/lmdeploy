@@ -20,12 +20,17 @@
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.cc
 
 #include <algorithm>
+#include <functional>
 #include <math.h>
 #include <numeric>
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
@@ -34,6 +39,7 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
@@ -63,7 +69,8 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
                                              const EngineParam&    engine,
                                              const LoraParam&      lora,
                                              int                   tp_size,
-                                             const Context&        ctx):
+                                             const Context&        ctx,
+                                             int                   phases):
     head_num_(model.head_num),
     kv_head_num_(model.kv_head_num),
     size_per_head_(model.head_dim),
@@ -99,128 +106,153 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     Clear(split_cnt_.buffer());
     Clear(barriers_.buffer());
 
-    const auto max_batch_size = engine.max_batch_size;
+    rope_base_buf_        = {engine.max_batch_size + 1, kCPUpinned};
+    decode_token_pos_buf_ = {engine.max_batch_size, kCPUpinned};
 
-    d_cu_x_len_ = {2 * (max_batch_size + 1), kDEVICE};
-    h_cu_x_len_ = {2 * (max_batch_size + 1), kCPUpinned};
-    event_      = Event::create();
-}
-
-void UnifiedAttentionLayer::Initialize(TensorMap& args)
-{
-    h_q_len_ = args.at("h_q_len").buffer();
-    h_k_len_ = args.at("h_k_len").buffer();
-
-    const int bsz = h_q_len_.size();
-
-    d_cu_q_len_ = d_cu_x_len_.data();
-    h_cu_q_len_ = h_cu_x_len_.data();
-    d_cu_k_len_ = d_cu_q_len_ + bsz + 1;
-    h_cu_k_len_ = h_cu_q_len_ + bsz + 1;
-
-    h_cu_q_len_[0] = h_cu_k_len_[0] = 0;
-
-    std::inclusive_scan(h_q_len_.data(), h_q_len_.data() + bsz, h_cu_q_len_ + 1);
-    std::inclusive_scan(h_k_len_.data(), h_k_len_.data() + bsz, h_cu_k_len_ + 1);
-
-    Copy(h_cu_x_len_.slice(0, 2 * bsz + 2), d_cu_x_len_.slice(0, 2 * bsz + 2));
-
-    event_.Record(core::Context::stream());
-
-    decode_num_ = *args.at("decode_num").data<int>();
-    prefil_num_ = *args.at("prefil_num").data<int>();
-
-    finished_  = args.at("finished").buffer();
-    rope_base_ = args.at("rope_base").buffer();
-
-    cu_block_nums_ = args.at("cu_block_nums").buffer();
-    kv_block_ptrs_ = args.at("kv_block_ptrs").buffer();
-
-    // rotary embedding, add offest when forward
-    if (rope_param_.type == RopeType::kDynamic) {
-        rope_param_.base = const_cast<float*>(rope_base_.data());
-    }
-    else if (rope_param_.type == RopeType::kMrope && !isTuning()) {
-        auto& position_ids               = args.at("mrope_position_ids");
-        rope_param_.mrope.stride         = position_ids.shape(1);
-        rope_param_.mrope.position_ids   = position_ids.data<int>();
-        rope_param_.mrope.position_delta = args.at("mrope_position_delta").data<int>();
-        rope_param_.mrope.length         = args.at("mrope_position_length").data<int>();
+    const int max_blocks = engine.max_batch_size * cdiv(engine.session_len, param_.cache_block_seq_len);
+    for (int i = 0; i < phases; ++i) {
+        data_.push_back(std::make_shared<AttentionData>(engine.max_batch_size, max_blocks, rope_param_));
     }
 }
 
-void UnifiedAttentionLayer::Finalize()
-{
-    event_.Sync();
-}
+struct AttentionData {
 
-struct AttentionStates {
+    struct Stat {
+        int n;
+        int q_sum;
+        int q_max;
+        int k_sum;
+        int k_max;
+    } decode, prefill;
+
+    // Buffer_<int> h_offset_q;
+    // Buffer_<int> h_offset_k;
+
+    // Buffer_<int> d_offset_q;
+    // Buffer_<int> d_offset_k;
+
+    Buffer_<void*> block_ptrs;
+    Buffer_<int>   block_ptrs_offsets;
+
+    // Buffer_<int> decode_token_pos;
+
     Buffer_<float> rope_base;
 
     Tensor_<int> mrope_position_ids;
     Buffer_<int> mrope_position_delta;
     Buffer_<int> mrope_length;
+
+    // borrowed from env
+    Buffer_<bool> finished;
+    Buffer_<int>  offset_q;
+    Buffer_<int>  offset_k;
+
+    AttentionData(int bsz, int max_blocks, RopeKernelParam& rope)
+    {
+        // h_offset_q = {bsz + 1, kCPUpinned};
+        // h_offset_k = {bsz + 1, kCPUpinned};
+        // d_offset_q = {bsz + 1, kDEVICE};
+        // d_offset_k = {bsz + 1, kDEVICE};
+
+        block_ptrs         = {max_blocks + 16, kDEVICE};
+        block_ptrs_offsets = {bsz + 1, kDEVICE};
+
+        // decode_token_pos = {bsz, kDEVICE};
+
+        if (rope.type == RopeType::kDynamic) {
+            rope_base = {bsz, kDEVICE};
+        }
+    }
 };
 
-// O(1) constant (scalar param, flags)
-// --- Init ---
-// Append([input], [index], H_BUF)  # inplace
-// --- Setup ---
-// Gather(h_buf, [perm], h_buf')
-// Swap(h_buf, h_buf')
-// HtoD(h_buf, d_buf)
-
-
-// O(1) mutable (q/k length, random state)
-// --- Init ---
-// Append([input], [index], H_BUF)         # inplace
-// --- Setup ---
-// Gather(H_BUF, [perm], h_buf')           # permutation
-// Swap(h_buf', H_BUF)
-// HtoD(H_BUF, d_buf)                      # release
-// --- Prepare ---
-// Gather(D_STATE, [perm], [mask], d_buf)  # acquire
-// Swap(d_buf, D_STATE)
-// ----------------
-// DtoD(D_STATE, d_buf)                    # release
-// --- Sync ---
-// DtoH(d_buf, h_buf')                     # acquire
-// Gather(h_buf', [perm], [mask], h_buf)
-
-
-// O(n) constant varlen (input embeds, mrope_position_ids)
-// --- Init ---
-// Append([input], [index], D_BUF, [D_LEN])        # acquire, inplace
-// --- Setup ---
-// Gather(D_BUF, [D_LEN], [perm], d_buf', [d_len'])
-// Swap(d_buf'<->D_BUF, [d_len']<->[D_LEN])        # release
-
-
-// O(n) mutable varlen (token_ids，input_ids)
-// --- Init ---
-// Append([input], [index], D_BUF, [D_LEN])        # acquire, inplace
-// --- Setup ---
-// Gather(D_BUF, [D_LEN], [perm], d_buf', d_len')
-// Swap(d_buf'<->D_BUF, d_len'<->D_LEN)            # release
-// --- Prepare ---
-// Gather(D_STATE, [D_SLEN], [perm], [mask], d_buf, [d_len])
-// Swap()
-
-
-
-void UnifiedAttentionLayer::Setup(const std::shared_ptr<AttentionStates>& states, const TensorMap& args)
+static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
 {
-    const int bsz = args.at("requests").size();
+    cache.rope_base = rope.base;
+    if (auto scaling_factor = rope.factor; scaling_factor > 1.f) {
+        const auto max_seq_len = cache.prompt_len;
+        const auto max_pos_emb = rope.max_position_embeddings;
+        if (max_seq_len > max_pos_emb) {
+            scaling_factor = scaling_factor * max_seq_len / max_pos_emb - (scaling_factor - 1);
+            cache.rope_base *= powf(scaling_factor, rope.dim / (rope.dim - 2.f));
+            // clang-format off
+            TM_LOG_INFO("[ProcessInferRequests] %ld rope_scaling_factor: %f, rope_theta = %f",
+                        (long)cache.request->id, scaling_factor, cache.rope_base);
+            // clang-format on
+        }
+    }
+}
 
-    const auto inputs = args.at("inputs").data<TensorMap>();
+void UnifiedAttentionLayer::Run(ExchOp op, int phase, TensorMap& env)
+{
+    if (op == ExchOp::kAdd) {
+        Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        if (rope_param_.type == RopeType::kDynamic) {
+            for (int i = 0; i < rc.size(); ++i) {
+                init_dynamic_ntk(*rc[i], param_.rope);
+            }
+        }
+    }
+    else if (op == ExchOp::kSetup) {
+        Setup(phase, env);
+    }
+    else if (op == ExchOp::kPrepare) {
+        data_.at(phase)->finished = env.at("finished").buffer().borrow();
+        data_.at(phase)->offset_q = env.at("offset_q").buffer().borrow();
+        data_.at(phase)->offset_k = env.at("offset_k").buffer().borrow();
+        // env["decode_token_pos"]   = data_.at(phase)->decode_token_pos;
+    }
+}
 
+void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
+{
+    Buffer_<RequestCache*> rc  = env.at("requests").buffer();
+    const int              bsz = rc.size();
+
+    auto& d = *data_.at(phase);
+
+    {  /// Upload KV cache ptrs
+        const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
+        Copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
+        Copy(offsets, bsz + 1, d.block_ptrs_offsets);
+    }
+
+    /// prepare Q/K stats for decode/prefill
+    d.decode = d.prefill = {};
+
+    d.decode.n  = std::find_if(rc.begin(), rc.end(), [](auto r) { return r->input_len > 1; }) - rc.begin();
+    d.prefill.n = bsz - d.decode.n;
+
+    // d.h_offset_q[0] = d.h_offset_k[0] = 0;
+    for (int i = 0; i < bsz; ++i) {
+        const auto& c = *rc[i];
+
+        // d.h_offset_q[i + 1] = d.h_offset_q[i] + c.input_len;
+        // d.h_offset_k[i + 1] = d.h_offset_k[i] + c.context_len;
+
+        auto& s = i < d.decode.n ? d.decode : d.prefill;
+        s.q_sum += c.input_len;
+        s.k_sum += c.context_len;
+        s.q_max = std::max(s.q_max, c.input_len);
+        s.k_max = std::max(s.k_max, c.context_len);
+
+        // last input token
+        // decode_token_pos_buf_[i] = d.h_offset_q[i + 1] - 1;
+        // TM_LOG_ERROR("%d deocde pos %d", i, decode_token_pos_buf_[i]);
+    }
+
+    // Copy_(d.h_offset_q, bsz + 1, d.d_offset_q);
+    // Copy_(d.h_offset_k, bsz + 1, d.d_offset_k);
+    // Copy_(decode_token_pos_buf_, bsz, d.decode_token_pos);
+
+    /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {
-        Copy(args.at("rope_base").buffer(), bsz, states->rope_base);
+        for (int i = 0; i < bsz; ++i) {
+            rope_base_buf_[i] = rc[i]->rope_base;
+        }
+        Copy_(rope_base_buf_, bsz, d.rope_base);
     }
     else if (rope_param_.type == RopeType::kMrope) {
-        for (int i = 0; i < bsz; ++i) {
-            // inputs->at("position_")
-        }
+        TM_CHECK(0) << "not implemented.";
     }
 }
 
@@ -302,19 +334,19 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     const auto device = qkv.device();
     const auto dtype  = qkv.dtype();
 
-    const int batch_size = decode_num_ + prefil_num_;
+    auto& d = *data_.at(p.phase);
+
+    const int batch_size = d.decode.n + d.prefill.n;
     const int q_count    = qkv.shape(0);
-    const int k_count    = h_cu_k_len_[batch_size] - h_cu_k_len_[decode_num_];
-    const int layer_id   = p.layer_id;
 
     const int local_q_kv_head_num = local_head_num_ + 2 * local_kv_head_num_;
 
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
-    Tensor tmp_kv{{2, (int)local_kv_head_num_, k_count + MAX_CTA_S, (int)size_per_head_}, dtype, device};
+    Tensor tmp_kv{{2, (int)local_kv_head_num_, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
     auto stream_ptr = streams_.data();
 
-    auto CreateParams = [&](int offset, int batch_size, int max_kv_splits, cudaStream_t stream) {
+    auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 
         // Batch offset for `out` and `q` are computed inside the kernel
@@ -331,27 +363,26 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
 
-        params.token_num  = h_cu_q_len_[offset + batch_size] - h_cu_q_len_[offset];
         params.batch_size = batch_size;
-        /// TODO: maximum on buffer slice
-        params.max_q_len = *std::max_element(h_q_len_.data() + offset, h_q_len_.data() + offset + batch_size);
-        params.max_k_len = *std::max_element(h_k_len_.data() + offset, h_k_len_.data() + offset + batch_size);
 
-        // Decoding use only
-        params.block_iter_params = BlockIteratorParams{(char**)kv_block_ptrs_.data(),  //
-                                                       cu_block_nums_.data() + offset,
-                                                       layer_id,
+        params.token_num = stat.q_sum;
+        params.max_q_len = stat.q_max;
+        params.max_k_len = stat.k_max;
+
+        // decode only
+        params.block_iter_params = BlockIteratorParams{(char**)d.block_ptrs.data(),  //
+                                                       d.block_ptrs_offsets.data() + offset,
+                                                       p.layer_id,
                                                        (int)param_.cache_block_seq_len};
 
-        // Prefilling use only
-        const int sum_k_len       = h_cu_k_len_[offset + prefil_num_] - h_cu_k_len_[offset];
+        // prefill only
         params.linear_iter_params = LinearIteratorParams{tmp_kv.raw_data(),  //
-                                                         int(2 * sum_k_len * size_per_head_),
-                                                         int(sum_k_len * size_per_head_)};
+                                                         int(2 * stat.k_sum * size_per_head_),
+                                                         int(stat.k_sum * size_per_head_)};
 
-        params.finished = finished_.data() + offset;
-        params.cu_q_len = d_cu_q_len_ + offset;
-        params.cu_k_len = d_cu_k_len_ + offset;
+        params.finished = d.finished.data() + offset;
+        params.cu_q_len = d.offset_q.data() + offset;
+        params.cu_k_len = d.offset_k.data() + offset;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -407,24 +438,23 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     cudaStream_t pf_stream = stream_;
     cudaStream_t dc_stream = stream_;
 
-    if (decode_num_ && prefil_num_) {
+    if (d.decode.n && d.prefill.n) {
         pf_stream = aux_stream_;
         check_cuda_error(cudaEventRecord(qkv_event_, stream_));
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (prefil_num_ && !isTuning()) {
-        const int offset    = decode_num_;
-        const int sum_k_len = h_cu_k_len_[offset + prefil_num_] - h_cu_k_len_[offset];
+    if (d.prefill.n && !isTuning()) {
+        const int offset = d.decode.n;
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
-        auto params = CreateParams(offset, prefil_num_, 1, pf_stream);
+        auto params = CreateParams(offset, d.prefill, 1, pf_stream);
         if constexpr (sizeof(T) == 2) {
             invokeProcessKV_v2_(params);
             sync_check_cuda_error();
 
             /// TODO: skip flattening for `sm_80`
-            invokeFlattenKV_v2_(params, sum_k_len);
+            invokeFlattenKV_v2_(params, d.prefill.k_sum);
             sync_check_cuda_error();
 
             dispatchAttention(params);
@@ -432,15 +462,15 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
     }
 
-    if (decode_num_ && !isTuning()) {
-        auto params = CreateParams(0, decode_num_, kMaxKVSplits, dc_stream);
+    if (d.decode.n && !isTuning()) {
+        auto params = CreateParams(0, d.decode, kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
             sync_check_cuda_error();
         }
     }
 
-    if (decode_num_ && prefil_num_) {
+    if (d.decode.n && d.prefill.n) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
         check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
     }

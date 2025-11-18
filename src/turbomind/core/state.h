@@ -2,6 +2,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/layout.h"
 #include "src/turbomind/core/tensor.h"
 #include <algorithm>
@@ -12,287 +13,142 @@ namespace turbomind {
 // 1. constant number of cudaMemcpy / kernel launches
 // 2. single stream synchronization / iteration
 
-template<class T>
-struct ConstState_ {
-    Tensor_<T> h_state;
-    Tensor_<T> h_buf;
-    Tensor_<T> d_buf;
+struct State {
 
-    ssize_t size;
+    Tensor data_[2];
 
-    ssize_t vec_size;
+    State() = default;
 
-    explicit ConstState_(Layout layout)
+    State(const Layout& layout, DataType dtype, const core::Device& device)
     {
-        h_state  = {layout, kCPUpinned};
-        h_buf    = {layout, kCPUpinned};
-        d_buf    = {layout, kDEVICE};
-        size     = 0;
-        vec_size = layout.stride(0);
+        data_[0] = {layout, dtype, device};
+        data_[1] = {layout, dtype, device};
     }
 
-    void Set(int i, const T* value)
+    Tensor& front()
     {
-        std::copy_n(value, vec_size, h_state.data() + i * vec_size);
+        return data_[0];
     }
 
-    T& operator[](int i)
+    Tensor& back()
     {
-        return h_state.data() + i * vec_size;
+        return data_[1];
     }
 
-    void Reorder(const Buffer_<int>& h_perm)
+    void Swap()
     {
-        const auto* src = h_state.data();
-        auto*       dst = h_buf.data();
-        for (int i = 0; i < h_perm.size(); ++i) {
-            std::copy_n(src + h_perm[i] * vec_size, vec_size, dst + i * vec_size);
+        std::swap(data_[0], data_[1]);
+    }
+};
+
+template<class Copy>
+void Warp(const Tensor& a0, int size0, const Buffer_<int>& perm, Tensor b1, Copy copy)
+{
+    auto a0_ptr = (const uint8_t*)a0.raw_data();
+    auto b1_ptr = (uint8_t*)b1.raw_data();
+
+    const auto vec_size = byte_size(a0.dtype(), a0.stride(0));
+
+    for (int i = 0; i < perm.size(); ++i) {
+        if (const int j = perm[i]; TM_LIKELY(j < size0)) {
+            copy(a0_ptr + j * vec_size, vec_size, b1_ptr + i * vec_size);
         }
-        size = h_perm.size();
-        std::swap(h_buf, h_state);
     }
+}
 
-    void Release()
-    {
-        Copy_(h_state.buffer(), size * vec_size, d_buf.buffer());
+template<class Copy>
+void Warp(const Tensor& a0, const Tensor& b1, int size0, const Buffer_<int>& perm, Tensor c1, Copy copy)
+{
+    auto a0_ptr = (const uint8_t*)a0.raw_data();
+    auto b1_ptr = (const uint8_t*)b1.raw_data();
+    auto c1_ptr = (uint8_t*)c1.raw_data();
+
+    const auto vec_size = byte_size(a0.dtype(), a0.stride(0));
+
+    for (int i = 0; i < perm.size(); ++i) {
+        const uint8_t* src_ptr = TM_LIKELY(perm[i] < size0) ? a0_ptr + perm[i] * vec_size : b1_ptr + i * vec_size;
+        copy(src_ptr, vec_size, c1_ptr + i * vec_size);
     }
-};
+}
 
-void MaskedGather(const Tensor& src, const Buffer_<int>& perm, const Buffer_<int>& mask, const Tensor& dst);
+template<class Copy>
+void Warp(const Tensor&       src0,
+          const Buffer_<int>& offset0,
+          int                 size0,
+          const Tensor&       src1,
+          const Buffer_<int>& offset1,
+          const Buffer_<int>& perm0,
+          Tensor              dst,
+          Buffer_<int>        offsetd,
+          Copy                copy)
+{
+    auto p_src0 = (const uint8_t*)src0.raw_data();
+    auto p_src1 = (const uint8_t*)src1.raw_data();
 
-template<class T>
-struct MutableState_ {
-    Tensor_<T> h_state;
-    Tensor_<T> d_state;
-    Tensor_<T> h_buf;
-    Tensor_<T> d_buf;
+    const ssize_t vec_size = byte_size(src0.dtype(), src0.stride(0));
 
-    ssize_t size;
-    ssize_t vec_size;
+    auto p_dst = (uint8_t*)dst.raw_data();
 
-    explicit MutableState_(Layout shape)
-    {
-        h_state = {shape, kCPUpinned};
-        h_buf   = {shape, kCPUpinned};
-        d_state = {shape, kDEVICE};
-        d_buf   = {shape, kDEVICE};
+    offsetd[0] = 0;
 
-        vec_size = h_state.stride(0);
-    }
-
-    T& operator[](int i)
-    {
-        return h_state.data() + i * vec_size;
-    }
-
-    void Reorder_0(const Buffer_<int>& h_perm)
-    {
-        const auto* src = h_state.data();
-        auto*       dst = h_buf.data();
-
-        for (int i = 0; i < h_perm.size(); ++i) {
-            std::copy_n(src + h_perm[i] * vec_size, vec_size, dst + i * vec_size);
+    for (int i = 0; i < perm0.size(); ++i) {
+        const uint8_t* p_src;
+        ssize_t        n;
+        if (const int j = perm0[i]; TM_LIKELY(j < size0)) {
+            p_src = p_src0 + offset0[j] * vec_size;
+            n     = offset0[j + 1] - offset0[j];
         }
-
-        std::swap(h_buf, h_state);
-    }
-
-    void Acquire_0(ssize_t size)
-    {
-        Copy_(d_buf, size * vec_size, h_buf);
-
-        core::Context::stream().Sync();
-
-        // const auto src = h_buf.data();
-        // auto       dst = h_state.data();
-
-        // for (int i = 0; i < h_perm.size(); ++i) {
-        //     std::copy_n(src + h_perm[i] * vec_size, vec_size, dst + i * vec_size);
-        // }
-    }
-
-    void Patch_0(const Buffer_<int>& h_perm, const Buffer_<int>& h_mask)
-    {
-        TM_CHECK_EQ(h_perm.size(), h_mask.size());
-    }
-
-    void Release_0(ssize_t size)
-    {
-        Copy_(h_state, vec_size * size, d_buf);
-    }
-
-    void Acquire_1(ssize_t size) {}
-
-    // void Acquire_1(const Buffer_<int>& d_perm)
-    // {
-    //     MaskedGather(d_state, d_perm, 0, d_buf);
-    //     std::swap(d_state, d_buf);
-    // }
-
-    void Patch_1(const Buffer_<int>& d_perm, const Buffer_<int>& d_mask) {}
-
-    void Release_1(ssize_t size)
-    {
-        Copy_(d_state, size * vec_size, d_buf);
-    }
-};
-
-// input embeddings, mrope position ids
-template<class T>
-struct ConstVarlenState_ {
-    Tensor_<T> d_state;
-    Buffer_<T> h_state_offset;
-    Buffer_<T> d_state_offset;
-    // Tensor_<T>   h_new;
-    Tensor_<T> d_buf;
-    Buffer_<T> h_buf_offset;
-    Buffer_<T> d_buf_offset;
-
-    // Buffer_<int> d_state_len;
-    // Buffer_<int> d_buf_len;
-    // Buffer_<int> h_state_len;
-    // Buffer_<int> h_buf_len;
-
-    size_t elem_size;
-
-    ConstVarlenState_(Layout layout, int max_slots)
-    {
-        d_state = {layout, kDEVICE};
-        d_buf   = {layout, kDEVICE};
-
-        elem_size = layout.stride(0);
-    }
-
-    void Set(int i, const T* value, int n)
-    {
-        // set data
-        Copy_(value, n * elem_size, d_state.data() + i * elem_size);
-
-        // set length
-        h_state_offset[i + 1] = h_state_offset[i] + n;
-    }
-
-    void Reorder_0(const Buffer_<int> h_perm, const Buffer_<int>& d_perm)
-    {
-        Copy(h_state_offset, d_perm.size() + 10, d_state_offset);
-
-        h_buf_offset[0] = 0;
-        for (int i = 0; i < h_perm.size(); ++i) {
-            const int j         = h_perm[i];
-            const int n         = h_state_offset[j + 1] - h_state_offset[j + 1];
-            h_buf_offset[i + 1] = h_buf_offset[i] + n;
+        else {
+            p_src = p_src1 + offset1[i] * vec_size;
+            n     = offset1[i + 1] - offset1[i];
         }
-
-        Copy(h_buf_offset, h_perm.size() + 1, d_buf_offset);
-
-        // kernel launch
-        // Reorder(h_buf_offset.)
-
-        std::swap(d_state, d_buf);
-        std::swap(d_state_offset, d_buf_offset);
-        std::swap(h_state_offset, h_buf_offset);
+        offsetd[i + 1] = offsetd[i] + n;
+        copy(p_src, n * vec_size, p_dst + offsetd[i] * vec_size);
     }
+}
 
-    void Release_0(ssize_t) {}  // NOP
-};
+// d1[i] = a0[perm[i]]:b0[perm[i]] if perm[i] < size0 else c1[i]
+// where `a0` has variable size with fixed stride
+//       `b0` has fixed size (1)
+//       `a1` has variable size
+//       `c1` has variable size with fixed stride
+template<class Copy>
+void Append(const Tensor&       a0,
+            const Buffer_<int>& a0_size,
+            const Tensor&       b0,
+            const Tensor&       c1,
+            const Buffer_<int>& c1_offset,
+            const Buffer_<int>& perm,
+            int                 size0,
+            Tensor              d1,
+            Buffer_<int>        d1_size,
+            Copy                copy)
+{
+    auto a0_ptr = (const uint8_t*)a0.raw_data();
+    auto b0_ptr = (const uint8_t*)b0.raw_data();
+    auto c1_ptr = (const uint8_t*)c1.raw_data();
 
-template<class T>
-struct MutableState0_ {
-    Tensor_<T> front;
-    Tensor_<T> back;
+    auto d1_ptr = (uint8_t*)d1.raw_data();
 
-    ssize_t vec_size;
+    TM_CHECK_EQ(a0.stride(0), d1.stride(0));
 
-    Tensor_<T>* operator->()
-    {
-        return &front;
-    }
+    const auto stride   = byte_size(a0.dtype(), a0.stride(0));
+    const auto vec_size = byte_size(a0.dtype(), a0.stride(1));
 
-    void Reorder(const Buffer_<int>& perm)
-    {
-        for (int i = 0; i < perm.size(); ++i) {
-            back[i] = front[perm[i]];
+    for (int i = 0; i < perm.size(); ++i) {
+        if (const int j = perm[i]; TM_LIKELY(j < size0)) {
+            TM_LOG_ERROR("A vec size %d, a0 size %d", vec_size, a0_size);
+            uint8_t* out = copy(a0_ptr + j * stride, vec_size * a0_size[j], d1_ptr + i * stride);
+            copy(b0_ptr + j * vec_size, vec_size, out);
+            d1_size[i] = a0_size[j] + 1;
         }
-        std::swap(front, back);
-    }
-
-    void Release(Tensor_<T>& outgoing, ssize_t size)
-    {
-        Copy(front, size * vec_size, outgoing);
-    }
-
-    void Acquire(const Tensor_<T>& state, ssize_t size)
-    {
-        Copy(state, size * vec_size, back);
-    }
-
-    void Patch(const Buffer_<int>& perm, const Buffer_<int>& mask) {}
-};
-
-template<class T>
-struct MutableState1_ {
-    Tensor_<T> data;
-
-    void Patch(Tensor_<T>& incoming, const Buffer_<int>& perm, const Buffer_<int>& mask)
-    {
-        // MaskedGather
-        std::swap(incoming, data);
-    }
-
-    void Release(Tensor_<T>& outgoing)
-    {
-        Copy(data, outgoing);
-    }
-};
-
-template<class T>
-struct ConstVarlenState0_ {
-    Tensor_<T>   data_0;
-    Tensor_<T>   data_1;
-    Buffer_<int> h_offset_0;
-    Buffer_<int> h_offset_1;
-    // Buffer_<int> d_offset;
-
-    ssize_t vec_size;
-
-    ssize_t size;
-
-    void Add(int i, const T* value, int n)
-    {
-        // set data
-        // Copy_(value, n * vec_size, data_0.data() + h_offset_0[i] * vec_size);
-
-        // set length
-        h_offset_0[i + 1] = h_offset_0[i] + n;
-
-        // size = i + 1;
-
-        // Copy_(value, n *vec_size, )
-    }
-
-    void Reorder(const Buffer_<int>& h_perm)
-    {
-        h_offset_1[0] = 0;
-        for (int i = 0; i < h_perm.size(); ++i) {
-            const auto j = h_perm[i];
-            const auto n = h_offset_0[j + 1] - h_offset_0[j];
-            h_offset_1[i + 1] = h_offset_1[i] + n;
-            if (j >= size) {
-                // core::Copy_()
-            }
+        else {
+            const auto n = c1_offset[i + 1] - c1_offset[i];
+            TM_LOG_ERROR("C i %d, vec size %d, c1 size %d, %d, %d", i, vec_size, n, c1_offset[i + 1], c1_offset[i]);
+            copy(c1_ptr + c1_offset[i] * vec_size, n * vec_size, d1_ptr + i * stride);
+            d1_size[i] = n;
         }
-
     }
-
-    void Release(Tensor_<T>& outgoing, Buffer_<int>& offsets, ssize_t size) {
-        // Copy_(data_0, )
-    }
-};
-
-template<class T>
-struct MutableVarlenState_ {
-    Tensor_<T> d_state;
-    Tensor_<T> d_buf;
-};
+}
 
 }  // namespace turbomind

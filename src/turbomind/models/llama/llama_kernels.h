@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/core.h"
 
 #include <cstdint>
 
@@ -63,5 +63,9 @@ template<typename T>
 void invokeMask(T* output, const int* mask, int batch_size, int dim, cudaStream_t stream);
 
 void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream);
+
+void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st);
+
+void PrefixSum(const Buffer_<int>& src, Ref<Buffer_<int>> dst, Stream stream);
 
 }  // namespace turbomind

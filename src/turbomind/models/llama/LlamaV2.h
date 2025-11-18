@@ -22,7 +22,7 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
-#include "src/turbomind/layers/DynamicDecodeLayer.h"
+#include "src/turbomind/layers/generation/generation.h"
 #include "src/turbomind/models/llama/LlamaBatch.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
@@ -34,7 +34,7 @@ namespace turbomind {
 
 class LlamaBatch;
 
-struct ModelStates;
+class InputProcessor;
 
 class LlamaV2 {
 public:
@@ -46,9 +46,14 @@ public:
             const LoraParam&             lora,
             const Context&               ctx,
             int                          max_batch_size,
-            std::shared_ptr<LlamaWeight> weights);
+            std::shared_ptr<LlamaWeight> weights,
+            int                          phases);
 
-    void Setup(const std::shared_ptr<ModelStates>& states, const TensorMap& args);
+    void Forward(int phase, TensorMap& env);
+
+    void Exchange(ExchOp op, int phase, TensorMap& env);
+
+    Tensor LookupEmbedding(const Buffer_<int>& input_ids, Tensor symm_buf);
 
     void Forward(Buffer_<int>     input_ids,
                  Tensor           hidden_states_out,
@@ -89,13 +94,11 @@ public:
     }
 
 private:
-    void updateEmbedding(char*            decoder_input,
+    void updateEmbedding(char*            decoder_input,  //
                          const int        bsz,
                          const int*       h_input_length,
                          const Sequence** sequences,
-                         int              token_num,
-                         int*             lora_mask,
-                         bool*            have_embeddings);
+                         int              token_num);
 
 private:
     friend class LlamaBatch;
@@ -130,8 +133,13 @@ private:
 
     const bool debug_;
 
-    std::unique_ptr<UnifiedDecoder>     unified_decoder_;
-    std::unique_ptr<DynamicDecodeLayer> dynamic_decode_;
+    struct Data;
+
+    std::shared_ptr<Data> data_;
+
+    std::shared_ptr<InputProcessor> input_processor_;
+    std::unique_ptr<UnifiedDecoder> unified_decoder_;
+    std::unique_ptr<Generation>     generation_;  // token generator
 };
 
 }  // namespace turbomind

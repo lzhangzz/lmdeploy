@@ -7,9 +7,11 @@
 #include <utility>
 
 #include <cub/block/block_reduce.cuh>
+#include <cub/block/block_scan.cuh>
 
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/array_ops.h"
+#include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/macro.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -434,6 +436,85 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
     else {
         return dispatch_t(std::integral_constant<int, 1>{});
     }
+}
+
+template<class T>
+__global__ void CollectHiddenStates_Kernel(const T* src, const int* idxs, T* dst, int dim)
+{
+    const int bi = blockIdx.x;
+    const int ti = idxs[bi];
+
+    if (ti < 0) {
+        return;
+    }
+
+    src += ti * dim;
+    dst += bi * dim;
+
+    for (int di = threadIdx.x; di < dim; di += blockDim.x) {
+        dst[di] = src[di];
+    }
+}
+
+void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st)
+{
+    const auto stride = byte_size(src.dtype(), src.stride(0));
+
+    auto invoke = [&](auto t) {
+        using T           = decltype(t);
+        const int dim     = stride / sizeof(T);
+        const int threads = round_up(min(dim, 1024), WARP_SIZE);
+        const int blocks  = idxs.size();
+        CollectHiddenStates_Kernel<<<blocks, threads, 0, st>>>(
+            (const T*)src.raw_data(), idxs.data(), (T*)dst.get().raw_data(), dim);
+    };
+
+    if (stride % sizeof(uint4) == 0) {
+        invoke(uint4{});
+    }
+    else if (stride % sizeof(uint2) == 0) {
+        invoke(uint2{});
+    }
+    else if (stride % sizeof(uint1) == 0) {
+        invoke(uint1{});
+    }
+    else if (stride % sizeof(ushort) == 0) {
+        invoke(ushort{});
+    }
+    else {
+        TM_CHECK(0) << "unsupported byte stride: " << stride;
+    }
+}
+
+template<int BLOCK_DIM>
+__global__ void PrefixSum_Kernel(const int* src, int* dst, int n)
+{
+    using BlockScan = cub::BlockScan<int, BLOCK_DIM>;
+    __shared__ typename BlockScan::TempStorage temp_storage;
+
+    const int m = round_up(n, BLOCK_DIM);
+
+    int accum{};
+    for (int i = threadIdx.x; i < m; i += BLOCK_DIM) {
+        int data = i < n ? 0 : src[i];
+        int sum{};
+        BlockScan{temp_storage}.ExclusiveSum(data, data, sum);
+        __syncthreads();
+        if (i < n) {
+            dst[i] = accum + data;
+        }
+        accum += sum;
+    }
+
+    if (threadIdx.x == 0) {
+        dst[n] = accum;
+    }
+}
+
+void PrefixSum(const Buffer_<int>& src, Ref<Buffer_<int>> dst, Stream stream)
+{
+    TM_CHECK_EQ(src.size() + 1, dst.get().size());
+    PrefixSum_Kernel<1024><<<1, 1024, 0, stream.handle()>>>(src.data(), dst.get().data(), src.size());
 }
 
 }  // namespace turbomind

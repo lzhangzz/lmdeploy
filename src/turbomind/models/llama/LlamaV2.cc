@@ -24,8 +24,14 @@
 #include <memory>
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/macro.h"
+#include "src/turbomind/core/exchange.h"
+#include "src/turbomind/core/state.h"
+#include "src/turbomind/core/state2.h"
+#include "src/turbomind/engine/request.h"
+#include "src/turbomind/layers/generation/generation.h"
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/LlamaV2.h"
@@ -44,12 +50,97 @@
 
 namespace turbomind {
 
-struct TransformerStates;
-struct SamplingStates;
+struct InputProcessorData {
+    Buffer_<int> input_ids;
+    Buffer_<int> input_ids_offsets;
 
-struct ModelStates {
-    std::shared_ptr<TransformerStates> transformer;
-    std::shared_ptr<SamplingStates>    sampling;
+    Tensor       input_embeds;
+    Buffer_<int> input_embeds_offsets;
+};
+
+class InputProcessor {
+public:
+    InputProcessor(const EngineParam& engine, int phases):
+        max_batch_size_{engine.max_batch_size}, max_forward_token_num_{engine.max_forward_token_num}
+    {
+        input_ids_buf_         = {max_forward_token_num_, kCPUpinned};
+        input_ids_offsets_buf_ = {max_batch_size_ + 1, kCPUpinned};
+
+        data_.reserve(phases);
+        for (int i = 0; i < phases; ++i) {
+            auto& d             = data_.emplace_back();
+            d.input_ids         = empty_like(input_ids_buf_, kDEVICE);
+            d.input_ids_offsets = empty_like(input_ids_offsets_buf_, kCPUpinned);
+        }
+    }
+
+    void Exchange(ExchOp op, int phase, TensorMap& env)
+    {
+        if (op != ExchOp::kPush) {
+            return;
+        }
+
+        auto& d = data_.at(phase);
+
+        const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
+        const Buffer_<int>           perm = env.at("permutation").buffer();
+
+        const int bs0 = *env.at("bs0").data<int>();
+        const int bsz = rc.size();
+
+        d.input_ids_offsets[0] = 0;
+        for (int i = 0; i < rc.size(); ++i) {
+            d.input_ids_offsets[i + 1] = d.input_ids_offsets[i];
+            if (const auto& c = *rc[i]; TM_UNLIKELY(perm[i] >= 0)) {
+                const auto src = c.token_ids + c.context_len - c.input_len;
+                std::copy_n(src, c.input_len, input_ids_buf_.data() + d.input_ids_offsets[i]);
+                d.input_ids_offsets[i + 1] += c.input_len;
+            }
+        }
+
+        if (auto size = d.input_ids_offsets[bsz]) {
+            Copy_(input_ids_buf_, size, d.input_ids);
+        }
+    }
+
+    void Forward(int phase, TensorMap& args)
+    {
+        auto& d = data_.at(phase);
+
+        const Buffer_<int> perm = args.at("permutation").buffer();
+
+        const auto bsz = perm.size();
+
+        // last output token + draft tokens
+        const Buffer_<int> autoreg_ids         = args.at("autoreg_ids").buffer();
+        const Buffer_<int> autoreg_ids_offsets = args.at("autoreg_ids_offsets").buffer();
+
+        Buffer_<int> input_ids{max_forward_token_num_, kDEVICE};
+        Select(autoreg_ids,  // auto-regressive token ids from last iteration T0
+               autoreg_ids_offsets,
+               d.input_ids,  // input token ids from swap-ins T1
+               d.input_ids_offsets,
+               perm,
+               input_ids,
+               input_ids_offsets_buf_);
+
+        const int token_num = input_ids_offsets_buf_[bsz];
+
+        Buffer_<int> input_ids_offsets{bsz + 1, kDEVICE};
+        Copy_(input_ids_offsets_buf_, bsz + 1, input_ids_offsets);
+
+        args.emplace("input_ids", input_ids.slice(0, token_num));
+        args.emplace("input_ids_offsets", input_ids_offsets);
+    }
+
+private:
+    const int max_batch_size_;
+    const int max_forward_token_num_;
+
+    std::vector<InputProcessorData> data_;
+
+    Buffer_<int> input_ids_buf_;
+    Buffer_<int> input_ids_offsets_buf_;
 };
 
 /// TODO: Padded vocab size should also be divisible by 8
@@ -66,7 +157,8 @@ LlamaV2::LlamaV2(DataType                     dtype,
                  const LoraParam&             lora,
                  const Context&               ctx,
                  int                          max_batch_size,
-                 std::shared_ptr<LlamaWeight> weights):
+                 std::shared_ptr<LlamaWeight> weights,
+                 int                          phases):
     dtype_{dtype},
     param_(model),
     attn_param_(attn),
@@ -94,39 +186,89 @@ LlamaV2::LlamaV2(DataType                     dtype,
         use_allgather_2d_ = true;
     }
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, lora, ctx);
+    input_processor_ = std::make_shared<InputProcessor>(engine, phases);
 
-    // using float to avoid data overflow
-    dynamic_decode_ = std::make_unique<DynamicDecodeLayer>(
-        kFloat32, max_batch_size, model.tokenizer_size, vocab_size_padded_, stream_, &ctx.device_prop);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, lora, ctx, phases);
+
+    generation_ = std::make_unique<Generation>(
+        kFloat32, max_batch_size, engine.session_len, model.tokenizer_size, vocab_size_padded_, phases);
 }
 
-void LlamaV2::Setup(const std::shared_ptr<ModelStates>& states, const TensorMap& args)
+void LlamaV2::Exchange(ExchOp op, int phase, TensorMap& env)
 {
-    dynamic_decode_->Setup(states->sampling, args);
-    
+    input_processor_->Exchange(op, phase, env);
+    unified_decoder_->Exchange(op, phase, env);
+    generation_->Exchange(op, phase, env);
 }
 
-void LlamaV2::updateEmbedding(char*            decoder_input,
-                              const int        bsz,
-                              const int*       h_input_length,
-                              const Sequence** sequences,
-                              int              token_num,
-                              int*             lora_mask,
-                              bool*            have_embeddings)
+Tensor LlamaV2::LookupEmbedding(const Buffer_<int>& input_ids, Tensor symm_buf)
+{
+    const auto& embedding_table = weights_->pre_decoder_embedding.weight;
+    TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units_);
+
+    const int token_num = input_ids.size();
+
+    Tensor input_embeds{{token_num, (int)hidden_units_}, dtype_, kDEVICE};
+
+    if (tp_size_ == 1) {
+        invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, stream_);
+        sync_check_cuda_error();
+    }
+    else if (use_allgather_2d_) {
+        const auto local_hidden_units = embedding_table.shape(1);
+        Tensor     temp{symm_buf.buffer(), {token_num, tp_size_, local_hidden_units}};
+
+        auto local = temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1);
+
+        invokeEmbeddingLookup(local, input_ids, embedding_table, stream_);
+        sync_check_cuda_error();
+
+        comm_->d_comm->AllGather2D(local.raw_data(),
+                                   temp.raw_data(),
+                                   hidden_units_,
+                                   local_hidden_units,
+                                   local_hidden_units,
+                                   token_num,
+                                   local.dtype(),
+                                   {true, true},
+                                   comm_->d_tp_group,
+                                   stream_);
+        sync_check_cuda_error();
+
+        Copy(temp.buffer(), input_embeds.buffer());
+    }
+    else {
+        const auto local_hidden_units = embedding_table.shape(1);
+        Tensor     temp{symm_buf.buffer(), {tp_size_, token_num, local_hidden_units}};
+
+        auto local = temp.slice(tp_rank_).squeeze(0);
+
+        invokeEmbeddingLookup(local, input_ids, embedding_table, stream_);
+        sync_check_cuda_error();
+
+        comm_->d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_->d_tp_group, stream_);
+        sync_check_cuda_error();
+
+        invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
+                                  (uint16_t*)temp.raw_data(),
+                                  tp_size_,
+                                  token_num,
+                                  local_hidden_units,
+                                  false,
+                                  stream_);
+        sync_check_cuda_error();
+    }
+
+    return input_embeds;
+}
+
+void LlamaV2::updateEmbedding(
+    char* decoder_input, const int bsz, const int* h_input_length, const Sequence** sequences, int token_num)
 {
     if (isTuning())
         return;
 
     TM_LOG_DEBUG(__PRETTY_FUNCTION__);
-
-    *have_embeddings          = false;
-    int*             mask_ptr = nullptr;
-    std::vector<int> mask;
-    if (lora_mask != nullptr) {
-        mask     = std::vector<int>(token_num);
-        mask_ptr = mask.data();
-    }
 
     const size_t elem_size = byte_size(dtype_, 1);
 
@@ -152,20 +294,9 @@ void LlamaV2::updateEmbedding(char*            decoder_input,
             char*  dst_ptr   = decoder_input + elem_size * off_dst * hidden_units_;
             auto   src_ptr   = embeddings[j].data() + elem_size * off_src * hidden_units_;
             check_cuda_error(cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDefault, stream_));
-            if (lora_mask != nullptr) {
-                std::fill_n(mask_ptr + off_dst, (end - begin), 1);
-                *have_embeddings = true;
-            }
         }
         decoder_input += elem_size * h_input_length[i] * hidden_units_;
-        mask_ptr += h_input_length[i];
     }
-
-    if (lora_mask != nullptr && *have_embeddings) {
-        cudaMemcpyAsync(lora_mask, mask.data(), sizeof(int) * token_num, cudaMemcpyDefault, stream_);
-        cudaStreamSynchronize(stream_);
-    }
-    sync_check_cuda_error();
 }
 
 void LlamaV2::Forward(Buffer_<int>     input_ids,
@@ -247,16 +378,10 @@ void LlamaV2::Forward(Buffer_<int>     input_ids,
         }
     }
 
-    bool have_embeddings = false;
     if (token_num) {
         // Copy input embeddings from corresponding sequences
-        updateEmbedding((char*)input_embeds.raw_data(),
-                        h_input_length.size(),
-                        h_input_length.data(),
-                        sequences,
-                        token_num,
-                        lora_mask ? lora_mask.data<int>() : nullptr,
-                        &have_embeddings);
+        updateEmbedding(
+            (char*)input_embeds.raw_data(), h_input_length.size(), h_input_length.data(), sequences, token_num);
         sync_check_cuda_error();
     }
 
@@ -374,7 +499,7 @@ void LlamaV2::dynamicDecode(Buffer token_ids,
         args.emplace("sampled_nums", sampled_nums);
     }
 
-    dynamic_decode_->Forward(args);
+    // dynamic_decode_->Forward(args);
 }
 
 }  // namespace turbomind

@@ -1,0 +1,35 @@
+
+
+#pragma once
+
+#include <memory>
+
+#include "src/turbomind/core/core.h"
+#include "src/turbomind/core/tensor.h"
+
+namespace turbomind {
+
+struct GenerationData;
+
+class Generation {
+public:
+    ~Generation();
+
+    Generation(DataType data_type,  //
+               int      max_batch_size,
+               int      session_len,
+               int      vocab_size,
+               int      vocab_size_padded,
+               int      phases);
+
+    void Run(ExchOp op, int phase, TensorMap& env);
+
+    void Forward(int phase, TensorMap& env);
+
+private:
+    struct Impl;
+
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace turbomind

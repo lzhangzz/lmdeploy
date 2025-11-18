@@ -5,6 +5,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/layout.h"
 #include "src/turbomind/core/stream.h"
 #include "src/turbomind/core/tensor.h"
@@ -22,5 +23,7 @@ using core::Layout;
 using core::Allocator;
 using core::Stream;
 using core::Event;
+using core::ExchOp;
+using core::BatchOp;
 
 }  // namespace turbomind

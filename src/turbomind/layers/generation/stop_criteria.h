@@ -13,33 +13,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <vector>
+#include "src/turbomind/core/core.h"
 
-#include "src/turbomind/core/tensor.h"
-#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
-#include "src/turbomind/macro.h"
-
-#include "src/turbomind/engine/request.h"
+#include "src/turbomind/layers/generation/base_param.h"
 
 namespace turbomind {
 
-template<typename T>
-class SamplingLayer: public BaseDynamicDecodeLayer {
+struct StopCriteriaData;
+
+class StopCriteria: public BaseGenerationParam {
 public:
-    explicit SamplingLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states);
+    explicit StopCriteria(const BaseGenerationParam& base, int phases);
 
-    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap&) override;
+    void Setup(int phase, TensorMap& env);
 
-    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const override;
+    void Forward(int phase, TensorMap& env);
 
 private:
-    // host buffer
-    Buffer_<int>   kept_;
-    Buffer_<int>   top_k_;
-    Buffer_<float> top_p_;
-    Buffer_<float> min_p_;
+    std::vector<std::shared_ptr<StopCriteriaData>> data_;
+
+    Buffer_<int> stop_words_buf_;
+    Buffer_<int> max_seq_len_buf_;
 };
 
 }  // namespace turbomind

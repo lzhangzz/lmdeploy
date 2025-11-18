@@ -1,111 +1,15 @@
 
 #pragma once
 
-#include <future>
 #include <memory>
-#include <thread>
 
-#include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/gateway.h"
-#include "src/turbomind/engine/queue.h"
 
-#include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/language_model.h"
+#include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
-
-class SequenceManager;
-
-struct RequestInfo {
-    std::shared_ptr<Request> request;
-    const Sequence*          sequence;
-
-    int  input_length;
-    int  prompt_length;
-    int  context_length;
-    int  max_seq_len;
-    int* token_ids;  // alias of "output_ids" buffer in request
-};
-
-#if 0
-struct Batch {
-    Event event;
-
-    int size;
-
-    int active_size;
-    int partial_size;
-
-    int prefill_size;
-    int decode_size;
-
-    bool init_sampling;
-
-    Buffer_<int> permutation;
-
-    //
-    Buffer_<int> input_ids;
-    Buffer_<int> input_ids_offsets;
-
-    Tensor       input_embeds;
-    Buffer_<int> input_embeds_offsets;
-
-    Buffer_<int> token_ids;
-    Buffer_<int> token_ids_offsets;
-
-    Buffer_<uint64_t> block_ptrs;
-    Buffer_<int>      block_ptrs_offsets;
-
-    Buffer_<int> h_q_lens;
-    Buffer_<int> h_k_lens;
-
-    Buffer_<bool> is_finished;  // is_finished -> input_length = 0
-
-    Buffer_<int> local_token_nums;
-
-    Buffer_<int> output_ids;
-    Buffer_<int> output_ids_offsets;
-
-    std::vector<std::shared_ptr<RequestInfo>> info;
-
-    // std::vector<std::shared_ptr<Request>> requests;
-    // std::vector<const Sequence*>          sequences;
-};
-#endif
-
-struct ModelStates;
-
-struct SchedBatch {
-    int size;
-
-    int active_size;
-    int partial_size;
-
-    int prefill_size;
-    int decode_size;
-
-    Event forward_ready_event;
-
-    Buffer_<int> permutation;
-    Buffer_<int> local_token_nums;
-
-    Buffer_<int> input_ids;
-    Buffer_<int> input_ids_offsets;
-
-    Tensor       input_embeds;
-    Buffer_<int> input_embeds_offsets;
-
-    Buffer_<int> token_ids;
-    Buffer_<int> token_ids_offsets;
-
-    Buffer_<uint64_t> block_ptrs;
-    Buffer_<int>      block_ptrs_offsets;
-
-    Buffer_<int> is_finished;
-
-    std::shared_ptr<ModelStates> model_states;
-};
-
-struct FeedbackBatch;
 
 // sched batch
 // ----
@@ -140,37 +44,6 @@ struct FeedbackBatch;
 // baseline
 // state = state.append(gather(incoming))
 
-class BatchedGatherScatter {
-public:
-    using Offsets = Buffer_<int>;
-    using Indexes = Buffer_<int>;
-
-    void Gather(const Tensor& src, const Indexes& idxs, Tensor dst);
-    void Scatter(const Tensor& src, const Indexes& idxs, Tensor dst);
-
-    void Gather(const Tensor& src, const Offsets& src_offsets, const Indexes& idxs, Tensor dst, Offsets dst_offsets);
-    void Scatter(const Tensor& src, const Offsets& src_offsets, const Indexes& idxs, Tensor dst, Offsets dst_offsets);
-
-    void Run();
-
-private:
-};
-
-void Scatter(const Tensor& src, const Buffer_<int>& idxs, Tensor dst);
-
-void Scatter(const Tensor&       src,
-             const Buffer_<int>& src_offsets,
-             const Buffer_<int>& idxs,
-             Tensor              dst,
-             const Buffer_<int>& dst_offsets,
-             Buffer_<int>        dst_end_offsets);
-
-void Copy(const Tensor&       src,
-          const Buffer_<int>& src_offsets,
-          const Buffer_<int>& src_end_offsets,
-          Tensor              dst,
-          Buffer_<int>        dst_offsets);
-
 // Sync
 // ---
 // batch = Receive()
@@ -191,6 +64,41 @@ void Copy(const Tensor&       src,
 // state = Clone(batch)             # no mutable sharing
 // Send(batch)
 
+/// Decoupled asynchronous model execution
+
+class Engine {
+public:
+    ~Engine();
+
+    Engine();
+    Engine(Engine&&) noexcept;
+    Engine& operator=(Engine&&) noexcept;
+
+    explicit operator bool() const noexcept
+    {
+        return static_cast<bool>(impl_);
+    }
+
+    Engine(DataType      dtype,
+           EngineParam   param,
+           LanguageModel model,
+           Context&      ctx,
+           Gateway&      gateway,
+           int           device_id,
+           int           dp_rank);
+
+    void WarmUp();
+
+    void Start();
+
+    ScheduleMetrics GetScheduleMetrics();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+#if 0
 class Engine {
 public:
     // Engine_()
@@ -209,15 +117,21 @@ private:
 
     void ProcessCancelRequests(std::vector<int>& indices, std::vector<Signal>& signals);
 
-    void Accept(const Requests& rs, std::vector<Signal>& signals);
+    void Accept(const Requests& rs, std::vector<Signal>& signals);  // abcd|EF
 
-    void Schedule(SchedBatch& b);
+    // Allocation of memory / compute resources
+    Buffer_<int> Schedule();
 
-    void SetupBatch(SchedBatch& b);
+    // intiailize RC from `Sequence`
+    void Setup(BatchData& d, const Buffer_<int>& perm);
 
-    void SetupSampling(SchedBatch& b);
+    // Sync vars from batch output to RC
+    void Synchronize(const BatchData& d, std::vector<Signal>& signals);
 
-    void Synchronize(const FeedbackBatch& b, std::vector<Signal>& signals);
+    // 1. (Add)    Se ->  Rc (unlikely)
+    // 2. (Setup)  Rc ->  D
+    // 3. (Update) D  ->  Rc
+    // 4. (Done)   RC ->  Se (finished, canceled)
 
 private:
     Gateway& gateway_;
@@ -235,40 +149,23 @@ private:
 
     std::shared_ptr<SequenceManager> seq_mgr_;
 
-    Queue<std::shared_ptr<FeedbackBatch>>& inbound_;
-    Queue<std::shared_ptr<SchedBatch>>&    outbound_;
+    Queue<std::shared_ptr<BatchData>>& inbound_;
+    Queue<std::shared_ptr<BatchData>>& outbound_;
 
     std::thread internal_thread_;
 
     int batch_size_{};
+    int active_size_{};
 
-    std::vector<std::shared_ptr<RequestInfo>> info_;
+    std::vector<std::shared_ptr<RequestCache>> rc_;  // |rc_| <= max_batch_size
 
-    struct State {
-        Buffer_<int> h_context_length;
-        Buffer_<int> h_is_finished;
-    };
+    Buffer_<int> perm_;
 
-    std::shared_ptr<State> state_;
-    std::shared_ptr<State> back_;
+    LlamaV2& model_;
 
-    Buffer_<int> h_prompt_length_;
-    Buffer_<int> h_input_length_;
-
-    Buffer_<int> h_input_ids_;
-    Buffer_<int> h_input_ids_offset_;
-
-    Buffer_<int> h_token_ids_;
-
-    Buffer_<int> h_output_ids_;
-    Buffer_<int> h_output_ids_offset_;
-
-    Buffer_<uint64_t> h_block_ptrs_;
-    Buffer_<int>      h_block_ptrs_offsets_;
-
-    Buffer_<float> h_rope_theta_;
-
-    Buffer_<int> h_perm_;
+    Buffer_<uint64_t> block_ptrs_;
+    Buffer_<int>      block_ptrs_offsets_;
 };
+#endif
 
 }  // namespace turbomind

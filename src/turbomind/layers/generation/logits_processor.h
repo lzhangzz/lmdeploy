@@ -16,24 +16,29 @@
 
 #pragma once
 
-#include "src/turbomind/layers/BaseDynamicDecodeLayer.h"
+#include <memory>
 
-#include "src/turbomind/engine/request.h"
-#include "src/turbomind/layers/sampling_layers/sampling_states.h"
+#include "src/turbomind/core/core.h"
+
+#include "src/turbomind/layers/generation/base_param.h"
 
 namespace turbomind {
 
-template<typename T>
-class StopCriteriaLayer: public BaseDynamicDecodeLayer {
+struct LogitsProcessorData;
+
+class LogitsProcessor: public BaseGenerationParam {
 public:
-    explicit StopCriteriaLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states);
+    explicit LogitsProcessor(const BaseGenerationParam& base, int phases);
 
-    void Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap&) override;
+    void Setup(int phase, TensorMap& env);
 
-    void Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const override;
+    void Forward(int phase, TensorMap& env);
 
 private:
-    Buffer_<int> stop_words_;
+    std::vector<std::shared_ptr<LogitsProcessorData>> data_;
+
+    // temp host buffer
+    std::shared_ptr<LogitsProcessorData> buf_;
 };
 
 }  // namespace turbomind

@@ -35,8 +35,7 @@ struct GenerationConfig {
 
     int output_logprobs = 0;
 
-    enum OutType
-    {
+    enum OutType {
         kNone       = 0,
         kAll        = 1,
         kGeneration = 2
@@ -138,8 +137,7 @@ struct Request {
 
     int ec;  // set when disabling conflicting requests
 
-    enum
-    {
+    enum {
         kOk            = 0,
         kInvalid       = 1,  // Sequence not exist or both `start` & `stop` (instead of `end`) is set
         kConflict      = 2,  // Concurrent requests to the same sequence
@@ -169,5 +167,35 @@ inline void UpdateState(Request& r, int status, int seq_len)
         TM_LOG_ERROR("Unknown error invoking callback for (%lu)", r.id);
     }
 }
+
+class Sequence;
+
+// Unlike `Request` which is shared by all local TP ranks, each rank has its own `RequestCache`.
+struct RequestCache {
+    std::shared_ptr<Request> request;
+
+    const Sequence&         sequence;
+    const GenerationConfig& gen_cfg;
+
+    RequestCache(std::shared_ptr<Request> r, const Sequence& s):
+        request{std::move(r)}, sequence{s}, gen_cfg{request->gen_cfg}
+    {
+    }
+
+    // These members may be opaque handles from individual modules, but we tend to keep it simple
+    // as long as the complexity is manageable
+
+    int*     token_ids{};  // currently the `output_ids` buf of request
+    uint8_t* random_state{};
+
+    int seq_len{};      // set at request init, updated per step
+    int prompt_len{};   // set at request init, constant
+    int max_seq_len{};  // set at request init, constant
+
+    int input_len{};    // set at schedule (set to `seq.input_len`)
+    int context_len{};  // set at schedule (context_len = cache_len + input_len)
+
+    float rope_base{};
+};
 
 }  // namespace turbomind

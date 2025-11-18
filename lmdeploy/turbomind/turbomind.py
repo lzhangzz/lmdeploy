@@ -196,7 +196,7 @@ class TurboMind:
         # create weight
         def _create_weight_func(device_id):
             rank = self.node_id * self.gpu_count + device_id
-            model_comm.create_shared_weights(device_id, rank)
+            model_comm.create_weights(device_id, rank)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []
@@ -213,7 +213,7 @@ class TurboMind:
 
         def _get_params(device_id, que):
             rank = self.node_id * self.gpu_count + device_id
-            out = model_comm.get_params(device_id, rank)
+            out = model_comm.get_weights(device_id, rank)
             que.put(out)
 
         que = Queue()
@@ -269,9 +269,9 @@ class TurboMind:
 
         self._postprocess_config(tm_model.tm_config, engine_config)
 
-        model_comm = _tm.AbstractTransformerModel.create_llama_model(model_dir='',
-                                                                     config=yaml.safe_dump(self.config_dict),
-                                                                     weight_type=self.config.model_config.weight_type)
+        model_comm = _tm.TurboMind.create(model_dir='',
+                                          config=yaml.safe_dump(self.config_dict),
+                                          weight_type=self.config.model_config.weight_type)
 
         # create empty weight
         self._create_weight(model_comm)
@@ -548,7 +548,7 @@ class TurboMindInstance:
         return self._model_inst
 
     def _create_model_instance(self, device_id):
-        model_inst = self.tm_model.model_comm.create_model_instance(device_id)
+        model_inst = self.tm_model.model_comm.create_request(device_id)
         return model_inst
 
     def _get_extra_output_processors(self, outputs: Dict[str, torch.Tensor], gen_config: GenerationConfig,

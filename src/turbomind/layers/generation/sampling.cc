@@ -14,18 +14,28 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/layers/sampling_layers/SamplingLayer.h"
-#include "src/turbomind/core/check.h"
-#include "src/turbomind/core/context.h"
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/layers/generation/sampling.h"
+
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
+
+#include "src/turbomind/engine/request.h"
+
 #include "src/turbomind/utils/logger.h"
 
 namespace turbomind {
 
-struct SamplerStates {
+struct SamplingData {
+
+    explicit SamplingData(int max_batch_size, DeviceType device)
+    {
+        top_k_buf = {max_batch_size, device};
+        top_p_buf = {max_batch_size, device};
+        min_p_buf = {max_batch_size, device};
+        kept_buf  = {max_batch_size, device};
+    }
+
     int   max_topk;
     int   min_topk;
     float min_topp;
@@ -38,9 +48,7 @@ struct SamplerStates {
     Buffer_<int> kept_buf;  // kept sample
 };
 
-template<typename T>
-SamplingLayer<T>::SamplingLayer(const BaseParam& param, const std::vector<std::shared_ptr<SamplingStates>>& states):
-    BaseDynamicDecodeLayer{param}
+Sampling::Sampling(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}
 {
     top_k_ = {max_batch_size_, kCPUpinned};
     top_p_ = {max_batch_size_, kCPUpinned};
@@ -50,20 +58,12 @@ SamplingLayer<T>::SamplingLayer(const BaseParam& param, const std::vector<std::s
     // constant array
     std::fill_n(kept_.data(), max_batch_size_, vocab_size_);
 
-    for (auto& state : states) {
-        auto s = std::make_shared<SamplerStates>();
-
-        s->top_k_buf = {max_batch_size_, kDEVICE};
-        s->top_p_buf = {max_batch_size_, kDEVICE};
-        s->min_p_buf = {max_batch_size_, kDEVICE};
-        s->kept_buf  = {max_batch_size_, kDEVICE};
-
-        state->sampler = std::move(s);
+    for (int i = 0; i < phases; ++i) {
+        data_.push_back(std::make_shared<SamplingData>(max_batch_size_, kDEVICE));
     }
 }
 
-template<typename T>
-void SamplingLayer<T>::Forward(const std::shared_ptr<SamplingStates>& states, TensorMap& args) const
+void Sampling::Forward(int phase, TensorMap& args)
 {
     // step1:
     //  - use topk / topp_minp kernel to sort and filter the scores
@@ -73,63 +73,63 @@ void SamplingLayer<T>::Forward(const std::shared_ptr<SamplingStates>& states, Te
 
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    auto& s = states->sampler;
+    auto& d = *data_.at(phase);
 
-    Tensor_<T> logits = args.at("logits");
+    Tensor_<float> logits = args.at("logits");
 
     const auto bsz = logits.shape(0);
 
-    const int step = *args.at("step").data<int>();
-
-    core::Copy(kept_.data(), bsz, s->kept_buf.data());
+    core::Copy(kept_.data(), bsz, d.kept_buf.data());
 
     Buffer_<int> indices(bsz * vocab_size_padded_, kDEVICE);
 
+    auto stream = core::Context::stream().handle();
+
     // use topk sort if some request use topk filter
-    if (s->max_topk > 0) {
+    if (d.max_topk > 0) {
         // TODO: top_k >= 64 is much slower than torch.topk()
         TopKSortFilterParams params{};
         params.logits            = logits.data();
         params.sorted_logits     = logits.data();
         params.sorted_indices    = indices.data();
-        params.kept              = s->kept_buf.data();
-        params.top_ks            = s->top_k_buf.data();
-        params.max_top_k         = s->max_topk;
+        params.kept              = d.kept_buf.data();
+        params.top_ks            = d.top_k_buf.data();
+        params.max_top_k         = d.max_topk;
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopKSortFilter<T>(params, stream_);
+        invokeTopKSortFilter<float>(params, stream);
     }
 
     // use topp sort if some request skip topk filter
-    if (s->min_topk == 0) {
-        invokeSoftmax<T>(logits.data(), vocab_size_padded_, vocab_size_, bsz, s->kept_buf.data(), stream_);
+    if (d.min_topk == 0) {
+        invokeSoftmax<float>(logits.data(), vocab_size_padded_, vocab_size_, bsz, d.kept_buf.data(), stream);
 
         TopPSortParams params{};
         params.logits            = logits.data();
         params.sorted_logits     = logits.data();
         params.sorted_indices    = indices.data();
-        params.kept              = s->kept_buf.data();
-        params.top_ks            = s->top_k_buf.data();
-        params.top_ps            = s->top_p_buf.data();
+        params.kept              = d.kept_buf.data();
+        params.top_ks            = d.top_k_buf.data();
+        params.top_ps            = d.top_p_buf.data();
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopPSort<T>(params, stream_);
+        invokeTopPSort<float>(params, stream);
     }
 
     // apply topp minp filter
-    if (s->max_minp != 0.f || s->min_topp != 1.f) {
+    if (d.max_minp != 0.f || d.min_topp != 1.f) {
         TopPMinPFilterParams params{};
         params.sorted_logits     = logits.data();
         params.sorted_indices    = indices.data();
-        params.kept              = s->kept_buf.data();
-        params.top_ps            = s->top_p_buf.data();
-        params.min_ps            = s->min_p_buf.data();
+        params.kept              = d.kept_buf.data();
+        params.top_ps            = d.top_p_buf.data();
+        params.min_ps            = d.min_p_buf.data();
         params.batch_size        = bsz;
         params.vocab_size        = vocab_size_;
         params.vocab_size_padded = vocab_size_padded_;
-        invokeTopPMinPFilter<T>(params, stream_);
+        invokeTopPMinPFilter<float>(params, stream);
     }
 
     // sample
@@ -138,50 +138,47 @@ void SamplingLayer<T>::Forward(const std::shared_ptr<SamplingStates>& states, Te
         params.logits          = logits.data();
         params.stride          = vocab_size_padded_;
         params.indices         = indices.data();
-        params.kept            = s->kept_buf.data();
+        params.kept            = d.kept_buf.data();
         params.curandstate     = (curandState_t*)args.at("curand_state").raw_data();
         params.batch_size      = bsz;
-        params.output_ids      = args.at("output_ids").data<int>() + step * bsz;
+        params.output_ids      = args.at("output_ids").data<int>();  // (B, 1)
         params.sequence_length = args.at("sequence_length").data<int>();
 
         if (auto sampled_logprobs = args.try_("sampled_logprobs")) {
-            params.sampled_logprobs = sampled_logprobs->data<T>();
+            params.sampled_logprobs = sampled_logprobs->data<float>();
             params.sampled_indexes  = args.at("sampled_indexes").data<uint32_t>();
             params.sampled_nums     = args.at("sampled_nums").data<uint32_t>();
         }
 
-        invokeSampling<T>(params, stream_);
+        invokeSampling<float>(params, stream);
         sync_check_cuda_error();
     }
 
     TM_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
-template<typename T>
-void SamplingLayer<T>::Setup(const std::shared_ptr<SamplingStates>& states, const TensorMap& args)
+void Sampling::Setup(int phase, TensorMap& env)
 {
-    Buffer_<const Request*> rs = args.at("requests").buffer();
+    Buffer_<const RequestCache*> rc = env.at("requests").buffer();
 
-    const auto bsz = rs.size();
+    const auto bsz = rc.size();
 
     for (int i = 0; i < bsz; ++i) {
-        top_k_[i] = rs[i]->gen_cfg.top_k;
-        top_p_[i] = rs[i]->gen_cfg.top_p;
-        min_p_[i] = rs[i]->gen_cfg.min_p;
+        top_k_[i] = rc[i]->gen_cfg.top_k;
+        top_p_[i] = rc[i]->gen_cfg.top_p;
+        min_p_[i] = rc[i]->gen_cfg.min_p;
     }
 
-    auto& s = states->sampler;
+    auto& d = *data_.at(phase);
 
-    s->max_topk = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
-    s->min_topk = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
-    s->min_topp = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
-    s->max_minp = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
+    d.max_topk = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
+    d.min_topk = *std::min_element(top_k_.begin(), top_k_.begin() + bsz);
+    d.min_topp = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
+    d.max_minp = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
 
-    core::Copy(top_k_.data(), bsz, s->top_k_buf.data());
-    core::Copy(top_p_.data(), bsz, s->top_p_buf.data());
-    core::Copy(min_p_.data(), bsz, s->min_p_buf.data());
+    core::Copy(top_k_.data(), bsz, d.top_k_buf.data());
+    core::Copy(top_p_.data(), bsz, d.top_p_buf.data());
+    core::Copy(min_p_.data(), bsz, d.min_p_buf.data());
 }
-
-template class SamplingLayer<float>;
 
 }  // namespace turbomind

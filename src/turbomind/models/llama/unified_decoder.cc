@@ -15,15 +15,13 @@
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
+#include "src/turbomind/engine/request.h"
+
 namespace turbomind {
 
-struct TransformerStates {
-    std::shared_ptr<AttentionStates> attention;
-};
-
-void UnifiedDecoder::Setup(const std::shared_ptr<TransformerStates>& states, const TensorMap& args)
+void UnifiedDecoder::Run(ExchOp op, int phase, TensorMap& env)
 {
-    attn_layer_->Setup(states->attention, args);
+    attn_layer_->Run(op, phase, env);
 }
 
 UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
@@ -31,7 +29,8 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
                                const AttentionParam& attn,
                                const MoeParam&       moe,
                                const LoraParam&      lora,
-                               const Context&        ctx):
+                               const Context&        ctx,
+                               int                   phases):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
@@ -44,7 +43,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(model.tune_layer_num)
 {
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(model, attn, engine, lora, attn_tp_size_, ctx, phases);
 
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
@@ -107,7 +106,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& weights)
+void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
 {
     /**
      * input tensors:
@@ -126,10 +125,6 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
      *   \param last_token_hidden_units [batch_size, hidden_units]
      *   \param block_ptrs [total_block_counts], void*
      */
-
-    const int decode_num = *args.at("decode_num").data<int>();
-    const int prefil_num = *args.at("prefil_num").data<int>();
-    const int batch_size = prefil_num + decode_num;
 
     constexpr auto device = kDEVICE;
 
@@ -152,8 +147,6 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
         local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
     }
 
-    attn_layer_->Initialize(args);
-
     TM_DEBUG_TENSOR(local_residual, "res", 1);
     TM_DEBUG_TENSOR(weights.at(0)->self_attn_norm, "norm_weight", 2);
 
@@ -171,10 +164,8 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
 
         /////////////////////////////////////////////
         /// self-attention
-        attn_layer_->Forward({local_hidden_states,  //
-                              local_hidden_states,
-                              weights.at(layer)->self_attn_weights.get(),
-                              layer});
+        attn_layer_->Forward(
+            {phase, local_hidden_states, local_hidden_states, weights.at(layer)->self_attn_weights.get(), layer});
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
 
@@ -233,37 +224,14 @@ void UnifiedDecoder::Forward(TensorMap& args, const std::vector<WeightType*>& we
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);
     }
 
-    /// TODO
-    using T = uint16_t;
+    const int bsz = *args.at("bsz").data<int>();
 
-    auto last_token_hidden_units = (T*)args.at("last_token_hidden_units").raw_data();
+    auto decode_tokens    = args.at("decode_hidden_states");
+    auto decode_token_pos = args.at("decode_token_pos").buffer().slice(0, bsz);
 
-    if (decode_num) {
-        check_cuda_error(cudaMemcpyAsync(last_token_hidden_units,
-                                         (T*)local_hidden_states.raw_data(),
-                                         sizeof(T) * decode_num * hidden_units_,
-                                         cudaMemcpyDefault,
-                                         stream_));
-        // TM_DEBUG_RAW(last_token_hidden_units, decode_num * hidden_units_, "dc_out", 2);
-    }
+    CollectHiddenStates(local_hidden_states, decode_token_pos, decode_tokens, stream_);
 
-    if (prefil_num) {
-        invokeGetFeatureOfLastToken(last_token_hidden_units + decode_num * hidden_units_,  //
-                                    (T*)local_hidden_states.raw_data(),
-                                    attn_layer_->d_cu_q_len() + decode_num,
-                                    hidden_units_,
-                                    prefil_num,
-                                    stream_);
-        sync_check_cuda_error();
-        // TM_DEBUG_RAW(last_token_hidden_units + decode_num * hidden_units_, prefil_num * hidden_units_, "pf_out", 2);
-    }
-
-    Buffer out(
-        (void*)last_token_hidden_units, (decode_num + prefil_num) * hidden_units_, local_residual.dtype(), kDEVICE);
-
-    TM_DEBUG_TENSOR(out, "out", 1);
-
-    attn_layer_->Finalize();
+    // TM_DEBUG_TENSOR(decode_tokens.slice(0, decode_token_pos.size()), "out", 1);
 }
 
 }  // namespace turbomind
