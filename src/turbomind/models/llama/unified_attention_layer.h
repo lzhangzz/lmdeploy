@@ -90,15 +90,12 @@ private:
     const LoraParam      lora_param_;
     const Context&       context_;
 
-    cudaStream_t const stream_;
-    LlamaLinear&       linear_;
-    const int          arch_{};
+    LlamaLinear& linear_;
+    const int    arch_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
     cudaEvent_t  aux_event_;
-
-    std::array<cudaStream_t, 2> streams_;
 
     RNG rng_;
 

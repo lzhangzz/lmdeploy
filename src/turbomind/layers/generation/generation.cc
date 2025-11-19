@@ -59,8 +59,7 @@ struct GenerationData {
     Buffer_<int> token_ids;
     Buffer_<int> token_ids_offsets;
 
-    Buffer_<int>  output_ids;
-    Buffer_<bool> finished;
+    Buffer_<int> output_ids;
 
     bool random_init_needed;
     int  max_context_len;
@@ -87,7 +86,7 @@ struct Generation::Impl {
     Buffer_<uint64_t> random_seed_buf_;
     Buffer_<bool>     random_init_buf_;
     Buffer_<int>      token_ids_buf_;
-    Buffer_<bool>     finished_buf_;
+    Buffer_<int>      output_ids_buf_;
 
     const int max_batch_size_;
     const int session_len_;
@@ -112,8 +111,8 @@ struct Generation::Impl {
         random_seed_buf_  = {max_batch_size_, kCPUpinned};
         random_init_buf_  = {max_batch_size_, kCPUpinned};
         /// TODO: min(max_batch_size * session_len, total_kv_cache_len)
-        token_ids_buf_ = {max_batch_size_ * (ssize_t)session_len_, kCPUpinned};
-        finished_buf_  = {max_batch_size_, kCPUpinned};
+        token_ids_buf_  = {max_batch_size_ * (ssize_t)session_len_, kCPUpinned};
+        output_ids_buf_ = {max_batch_size_, kCPUpinned};
 
         for (int i = 0; i < phases; ++i) {
             auto d = std::make_unique<GenerationData>();
@@ -123,7 +122,6 @@ struct Generation::Impl {
             d->random_init  = empty_like(random_init_buf_, kDEVICE);
             d->token_ids    = empty_like(token_ids_buf_, kDEVICE);
             d->output_ids   = empty_like(output_ids_, kDEVICE);
-            d->finished     = empty_like(finished_buf_, kDEVICE);
 
             d->token_ids_offsets = {max_batch_size_ + 1, kCPUpinned};
 
@@ -194,10 +192,6 @@ struct Generation::Impl {
 
         // state -> data
         Copy(random_state_.front().buffer(), bsz * sizeof(curandState_t), d.random_state);
-
-        Buffer_<bool> finished = env.at("finished").buffer();
-        Copy(finished, bsz, d.finished);
-
         Copy(output_ids_, bsz, d.output_ids);
     }
 
@@ -205,11 +199,11 @@ struct Generation::Impl {
     {
         auto& d = *data_.at(phase);
 
-        env.produce("random_state", d.random_state);
+        Copy(d.random_state, random_state_buf_);
+        env.produce("random_state", random_state_buf_);
 
-        env.produce("finished", d.finished);
-
-        env.produce("output_ids", d.output_ids);
+        Copy(d.output_ids, output_ids_buf_);
+        env.produce("output_ids", output_ids_buf_);
     }
 
     void Forward(int phase, TensorMap& env)
@@ -256,6 +250,7 @@ struct Generation::Impl {
         std::vector x{token_ids_size_.front().data<int>(), token_ids_size_.front().data<int>() + bsz};
         dbg("token_ids_size: ", x);
 
+        env.emplace("token_ids", token_ids_.front().slice(0, bsz));
         env.emplace("output_ids", output_ids_);              // out
         env.emplace("curand_state", random_state_.front());  // inout
 

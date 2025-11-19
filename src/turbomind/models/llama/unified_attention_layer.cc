@@ -26,6 +26,7 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/exchange.h"
@@ -52,9 +53,6 @@ namespace turbomind {
 
 UnifiedAttentionLayer::~UnifiedAttentionLayer()
 {
-    for (auto& s : streams_) {
-        s = {};
-    }
 
     check_cuda_error(cudaEventDestroy(aux_event_));
     check_cuda_error(cudaEventDestroy(qkv_event_));
@@ -81,7 +79,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     model_param_(model),
     lora_param_(lora),
     context_(ctx),
-    stream_(ctx.stream),
     linear_(*ctx.linear),
     arch_(getSMVersion())
 {
@@ -91,9 +88,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(const ModelParam&     model,
     check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
     check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
     check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
-
-    streams_[0] = stream_;
-    streams_[1] = aux_stream_;
 
     init_rope_kernel_param(param_.rope, rope_param_);
 
@@ -125,16 +119,8 @@ struct AttentionData {
         int k_max;
     } decode, prefill;
 
-    // Buffer_<int> h_offset_q;
-    // Buffer_<int> h_offset_k;
-
-    // Buffer_<int> d_offset_q;
-    // Buffer_<int> d_offset_k;
-
     Buffer_<void*> block_ptrs;
     Buffer_<int>   block_ptrs_offsets;
-
-    // Buffer_<int> decode_token_pos;
 
     Buffer_<float> rope_base;
 
@@ -144,16 +130,11 @@ struct AttentionData {
 
     // borrowed from env
     Buffer_<bool> finished;
-    Buffer_<int>  offset_q;
-    Buffer_<int>  offset_k;
+    Buffer_<int>  q_offsets;
+    Buffer_<int>  k_offsets;
 
     AttentionData(int bsz, int max_blocks, RopeKernelParam& rope)
     {
-        // h_offset_q = {bsz + 1, kCPUpinned};
-        // h_offset_k = {bsz + 1, kCPUpinned};
-        // d_offset_q = {bsz + 1, kDEVICE};
-        // d_offset_k = {bsz + 1, kDEVICE};
-
         block_ptrs         = {max_blocks + 16, kDEVICE};
         block_ptrs_offsets = {bsz + 1, kDEVICE};
 
@@ -196,10 +177,9 @@ void UnifiedAttentionLayer::Run(ExchOp op, int phase, TensorMap& env)
         Setup(phase, env);
     }
     else if (op == ExchOp::kPrepare) {
-        data_.at(phase)->finished = env.at("finished").buffer().borrow();
-        data_.at(phase)->offset_q = env.at("offset_q").buffer().borrow();
-        data_.at(phase)->offset_k = env.at("offset_k").buffer().borrow();
-        // env["decode_token_pos"]   = data_.at(phase)->decode_token_pos;
+        data_.at(phase)->finished  = env.at("finished").buffer().borrow();
+        data_.at(phase)->q_offsets = env.at("q_offsets").buffer().borrow();
+        data_.at(phase)->k_offsets = env.at("k_offsets").buffer().borrow();
     }
 }
 
@@ -226,23 +206,12 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     for (int i = 0; i < bsz; ++i) {
         const auto& c = *rc[i];
 
-        // d.h_offset_q[i + 1] = d.h_offset_q[i] + c.input_len;
-        // d.h_offset_k[i + 1] = d.h_offset_k[i] + c.context_len;
-
         auto& s = i < d.decode.n ? d.decode : d.prefill;
         s.q_sum += c.input_len;
-        s.k_sum += c.context_len;
+        s.k_sum += c.history_len + c.input_len;
         s.q_max = std::max(s.q_max, c.input_len);
-        s.k_max = std::max(s.k_max, c.context_len);
-
-        // last input token
-        // decode_token_pos_buf_[i] = d.h_offset_q[i + 1] - 1;
-        // TM_LOG_ERROR("%d deocde pos %d", i, decode_token_pos_buf_[i]);
+        s.k_max = std::max(s.k_max, c.history_len + c.input_len);
     }
-
-    // Copy_(d.h_offset_q, bsz + 1, d.d_offset_q);
-    // Copy_(d.h_offset_k, bsz + 1, d.d_offset_k);
-    // Copy_(decode_token_pos_buf_, bsz, d.decode_token_pos);
 
     /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {
@@ -344,8 +313,6 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     Tensor attn{{q_count, (int)local_head_num_ * (int)size_per_head_}, dtype, device};
     Tensor tmp_kv{{2, (int)local_kv_head_num_, d.prefill.k_sum + MAX_CTA_S, (int)size_per_head_}, dtype, device};
 
-    auto stream_ptr = streams_.data();
-
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
 
@@ -381,8 +348,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
                                                          int(stat.k_sum * size_per_head_)};
 
         params.finished = d.finished.data() + offset;
-        params.cu_q_len = d.offset_q.data() + offset;
-        params.cu_k_len = d.offset_k.data() + offset;
+        params.cu_q_len = d.q_offsets.data() + offset;
+        params.cu_k_len = d.k_offsets.data() + offset;
 
         params.num_heads     = local_head_num_;
         params.num_kv_heads  = local_kv_head_num_;
@@ -435,12 +402,14 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         return params;
     };
 
-    cudaStream_t pf_stream = stream_;
-    cudaStream_t dc_stream = stream_;
+    const cudaStream_t stream = core::Context::stream().handle();
+
+    cudaStream_t pf_stream = stream;
+    cudaStream_t dc_stream = pf_stream;
 
     if (d.decode.n && d.prefill.n) {
         pf_stream = aux_stream_;
-        check_cuda_error(cudaEventRecord(qkv_event_, stream_));
+        check_cuda_error(cudaEventRecord(qkv_event_, stream));
         check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
@@ -472,11 +441,11 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     if (d.decode.n && d.prefill.n) {
         check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
-        check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
+        check_cuda_error(cudaStreamWaitEvent(stream, aux_event_));
     }
 
     if (isTuning()) {
-        rng_.set_stream(stream_);
+        rng_.set_stream(stream);
         rng_.GenerateUniform(attn.data<T>(), attn.size(), .02f, -.01f);
     }
 
@@ -496,6 +465,8 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
 
     Tensor q;
 
+    const auto stream = core::Context::stream().handle();
+
     if (w.q_proj.weight) {
         q = linear_.Forward(hidden_state, w.q_proj);
         sync_check_cuda_error();
@@ -504,7 +475,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
         Tensor q_a = linear_.Forward(hidden_state, w.q_a_proj);
         sync_check_cuda_error();
 
-        invokeRMSNorm(q_a, q_a, w.q_a_layernorm, model_param_.norm_eps, stream_);
+        invokeRMSNorm(q_a, q_a, w.q_a_layernorm, model_param_.norm_eps, stream);
         sync_check_cuda_error();
 
         q = linear_.Forward(q_a, w.q_b_proj);
@@ -515,7 +486,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     sync_check_cuda_error();
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
-    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream_);
+    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm, model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
     Tensor kv_b = linear_.Forward(kv_a, w.kv_b_proj);
@@ -535,7 +506,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
                qk_rope_dim,
                kv_lora_rank,
                v_head_dim,
-               stream_);
+               stream);
     sync_check_cuda_error();
 
     return qkv;
@@ -543,7 +514,9 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
 
 void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 {
-    check_cuda_error(cudaEventRecord(qkv_event_, stream_));
+    const auto stream = core::Context::stream().handle();
+
+    check_cuda_error(cudaEventRecord(qkv_event_, stream));
     check_cuda_error(cudaStreamWaitEvent(aux_stream_, qkv_event_));
 
     TM_CHECK(model_param_.attn_bias == false) << "not implemented";
@@ -553,7 +526,7 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
     auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
 
     auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
-    invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream_);
+    invokeRMSNormQK(q, weights.q_a_layernorm, model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
     auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
@@ -561,7 +534,7 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
     sync_check_cuda_error();
 
     check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));
-    check_cuda_error(cudaStreamWaitEvent(stream_, aux_event_));
+    check_cuda_error(cudaStreamWaitEvent(stream, aux_event_));
 }
 
 }  // namespace turbomind

@@ -66,6 +66,11 @@ void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t 
 
 void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st);
 
-void PrefixSum(const Buffer_<int>& src, Ref<Buffer_<int>> dst, Stream stream);
+void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cudaStream_t st);
+
+inline void PrefixSum(const int* src, int n, int* dst, cudaStream_t st)
+{
+    return BatchPrefixSum(&src, &n, &dst, 1, st);
+}
 
 }  // namespace turbomind

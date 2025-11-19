@@ -8,6 +8,8 @@
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/models/language_model.h"
 
+#include "src/turbomind/utils/anomaly_handler.h"
+
 namespace turbomind {
 
 using std::shared_ptr;
@@ -24,9 +26,12 @@ struct ModelExecutor::Impl {
 
     void InternalThreadEntry()
     {
+
         Stream    stream  = Stream::create();
         Allocator h_alloc = Allocator(kCPU);
         Allocator d_alloc = Allocator(kDEVICE);
+
+        AnomalyHandler::instance().Init(0, 1000, 0, 1000, stream.handle());
 
         core::ContextGuard ctx{stream, h_alloc, d_alloc};
 

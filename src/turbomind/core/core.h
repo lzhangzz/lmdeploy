@@ -9,6 +9,7 @@
 #include "src/turbomind/core/layout.h"
 #include "src/turbomind/core/stream.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/core/ranges.h"
 
 namespace turbomind {
 
@@ -25,5 +26,7 @@ using core::Stream;
 using core::Event;
 using core::ExchOp;
 using core::BatchOp;
+
+using core::subrange;
 
 }  // namespace turbomind

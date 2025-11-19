@@ -188,12 +188,21 @@ struct RequestCache {
     int*     token_ids{};  // currently the `output_ids` buf of request
     uint8_t* random_state{};
 
-    int seq_len{};      // set at request init, updated per step
+    int seq_len{};  // set at request init, updated per step
+
     int prompt_len{};   // set at request init, constant
     int max_seq_len{};  // set at request init, constant
 
     int input_len{};    // set at schedule (set to `seq.input_len`)
-    int context_len{};  // set at schedule (context_len = cache_len + input_len)
+    int history_len{};  // set at schedule (set to `seq.cache_len`)
+
+    enum Stage {
+        kInactive,
+        kPrefill,   // inputs taken from `token_ids`, `input_embeds`
+        kDecoding,  // inputs tkane from AR buffers
+    };
+
+    Stage stage{kInactive};
 
     float rope_base{};
 };

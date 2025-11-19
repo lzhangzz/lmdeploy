@@ -486,35 +486,58 @@ void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor
     }
 }
 
-template<int BLOCK_DIM>
-__global__ void PrefixSum_Kernel(const int* src, int* dst, int n)
+template<int BLOCK_DIM, int MAX_COUNT>
+__global__ void
+BatchPrefixSum_Kernel(Array<const int*, MAX_COUNT> srcs, Array<int, MAX_COUNT> ns, Array<int*, MAX_COUNT> dsts)
 {
+    const int  bi  = blockIdx.x;
+    const int* src = srcs[bi];
+    int*       dst = dsts[bi];
+    const int  n   = ns[bi];
+
     using BlockScan = cub::BlockScan<int, BLOCK_DIM>;
+
     __shared__ typename BlockScan::TempStorage temp_storage;
 
-    const int m = round_up(n, BLOCK_DIM);
-
-    int accum{};
-    for (int i = threadIdx.x; i < m; i += BLOCK_DIM) {
-        int data = i < n ? 0 : src[i];
+    int prefix{};
+    for (int i = threadIdx.x; i < round_up(n, BLOCK_DIM); i += BLOCK_DIM) {
+        if (i >= BLOCK_DIM) {
+            __syncthreads();
+        }
+        int data = i < n ? src[i] : 0;
         int sum{};
         BlockScan{temp_storage}.ExclusiveSum(data, data, sum);
-        __syncthreads();
         if (i < n) {
-            dst[i] = accum + data;
+            dst[i] = prefix + data;
         }
-        accum += sum;
+        prefix += sum;
     }
 
     if (threadIdx.x == 0) {
-        dst[n] = accum;
+        dst[n] = prefix;
     }
 }
 
-void PrefixSum(const Buffer_<int>& src, Ref<Buffer_<int>> dst, Stream stream)
+void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cudaStream_t st)
 {
-    TM_CHECK_EQ(src.size() + 1, dst.get().size());
-    PrefixSum_Kernel<1024><<<1, 1024, 0, stream.handle()>>>(src.data(), dst.get().data(), src.size());
+    constexpr int max_count = 1;
+
+    Array<const int*, max_count> p_srcs{};
+    Array<int*, max_count>       p_dsts{};
+    Array<int, max_count>        p_ns{};
+
+    for (int i = 0; i < count; ++i) {
+        p_srcs[i] = srcs[i];
+        p_dsts[i] = dsts[i];
+        p_ns[i]   = ns[i];
+    }
+
+    TM_CHECK_LE(count, max_count);
+
+    constexpr int block = 256;
+    const int     grid  = count;
+
+    BatchPrefixSum_Kernel<block><<<grid, block, 0, st>>>(p_srcs, p_ns, p_dsts);
 }
 
 }  // namespace turbomind

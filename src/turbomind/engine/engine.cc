@@ -1,4 +1,8 @@
 
+#include <algorithm>
+#include <memory>
+#include <thread>
+
 #include "nvtx3/nvToolsExt.h"
 
 #include "src/turbomind/comm/host_comm.h"
@@ -15,9 +19,7 @@
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
 
-#include <algorithm>
-#include <memory>
-#include <thread>
+#include "dbg.h"
 
 namespace turbomind {
 
@@ -276,10 +278,6 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
-        // set at scheduling
-        // c->input_len   = input_len;
-        // c->context_len = seq.tokens.size() + input_len;
-
         int max_seq_len = c->prompt_len + c->gen_cfg.max_new_tokens;
         if (max_seq_len > session_len_trunc_) {
             max_seq_len = session_len_trunc_;
@@ -311,16 +309,19 @@ void Engine::Impl::Schedule()
     vector<Sequence::Status> status;
     vector<uint64_t>         priorities;
     vector<int>              context_length;
-    std::vector<int>         inv;
+    vector<RequestCache*>    cache;
+    vector<int>              inv;
 
     for (int i = 0; i < s.size(); ++i) {
+        // skip invalid positions
         if (const auto& c = s.rc[i]) {
+            cache.push_back(c.get());
             sequences.push_back(&c->sequence);
             status.push_back(c->sequence.status);
             priorities.push_back(c->request->unique_id);
             context_length.push_back(c->seq_len /* plus draft tokens */);
             inv.push_back(i);
-            c->input_len = c->context_len = 0;
+            c->input_len = c->history_len = 0;
         }
     }
 
@@ -331,23 +332,23 @@ void Engine::Impl::Schedule()
     vector<int> idxs(sequences.size());
     std::iota(idxs.begin(), idxs.end(), 0);
 
-    // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
-    // |<----------- active ----------->|<------- inactive ----->|
-
     auto inactive = std::stable_partition(idxs.begin(), idxs.end(), [&](int i) {
         return sequences[i]->status == Sequence::kActive;  // IS active
     });
+
+    TM_CHECK(sequences.empty() || inactive != idxs.begin()) << "No enough blocks";
+
+    // |<----------- active ----------->|<------- inactive ----->|
 
     // ! past-the-end of swap-outs
     auto swap_out = std::stable_partition(inactive, idxs.end(), [&](int i) {
         return status[i] == Sequence::kActive;  // WAS active
     });
 
-    if (!sequences.empty()) {
-        TM_CHECK(inactive != idxs.begin()) << "No enough blocks";
-    }
+    //                                  |<- swap-out ->|
+    // |<----------- active ----------->|<------- inactive ----->|
 
-    // move the partial seq to the back
+    // move partially prefilled to the back
     auto partial = std::stable_partition(idxs.begin(), inactive, [&](int i) {
         return sequences[i]->cache_len + sequences[i]->input_length == context_length[i];
     });
@@ -358,15 +359,26 @@ void Engine::Impl::Schedule()
         return status[i] == Sequence::kActive;  // past status
     });
 
-    // sort swap-ins according to input length
-    std::stable_sort(swap_in, partial, [&](int i, int j) {  //
-        return sequences[i]->input_length < sequences[j]->input_length;
-    });
+    // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
+    // |<----------- active ----------->|<------- inactive ----->|
+
+    for (auto i : subrange{idxs.begin(), swap_in}) {
+        TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
+        cache[i]->stage = RequestCache::kDecoding;
+    }
+    for (auto i : subrange{swap_in, partial}) {
+        TM_CHECK_EQ(cache[i]->stage, RequestCache::kInactive);
+        cache[i]->stage = RequestCache::kPrefill;
+    }
+    for (auto i : subrange{inactive, swap_out}) {
+        TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
+        cache[i]->stage = RequestCache::kInactive;
+    }
 
     vector<unique_ptr<RequestCache>> rc(idxs.size());
     vector<int>                      perm(idxs.size());
     for (int i = 0; i < idxs.size(); ++i) {
-        perm[i] = inv[idxs[i]];
+        perm[i] = inv[idxs[i]];              // inverse map to original indices
         rc[i]   = std::move(s.rc[perm[i]]);  // warp the request cache
     }
     s.rc.swap(rc);
@@ -374,7 +386,8 @@ void Engine::Impl::Schedule()
 
     for (auto& c : s.rc) {
         c->input_len   = c->sequence.input_length;
-        c->context_len = c->sequence.cache_len + c->input_len;
+        c->history_len = c->sequence.cache_len;
+        dbg(c->history_len, c->input_len, c->stage);
     }
 
     s.bs0     = std::exchange(s.active, inactive - idxs.begin());
@@ -421,31 +434,52 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
 {
     auto& s = states_.at(0);
 
-    Buffer_<int> is_finished;
-    Buffer_<int> seq_lens;
+    Buffer_<bool> finished;
+    Buffer_<int>  output_ids;
+    Buffer_<int>  sequence_length;
     {
         TensorMap env;
         Run(ExchOp::kFetch, b.phase, env);
-        is_finished = env.at("finished").buffer();
-        seq_lens    = env.at("seq_lens").buffer();
+        finished        = env.at("finished").buffer();
+        output_ids      = env.at("output_ids").buffer();
+        sequence_length = env.at("sequence_length").buffer();
     }
 
     core::Context::stream().Sync();
 
     Run(BatchOp::kUpdate, -1, TensorMap{});
 
+    dbg(finished.size());
+    dbg(s.rc.size());
+    dbg(b.bs0, b.bsz);
+    dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
+
+    vector<int> perm(b.bsz);
+
     std::vector<RequestCache*> cs;
-    for (int i = 0; i < is_finished.size(); ++i) {
-        if (auto& c = *s.rc[i]; is_finished[i] && !c.request->session.end_flag) {
+    for (int i = 0; i < b.bsz; ++i) {
+        if (auto& c = *s.rc[i]; finished[i] && !c.request->session.end_flag) {
             cs.push_back(s.rc[i].get());
         }
     }
+
+    for (int i = 0; i < b.bsz; ++i) {
+        auto& c = *s.rc[i];
+        dbg(c.seq_len, sequence_length[i], output_ids[i]);
+        c.token_ids[c.seq_len] = output_ids[i];
+        c.sequence.cache_len   = sequence_length[i] - 1;
+        c.seq_len              = sequence_length[i];
+        signals.push_back([this, r = c.request, l = c.seq_len] {  //
+            UpdateState(*r, Request::kOk, l);
+        });
+    }
+
     if (!cs.empty()) {  // Rc -> Seq
         Run(ExchOp::kDel, -1, TensorMap{{"requests", Buffer{cs.data(), (int)cs.size(), kCPU}}});
     }
 
-    for (int i = 0; i < is_finished.size(); ++i) {
-        if (is_finished[i]) {
+    for (int i = 0; i < b.bsz; ++i) {
+        if (finished[i]) {
             auto& c = *s.rc[i];
             if (c.request->session.end_flag) {
                 seq_mgr_->CacheGeneration(c.sequence);
@@ -502,6 +536,8 @@ void Engine::Impl::InternalThreadEntry()
         Schedule();  // Forced swap out / Sync data
 
         Setup(*d);
+
+        while (d->bsz == 0) {};
 
         d->ready.Record(core::Context::stream());
 
