@@ -4,6 +4,7 @@
 
 #include "src/turbomind/turbomind.h"
 
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 
 #include "src/turbomind/engine/engine.h"
@@ -15,6 +16,8 @@
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
 #include <yaml-cpp/yaml.h>
@@ -179,6 +182,8 @@ struct TurboMind::Impl {
     string model_name_;
     string model_dir_;
 
+    ~Impl();
+
     Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory);
 
     unique_ptr<ModelRequest> CreateRequest()
@@ -252,6 +257,24 @@ struct TurboMind::Impl {
         return comm;
     }
 };
+
+TurboMind::Impl::~Impl()
+{
+    TM_LOG_INFO(__PRETTY_FUNCTION__);
+    if (gateway_) {
+        gateway_->shutdown();
+    }
+    for (int i = 0; i < (int)engines_.size(); ++i) {
+        /// TODO: make device part of core::Context
+        CudaDeviceGuard device(engine_param_.devices[i]);
+        {
+            core::ContextGuard context{contexts_[i]->core_stream};
+            engines_[i]  = {};
+            contexts_[i] = {};
+        }
+        weights_[i] = {};
+    }
+}
 
 TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory):
     data_type_{}, model_param_{}, attn_param_{}, moe_param_{}, engine_param_{}

@@ -82,14 +82,7 @@ struct Engine::Impl {
         executor_.Start();
     }
 
-    ~Impl()
-    {
-        inbound_.close();
-        outbound_.close();
-        if (internal_thread_.joinable()) {
-            internal_thread_.join();
-        }
-    }
+    ~Impl();
 
     const DataType    dtype_;
     const EngineParam param_;
@@ -127,6 +120,7 @@ struct Engine::Impl {
 
         int bs0     = 0;
         int active  = 0;
+        int finish  = 0;
         int swapout = 0;
 
         int size() const noexcept
@@ -141,6 +135,17 @@ struct Engine::Impl {
     Buffer_<void*> block_ptrs_buf_;
     Buffer_<int>   block_ptrs_offsets_buf_;
 };
+
+Engine::Impl::~Impl()
+{
+    TM_LOG_INFO(__PRETTY_FUNCTION__);
+    inbound_.close();
+    outbound_.close();
+    if (internal_thread_.joinable()) {
+        internal_thread_.join();
+    }
+    executor_ = {};
+}
 
 Engine::Impl::Impl(
     DataType dtype, EngineParam param, LanguageModel model, Context& ctx, Gateway& gateway, int device_id, int dp_rank):
@@ -392,6 +397,7 @@ void Engine::Impl::Schedule()
 
     s.bs0     = std::exchange(s.active, inactive - idxs.begin());
     s.swapout = swap_out - inactive;
+    s.finish  = 0;
 }
 
 void Engine::Impl::Setup(BatchData& d)
@@ -492,6 +498,7 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
                 UpdateState(*r, Request::kFinish, len);
             });
             s.rc[i] = {};
+            s.finish += 1;
         }
     }
 }
@@ -511,8 +518,8 @@ void Engine::Impl::InternalThreadEntry()
             rs = std::make_shared<RequestData>();
             gateway_.pop(rs->infer,  //
                          rs->kill,
-                         param_.max_batch_size - st.size(),
-                         st.size() == 0,
+                         param_.max_batch_size - st.size() + st.finish,
+                         st.size() - st.finish == 0,
                          rs->abort,
                          dp_rank_);
             // DisableInvalidRequests(rs->infer, rs->kill);
@@ -523,6 +530,8 @@ void Engine::Impl::InternalThreadEntry()
             TM_LOG_INFO("[Engine] stop requested.");
             break;
         }
+
+        // TM_CHECK(0);
 
         vector<Signal> signals;
         // ProcessKillRequests(rs->kill, signals);  // Erase
@@ -537,8 +546,6 @@ void Engine::Impl::InternalThreadEntry()
 
         Setup(*d);
 
-        while (d->bsz == 0) {};
-
         d->ready.Record(core::Context::stream());
 
         outbound_.push(std::move(d));
@@ -552,8 +559,6 @@ void Engine::Impl::InternalThreadEntry()
         core::Context::stream().Wait(d->done);
 
         Update(*d, signals);
-
-        // Unlink finished
 
         if (tp_rank_ == 0) {
             gateway_.notify(std::move(signals));
