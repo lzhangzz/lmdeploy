@@ -73,4 +73,10 @@ inline void PrefixSum(const int* src, int n, int* dst, cudaStream_t st)
     return BatchPrefixSum(&src, &n, &dst, 1, st);
 }
 
+void AppendTokenIds(int**        token_ids_ptrs,  //
+                    const int*   output_ids,
+                    const int*   positions,
+                    int          batch_size,
+                    cudaStream_t stream);
+
 }  // namespace turbomind

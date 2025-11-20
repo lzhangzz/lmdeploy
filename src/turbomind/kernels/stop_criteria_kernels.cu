@@ -106,13 +106,12 @@ void invokeStopWordsCriterion(const int*   output_ids,
 }
 #endif
 
-__global__ void stop_words_criterion_v2(const int* token_ids,
-                                        const int* sequence_length,
-                                        const int* stop_words,
-                                        bool*      finished,
-                                        int64_t    token_ids_stride,
-                                        int        stop_words_len,
-                                        int        batch_size)
+__global__ void stop_words_criterion_v2(const int** token_ids_ptrs,
+                                        const int*  sequence_length,
+                                        const int*  stop_words,
+                                        bool*       finished,
+                                        int         stop_words_len,
+                                        int         batch_size)
 {
     const int id        = blockIdx.x * blockDim.x + threadIdx.x;
     const int batch_idx = blockIdx.y;
@@ -128,10 +127,8 @@ __global__ void stop_words_criterion_v2(const int* token_ids,
     const int item_start = (id > 0) ? base_offsets[id - 1] : 0;
     const int item_size  = item_end - item_start;
 
-    /* The single-token case unconditionally bans the token */
-    const int seq_len = sequence_length[batch_idx];
-
-    token_ids += batch_idx * token_ids_stride;
+    const int  seq_len   = sequence_length[batch_idx];
+    const int* token_ids = token_ids_ptrs[batch_idx];
 
     /* Enough previously generated tokens to look for a match */
     if (seq_len >= item_size) {
@@ -145,11 +142,10 @@ __global__ void stop_words_criterion_v2(const int* token_ids,
     }
 }
 
-void invokeStopWordsCriterion_v2(const int*   token_ids,
+void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
                                  const int*   sequence_length,
                                  const int*   stop_words,
                                  bool*        finished,
-                                 int64_t      token_ids_stride,
                                  int          stop_words_len,
                                  int          batch_size,
                                  cudaStream_t stream)
@@ -160,7 +156,7 @@ void invokeStopWordsCriterion_v2(const int*   token_ids,
     const dim3 grid(cdiv(stop_words_len, block), batch_size);
 
     stop_words_criterion_v2<<<grid, block, 0, stream>>>(
-        token_ids, sequence_length, stop_words, finished, token_ids_stride, stop_words_len, batch_size);
+        token_ids_ptrs, sequence_length, stop_words, finished, stop_words_len, batch_size);
 }
 
 #if 0

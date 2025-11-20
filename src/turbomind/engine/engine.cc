@@ -330,9 +330,9 @@ void Engine::Impl::Schedule()
         }
     }
 
-    auto adjust = [this](const Sequences&, const std::vector<int>&) -> int { return param_.max_forward_token_num; };
+    auto constant = [this](auto&&...) -> int { return param_.max_forward_token_num; };
 
-    auto outcome = seq_mgr_->Materialize(sequences, context_length, priorities, 1, adjust);
+    auto outcome = seq_mgr_->Materialize(sequences, context_length, priorities, 1, constant);
 
     vector<int> idxs(sequences.size());
     std::iota(idxs.begin(), idxs.end(), 0);
@@ -353,25 +353,18 @@ void Engine::Impl::Schedule()
     //                                  |<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
 
-    // move partially prefilled to the back
-    auto partial = std::stable_partition(idxs.begin(), inactive, [&](int i) {
-        return sequences[i]->cache_len + sequences[i]->input_length == context_length[i];
-    });
-
-    TM_CHECK_LE(inactive - partial, 1);
-
-    auto swap_in = std::stable_partition(idxs.begin(), partial, [&](int i) {
+    auto swap_in = std::stable_partition(idxs.begin(), inactive, [&](int i) {
         return status[i] == Sequence::kActive;  // past status
     });
 
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
 
-    for (auto i : subrange{idxs.begin(), swap_in}) {
-        TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
-        cache[i]->stage = RequestCache::kDecoding;
-    }
-    for (auto i : subrange{swap_in, partial}) {
+    // for (auto i : subrange{idxs.begin(), swap_in}) {
+    //     TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
+    //     cache[i]->stage = RequestCache::kDecoding;
+    // }
+    for (auto i : subrange{swap_in, inactive}) {
         TM_CHECK_EQ(cache[i]->stage, RequestCache::kInactive);
         cache[i]->stage = RequestCache::kPrefill;
     }
@@ -379,6 +372,12 @@ void Engine::Impl::Schedule()
         TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
         cache[i]->stage = RequestCache::kInactive;
     }
+
+    // move partially prefilled sequences to the back
+    auto partial = std::stable_partition(idxs.begin(), inactive, [&](int i) {
+        return sequences[i]->cache_len + sequences[i]->input_length == context_length[i];
+    });
+    TM_CHECK_LE(inactive - partial, 1);
 
     vector<unique_ptr<RequestCache>> rc(idxs.size());
     vector<int>                      perm(idxs.size());
@@ -434,6 +433,14 @@ void Engine::Impl::Setup(BatchData& d)
     /// FIXME: all-gather
     d.local_token_num  = {*env.at("local_token_num").data<int>()};
     d.global_token_num = d.local_token_num[0];
+
+    /// extrapolate
+    for (int i = 0; i < st.active; ++i) {
+        auto& c = *st.rc[i];
+        if (c.sequence.cache_len + c.sequence.input_length == c.seq_len) {
+            c.stage = RequestCache::kDecoding;
+        }
+    }
 }
 
 void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
@@ -455,8 +462,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
 
     Run(BatchOp::kUpdate, -1, TensorMap{});
 
-    dbg(finished.size());
-    dbg(s.rc.size());
+    // dbg(finished.size());
+    // dbg(s.rc.size());
     dbg(b.bs0, b.bsz);
     dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
 
@@ -473,11 +480,16 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         auto& c = *s.rc[i];
         dbg(c.seq_len, sequence_length[i], output_ids[i]);
         c.token_ids[c.seq_len] = output_ids[i];
-        c.sequence.cache_len   = sequence_length[i] - 1;
-        c.seq_len              = sequence_length[i];
-        signals.push_back([this, r = c.request, l = c.seq_len] {  //
-            UpdateState(*r, Request::kOk, l);
-        });
+        if (TM_LIKELY(c.stage == RequestCache::kDecoding)) {  // new tokens generated
+            c.sequence.cache_len = sequence_length[i] - 1;
+            c.seq_len            = sequence_length[i];
+            signals.push_back([this, r = c.request, l = c.seq_len] {  //
+                UpdateState(*r, Request::kOk, l);
+            });
+        }
+        else {
+            c.sequence.cache_len = sequence_length[i];
+        }
     }
 
     if (!cs.empty()) {  // Rc -> Seq
@@ -485,8 +497,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     }
 
     for (int i = 0; i < b.bsz; ++i) {
-        if (finished[i]) {
-            auto& c = *s.rc[i];
+        auto& c = *s.rc[i];
+        if (c.stage == RequestCache::kDecoding && finished[i]) {
             if (c.request->session.end_flag) {
                 seq_mgr_->CacheGeneration(c.sequence);
                 TM_CHECK(seq_mgr_->Erase(c.request->id));
@@ -563,6 +575,8 @@ void Engine::Impl::InternalThreadEntry()
         if (tp_rank_ == 0) {
             gateway_.notify(std::move(signals));
         }
+
+        dbg("=========================================================================");
     }
 }
 

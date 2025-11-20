@@ -22,9 +22,7 @@ public:
                int      vocab_size_padded,
                int      phases);
 
-    void Run(ExchOp op, int phase, TensorMap& env);
-
-    void Forward(int phase, TensorMap& env);
+    void Run(BatchOp op, int phase, TensorMap& env);
 
 private:
     struct Impl;

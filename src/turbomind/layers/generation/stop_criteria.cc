@@ -54,23 +54,22 @@ void StopCriteria::Forward(int phase, TensorMap& env)
 {
     auto& d = *data_.at(phase);
 
-    const Tensor_<int> token_ids       = env.at("token_ids");
-    const Buffer_<int> sequence_length = env.at("sequence_length").buffer();
+    const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
+    const Buffer_<int>  sequence_length = env.at("sequence_length").buffer();
 
     Buffer_<bool> finished = env.at("finished").buffer();
 
-    const int batch_size = token_ids.shape(0);
+    const int batch_size = token_ids_ptrs.size();
 
     auto stream = core::Context::stream().handle();
 
     if (auto& stop_words = d.stop_words_ten) {
         TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
         size_t stop_words_len = stop_words.shape(2);
-        invokeStopWordsCriterion_v2(token_ids.data(),
+        invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
                                     sequence_length.data(),
                                     stop_words.data(),
                                     finished.data(),
-                                    token_ids.stride(0),
                                     stop_words_len,
                                     batch_size,
                                     stream);

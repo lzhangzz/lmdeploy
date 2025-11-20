@@ -488,7 +488,7 @@ void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor
 
 template<int BLOCK_DIM, int MAX_COUNT>
 __global__ void
-BatchPrefixSum_Kernel(Array<const int*, MAX_COUNT> srcs, Array<int, MAX_COUNT> ns, Array<int*, MAX_COUNT> dsts)
+BatchPrefixSumKernel(Array<const int*, MAX_COUNT> srcs, Array<int, MAX_COUNT> ns, Array<int*, MAX_COUNT> dsts)
 {
     const int  bi  = blockIdx.x;
     const int* src = srcs[bi];
@@ -537,7 +537,25 @@ void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cuda
     constexpr int block = 256;
     const int     grid  = count;
 
-    BatchPrefixSum_Kernel<block><<<grid, block, 0, st>>>(p_srcs, p_ns, p_dsts);
+    BatchPrefixSumKernel<block><<<grid, block, 0, st>>>(p_srcs, p_ns, p_dsts);
+}
+
+__global__ void AppendTokenIdsKernel(int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i < batch_size) {
+        int* token_ids = token_ids_ptrs[i];
+        int  pos       = positions[i];
+        token_ids[pos] = output_ids[i];
+    }
+}
+
+void AppendTokenIds(
+    int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size, cudaStream_t stream)
+{
+    constexpr int block = 128;
+    const int     grid  = cdiv(batch_size, block);
+    AppendTokenIdsKernel<<<grid, block, 0, stream>>>(token_ids_ptrs, output_ids, positions, batch_size);
 }
 
 }  // namespace turbomind

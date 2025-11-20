@@ -21,11 +21,10 @@
 
 namespace turbomind {
 
-void invokeStopWordsCriterion_v2(const int*   token_ids,
+void invokeStopWordsCriterion_v2(const int**  token_ids_ptrs,
                                  const int*   sequence_length,
                                  const int*   stop_words,
                                  bool*        finished,
-                                 int64_t      token_ids_stride,
                                  int          stop_words_len,
                                  int          batch_size,
                                  cudaStream_t stream);

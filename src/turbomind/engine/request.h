@@ -196,10 +196,11 @@ struct RequestCache {
     int input_len{};    // set at schedule (set to `seq.input_len`)
     int history_len{};  // set at schedule (set to `seq.cache_len`)
 
+    //                 input source     new tokens
     enum Stage {
         kInactive,
-        kPrefill,   // inputs taken from `token_ids`, `input_embeds`
-        kDecoding,  // inputs tkane from AR buffers
+        kPrefill,   //    request          yes/no
+        kDecoding,  //   auto-regres       yes
     };
 
     Stage stage{kInactive};

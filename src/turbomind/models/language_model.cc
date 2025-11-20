@@ -5,6 +5,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -54,8 +55,6 @@ public:
         const int bs0 = *env.at("bs0").data<int>();
         const int bsz = *env.at("bsz").data<int>();
 
-        TM_LOG_ERROR("bs0 = %d, bsz = %d", bs0, bsz);
-
         int decode = 0;
 
         d.input_ids_offsets[0] = 0;
@@ -65,7 +64,7 @@ public:
                 const auto src = c.token_ids + c.history_len;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + d.input_ids_offsets[i]);
                 d.input_ids_offsets[i + 1] += c.input_len;
-                TM_LOG_ERROR("input len = %d", c.input_len);
+                // TM_LOG_ERROR("input len = %d", c.input_len);
             }
             else {
                 ++decode;
@@ -74,7 +73,6 @@ public:
 
         core::CopyT copy{};
 
-        TM_LOG_ERROR("total prefill input size = %d", d.input_ids_offsets[bsz]);
         if (auto size = d.input_ids_offsets[bsz]) {
             copy(input_ids_buf_, size, d.input_ids);
         }
@@ -192,6 +190,8 @@ struct LanguageModel::Impl {
     struct Data {
         Buffer_<int>  sequence_length;
         Buffer_<bool> finished;
+
+        vector<RequestCache::Stage> stage;
     };
 
     vector<Data> data_;
@@ -214,27 +214,28 @@ struct LanguageModel::Impl {
 
     void Run(BatchOp op, int phase, TensorMap& env)
     {
-        if (op == BatchOp::kSetup) {
-            Setup(phase, env);
+        switch (op) {
+            case BatchOp::kSetup:
+                return Setup(phase, env);
+            case BatchOp::kPrepare:
+                return Prepare(phase, env);
+            case BatchOp::kForward:
+                return Forward(phase, env);
+            case BatchOp::kUnprep:
+                return Unprep(phase, env);
+            case BatchOp::kFetch:
+                return Fetch(phase, env);
+            default:
+                input_processor_->Run(op, phase, env);
+                unified_decoder_->Run(op, phase, env);
+                generation_->Run(op, phase, env);
         }
-        else if (op == BatchOp::kPrepare) {
-            Prepare(phase, env);
-        }
-        else if (op == BatchOp::kForward) {
-            Forward(phase, env);
-        }
-        else if (op == BatchOp::kFetch) {
-            Fetch(phase, env);
-        }
-
-        input_processor_->Run(op, phase, env);
-        unified_decoder_->Run(op, phase, env);
-        generation_->Run(op, phase, env);
     }
 
     void Setup(int phase, TensorMap& env);
     void Prepare(int phase, TensorMap& env);
     void Forward(int phase, TensorMap& env);
+    void Unprep(int phase, TensorMap& env);
     void Fetch(int phase, TensorMap& env);
 };
 
@@ -271,6 +272,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
         auto& d           = data_.emplace_back();
         d.sequence_length = empty_like(sequence_length_buf_, kDEVICE);
         d.finished        = empty_like(finished_buf_, kDEVICE);
+        d.stage.resize(engine.max_batch_size);
     }
 
     input_processor_ = std::make_shared<InputProcessor>(engine, phases);
@@ -404,6 +406,8 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer local_l
 
 void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 {
+    input_processor_->Run(BatchOp::kSetup, phase, env);
+
     auto& d = data_.at(phase);
 
     const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
@@ -413,17 +417,26 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     const int bsz = *env.at("bsz").data<int>();
 
     for (int i = 0; i < rc.size(); ++i) {
-        if (auto& c = *rc[i]; TM_UNLIKELY(perm[i] >= bs0)) {
+        auto& c    = *rc[i];
+        d.stage[i] = c.stage;
+        if (TM_UNLIKELY(c.stage == RequestCache::kPrefill)) {
             sequence_length_buf_[i] = c.history_len + c.input_len;
         }
     }
 
     core::CopyT copy{};
     copy(sequence_length_buf_, bsz, d.sequence_length);
+
+    unified_decoder_->Run(BatchOp::kSetup, phase, env);
+    generation_->Run(BatchOp::kSetup, phase, env);
 }
 
 void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 {
+    env.emplace("autoreg_ids", autoreg_ids_);
+
+    input_processor_->Run(BatchOp::kPrepare, phase, env);
+
     auto& d = data_.at(phase);
 
     const Buffer_<int> perm = env.at("permutation").buffer();
@@ -431,12 +444,18 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     const int          bs0  = *env.at("bs0").data<int>();
 
     Clear(finished_.back().buffer());
-
     Warp(finished_.front(), bs0, perm, finished_.back(), core::CopyT{});
     finished_.Swap();
 
     // sequence_length = history_len + input_len
-    Warp(sequence_length_.front(), d.sequence_length, bs0, perm, sequence_length_.back(), core::CopyT{});
+    for (int i = 0; i < bsz; ++i) {
+        if (const int j = perm[i]; j < bs0 && d.stage[i] == RequestCache::kDecoding) {
+            core::Copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
+        }
+        else {
+            core::Copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
+        }
+    }
     sequence_length_.Swap();
 
     Buffer_<int> k_offsets{bsz + 1, kDEVICE};
@@ -446,8 +465,8 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     env.produce("sequence_length", sequence_length_.front());
     env.produce("k_offsets", k_offsets);
 
-    env.emplace("autoreg_ids", autoreg_ids_);
-    // env.emplace("autoreg_ids_offsets", autoreg_ids_offsets_);
+    unified_decoder_->Run(BatchOp::kPrepare, phase, env);
+    generation_->Run(BatchOp::kPrepare, phase, env);
 }
 
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
@@ -483,10 +502,6 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
     // output hidden states
     // output logits
 
-    // Buffer_<int> seq_len_0 = empty_like(sequence_length_.front().buffer());
-    // Copy(sequence_length_.front().buffer(), bsz, seq_len_0);
-
-
     // TM_CHECK(0);
 
     if (auto decode_hidden_states = env.at("decode_hidden_states")) {
@@ -494,7 +509,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         auto f32_logits = empty_like(logits, kFloat32);
         invokeCastFloat2D(logits, f32_logits, core::Context::stream().handle());
         env.emplace("logits", f32_logits);
-        generation_->Forward(phase, env);
+        generation_->Run(BatchOp::kForward, phase, env);
     }
 
     Copy(env.at("output_ids").buffer(), autoreg_ids_);
@@ -503,9 +518,17 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
     // Unprepare
 
     auto& d = data_.at(phase);
+}
+
+void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
+{
+    auto& d = data_.at(phase);
 
     Copy(sequence_length_.front().buffer(), d.sequence_length);
+
     Copy(finished_.front().buffer(), d.finished);
+
+    generation_->Run(BatchOp::kUnprep, phase, env);
 }
 
 void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
@@ -517,6 +540,8 @@ void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
 
     Copy(d.finished, finished_buf_);
     env.produce("finished", finished_buf_);
+
+    generation_->Run(BatchOp::kFetch, phase, env);
 }
 
 LanguageModel::~LanguageModel() = default;
