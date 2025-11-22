@@ -117,7 +117,7 @@ public:
             decode_token_pos_buf_[i] = input_ids_offsets_buf_[i + 1] - 1;
         }
 
-        dbg(bs0, bsz);
+        // dbg(bs0, bsz);
 
         const int token_num = input_ids_offsets_buf_[bsz];
 
@@ -134,11 +134,13 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env)
     {
-        if (op == BatchOp::kSetup) {
-            Setup(phase, env);
-        }
-        else if (op == BatchOp::kPrepare) {
-            Prepare(phase, env);
+        switch (op) {
+            case BatchOp::kSetup:
+                return Setup(phase, env);
+            case BatchOp::kPrepare:
+                return Prepare(phase, env);
+            default:
+                return;
         }
     }
 
@@ -200,18 +202,6 @@ struct LanguageModel::Impl {
     std::unique_ptr<UnifiedDecoder> unified_decoder_;
     std::unique_ptr<Generation>     generation_;  // token generator
 
-    Impl(DataType              dtype,
-         const ModelParam&     model,
-         const EngineParam&    engine,
-         const AttentionParam& attn,
-         const MoeParam&       moe,
-         const Context&        ctx,
-         const LlamaWeight&    weights,
-         int                   phases);
-
-    Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
-    Tensor PostEmbedding(const Tensor& features, Buffer local_logits);
-
     void Run(BatchOp op, int phase, TensorMap& env)
     {
         switch (op) {
@@ -231,6 +221,18 @@ struct LanguageModel::Impl {
                 generation_->Run(op, phase, env);
         }
     }
+
+    Impl(DataType              dtype,
+         const ModelParam&     model,
+         const EngineParam&    engine,
+         const AttentionParam& attn,
+         const MoeParam&       moe,
+         const Context&        ctx,
+         const LlamaWeight&    weights,
+         int                   phases);
+
+    Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
+    Tensor PostEmbedding(const Tensor& features, Buffer local_logits);
 
     void Setup(int phase, TensorMap& env);
     void Prepare(int phase, TensorMap& env);

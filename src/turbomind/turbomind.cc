@@ -447,6 +447,8 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
 
     h_comm->Sync();
 
+    constexpr int phases = 2;
+
     // create model
     LanguageModel model{data_type_,  //
                         model_param_,
@@ -455,7 +457,7 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
                         moe_param_,
                         *ctx,
                         *weights_[rank],
-                        1};
+                        phases};
 
     const int dp_rank = engine_param.outer_dp_rank * engine_param.attn_dp_size + engine_param.attn_dp_rank;
     // create engine
@@ -465,7 +467,8 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
                             *ctx,
                             *gateway_,
                             engine_param_.devices[device_id],
-                            dp_rank};
+                            dp_rank,
+                            phases};
 
     h_comm->Sync();
 

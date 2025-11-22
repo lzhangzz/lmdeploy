@@ -9,24 +9,25 @@ namespace turbomind {
 struct RequestCache;
 
 struct BatchData {
-    int phase;
 
-    int bs0;
-    int bsz;
-
-    std::vector<int> perm;
-
-    std::vector<int> local_token_num;
-    int              global_token_num;
-
-    Event ready;
-    Event done;
-
-    BatchData()
+    explicit BatchData(int phase): phase{phase}
     {
         ready = Event::create();
         done  = Event::create();
     }
+
+    const int phase;
+
+    int bs0 = 0;
+    int bsz = 0;
+
+    std::vector<int> perm;
+
+    std::vector<int> local_token_num;
+    int              global_token_num = 0;
+
+    Event ready;
+    Event done;
 };
 
 }  // namespace turbomind

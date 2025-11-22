@@ -258,7 +258,6 @@ struct Generation::Impl {
 
     void Forward(int phase, TensorMap& env)
     {
-        TM_CHECK_EQ(phase, 0);
         auto& d = *data_.at(phase);
 
         const Buffer_<int> perm = env.at("permutation").buffer();

@@ -85,7 +85,8 @@ public:
            Context&      ctx,
            Gateway&      gateway,
            int           device_id,
-           int           dp_rank);
+           int           dp_rank,
+           int           phases);
 
     void WarmUp();
 

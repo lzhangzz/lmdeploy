@@ -5,6 +5,7 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
@@ -159,7 +160,12 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
 
+    // auto stack_alloc{core::Context::device_alloc().adapt<core::StackAllocatorImpl>()};
+    // core::ContextGuard ctx{Allocator{stack_alloc}};
+
     for (int layer = 0; layer < layer_num_; ++layer) {
+
+        // stack_alloc->iter();
 
         /// TODO: do not skip the layers when they are heterogeneous
         if (isTuning() && layer >= tune_layer_num_) {

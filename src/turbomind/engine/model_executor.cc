@@ -29,7 +29,7 @@ struct ModelExecutor::Impl {
 
         Stream    stream  = Stream::create();
         Allocator h_alloc = Allocator(kCPU);
-        Allocator d_alloc = Allocator(kDEVICE);
+        Allocator d_alloc = Allocator(stream, false);
 
         AnomalyHandler::instance().Init(0, 1000, 0, 1000, stream.handle());
 

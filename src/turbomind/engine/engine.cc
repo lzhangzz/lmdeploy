@@ -46,7 +46,8 @@ struct Engine::Impl {
          Context&      ctx,
          Gateway&      gateway,
          int           device_id,
-         int           dp_rank);
+         int           dp_rank,
+         int           phases);
 
     void CreateSequenceManager();
 
@@ -128,8 +129,10 @@ struct Engine::Impl {
             return rc.size();
         }
     };
-
     vector<State> states_;
+
+    struct Data {};
+    vector<Data> data_;
 
     // staging buffers
     Buffer_<void*> block_ptrs_buf_;
@@ -147,8 +150,14 @@ Engine::Impl::~Impl()
     executor_ = {};
 }
 
-Engine::Impl::Impl(
-    DataType dtype, EngineParam param, LanguageModel model, Context& ctx, Gateway& gateway, int device_id, int dp_rank):
+Engine::Impl::Impl(DataType      dtype,
+                   EngineParam   param,
+                   LanguageModel model,
+                   Context&      ctx,
+                   Gateway&      gateway,
+                   int           device_id,
+                   int           dp_rank,
+                   int           phases):
     dtype_{dtype},
     param_{param},
     gateway_{gateway},
@@ -161,6 +170,10 @@ Engine::Impl::Impl(
     model_{std::move(model)}
 {
     states_.emplace_back();
+
+    for (int i = 0; i < phases; ++i) {
+        data_.emplace_back();
+    }
 
     executor_ = ModelExecutor{model_, outbound_, inbound_};
 
@@ -360,10 +373,6 @@ void Engine::Impl::Schedule()
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
 
-    // for (auto i : subrange{idxs.begin(), swap_in}) {
-    //     TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
-    //     cache[i]->stage = RequestCache::kDecoding;
-    // }
     for (auto i : subrange{swap_in, inactive}) {
         TM_CHECK_EQ(cache[i]->stage, RequestCache::kInactive);
         cache[i]->stage = RequestCache::kPrefill;
@@ -403,6 +412,8 @@ void Engine::Impl::Setup(BatchData& d)
 {
     auto& st = states_.at(0);
 
+    dbg(d.phase);
+
     Buffer_<RequestCache*> rc{st.active, kCPU};
     for (int i = 0; i < st.active; ++i) {
         rc[i] = st.rc[i].get();
@@ -421,6 +432,8 @@ void Engine::Impl::Setup(BatchData& d)
     d.bs0  = st.bs0;
     d.bsz  = st.active;
     d.perm = st.perm;
+
+    dbg(d.bs0, d.bsz, d.perm);
 
     TensorMap env{{"block_ptrs", block_ptrs_buf_},
                   {"block_ptrs_offsets", block_ptrs_offsets_buf_},
@@ -462,11 +475,66 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
 
     Run(BatchOp::kUpdate, -1, TensorMap{});
 
-    // dbg(finished.size());
-    // dbg(s.rc.size());
     dbg(b.bs0, b.bsz);
     dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
 
+#if 1
+
+    vector<int> perm;
+    if (data_.size() > 1) {
+        perm = s.perm;
+    }
+    else {
+        perm.resize(b.bsz);
+        std::iota(perm.begin(), perm.end(), 0);
+    }
+
+    for (int i = 0; i < s.active; ++i) {
+        auto& c = *s.rc[i];
+        if (const int j = perm[i]; j < b.bsz) {
+            if (c.stage == RequestCache::kDecoding) {
+                c.token_ids[c.seq_len] = output_ids[j];
+                signals.push_back([this, r = c.request, l = sequence_length[j]] {  //
+                    UpdateState(*r, Request::kOk, l);
+                });
+                c.sequence.cache_len = c.seq_len;
+                c.seq_len            = sequence_length[j] + 1;
+            }
+            else {
+                TM_CHECK(0);
+            }
+        }
+        else {  // not exist yet
+            if (c.stage == RequestCache::kDecoding) {
+                c.sequence.cache_len = c.seq_len;
+                c.seq_len += 1;
+            }
+            else {
+                TM_CHECK(0);
+            }
+        }
+        // dbg(c.sequence.cache_len, c.seq_len);
+    }
+
+    for (int i = 0; i < b.bsz; ++i) {
+        auto& c = *s.rc[i];
+        if (const int j = perm[i]; j < b.bsz && finished[j]) {
+            if (c.request->session.end_flag) {
+                seq_mgr_->CacheGeneration(c.sequence);
+                TM_CHECK(seq_mgr_->Erase(c.request->id));
+            }
+            else {
+                seq_mgr_->UpdateAndSetUnlock(c.sequence);
+            }
+            signals.push_back([this, len = c.seq_len, r = std::move(c.request)] {  //
+                UpdateState(*r, Request::kFinish, len);
+            });
+            s.rc[i] = {};
+            s.finish += 1;
+        }
+    }
+
+#else
     vector<int> perm(b.bsz);
 
     std::vector<RequestCache*> cs;
@@ -513,15 +581,24 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
             s.finish += 1;
         }
     }
+
+#endif
 }
 
 void Engine::Impl::InternalThreadEntry()
 {
-    core::ContextGuard ctx{Stream::create(), Allocator(kCPU), Allocator(kDEVICE)};
+    auto stream = Stream::create();
 
-    unique_ptr<BatchData> d = std::make_unique<BatchData>();
+    core::ContextGuard ctx{stream, Allocator(kCPU), Allocator(stream, false)};
+
+    unique_ptr<BatchData> d = std::make_unique<BatchData>(0);
+
+    for (unsigned i = 1; i < data_.size(); ++i) {
+        inbound_.push(std::make_unique<BatchData>(i));
+    }
 
     while (true) {
+
         shared_ptr<RequestData> rs;
 
         auto& st = states_.at(0);
@@ -586,9 +663,15 @@ Engine::Engine()                             = default;
 Engine::Engine(Engine&&) noexcept            = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
-Engine::Engine(
-    DataType dtype, EngineParam param, LanguageModel model, Context& ctx, Gateway& gateway, int device_id, int dp_rank):
-    impl_{std::make_unique<Impl>(dtype, param, std::move(model), ctx, gateway, device_id, dp_rank)}
+Engine::Engine(DataType      dtype,
+               EngineParam   param,
+               LanguageModel model,
+               Context&      ctx,
+               Gateway&      gateway,
+               int           device_id,
+               int           dp_rank,
+               int           phases):
+    impl_{std::make_unique<Impl>(dtype, param, std::move(model), ctx, gateway, device_id, dp_rank, phases)}
 {
 }
 
