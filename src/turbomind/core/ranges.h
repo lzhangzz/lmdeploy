@@ -17,6 +17,16 @@ public:
         return last_;
     }
 
+    auto empty() const
+    {
+        return first_ == last_;
+    }
+
+    auto size() const
+    {
+        return last_ - first_;
+    }
+
 private:
     Iterator first_;
     Iterator last_;

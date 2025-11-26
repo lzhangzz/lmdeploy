@@ -60,11 +60,10 @@ public:
         d.input_ids_offsets[0] = 0;
         for (int i = 0; i < rc.size(); ++i) {
             d.input_ids_offsets[i + 1] = d.input_ids_offsets[i];
-            if (const auto& c = *rc[i]; TM_UNLIKELY(c.stage == RequestCache::kPrefill)) {
-                const auto src = c.token_ids + c.history_len;
+            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
+                const auto src = c.token_ids + c.history_len + c.alpha;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + d.input_ids_offsets[i]);
                 d.input_ids_offsets[i + 1] += c.input_len;
-                // TM_LOG_ERROR("input len = %d", c.input_len);
             }
             else {
                 ++decode;
@@ -122,10 +121,10 @@ public:
         const int token_num = input_ids_offsets_buf_[bsz];
 
         Buffer_<int> input_ids_offsets{bsz + 1, kDEVICE};
-        copy(input_ids_offsets_buf_, input_ids_offsets.size(), input_ids_offsets);
+        copy(input_ids_offsets_buf_, input_ids_offsets.size(), input_ids_offsets);  // H2D
 
         Buffer_<int> decode_token_pos{bsz, kDEVICE};
-        copy(decode_token_pos_buf_, decode_token_pos.size(), decode_token_pos);
+        copy(decode_token_pos_buf_, decode_token_pos.size(), decode_token_pos);  // H2D
 
         env.produce("input_ids", input_ids.slice(0, token_num));
         env.produce("q_offsets", input_ids_offsets);
@@ -193,7 +192,8 @@ struct LanguageModel::Impl {
         Buffer_<int>  sequence_length;
         Buffer_<bool> finished;
 
-        vector<RequestCache::Stage> stage;
+        Buffer_<bool> is_decoding;
+        Buffer_<bool> is_generate;
     };
 
     vector<Data> data_;
@@ -274,7 +274,8 @@ LanguageModel::Impl::Impl(DataType              dtype,
         auto& d           = data_.emplace_back();
         d.sequence_length = empty_like(sequence_length_buf_, kDEVICE);
         d.finished        = empty_like(finished_buf_, kDEVICE);
-        d.stage.resize(engine.max_batch_size);
+        d.is_decoding     = {engine.max_batch_size, kCPU};
+        d.is_generate     = {engine.max_batch_size, kCPU};
     }
 
     input_processor_ = std::make_shared<InputProcessor>(engine, phases);
@@ -419,10 +420,11 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     const int bsz = *env.at("bsz").data<int>();
 
     for (int i = 0; i < rc.size(); ++i) {
-        auto& c    = *rc[i];
-        d.stage[i] = c.stage;
-        if (TM_UNLIKELY(c.stage == RequestCache::kPrefill)) {
-            sequence_length_buf_[i] = c.history_len + c.input_len;
+        auto& c          = *rc[i];
+        d.is_decoding[i] = c.is_decoding;
+        d.is_generate[i] = c.is_generate;
+        if (TM_UNLIKELY(!c.is_decoding)) {
+            sequence_length_buf_[i] = c.history_len + c.alpha + c.input_len;
         }
     }
 
@@ -451,7 +453,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     // sequence_length = history_len + input_len
     for (int i = 0; i < bsz; ++i) {
-        if (const int j = perm[i]; j < bs0 && d.stage[i] == RequestCache::kDecoding) {
+        if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
             core::Copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
         }
         else {
@@ -542,6 +544,9 @@ void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
 
     Copy(d.finished, finished_buf_);
     env.produce("finished", finished_buf_);
+
+    env.produce("is_generate", d.is_generate);
+    env.produce("is_decoding", d.is_decoding);
 
     generation_->Run(BatchOp::kFetch, phase, env);
 }

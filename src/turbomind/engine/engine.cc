@@ -166,7 +166,7 @@ Engine::Impl::Impl(DataType      dtype,
     tp_rank_{param.attn_tp_rank},
     dp_rank_{dp_rank},
     device_id_{device_id},
-    async_{0},
+    async_{phases > 1},
     model_{std::move(model)}
 {
     states_.emplace_back();
@@ -325,8 +325,9 @@ void Engine::Impl::Schedule()
 
     vector<const Sequence*>  sequences;
     vector<Sequence::Status> status;
-    vector<uint64_t>         priorities;
     vector<int>              context_length;
+    vector<int>              alpha;
+    vector<uint64_t>         priorities;
     vector<RequestCache*>    cache;
     vector<int>              inv;
 
@@ -337,56 +338,78 @@ void Engine::Impl::Schedule()
             sequences.push_back(&c->sequence);
             status.push_back(c->sequence.status);
             priorities.push_back(c->request->unique_id);
-            context_length.push_back(c->seq_len /* plus draft tokens */);
+            context_length.push_back(c->seq_len + c->beta /* plus draft tokens */);
+            alpha.push_back(c->alpha);
             inv.push_back(i);
             c->input_len = c->history_len = 0;
+            dbg(c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding, c->is_generate);
         }
     }
 
-    auto constant = [this](auto&&...) -> int { return param_.max_forward_token_num; };
+    dbg("Schedule");
 
-    auto outcome = seq_mgr_->Materialize(sequences, context_length, priorities, 1, constant);
+    auto outcome = seq_mgr_->Materialize(
+        sequences, context_length, alpha, priorities, param_.max_forward_token_num, param_.max_context_token_num);
 
     vector<int> idxs(sequences.size());
     std::iota(idxs.begin(), idxs.end(), 0);
 
-    auto inactive = std::stable_partition(idxs.begin(), idxs.end(), [&](int i) {
-        return sequences[i]->status == Sequence::kActive;  // IS active
-    });
+    subrange active{idxs.begin(), std::stable_partition(idxs.begin(), idxs.end(), [&](int i) {
+                        return sequences[i]->status == Sequence::kActive;  // IS active
+                    })};
 
-    TM_CHECK(sequences.empty() || inactive != idxs.begin()) << "No enough blocks";
+    subrange inactive{active.end(), idxs.end()};
 
-    // |<----------- active ----------->|<------- inactive ----->|
+    TM_CHECK(sequences.empty() || !active.empty()) << "No enough blocks";
 
-    // ! past-the-end of swap-outs
-    auto swap_out = std::stable_partition(inactive, idxs.end(), [&](int i) {
-        return status[i] == Sequence::kActive;  // WAS active
-    });
+    subrange existing{active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {
+                          return status[i] == Sequence::kActive;  // WAS active in active
+                      })};
 
-    //                                  |<- swap-out ->|
-    // |<----------- active ----------->|<------- inactive ----->|
+    subrange swap_in{existing.end(), active.end()};
 
-    auto swap_in = std::stable_partition(idxs.begin(), inactive, [&](int i) {
-        return status[i] == Sequence::kActive;  // past status
-    });
+    subrange swap_out{inactive.begin(), std::stable_partition(inactive.begin(), inactive.end(), [&](int i) {
+                          return status[i] == Sequence::kActive;  // WAS active in inactive
+                      })};
 
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
 
-    for (auto i : subrange{swap_in, inactive}) {
-        TM_CHECK_EQ(cache[i]->stage, RequestCache::kInactive);
-        cache[i]->stage = RequestCache::kPrefill;
-    }
-    for (auto i : subrange{inactive, swap_out}) {
-        TM_CHECK_NE(cache[i]->stage, RequestCache::kInactive);
-        cache[i]->stage = RequestCache::kInactive;
+    for (auto i : swap_out) {
+        cache[i]->alpha = {};
+        cache[i]->beta  = {};
     }
 
+    for (auto i : swap_in) {
+        cache[i]->is_decoding = {};
+        cache[i]->is_generate = {};
+    }
+
+    for (auto i : existing) {
+        if (cache[i]->is_generate) {
+            cache[i]->is_decoding = true;
+        }
+    }
+
+    for (auto i : active) {
+        auto& s = *sequences[i];
+        auto& c = *cache[i];
+        if (s.cache_len + c.alpha + s.input_length == c.seq_len + c.beta) {
+            c.is_generate = true;
+        }
+    }
+
+    // if (async_) {
+    //     for (auto i : active) {
+    //         cache[i]->alpha = sequences[i]->input_length;
+    //         cache[i]->beta  = cache[i]->is_generate;
+    //     }
+    // }
+
     // move partially prefilled sequences to the back
-    auto partial = std::stable_partition(idxs.begin(), inactive, [&](int i) {
-        return sequences[i]->cache_len + sequences[i]->input_length == context_length[i];
-    });
-    TM_CHECK_LE(inactive - partial, 1);
+    subrange partial{std::stable_partition(active.begin(), active.end(), [&](int i) { return cache[i]->is_generate; }),
+                     active.end()};
+    TM_CHECK_LE(partial.size(), 1);
 
     vector<unique_ptr<RequestCache>> rc(idxs.size());
     vector<int>                      perm(idxs.size());
@@ -400,11 +423,11 @@ void Engine::Impl::Schedule()
     for (auto& c : s.rc) {
         c->input_len   = c->sequence.input_length;
         c->history_len = c->sequence.cache_len;
-        dbg(c->history_len, c->input_len, c->stage);
+        dbg(c->seq_len, c->history_len, c->input_len, c->alpha, c->beta, c->is_decoding, c->is_generate);
     }
 
-    s.bs0     = std::exchange(s.active, inactive - idxs.begin());
-    s.swapout = swap_out - inactive;
+    s.bs0     = std::exchange(s.active, active.size());
+    s.swapout = swap_out.size();
     s.finish  = 0;
 }
 
@@ -446,14 +469,6 @@ void Engine::Impl::Setup(BatchData& d)
     /// FIXME: all-gather
     d.local_token_num  = {*env.at("local_token_num").data<int>()};
     d.global_token_num = d.local_token_num[0];
-
-    /// extrapolate
-    for (int i = 0; i < st.active; ++i) {
-        auto& c = *st.rc[i];
-        if (c.sequence.cache_len + c.sequence.input_length == c.seq_len) {
-            c.stage = RequestCache::kDecoding;
-        }
-    }
 }
 
 void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
@@ -461,12 +476,14 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     auto& s = states_.at(0);
 
     Buffer_<bool> finished;
+    Buffer_<bool> is_generate;
     Buffer_<int>  output_ids;
     Buffer_<int>  sequence_length;
     {
         TensorMap env;
         Run(ExchOp::kFetch, b.phase, env);
         finished        = env.at("finished").buffer();
+        is_generate     = env.at("is_generate").buffer();
         output_ids      = env.at("output_ids").buffer();
         sequence_length = env.at("sequence_length").buffer();
     }
@@ -489,34 +506,38 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    for (int i = 0; i < s.active; ++i) {
+    dbg("Update");
+
+    const int size = s.active + (async_ ? s.swapout : 0);
+
+    for (int i = 0; i < size; ++i) {
         auto& c = *s.rc[i];
+
         if (const int j = perm[i]; j < b.bsz) {
-            if (c.stage == RequestCache::kDecoding) {
+            if (is_generate[j]) {
                 c.token_ids[c.seq_len] = output_ids[j];
-                signals.push_back([this, r = c.request, l = sequence_length[j]] {  //
-                    UpdateState(*r, Request::kOk, l);
-                });
-                c.sequence.cache_len = c.seq_len;
-                c.seq_len            = sequence_length[j] + 1;
+                c.seq_len              = sequence_length[j];
+                c.sequence.cache_len   = sequence_length[j] - 1;
+                if (c.request->stream_output) {
+                    signals.push_back([this, r = c.request, l = sequence_length[j]] {  //
+                        UpdateState(*r, Request::kOk, l);
+                    });
+                }
             }
             else {
-                TM_CHECK(0);
+                c.sequence.cache_len = sequence_length[j];
             }
         }
-        else {  // not exist yet
-            if (c.stage == RequestCache::kDecoding) {
-                c.sequence.cache_len = c.seq_len;
-                c.seq_len += 1;
-            }
-            else {
-                TM_CHECK(0);
-            }
+
+        if (async_) {
+            c.alpha = c.input_len;
+            c.beta  = c.is_generate;
         }
-        // dbg(c.sequence.cache_len, c.seq_len);
+        
+        dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
     }
 
-    for (int i = 0; i < b.bsz; ++i) {
+    for (int i = 0; i < size; ++i) {
         auto& c = *s.rc[i];
         if (const int j = perm[i]; j < b.bsz && finished[j]) {
             if (c.request->session.end_flag) {

@@ -208,9 +208,9 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
 
         auto& s = i < d.decode.n ? d.decode : d.prefill;
         s.q_sum += c.input_len;
-        s.k_sum += c.history_len + c.input_len;
+        s.k_sum += c.history_len + c.alpha + c.input_len;
         s.q_max = std::max(s.q_max, c.input_len);
-        s.k_max = std::max(s.k_max, c.history_len + c.input_len);
+        s.k_max = std::max(s.k_max, c.history_len + c.alpha + c.input_len);
     }
 
     /// handling different RoPE types

@@ -208,12 +208,7 @@ struct Generation::Impl {
         d.generation_size = 0;
         for (int i = 0; i < rc.size(); ++i) {
             const auto& c = *rc[i];
-            if (c.stage == RequestCache::kDecoding) {
-                d.generation_size += 1;
-            }
-            else if (c.seq_len == c.history_len + c.input_len) {
-                d.generation_size += 1;
-            }
+            d.generation_size += c.is_generate;
         }
         dbg(d.generation_size);
 

@@ -187,7 +187,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
         // min_length
         min_lengths[i] = rs[i]->prompt_len + g.min_new_tokens;
-        if (rs[i]->seq_len < min_lengths[i]) {
+        if (rs[i]->seq_len + rs[i]->beta < min_lengths[i]) {
             d.has_min_length_penalty = true;
         }
     }

@@ -185,25 +185,22 @@ struct RequestCache {
     // These members may be opaque handles from individual modules, but we tend to keep it simple
     // as long as the complexity is manageable
 
-    int*     token_ids{};  // currently the `output_ids` buf of request
-    uint8_t* random_state{};
+    int*     token_ids    = nullptr;  // currently the `output_ids` buf of request
+    uint8_t* random_state = nullptr;
 
-    int seq_len{};  // set at request init, updated per step
+    int seq_len = 0;  // set at request init, updated per step
 
-    int prompt_len{};   // set at request init, constant
-    int max_seq_len{};  // set at request init, constant
+    int prompt_len  = 0;  // set at request init, constant
+    int max_seq_len = 0;  // set at request init, constant
 
-    int input_len{};    // set at schedule (set to `seq.input_len`)
-    int history_len{};  // set at schedule (set to `seq.cache_len`)
+    int input_len   = 0;  // set at schedule (set to `seq.input_len`)
+    int history_len = 0;  // set at schedule (set to `seq.cache_len`)
 
-    //                 input source     new tokens
-    enum Stage {
-        kInactive,
-        kPrefill,   //    request          yes/no
-        kDecoding,  //   auto-regres       yes
-    };
+    bool is_decoding = 0;  // `seq_len` and `input_ids` taken from the engine
+    bool is_generate = 0;  //
 
-    Stage stage{kInactive};
+    int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
+    int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
 
     float rope_base{};
 };

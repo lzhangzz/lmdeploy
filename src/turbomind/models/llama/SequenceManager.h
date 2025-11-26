@@ -104,11 +104,20 @@ public:
 
     using AdjustInputCount = std::function<int(const Sequences&, const std::vector<int>&)>;
 
-    [[nodiscard]] Outcome Materialize(Sequences                    sequences,
-                                      std::vector<int>             context_lengths,
-                                      const std::vector<uint64_t>& priorities,
-                                      int                          step_length,
-                                      AdjustInputCount             adjust);
+    //                50       1       0       50
+    //    context = seq_len + beta = cache + alpha + input
+    //     alpha' = input
+    //      beta' = int(is_gen)
+    //  -----------------------------------
+    //   seq_len += output
+    //     cache += input + output - 1  or  cache = seq_len - 1
+
+    [[nodiscard]] Outcome Materialize(Sequences             sequences,
+                                      std::vector<int>      context_length,
+                                      std::vector<int>      alpha,
+                                      std::vector<uint64_t> priorities,
+                                      int                   max_fwd_tokens,
+                                      int                   max_tmp_tokens);
 
     /** @brief cache the input prompt tokens of each seq in sequences[0:active_size-1]
      *
@@ -168,12 +177,7 @@ private:
     void VerifyAndLockCached(const Sequences& sequences);
 
     std::vector<int> CountRequiredBlocks(const Sequences&        sequences,  //
-                                         const std::vector<int>& context_lengths,
-                                         int                     step_length);
-
-    static void SortByPriority(Sequences&                   sequences,  //
-                               std::vector<int>&            context_lengths,
-                               const std::vector<uint64_t>& priorities);
+                                         const std::vector<int>& context_length);
 
     static void AssignAndActivate(const Sequences&        sequences,  //
                                   const std::vector<int>& counts,
