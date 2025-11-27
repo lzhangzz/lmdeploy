@@ -256,6 +256,20 @@ struct TurboMind::Impl {
 
         return comm;
     }
+
+    void HandleMissingParams()
+    {
+        if (!engine_param_.max_context_token_num) {
+            engine_param_.max_context_token_num = engine_param_.session_len;
+            TM_LOG_WARNING("[TM] `max_context_token_num` is not set, default to %d.",
+                           (int)engine_param_.max_context_token_num);
+        }
+
+        if (engine_param_.max_context_token_num <= engine_param_.max_batch_size) {
+            engine_param_.max_context_token_num *= engine_param_.session_len;
+            TM_LOG_WARNING("[TM] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
+        }
+    }
 };
 
 TurboMind::Impl::~Impl()
@@ -390,6 +404,8 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
         moe_param_.expert_num.push_back(it->as<int>());
     }
+
+    HandleMissingParams();
 
     gateway_ = std::make_shared<Gateway>(engine_param_.outer_dp_size, engine_param_.attn_dp_size, ffi_ctx_factory);
     ffi_ctx_factory_ = ffi_ctx_factory;

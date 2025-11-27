@@ -34,14 +34,16 @@ public:
     {
         input_ids_buf_         = {max_forward_token_num_, kCPUpinned};
         input_ids_offsets_buf_ = {max_batch_size_ + 1, kCPUpinned};
-
-        decode_token_pos_buf_ = {max_batch_size_, kCPUpinned};
+        decode_token_pos_buf_  = {max_batch_size_, kCPUpinned};
 
         data_.reserve(phases);
         for (int i = 0; i < phases; ++i) {
             auto& d             = data_.emplace_back();
             d.input_ids         = empty_like(input_ids_buf_, kDEVICE);
-            d.input_ids_offsets = empty_like(input_ids_offsets_buf_, kCPUpinned);
+            d.input_ids_offsets = empty_like(input_ids_offsets_buf_, kDEVICE);
+            d.decode_token_pos  = empty_like(decode_token_pos_buf_, kDEVICE);
+
+            d.autoreg_ids_pos = {max_batch_size_, kCPU};  // !
         }
     }
 
@@ -55,32 +57,37 @@ public:
         const int bs0 = *env.at("bs0").data<int>();
         const int bsz = *env.at("bsz").data<int>();
 
-        int decode = 0;
-
-        d.input_ids_offsets[0] = 0;
-        for (int i = 0; i < rc.size(); ++i) {
-            d.input_ids_offsets[i + 1] = d.input_ids_offsets[i];
-            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
-                const auto src = c.token_ids + c.history_len + c.alpha;
-                std::copy_n(src, c.input_len, input_ids_buf_.data() + d.input_ids_offsets[i]);
-                d.input_ids_offsets[i + 1] += c.input_len;
-            }
-            else {
-                ++decode;
-            }
-        }
-
         core::CopyT copy{};
 
-        if (auto size = d.input_ids_offsets[bsz]) {
-            copy(input_ids_buf_, size, d.input_ids);
+        input_ids_offsets_buf_[0] = 0;
+        for (int i = 0; i < rc.size(); ++i) {
+            input_ids_offsets_buf_[i + 1] = input_ids_offsets_buf_[i];
+            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
+                const auto src = c.token_ids + c.history_len + c.alpha;
+                std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
+                d.autoreg_ids_pos[i] = -1;
+                input_ids_offsets_buf_[i + 1] += c.input_len;
+            }
+            else {
+                d.autoreg_ids_pos[i] = input_ids_offsets_buf_[i];
+                input_ids_offsets_buf_[i + 1] += 1;
+            }
+            decode_token_pos_buf_[i] = input_ids_offsets_buf_[i + 1] - 1;
         }
 
-        dbg(d.input_ids_offsets[bsz], decode);
+        dbg(core::to_vector<int>(input_ids_offsets_buf_.slice(0, bsz + 1)));
 
-        Buffer_<int> local_token_num{1, kCPU};
-        local_token_num[0] = d.input_ids_offsets[bsz] + decode;
-        env.produce("local_token_num", local_token_num);
+        copy(input_ids_buf_, input_ids_offsets_buf_[bsz], d.input_ids);
+        copy(decode_token_pos_buf_, bsz, d.decode_token_pos);
+        copy(input_ids_offsets_buf_, bsz + 1, d.input_ids_offsets);
+
+        // dbg(decode_token_pos_buf_[0]);
+
+        d.input_token_num = input_ids_offsets_buf_[bsz];
+
+        // dbg(d.input_token_num);
+
+        env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
     }
 
     void Prepare(int phase, TensorMap& env)
@@ -97,38 +104,16 @@ public:
 
         core::CopyT copy{};
 
-        Buffer_<int> input_ids{max_forward_token_num_, kDEVICE};
-        int*         input_ids_buf = input_ids.data();
         for (int i = 0; i < bsz; ++i) {
-            input_ids_offsets_buf_[i] = input_ids_buf - input_ids.data();
-            if (const int n = d.input_ids_offsets[i + 1] - d.input_ids_offsets[i]; TM_UNLIKELY(n)) {
-                input_ids_buf = copy(d.input_ids.data() + d.input_ids_offsets[i], n, input_ids_buf);
-            }
-            else {
-                /// TODO: in general the length of item size in `autoreg_ids` may be greater than 1
+            if (auto pos = d.autoreg_ids_pos[i]; pos >= 0) {
                 TM_CHECK_LT(perm[i], bs0);
-                input_ids_buf = copy(autoreg_ids.data() + perm[i], 1, input_ids_buf);
+                copy(autoreg_ids.data() + perm[i], 1, &d.input_ids[pos]);
             }
         }
-        input_ids_offsets_buf_[bsz] = input_ids_buf - input_ids.data();
 
-        for (int i = 0; i < bsz; ++i) {
-            decode_token_pos_buf_[i] = input_ids_offsets_buf_[i + 1] - 1;
-        }
-
-        // dbg(bs0, bsz);
-
-        const int token_num = input_ids_offsets_buf_[bsz];
-
-        Buffer_<int> input_ids_offsets{bsz + 1, kDEVICE};
-        copy(input_ids_offsets_buf_, input_ids_offsets.size(), input_ids_offsets);  // H2D
-
-        Buffer_<int> decode_token_pos{bsz, kDEVICE};
-        copy(decode_token_pos_buf_, decode_token_pos.size(), decode_token_pos);  // H2D
-
-        env.produce("input_ids", input_ids.slice(0, token_num));
-        env.produce("q_offsets", input_ids_offsets);
-        env.produce("decode_token_pos", decode_token_pos);
+        env.produce("input_ids", d.input_ids.slice(0, d.input_token_num));
+        env.produce("q_offsets", d.input_ids_offsets.slice(0, bsz + 1));
+        env.produce("decode_token_pos", d.decode_token_pos.slice(0, bsz));
     }
 
     void Run(BatchOp op, int phase, TensorMap& env)
@@ -147,6 +132,11 @@ private:
     struct Data {
         Buffer_<int> input_ids;
         Buffer_<int> input_ids_offsets;
+        int          input_token_num;
+
+        Buffer_<int> decode_token_pos;
+
+        Buffer_<int> autoreg_ids_pos;
 
         Tensor       input_embeds;
         Buffer_<int> input_embeds_offsets;
