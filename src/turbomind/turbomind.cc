@@ -493,6 +493,8 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
 
     h_comm->Sync();
 
+    core::Context::stream().Sync();
+
     // create sequence manager
     engines_[rank].Start();
 }

@@ -49,6 +49,8 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/logger.h"
 
+#include "dbg.h"
+
 namespace turbomind {
 
 UnifiedAttentionLayer::~UnifiedAttentionLayer()
@@ -133,12 +135,13 @@ struct AttentionData {
     Buffer_<int>  q_offsets;
     Buffer_<int>  k_offsets;
 
+    int dbg_offset;
+    int dbg_size;
+
     AttentionData(int bsz, int max_blocks, RopeKernelParam& rope)
     {
         block_ptrs         = {max_blocks + 16, kDEVICE};
         block_ptrs_offsets = {bsz + 1, kDEVICE};
-
-        // decode_token_pos = {bsz, kDEVICE};
 
         if (rope.type == RopeType::kDynamic) {
             rope_base = {bsz, kDEVICE};
@@ -193,6 +196,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     {  /// Upload KV cache ptrs
         const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
         Copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
+        dbg(offsets[bsz], d.block_ptrs.size());
         Copy(offsets, bsz + 1, d.block_ptrs_offsets);
     }
 
@@ -202,9 +206,15 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     d.decode.n  = std::find_if(rc.begin(), rc.end(), [](auto r) { return r->input_len > 1; }) - rc.begin();
     d.prefill.n = bsz - d.decode.n;
 
-    // d.h_offset_q[0] = d.h_offset_k[0] = 0;
+    d.dbg_offset = d.dbg_size = 0;
+
     for (int i = 0; i < bsz; ++i) {
         const auto& c = *rc[i];
+
+        // if (c.request->id == 4 && c.input_len > 1) {
+        //     d.dbg_offset = d.decode.q_sum + d.prefill.q_sum;
+        //     d.dbg_size   = c.input_len;
+        // }
 
         auto& s = i < d.decode.n ? d.decode : d.prefill;
         s.q_sum += c.input_len;
@@ -212,6 +222,15 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         s.q_max = std::max(s.q_max, c.input_len);
         s.k_max = std::max(s.k_max, c.history_len + c.alpha + c.input_len);
     }
+
+    dbg(d.decode.n,
+        d.decode.k_sum,
+        d.decode.k_max,
+        d.prefill.n,
+        d.prefill.q_sum,
+        d.prefill.q_max,
+        d.prefill.k_sum,
+        d.prefill.k_max);
 
     /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {
@@ -267,6 +286,12 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     Tensor qkv;
 
+    auto& d = *data_.at(p.phase);
+
+    if (d.dbg_size) {
+        DebugTensor(p.input.slice(d.dbg_offset, d.dbg_size), Concat("attn_in", p.layer_id), 0);
+    }
+
     if (weights.qkv.output_dim) {
         // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
         qkv = linear_.Forward(p.input, weights.qkv);
@@ -290,6 +315,10 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
     Tensor attn = [&]() -> Tensor { TM_DISPATCH_PRIMARY_DTYPES_RET(qkv.dtype(), invoke); }();
 
     TM_DEBUG_TENSOR(attn, Concat("attn", layer_id), 3);
+
+    if (d.dbg_size) {
+        DebugTensor(attn.slice(d.dbg_offset, d.dbg_size), Concat("attn_out", p.layer_id), 0);
+    }
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
@@ -330,7 +359,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
 
-        params.batch_size = batch_size;
+        params.batch_size = stat.n;
 
         params.token_num = stat.q_sum;
         params.max_q_len = stat.q_max;

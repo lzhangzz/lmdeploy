@@ -65,6 +65,7 @@ public:
             if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
                 const auto src = c.token_ids + c.history_len + c.alpha;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
+                dbg(std::vector<int>(src, src + c.input_len));
                 d.autoreg_ids_pos[i] = -1;
                 input_ids_offsets_buf_[i + 1] += c.input_len;
             }
@@ -75,7 +76,8 @@ public:
             decode_token_pos_buf_[i] = input_ids_offsets_buf_[i + 1] - 1;
         }
 
-        dbg(core::to_vector<int>(input_ids_offsets_buf_.slice(0, bsz + 1)));
+        // dbg(core::to_vector<int>(input_ids_offsets_buf_.slice(0, bsz + 1)));
+        // dbg(core::to_vector<int>(decode_token_pos_buf_.slice(0, bsz)));
 
         copy(input_ids_buf_, input_ids_offsets_buf_[bsz], d.input_ids);
         copy(decode_token_pos_buf_, bsz, d.decode_token_pos);
@@ -84,8 +86,7 @@ public:
         // dbg(decode_token_pos_buf_[0]);
 
         d.input_token_num = input_ids_offsets_buf_[bsz];
-
-        // dbg(d.input_token_num);
+        dbg(d.input_token_num);
 
         env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
     }
@@ -167,6 +168,8 @@ struct LanguageModel::Impl {
     const bool use_ag2d_;
 
     const bool debug_;
+
+    Buffer_<bool> false_;
 
     // mutable state
     State finished_;
@@ -250,6 +253,9 @@ LanguageModel::Impl::Impl(DataType              dtype,
     use_ag2d_{comm_.d_comm && comm_.d_comm->Query(comm::kHasAllGather2D)},
     debug_{isDebug()}
 {
+
+    false_ = {engine.max_batch_size, kDEVICE};
+    Clear(false_);
 
     finished_buf_ = {engine.max_batch_size, kCPUpinned};
     finished_     = {{engine.max_batch_size}, kBool, kDEVICE};
@@ -437,23 +443,44 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     const int          bsz  = *env.at("bsz").data<int>();
     const int          bs0  = *env.at("bs0").data<int>();
 
-    Clear(finished_.back().buffer());
-    Warp(finished_.front(), bs0, perm, finished_.back(), core::CopyT{});
+    core::CopyT copy{};
+
+    for (int i = 0; i < bsz; ++i) {
+        if (const int j = perm[i]; j < bs0) {
+            copy(finished_.front().data<bool>() + j, 1, finished_.back().data<bool>() + i);
+        }
+        else {
+            copy(false_.data() + i, 1, finished_.back().data<bool>() + i);
+        }
+    }
     finished_.Swap();
 
     // sequence_length = history_len + input_len
     for (int i = 0; i < bsz; ++i) {
         if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
-            core::Copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
+            dbg("auto-regress");
+            copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
         }
         else {
-            core::Copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
+            dbg("prefill");
+            copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
         }
     }
     sequence_length_.Swap();
 
     Buffer_<int> k_offsets{bsz + 1, kDEVICE};
     PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
+
+    // Buffer_<int> k_offsets_tmp{k_offsets.size(), kCPU};
+    // Buffer_<int> sequence_length_tmp{sequence_length_.front().size(), kCPU};
+
+    // Copy(k_offsets, k_offsets_tmp);
+    // Copy(sequence_length_.front().buffer(), sequence_length_tmp);
+
+    // core::Context::stream().Sync();
+
+    // dbg(core::to_vector<int>(sequence_length_tmp.slice(0, bsz)));
+    // dbg(core::to_vector<int>(k_offsets_tmp.slice(0, bsz + 1)));
 
     env.produce("finished", finished_.front());
     env.produce("sequence_length", sequence_length_.front());
