@@ -3,11 +3,13 @@
 
 #include <memory>
 
+#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/exchange.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/models/language_model.h"
 
+#include "src/turbomind/models/llama/copy.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 
 namespace turbomind {
@@ -53,9 +55,21 @@ struct ModelExecutor::Impl {
                       {"permutation", Buffer{d.perm.data(), d.bsz, kCPU}},
                       {"local_token_nums", Buffer{d.local_token_num.data(), (int)d.local_token_num.size(), kCPU}},
                       {"global_token_num", Buffer{&d.global_token_num, 1, kCPU}}};
+
+        BatchCopyV2 copy;
+        env.produce("copy", copy.buf());
+
         model_.Run(BatchOp::kPrepare, d.phase, env);
+        dbg(copy);
+        copy.Run();
+
         model_.Run(BatchOp::kForward, d.phase, env);
+
         model_.Run(BatchOp::kUnprep, d.phase, env);
+        dbg(copy);
+        copy.Run();
+
+        // TM_CHECK(0);
     }
 
     Impl(LanguageModel& model, Queue<unique_ptr<BatchData>>& inbound, Queue<unique_ptr<BatchData>>& outbound):

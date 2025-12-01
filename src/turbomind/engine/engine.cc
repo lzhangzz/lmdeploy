@@ -1,5 +1,6 @@
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -15,6 +16,7 @@
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
+#include "src/turbomind/models/llama/copy.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
@@ -461,14 +463,20 @@ void Engine::Impl::Setup(BatchData& d)
 
     dbg(d.bs0, d.bsz, d.perm);
 
+    BatchCopyV2 copy{};
+
     TensorMap env{{"block_ptrs", block_ptrs_buf_},
                   {"block_ptrs_offsets", block_ptrs_offsets_buf_},
                   {"requests", rc},
                   {"bs0", Buffer{&st.bs0, 1, kCPU}},
                   {"bsz", Buffer{&st.active, 1, kCPU}},
+                  {"copy", copy.buf()},
                   {"permutation", Buffer{st.perm.data(), st.active, kCPU}}};
 
     Run(BatchOp::kSetup, d.phase, env);
+
+    dbg(copy);
+    copy.Run();
 
     /// FIXME: all-gather
     d.local_token_num  = {*env.at("local_token_num").data<int>()};
@@ -483,9 +491,14 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     Buffer_<bool> is_generate;
     Buffer_<int>  output_ids;
     Buffer_<int>  sequence_length;
+
     {
-        TensorMap env;
+        BatchCopyV2 copy;
+        TensorMap   env{{"copy", copy.buf()}};
         Run(ExchOp::kFetch, b.phase, env);
+        dbg(copy);
+        copy.Run();
+
         finished        = env.at("finished").buffer();
         is_generate     = env.at("is_generate").buffer();
         output_ids      = env.at("output_ids").buffer();
@@ -570,6 +583,8 @@ void Engine::Impl::InternalThreadEntry()
     for (unsigned i = 1; i < data_.size(); ++i) {
         inbound_.push(std::make_unique<BatchData>(i));
     }
+
+    // std::this_thread::sleep_for(std::chrono::seconds(2));
 
     while (true) {
 

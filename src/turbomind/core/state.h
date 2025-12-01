@@ -42,7 +42,7 @@ struct State {
 };
 
 template<class Copy>
-void Warp(const Tensor& a0, int size0, const Buffer_<int>& perm, Tensor b1, Copy copy)
+void Warp(const Tensor& a0, int size0, const Buffer_<int>& perm, Tensor b1, Copy& copy)
 {
     auto a0_ptr = (const uint8_t*)a0.raw_data();
     auto b1_ptr = (uint8_t*)b1.raw_data();
@@ -57,7 +57,7 @@ void Warp(const Tensor& a0, int size0, const Buffer_<int>& perm, Tensor b1, Copy
 }
 
 template<class Copy>
-void Warp(const Tensor& a0, const Tensor& b1, int size0, const Buffer_<int>& perm, Tensor c1, Copy copy)
+void Warp(const Tensor& a0, const Tensor& b1, int size0, const Buffer_<int>& perm, Tensor c1, Copy& copy)
 {
     auto a0_ptr = (const uint8_t*)a0.raw_data();
     auto b1_ptr = (const uint8_t*)b1.raw_data();
@@ -80,7 +80,7 @@ void Warp(const Tensor&       src0,
           const Buffer_<int>& perm0,
           Tensor              dst,
           Buffer_<int>        offsetd,
-          Copy                copy)
+          Copy&               copy)
 {
     auto p_src0 = (const uint8_t*)src0.raw_data();
     auto p_src1 = (const uint8_t*)src1.raw_data();
@@ -122,7 +122,7 @@ void Append(const Tensor&       a0,
             int                 size0,
             Tensor              d1,
             Buffer_<int>        d1_size,
-            Copy                copy)
+            Copy&               copy)
 {
     auto a0_ptr = (const uint8_t*)a0.raw_data();
     auto b0_ptr = (const uint8_t*)b0.raw_data();

@@ -15,7 +15,8 @@
 
 #include "src/turbomind/kernels/gpt_kernels.h"            // invokeTranspose2D
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
-#include "src/turbomind/models/llama/llama_kernels.h"     // invokePadLastTokenIds
+#include "src/turbomind/models/llama/copy.h"
+#include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds
 
 #include "dbg.h"
 
@@ -145,8 +146,9 @@ struct Generation::Impl {
         const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
         const Buffer_<int>           perm = env.at("permutation").buffer();
 
-        const int  bs0 = *env.at("bs0").buffer().data<int>();
-        const auto bsz = perm.size();
+        const int  bs0  = *env.at("bs0").buffer().data<int>();
+        const auto bsz  = perm.size();
+        auto&      copy = *env.at("copy").data<BatchCopyV2*>()[0];
 
         // random states
         d.random_init_needed = false;
@@ -165,10 +167,10 @@ struct Generation::Impl {
                 random_seed_buf_[i]  = rc[i]->gen_cfg.random_seed;
             }
         }
-        Copy_(random_state_buf_, bsz, d.random_state);
+        copy(random_state_buf_, bsz, d.random_state);
         if (d.random_init_needed) {
-            Copy_(random_init_buf_, bsz, d.random_init);
-            Copy_(random_seed_buf_, bsz, d.random_seed);
+            copy(random_init_buf_, bsz, d.random_init);
+            copy(random_seed_buf_, bsz, d.random_seed);
         }
 
         vector<int> used(bs0);
@@ -192,7 +194,7 @@ struct Generation::Impl {
                 h_token_ids_free_.pop_back();
                 // copy to staging buffer
                 std::copy_n(c.token_ids, c.seq_len, token_ids_buf);
-                core::Copy(token_ids_buf, c.seq_len, token_ids_ptrs_buf_[i]);
+                copy(token_ids_buf, c.seq_len, token_ids_ptrs_buf_[i]);
                 token_ids_buf += c.seq_len;
             }
             else {
@@ -200,7 +202,7 @@ struct Generation::Impl {
             }
         }
 
-        Copy_(token_ids_ptrs_buf_, bsz, d.token_ids_ptrs);
+        copy(token_ids_ptrs_buf_, bsz, d.token_ids_ptrs);
 
         // update `h_token_ids_ptrs_`
         std::copy_n(token_ids_ptrs_buf_.data(), bsz, h_token_ids_ptrs_.data());
@@ -223,31 +225,35 @@ struct Generation::Impl {
 
         const Buffer_<int> perm = env.at("permutation").buffer();
 
-        const int bs0 = *env.at("bs0").buffer().data<int>();
-        const int bsz = perm.size();
+        const int bs0  = *env.at("bs0").buffer().data<int>();
+        const int bsz  = perm.size();
+        auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
 
-        Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), core::CopyT{});
+        Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
         random_state_.Swap();
     }
 
     void Unprep(int phase, TensorMap& env)
     {
-        const int bsz = *env.at("bsz").buffer().data<int>();
-        auto&     d   = *data_.at(phase);
+        const int bsz  = *env.at("bsz").buffer().data<int>();
+        auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
+
+        auto& d = *data_.at(phase);
 
         // state -> data
-        Copy(random_state_.front().buffer(), bsz * sizeof(curandState_t), d.random_state);
-        Copy(output_ids_, bsz, d.output_ids);
+        copy(random_state_.front().buffer(), bsz * sizeof(curandState_t), d.random_state);
+        copy(output_ids_, bsz, d.output_ids);
     }
 
     void Fetch(int phase, TensorMap& env)
     {
-        auto& d = *data_.at(phase);
+        auto& d    = *data_.at(phase);
+        auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
 
-        Copy(d.random_state, random_state_buf_);
+        copy(d.random_state, d.random_state.size(), random_state_buf_);
         env.produce("random_state", random_state_buf_);
 
-        Copy(d.output_ids, output_ids_buf_);
+        copy(d.output_ids, d.output_ids.size(), output_ids_buf_);
         env.produce("output_ids", output_ids_buf_);
     }
 

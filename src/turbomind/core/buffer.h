@@ -330,9 +330,6 @@ namespace detail {
 
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream);
 
-/// TODO: implement this
-void* CopyIndirectSize(const void* a, const int* count, int max_count, int elem_size, void* b, const Stream& stream);
-
 }  // namespace detail
 
 template<class T>
