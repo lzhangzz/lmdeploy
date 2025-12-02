@@ -5,6 +5,7 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/request.h"
@@ -15,7 +16,7 @@
 
 #include "src/turbomind/kernels/gpt_kernels.h"            // invokeTranspose2D
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
-#include "src/turbomind/models/llama/copy.h"
+
 #include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds
 
 #include "dbg.h"

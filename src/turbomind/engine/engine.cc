@@ -16,7 +16,7 @@
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/models/llama/copy.h"
+#include "src/turbomind/core/copy.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
@@ -584,7 +584,7 @@ void Engine::Impl::InternalThreadEntry()
         inbound_.push(std::make_unique<BatchData>(i));
     }
 
-    // std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     while (true) {
 

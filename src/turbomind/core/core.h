@@ -4,6 +4,7 @@
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
+#include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/layout.h"
@@ -26,6 +27,7 @@ using core::Stream;
 using core::Event;
 using core::ExchOp;
 using core::BatchOp;
+using core::BatchCopyV2;
 
 using core::subrange;
 
