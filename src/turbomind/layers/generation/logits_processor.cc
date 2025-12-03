@@ -159,6 +159,8 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
     Buffer_<const RequestCache*> rs = env.at("requests").buffer();
 
+    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+
     const int bsz = rs.size();
 
     auto& repetition_penalty = buf_->repetition_penalty_buf;
@@ -193,15 +195,15 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     }
 
     if (d.has_temperature_penalty) {
-        Copy_(temperature, bsz, d.temperature_buf);
+        copy(temperature, bsz, d.temperature_buf);
     }
 
     if (d.has_repetition_penalty) {
-        Copy_(repetition_penalty, bsz, d.repetition_penalty_buf);
+        copy(repetition_penalty, bsz, d.repetition_penalty_buf);
     }
 
     if (d.has_min_length_penalty) {
-        Copy_(min_lengths, bsz, d.min_lengths_buf);
+        copy(min_lengths, bsz, d.min_lengths_buf);
     }
 
     sync_check_cuda_error();
@@ -212,7 +214,8 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                         rs,
                         buf_->bad_words_buf.data(),
                         d.bad_words_buf.data(),
-                        d.bad_words_ten);
+                        d.bad_words_ten,
+                        copy);
 
     if (d.has_min_length_penalty) {  // end ids for min length
         d.end_ids_ten  = {};
@@ -239,7 +242,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
                 std::copy_n(eos_ids.begin(), std::min((int)eos_ids.size(), kMaxEndIdsSize), h_end_ids);
                 h_end_ids += max_length;
             }
-            Copy(buf_->end_ids_buf, bsz * max_length, d.end_ids_buf);
+            copy(buf_->end_ids_buf, bsz * max_length, d.end_ids_buf);
             d.end_ids_ten = {d.end_ids_buf.data(), {bsz, max_length}, kDEVICE};
         }
     }

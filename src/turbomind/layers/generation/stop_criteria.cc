@@ -36,10 +36,12 @@ void StopCriteria::Setup(int phase, TensorMap& env)
 
     const Buffer_<const RequestCache*> rs = env.at("requests").buffer();
 
+    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+
     for (int i = 0; i < rs.size(); ++i) {
         max_seq_len_buf_[i] = rs[i]->max_seq_len;
     }
-    Copy_(max_seq_len_buf_, rs.size(), d.max_seq_len);
+    copy(max_seq_len_buf_, rs.size(), d.max_seq_len);
 
     d.stop_words_ten = {};
     init_stop_bad_words(&GenerationConfig::stop_ids,  //
@@ -47,7 +49,8 @@ void StopCriteria::Setup(int phase, TensorMap& env)
                         rs,
                         stop_words_buf_.data(),
                         d.stop_words.data(),
-                        d.stop_words_ten);
+                        d.stop_words_ten,
+                        copy);
 }
 
 void StopCriteria::Forward(int phase, TensorMap& env)

@@ -196,7 +196,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     {  /// Upload KV cache ptrs
         const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
         Copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
-        dbg(offsets[bsz], d.block_ptrs.size());
+        // dbg(offsets[bsz], d.block_ptrs.size());
         Copy(offsets, bsz + 1, d.block_ptrs_offsets);
     }
 
@@ -223,14 +223,14 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         s.k_max = std::max(s.k_max, c.history_len + c.alpha + c.input_len);
     }
 
-    dbg(d.decode.n,
-        d.decode.k_sum,
-        d.decode.k_max,
-        d.prefill.n,
-        d.prefill.q_sum,
-        d.prefill.q_max,
-        d.prefill.k_sum,
-        d.prefill.k_max);
+    // dbg(d.decode.n,
+    //     d.decode.k_sum,
+    //     d.decode.k_max,
+    //     d.prefill.n,
+    //     d.prefill.q_sum,
+    //     d.prefill.q_max,
+    //     d.prefill.k_sum,
+    //     d.prefill.k_max);
 
     /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {

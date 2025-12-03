@@ -52,9 +52,11 @@ struct ModelExecutor::Impl {
 
     void Run(BatchData& d)
     {
+        auto      batch = &d;
         TensorMap env{{"bs0", Buffer{&d.bs0, 1, kCPU}},  //
                       {"bsz", Buffer{&d.bsz, 1, kCPU}},
                       {"permutation", Buffer{d.perm.data(), d.bsz, kCPU}},
+                      {"batch", Buffer{&batch, 1, kCPU}},
                       {"local_token_nums", Buffer{d.local_token_num.data(), (int)d.local_token_num.size(), kCPU}},
                       {"global_token_num", Buffer{&d.global_token_num, 1, kCPU}}};
 
@@ -68,7 +70,7 @@ struct ModelExecutor::Impl {
         model_.Run(BatchOp::kForward, d.phase, env);
 
         model_.Run(BatchOp::kUnprep, d.phase, env);
-        dbg(copy);
+        // dbg(copy);
         copy.Run();
 
         // TM_CHECK(0);

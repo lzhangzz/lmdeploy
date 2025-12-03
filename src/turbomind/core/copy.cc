@@ -1,12 +1,14 @@
 
 #include "src/turbomind/core/copy.h"
-#include "src/turbomind/core/check.h"
 
 #include <cstdint>
-#include <cuda_runtime.h>
-#include <driver_types.h>
 #include <type_traits>
 #include <variant>
+
+#include <cuda_runtime.h>
+#include <driver_types.h>
+
+#include "src/turbomind/core/check.h"
 
 namespace turbomind::core {
 
@@ -20,6 +22,8 @@ typedef CUresult(CUDAAPI* PFN_cuMemcpyBatchAsync_v12080)(CUdeviceptr_v2*        
                                                          size_t                 numAttrs,
                                                          size_t*                failIdx,
                                                          CUstream               hStream);
+
+/// TODO: add `PFN_cuMemcpyBatchAsync_v13000`
 
 namespace {
 
@@ -51,6 +55,10 @@ BatchCopyV2::BatchCopyV2(): self_{this}
 
 void BatchCopyV2::Run()
 {
+    if (src_.empty()) {
+        return;
+    }
+
     std::visit(
         [&](auto&& copy) {
             using T = std::decay_t<decltype(copy)>;
@@ -60,17 +68,19 @@ void BatchCopyV2::Run()
                 attr.flags          = CU_MEMCPY_FLAG_PREFER_OVERLAP_WITH_COMPUTE;
                 std::vector<size_t> ais(src_.size(), 0);
                 size_t              fail_idx{SIZE_MAX};
-                copy((CUdeviceptr_v2*)dst_.data(),
-                     (CUdeviceptr_v2*)src_.data(),
-                     size_.data(),
-                     src_.size(),
-                     &attr,
-                     ais.data(),
-                     1,
-                     &fail_idx,
-                     core::Context::stream().handle());
+
+                auto status = copy((CUdeviceptr_v2*)dst_.data(),
+                                   (CUdeviceptr_v2*)src_.data(),
+                                   size_.data(),
+                                   src_.size(),
+                                   &attr,
+                                   ais.data(),
+                                   1,
+                                   &fail_idx,
+                                   core::Context::stream().handle());
+
                 if (auto i = fail_idx; i != SIZE_MAX) {
-                    TM_CHECK(0) << (void*)src_[i] << " " << size_[i] << " " << (void*)dst_[i];
+                    TM_CHECK(0) << (void*)src_[i] << " " << size_[i] << " " << (void*)dst_[i] << " code " << status;
                 }
             }
             else {

@@ -8,6 +8,7 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/state.h"
+#include "src/turbomind/engine/batch_data.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/layers/generation/generation.h"
@@ -67,7 +68,7 @@ public:
             if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
                 const auto src = c.token_ids + c.history_len + c.alpha;
                 std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
-                dbg(std::vector<int>(src, src + c.input_len));
+                // dbg(std::vector<int>(src, src + c.input_len));
                 d.autoreg_ids_pos[i] = -1;
                 input_ids_offsets_buf_[i + 1] += c.input_len;
             }
@@ -88,7 +89,7 @@ public:
         // dbg(decode_token_pos_buf_[0]);
 
         d.input_token_num = input_ids_offsets_buf_[bsz];
-        dbg(d.input_token_num);
+        // dbg(d.input_token_num);
 
         env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
     }
@@ -108,10 +109,12 @@ public:
 
         // core::CopyT copy{};
 
-        for (int i = 0; i < bsz; ++i) {
-            if (auto pos = d.autoreg_ids_pos[i]; pos >= 0) {
-                TM_CHECK_LT(perm[i], bs0);
-                copy(autoreg_ids.data() + perm[i], 1, &d.input_ids[pos]);
+        if (auto g = copy.group()) {
+            for (int i = 0; i < bsz; ++i) {
+                if (auto pos = d.autoreg_ids_pos[i]; pos >= 0) {
+                    TM_CHECK_LT(perm[i], bs0);
+                    copy(autoreg_ids.data() + perm[i], 1, &d.input_ids[pos]);
+                }
             }
         }
 
@@ -450,28 +453,32 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     // core::CopyT copy{};
 
-    for (int i = 0; i < bsz; ++i) {
-        if (const int j = perm[i]; j < bs0) {
-            copy(finished_.front().data<bool>() + j, 1, finished_.back().data<bool>() + i);
+    if (auto group = copy.group()) {
+        for (int i = 0; i < bsz; ++i) {
+            if (const int j = perm[i]; j < bs0) {
+                copy(finished_.front().data<bool>() + j, 1, finished_.back().data<bool>() + i);
+            }
+            else {
+                copy(false_.data() + i, 1, finished_.back().data<bool>() + i);
+            }
         }
-        else {
-            copy(false_.data() + i, 1, finished_.back().data<bool>() + i);
-        }
+        finished_.Swap();
     }
-    finished_.Swap();
 
-    // sequence_length = history_len + input_len
-    for (int i = 0; i < bsz; ++i) {
-        if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
-            dbg("auto-regress");
-            copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
+    if (auto group = copy.group()) {
+        // sequence_length = history_len + input_len
+        for (int i = 0; i < bsz; ++i) {
+            if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
+                // dbg("auto-regress");
+                copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
+            }
+            else {
+                // dbg("prefill");
+                copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
+            }
         }
-        else {
-            dbg("prefill");
-            copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
-        }
+        sequence_length_.Swap();
     }
-    sequence_length_.Swap();
 
     Buffer_<int> k_offsets{bsz + 1, kDEVICE};
     // PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
@@ -528,6 +535,8 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
     env.emplace("decode_hidden_states", decode_hidden_states);
 
     unified_decoder_->Forward(phase, env, weights_.decoder_layer_weights);
+
+    // env.at("batch").data<BatchData*>()[0]->Notify();
 
     TM_DEBUG_TENSOR(decoder_output, "hidden_states", 1);
 

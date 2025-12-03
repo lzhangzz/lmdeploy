@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <future>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
 
@@ -14,6 +16,7 @@ struct BatchData {
     {
         ready = Event::create();
         done  = Event::create();
+        next  = Event::create();
     }
 
     const int phase;
@@ -28,6 +31,15 @@ struct BatchData {
 
     Event ready;
     Event done;
+    Event next;
+
+    std::promise<Event> promise;
+
+    void Notify()
+    {
+        next.Record(core::Context::stream());
+        promise.set_value(next);
+    }
 };
 
 }  // namespace turbomind

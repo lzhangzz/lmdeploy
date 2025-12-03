@@ -213,7 +213,7 @@ struct Generation::Impl {
             const auto& c = *rc[i];
             d.generation_size += c.is_generate;
         }
-        dbg(d.generation_size);
+        // dbg(d.generation_size);
 
         logits_processor->Setup(phase, env);
         sampling->Setup(phase, env);
@@ -230,8 +230,10 @@ struct Generation::Impl {
         const int bsz  = perm.size();
         auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
 
-        Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
-        random_state_.Swap();
+        if (auto g = copy.group()) {
+            Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
+            random_state_.Swap();
+        }
     }
 
     void Unprep(int phase, TensorMap& env)

@@ -8,7 +8,7 @@ add_library(engine STATIC
     model_request.cc 
     model_executor.cc 
     engine.cc
-    engine.cu)
+    )
 target_link_libraries(engine PRIVATE core)
 set_property(TARGET engine PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET engine PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

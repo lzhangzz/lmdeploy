@@ -11,8 +11,8 @@ constexpr int kMaxEndIdsSize      = 32;
 
 namespace {
 
-template<class G, class Rs, class T>
-void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d_buf, Tensor_<T>& out)
+template<class G, class Rs, class T, class Copy>
+void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d_buf, Tensor_<T>& out, Copy& copy)
 {
     const int bsz        = rs.size();
     int       max_length = 0;
@@ -62,7 +62,7 @@ void init_stop_bad_words(G getter, const char* key, const Rs& rs, T* h_buf, T* d
             std::copy_n(copy_offsets[i].first, copy_offsets[i].second, h_buf + i * 2 * max_length + max_length);
         }
     }
-    core::Copy(h_buf, bsz * 2 * max_length, d_buf);
+    copy(h_buf, bsz * 2 * max_length, d_buf);
     // Construct a tensor from the device buffer
     out = {d_buf, {bsz, 2, max_length}, kDEVICE};
 };

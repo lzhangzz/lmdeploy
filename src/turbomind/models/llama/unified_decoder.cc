@@ -18,6 +18,8 @@
 
 #include "src/turbomind/engine/request.h"
 
+#include "src/turbomind/engine/batch_data.h"
+
 namespace turbomind {
 
 void UnifiedDecoder::Run(ExchOp op, int phase, TensorMap& env)
@@ -232,6 +234,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);
+
+        // if (layer == layer_num_ - 1) {
+        //     args.at("batch").data<BatchData*>()[0]->Notify();
+        // }
     }
 
     const int bsz = *args.at("bsz").data<int>();

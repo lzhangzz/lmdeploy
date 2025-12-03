@@ -14,9 +14,9 @@
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
 
+#include "src/turbomind/core/copy.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
-#include "src/turbomind/core/copy.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
@@ -344,11 +344,12 @@ void Engine::Impl::Schedule()
             alpha.push_back(c->alpha);
             inv.push_back(i);
             c->input_len = c->history_len = 0;
-            dbg(c->request->id, c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding, c->is_generate);
+            // dbg(c->request->id, c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding,
+            // c->is_generate);
         }
     }
 
-    dbg("Schedule");
+    // dbg("Schedule");
 
     auto outcome = seq_mgr_->Materialize(
         sequences, context_length, alpha, priorities, param_.max_forward_token_num, param_.max_context_token_num);
@@ -407,7 +408,7 @@ void Engine::Impl::Schedule()
                      active.end()};
     TM_CHECK_LE(partial.size(), 1);
 
-    dbg(inv);
+    // dbg(inv);
 
     vector<unique_ptr<RequestCache>> rc(idxs.size());
     vector<int>                      perm(idxs.size());
@@ -421,14 +422,14 @@ void Engine::Impl::Schedule()
     for (auto& c : s.rc) {
         c->input_len   = c->sequence.input_length;
         c->history_len = c->sequence.cache_len;
-        dbg(c->request->id,
-            c->seq_len,
-            c->history_len,
-            c->input_len,
-            c->alpha,
-            c->beta,
-            c->is_decoding,
-            c->is_generate);
+        // dbg(c->request->id,
+        //     c->seq_len,
+        //     c->history_len,
+        //     c->input_len,
+        //     c->alpha,
+        //     c->beta,
+        //     c->is_decoding,
+        //     c->is_generate);
     }
 
     s.bs0     = std::exchange(s.active, active.size());
@@ -440,7 +441,7 @@ void Engine::Impl::Setup(BatchData& d)
 {
     auto& st = states_.at(0);
 
-    dbg(d.phase);
+    // dbg(d.phase);
 
     Buffer_<RequestCache*> rc{st.active, kCPU};
     for (int i = 0; i < st.active; ++i) {
@@ -461,7 +462,7 @@ void Engine::Impl::Setup(BatchData& d)
     d.bsz  = st.active;
     d.perm = st.perm;
 
-    dbg(d.bs0, d.bsz, d.perm);
+    // dbg(d.bs0, d.bsz, d.perm);
 
     BatchCopyV2 copy{};
 
@@ -475,7 +476,7 @@ void Engine::Impl::Setup(BatchData& d)
 
     Run(BatchOp::kSetup, d.phase, env);
 
-    dbg(copy);
+    // dbg(copy);
     copy.Run();
 
     /// FIXME: all-gather
@@ -496,7 +497,7 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         BatchCopyV2 copy;
         TensorMap   env{{"copy", copy.buf()}};
         Run(ExchOp::kFetch, b.phase, env);
-        dbg(copy);
+        // dbg(copy);
         copy.Run();
 
         finished        = env.at("finished").buffer();
@@ -509,8 +510,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
 
     Run(BatchOp::kUpdate, -1, TensorMap{});
 
-    dbg(b.bs0, b.bsz);
-    dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
+    // dbg(b.bs0, b.bsz);
+    // dbg(core::to_vector<bool>(finished.slice(0, b.bsz)));
 
     vector<int> perm;
     if (data_.size() > 1) {
@@ -521,7 +522,7 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         std::iota(perm.begin(), perm.end(), 0);
     }
 
-    dbg("Update");
+    // dbg("Update");
 
     const int size = s.active + (async_ ? s.swapout : 0);
 
@@ -550,7 +551,7 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
             c.beta  = c.is_generate;
         }
 
-        dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
+        // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
     }
 
     for (int i = 0; i < size; ++i) {
@@ -624,6 +625,8 @@ void Engine::Impl::InternalThreadEntry()
 
         d->ready.Record(core::Context::stream());
 
+        // auto future = (d->promise = {}).get_future();
+
         outbound_.push(std::move(d));
 
         if (!inbound_.pop(d)) {
@@ -640,7 +643,10 @@ void Engine::Impl::InternalThreadEntry()
             gateway_.notify(std::move(signals));
         }
 
-        dbg("=========================================================================");
+        // if (future.valid()) {
+        //     future.get().Sync();
+        // }
+        // dbg("=========================================================================");
     }
 }
 

@@ -16,6 +16,7 @@
 
 #include "src/turbomind/layers/generation/sampling.h"
 
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
@@ -78,8 +79,6 @@ void Sampling::Forward(int phase, TensorMap& args)
     Tensor_<float> logits = args.at("logits");
 
     const auto bsz = logits.shape(0);
-
-    core::Copy(kept_.data(), bsz, d.kept_buf.data());
 
     Buffer_<int> indices(bsz * vocab_size_padded_, kDEVICE);
 
@@ -161,6 +160,8 @@ void Sampling::Setup(int phase, TensorMap& env)
 {
     Buffer_<const RequestCache*> rc = env.at("requests").buffer();
 
+    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+
     const auto bsz = rc.size();
 
     for (int i = 0; i < bsz; ++i) {
@@ -176,9 +177,11 @@ void Sampling::Setup(int phase, TensorMap& env)
     d.min_topp = *std::min_element(top_p_.begin(), top_p_.begin() + bsz);
     d.max_minp = *std::max_element(min_p_.begin(), min_p_.begin() + bsz);
 
-    core::Copy(top_k_.data(), bsz, d.top_k_buf.data());
-    core::Copy(top_p_.data(), bsz, d.top_p_buf.data());
-    core::Copy(min_p_.data(), bsz, d.min_p_buf.data());
+    copy(top_k_.data(), bsz, d.top_k_buf.data());
+    copy(top_p_.data(), bsz, d.top_p_buf.data());
+
+    copy(min_p_.data(), bsz, d.min_p_buf.data());
+    copy(kept_.data(), bsz, d.kept_buf.data());
 }
 
 }  // namespace turbomind
