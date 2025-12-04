@@ -229,6 +229,21 @@ void Engine::Impl::CreateSequenceManager()
     }
 }
 
+void Engine::Impl::ProcessKillRequests(const Requests& kills, std::vector<Signal>& signals)
+{
+    for (auto& r : kills) {
+        if (r) {
+            int ec = r->ec;
+            if (!ec) {
+                if (!seq_mgr_->Erase(r->id)) {
+                    ec = Request::kInvalid;
+                }
+            }
+            signals.push_back([=] { r->end_cb ? r->end_cb(ec) : void(); });
+        }
+    }
+}
+
 void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 {
     auto& s = states_.at(0);
@@ -293,6 +308,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         int* token_ids = c->token_ids = r->output_ids.data();
 
+        /// TODO: move this somewhere else
         token_ids = std::copy_n(seq.tokens.data(), seq.tokens.size(), token_ids);
         token_ids = std::copy_n(input_ids, input_len, token_ids);
 
@@ -614,47 +630,57 @@ void Engine::Impl::InternalThreadEntry()
             // FindCanceledIndices(rs->cancel);
         }
 
+        /// TODO: broadcast to TP ranks
+
         if (rs->abort) {
             TM_LOG_INFO("[Engine] stop requested.");
             break;
         }
 
         vector<Signal> signals;
-        // ProcessKillRequests(rs->kill, signals);  // Erase
+
+        ProcessKillRequests(rs->kill, signals);  // Erase
+
         Accept(rs->infer, signals);
+
         // ProcessCancelRequests(rs->cancel, signals);  // Forced swap out / Sync data
+
         if (tp_rank_ == 0) {
             gateway_.notify(std::move(signals));
         }
         signals.clear();
 
-        Schedule();
+        if (st.size() - st.finish) {
 
-        Setup(*d);
+            Schedule();
 
-        d->ready.Record(core::Context::stream());
+            Setup(*d);
 
-        // auto future = (d->promise = {}).get_future();
+            d->ready.Record(core::Context::stream());
 
-        outbound_.push(std::move(d));
+            // auto future = (d->promise = {}).get_future();
 
-        if (!inbound_.pop(d)) {
-            break;
+            outbound_.push(std::move(d));
+
+            if (!inbound_.pop(d)) {
+                break;
+            }
+
+            TM_CHECK_NOTNULL(d);
+
+            core::Context::stream().Wait(d->done);
+
+            Update(*d, signals);
+
+            if (tp_rank_ == 0) {
+                gateway_.notify(std::move(signals));
+            }
+
+            // if (future.valid()) {
+            //     future.get().Sync();
+            // }
         }
 
-        TM_CHECK_NOTNULL(d);
-
-        core::Context::stream().Wait(d->done);
-
-        Update(*d, signals);
-
-        if (tp_rank_ == 0) {
-            gateway_.notify(std::move(signals));
-        }
-
-        // if (future.valid()) {
-        //     future.get().Sync();
-        // }
         // dbg("=========================================================================");
     }
 }
