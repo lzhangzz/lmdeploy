@@ -64,7 +64,7 @@ struct ModelExecutor::Impl {
         env.produce("copy", copy.buf());
 
         model_.Run(BatchOp::kPrepare, d.phase, env);
-        dbg(copy);
+        // dbg(copy);
         copy.Run();
 
         model_.Run(BatchOp::kForward, d.phase, env);

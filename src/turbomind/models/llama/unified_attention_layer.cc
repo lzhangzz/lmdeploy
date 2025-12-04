@@ -191,13 +191,14 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     Buffer_<RequestCache*> rc  = env.at("requests").buffer();
     const int              bsz = rc.size();
 
-    auto& d = *data_.at(phase);
+    auto& d    = *data_.at(phase);
+    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
 
     {  /// Upload KV cache ptrs
         const Buffer_<int> offsets = env.at("block_ptrs_offsets").buffer();
-        Copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
+        copy(env.at("block_ptrs").buffer(), offsets[bsz], d.block_ptrs);
         // dbg(offsets[bsz], d.block_ptrs.size());
-        Copy(offsets, bsz + 1, d.block_ptrs_offsets);
+        copy(offsets, bsz + 1, d.block_ptrs_offsets);
     }
 
     /// prepare Q/K stats for decode/prefill

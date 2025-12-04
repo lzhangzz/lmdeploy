@@ -298,6 +298,8 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
+        // dbg(seq.cache_len, seq.tokens.size(), input_len, c->seq_len);
+
         int max_seq_len = c->prompt_len + c->gen_cfg.max_new_tokens;
         if (max_seq_len > session_len_trunc_) {
             max_seq_len = session_len_trunc_;
@@ -342,6 +344,7 @@ void Engine::Impl::Schedule()
             priorities.push_back(c->request->unique_id);
             context_length.push_back(c->seq_len + c->beta /* plus draft tokens */);
             alpha.push_back(c->alpha);
+            TM_CHECK(c->sequence.status == Sequence::kActive || c->alpha == 0) << c->sequence.status << " " << c->alpha;
             inv.push_back(i);
             c->input_len = c->history_len = 0;
             // dbg(c->request->id, c->seq_len, c->sequence.cache_len, c->alpha, c->beta, c->is_decoding,
@@ -377,12 +380,6 @@ void Engine::Impl::Schedule()
 
     // |<-- existing -->|<-- swap-in -->|<- swap-out ->|
     // |<----------- active ----------->|<------- inactive ----->|
-
-    /// TODO: Move this to update
-    for (auto i : swap_out) {
-        cache[i]->alpha = {};
-        cache[i]->beta  = {};
-    }
 
     for (auto i : swap_in) {
         cache[i]->is_decoding = {};
@@ -420,6 +417,7 @@ void Engine::Impl::Schedule()
     s.perm.swap(perm);
 
     for (auto& c : s.rc) {
+        /// ! input_length not updated for inactive seqs
         c->input_len   = c->sequence.input_length;
         c->history_len = c->sequence.cache_len;
         // dbg(c->request->id,
@@ -530,11 +528,13 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
         auto& c = *s.rc[i];
 
         if (const int j = perm[i]; j < b.bsz) {
-            if (is_generate[j]) {
+            if (auto& seq = c.sequence; is_generate[j]) {
                 c.token_ids[c.seq_len] = output_ids[j];
-                // dbg(output_ids[j]);
-                c.seq_len            = sequence_length[j];
-                c.sequence.cache_len = sequence_length[j] - 1;
+                c.seq_len              = sequence_length[j];
+                seq.cache_len          = sequence_length[j] - 1;
+                if (const int new_tokens = c.seq_len - seq.tokens.size()) {
+                    seq.tokens.insert(seq.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
+                }
                 if (c.request->stream_output) {
                     signals.push_back([this, r = c.request, l = sequence_length[j]] {  //
                         UpdateState(*r, Request::kOk, l);
@@ -542,27 +542,36 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
                 }
             }
             else {
-                c.sequence.cache_len = sequence_length[j];
+                seq.cache_len = sequence_length[j];
             }
-        }
-
-        if (async_) {
-            c.alpha = c.input_len;
-            c.beta  = c.is_generate;
         }
 
         // dbg(c.seq_len, c.sequence.cache_len, c.alpha, c.beta, c.is_decoding, c.is_generate);
     }
 
+    if (async_) {
+        for (int i = 0; i < size; ++i) {
+            auto& c = *s.rc[i];
+            if (i < s.active) {
+                c.alpha = c.input_len;
+                c.beta  = c.is_generate;
+            }
+            else {
+                c.alpha = c.beta = 0;
+            }
+        }
+    }
+
     for (int i = 0; i < size; ++i) {
         auto& c = *s.rc[i];
         if (const int j = perm[i]; j < b.bsz && finished[j]) {
+            auto& seq = c.sequence;
             if (c.request->session.end_flag) {
-                seq_mgr_->CacheGeneration(c.sequence);
+                seq_mgr_->CacheGeneration(seq);
                 TM_CHECK(seq_mgr_->Erase(c.request->id));
             }
             else {
-                seq_mgr_->UpdateAndSetUnlock(c.sequence);
+                seq_mgr_->UpdateAndSetUnlock(seq);
             }
             signals.push_back([this, len = c.seq_len, r = std::move(c.request)] {  //
                 UpdateState(*r, Request::kFinish, len);
@@ -585,7 +594,7 @@ void Engine::Impl::InternalThreadEntry()
         inbound_.push(std::make_unique<BatchData>(i));
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     while (true) {
 

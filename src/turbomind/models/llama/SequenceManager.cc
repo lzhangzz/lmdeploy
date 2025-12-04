@@ -489,10 +489,13 @@ auto SequenceManager::Materialize(Sequences             sequences,
 
     // `schedule.last` is decreasing in the loop
     for (int i = 0; i < schedule.last; ++i) {
-        const int input_len = context_length[i] - alpha[i] - sequences[i]->cache_len;
-        TM_CHECK_GT(input_len, 0);
-        const int tmp_len = input_len > 1 ? context_length[i] : 0;
-        Transaction{sequences, i, required[i], input_len, tmp_len, schedule}.Process();
+        auto&     s         = *sequences[i];
+        const int input_len = context_length[i] - alpha[i] - s.cache_len;
+        // sanity check
+        TM_CHECK_GT(input_len, 0) << "Logical error: " << context_length[i] << " " << alpha[i] << " " << s.cache_len << " " << s.status;
+        // temp buffer for flatten KV cache
+        const int temp_len = (input_len > 1 || s.status != Sequence::kActive) ? context_length[i] : 0;
+        Transaction{sequences, i, required[i], input_len, temp_len, schedule}.Process();
     }
 
     // mark remaining sequences invalid
@@ -527,7 +530,7 @@ auto SequenceManager::Materialize(Sequences             sequences,
 
     // release preempted blocks -> cached
     if (!schedule.victims.empty()) {
-        TM_LOG_INFO("[SeqMgr] #victim: %d", (int)schedule.victims.size());
+        TM_LOG_ERROR("[SeqMgr] #victim: %d", (int)schedule.victims.size());
         for (const auto& p : schedule.victims) {
             UpdateAndSetUnlock(*p);
         }
