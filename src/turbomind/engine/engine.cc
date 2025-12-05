@@ -55,15 +55,17 @@ struct Engine::Impl {
 
     void InternalThreadEntry();
 
-    void DisableInvalidRequests(Requests& infer_rs, Requests& kill_rs);
+    void Validate(Requests& infer_rs, Requests& kill_rs);
 
-    void ProcessKillRequests(const Requests& rs, vector<Signal>& signals);
+    void Kill(const Requests& rs, vector<Signal>& signals);
 
-    void FindCanceledIndices(vector<int>& indices);
+    vector<int> GetCanceled();
 
-    void ProcessCancelRequests(vector<int>& indices, vector<Signal>& signals);
+    void Cancel(vector<int>& indices, vector<Signal>& signals);
 
     void Accept(const Requests& rs, vector<Signal>& signals);
+
+    Signal Interrupt(unique_ptr<RequestCache> c, int status);
 
     // Allocation of memory / compute resources
     void Schedule();
@@ -229,7 +231,79 @@ void Engine::Impl::CreateSequenceManager()
     }
 }
 
-void Engine::Impl::ProcessKillRequests(const Requests& kills, std::vector<Signal>& signals)
+void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
+{
+    std::pmr::monotonic_buffer_resource    mbr;
+    std::pmr::unordered_map<uint64_t, int> occur(&mbr);
+
+    auto count = [&occur](const auto& reqs) {
+        for (const auto& r : reqs) {
+            ++occur[r->id];
+        }
+    };
+
+    auto validate = [&](auto& reqs, const char* type) {
+        for (const auto& r : reqs) {
+            if (occur[r->id] > 1) {
+                TM_LOG_ERROR("Skip conflicting %s request for ID %lu", type, r->id);
+                r->ec = Request::kConflict;
+            }
+            if (param_.enable_prefix_caching) {
+                if (r->session.step != 0) {
+                    // Prefix caching is incompatible with interactive mode
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu step %d", type, r->id, r->session.step);
+                    r->ec = Request::kInconsistency;
+                }
+                else if (r->gen_cfg.output_logits == GenerationConfig::kAll
+                         || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                    // Prefix caching is incompatible with outputting all tokens' logits or last_hidden_state
+                    TM_LOG_ERROR("Skip inconsistent %s request for ID %lu. It cannot output logits or "
+                                 "last_hidden_states for all tokens",
+                                 type,
+                                 r->id);
+                    r->ec = Request::kInconsistency;
+                }
+            }
+        }
+    };
+
+    for (const auto& s : states_) {
+        for (int i = 0; i < s.size(); ++i) {
+            if (s.rc[i]) {
+                ++occur[s.rc[i]->request->id];
+            }
+        }
+    }
+
+    count(kill_reqs);
+    count(infer_reqs);
+
+    validate(kill_reqs, "kill");
+    validate(infer_reqs, "infer");
+
+    // New requests that never get a chance to start
+    for (auto& r : infer_reqs) {
+        if (r && r->cancel_flag.load(std::memory_order_acquire) == -1) {
+            r->ec = Request::kCancel;
+        }
+    }
+}
+
+vector<int> Engine::Impl::GetCanceled()
+{
+    auto& s = states_.at(0);
+
+    vector<int> idxs;
+    for (int i = 0; i < s.size(); ++i) {  // current batch
+        const auto& r = s.rc[i];
+        if (r && r->request->cancel_flag.load(std::memory_order_acquire) == -1) {
+            idxs.push_back(i);
+        }
+    }
+    return idxs;
+}
+
+void Engine::Impl::Kill(const Requests& kills, vector<Signal>& signals)
 {
     for (auto& r : kills) {
         if (r) {
@@ -241,6 +315,28 @@ void Engine::Impl::ProcessKillRequests(const Requests& kills, std::vector<Signal
             }
             signals.push_back([=] { r->end_cb ? r->end_cb(ec) : void(); });
         }
+    }
+}
+
+Signal Engine::Impl::Interrupt(unique_ptr<RequestCache> c, int status)
+{
+    auto& s = TM_CHECK_NOTNULL(c)->sequence;
+    if (c->request->session.end_flag) {
+        seq_mgr_->CacheGeneration(s);
+        TM_CHECK(seq_mgr_->Erase(c->request->id));
+    }
+    else {
+        seq_mgr_->UpdateAndSetUnlock(s);
+    }
+    return [r = c->request, len = c->seq_len, status] { UpdateState(*r, status, len); };
+}
+
+void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
+{
+    auto& s = states_.at(0);
+    for (const auto& i : indices) {
+        signals.push_back(Interrupt(std::move(s.rc[i]), Request::kCancel));
+        s.finish += 1;
     }
 }
 
@@ -579,20 +675,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     }
 
     for (int i = 0; i < size; ++i) {
-        auto& c = *s.rc[i];
         if (const int j = perm[i]; j < b.bsz && finished[j]) {
-            auto& seq = c.sequence;
-            if (c.request->session.end_flag) {
-                seq_mgr_->CacheGeneration(seq);
-                TM_CHECK(seq_mgr_->Erase(c.request->id));
-            }
-            else {
-                seq_mgr_->UpdateAndSetUnlock(seq);
-            }
-            signals.push_back([this, len = c.seq_len, r = std::move(c.request)] {  //
-                UpdateState(*r, Request::kFinish, len);
-            });
-            s.rc[i] = {};
+            signals.push_back(Interrupt(std::move(s.rc[i]), Request::kFinish));
             s.finish += 1;
         }
     }
@@ -626,8 +710,8 @@ void Engine::Impl::InternalThreadEntry()
                          st.size() - st.finish == 0,
                          rs->abort,
                          dp_rank_);
-            // DisableInvalidRequests(rs->infer, rs->kill);
-            // FindCanceledIndices(rs->cancel);
+            Validate(rs->infer, rs->kill);
+            rs->cancel = GetCanceled();
         }
 
         /// TODO: broadcast to TP ranks
@@ -639,16 +723,15 @@ void Engine::Impl::InternalThreadEntry()
 
         vector<Signal> signals;
 
-        ProcessKillRequests(rs->kill, signals);  // Erase
+        Kill(rs->kill, signals);
 
         Accept(rs->infer, signals);
 
-        // ProcessCancelRequests(rs->cancel, signals);  // Forced swap out / Sync data
+        Cancel(rs->cancel, signals);
 
-        if (tp_rank_ == 0) {
-            gateway_.notify(std::move(signals));
-        }
-        signals.clear();
+        gateway_.notify(std::move(signals), tp_rank_ == 0);
+
+        TM_CHECK_GE(st.size(), st.finish);
 
         if (st.size() - st.finish) {
 
@@ -672,9 +755,7 @@ void Engine::Impl::InternalThreadEntry()
 
             Update(*d, signals);
 
-            if (tp_rank_ == 0) {
-                gateway_.notify(std::move(signals));
-            }
+            gateway_.notify(std::move(signals), tp_rank_ == 0);
 
             // if (future.valid()) {
             //     future.get().Sync();
