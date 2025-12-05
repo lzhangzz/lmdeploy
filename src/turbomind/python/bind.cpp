@@ -561,8 +561,4 @@ PYBIND11_MODULE(_turbomind, m)
             "device_id"_a,
             "tags"_a,
             "rank"_a);
-        // .def("__str__", &LlamaTritonModel::toString)
-        // .def("__repr__", &LlamaTritonModel::toString)
-        // .def("get_tensor_para_size", &LlamaTritonModel::getTensorParaSize)
-        // .def("get_pipeline_para_size", &LlamaTritonModel::getPipelineParaSize);
 }

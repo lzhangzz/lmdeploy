@@ -1,6 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <filesystem>
+#include <future>
+#include <random>
 
 #include "src/turbomind/turbomind.h"
 
@@ -16,6 +18,9 @@
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_utils.h"
+
+#include "src/turbomind/kernels/gemm/tuner/params.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
@@ -270,6 +275,8 @@ struct TurboMind::Impl {
             TM_LOG_WARNING("[TM] `max_context_token_num` = %d.", (int)engine_param_.max_context_token_num);
         }
     }
+
+    void WarmUp(int rank);
 };
 
 TurboMind::Impl::~Impl()
@@ -497,6 +504,129 @@ void TurboMind::Impl::CreateEngine(int device_id, int rank)
 
     // create sequence manager
     engines_[rank].Start();
+
+    WarmUp(rank);
+
+    ctx->comm.h_tp_group->Sync();
+}
+
+template<class First, class Last>
+static std::string Join(First first, Last last, const std::string& delim)
+{
+    if (first == last) {
+        return {};
+    }
+    std::ostringstream oss;
+    oss << *first++;
+    while (first != last) {
+        oss << delim << *first++;
+    }
+    return oss.str();
+}
+
+void TurboMind::Impl::WarmUp(int rank)
+{
+    auto& ctx = contexts_[rank];
+
+    auto& tp_group = ctx->comm.h_tp_group;
+
+    auto& linear = *ctx->linear;
+
+    const int tp_rank = tp_group->rank();
+
+    if (auto str = std::getenv("TM_GEMM_IMPORT")) {
+        std::ifstream ifs(str);
+        const int     n_imported = linear.Import(ifs);
+        if (tp_rank == 0) {
+            TM_LOG_INFO("[Gemm2] %d records imported", n_imported);
+        }
+        return;
+    }
+
+    isTuning() = true;
+    linear.set_measure(true);
+
+    tp_group->Sync(true);
+
+    if (tp_rank == 0) {
+
+        std::vector<int> bss = linear.GetTuningSeq();
+        if (bss.empty()) {
+            bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
+        }
+
+        const int max_fwd_token_num = engine_param_.max_forward_token_num;
+
+        // remove bs that is too large
+        bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_fwd_token_num; }), bss.end());
+
+        if (bss.empty() || bss.back() < max_fwd_token_num) {
+            bss.push_back(max_fwd_token_num);
+        }
+
+        auto str = Join(bss.begin(), bss.end(), ", ");
+        TM_LOG_INFO("[Gemm2] Tuning sequence: %s", str.c_str());
+
+        if (!bss.empty()) {
+            const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
+            Buffer_<int>                       input_ids(max_bs, kCPU);
+            std::mt19937                       g{};
+            std::uniform_int_distribution<int> d{0, (int)model_param_.vocab_size - 1};
+            for (auto& x : input_ids) {
+                x = d(g);
+            }
+
+            auto tick = std::chrono::steady_clock::now();
+
+            for (auto token_num : bss) {
+
+                TM_LOG_INFO("[Gemm2] %d", token_num);
+
+                auto r = CreateRequest();
+
+                TensorMap inputs{{"input_ids", input_ids.slice(0, token_num)}};
+
+                ModelRequest::InputParam param{};
+                param.session.start_flag     = true;
+                param.session.end_flag       = true;
+                param.gen_cfg.max_new_tokens = 1;
+                param.tensors                = std::make_shared<TensorMap>(inputs);
+
+                ModelRequest::OutputParam out;
+
+                std::promise<int> promise;
+                auto              future = promise.get_future();
+
+                out = r->Forward(std::move(param), [&] {
+                    if (auto state = out.state->exchange(nullptr)) {
+                        promise.set_value(state->status);
+                    }
+                });
+
+                if (auto status = future.get(); status != Request::kFinish) {
+                    TM_LOG_ERROR("Warm-up for %d tokens failed with status %d", status);
+                }
+            }
+
+            auto tock = std::chrono::steady_clock::now();
+
+            TM_LOG_INFO("[Gemm2] Tuning finished in %.2f seconds.",
+                        std::chrono::duration<float, std::ratio<1, 1>>(tock - tick).count());
+        }
+
+        if (auto path = std::getenv("TM_GEMM_EXPORT")) {
+            std::ofstream ofs(path);
+            const auto    n_records = linear.Export(ofs);
+            TM_LOG_INFO("[Gemm2] %d records exported.", n_records);
+        }
+    }
+
+    tp_group->Sync(true);
+
+    linear.set_measure(false);
+    isTuning() = false;
+
+    tp_group->Sync(true);
 }
 
 TurboMind::~TurboMind() = default;
