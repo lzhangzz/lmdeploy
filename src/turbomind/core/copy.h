@@ -7,25 +7,25 @@
 
 namespace turbomind::core {
 
-class BatchCopyV2 {
+class BatchCopy {
 public:
-    ~BatchCopyV2();
+    ~BatchCopy();
 
-    BatchCopyV2();
+    BatchCopy();
 
-    BatchCopyV2(const BatchCopyV2&)                = delete;
-    BatchCopyV2& operator=(const BatchCopyV2&)     = delete;
-    BatchCopyV2(BatchCopyV2&&) noexcept            = delete;
-    BatchCopyV2& operator=(BatchCopyV2&&) noexcept = delete;
+    BatchCopy(const BatchCopy&)                = delete;
+    BatchCopy& operator=(const BatchCopy&)     = delete;
+    BatchCopy(BatchCopy&&) noexcept            = delete;
+    BatchCopy& operator=(BatchCopy&&) noexcept = delete;
 
     // clang-format off
     class Group {
     public:
         ~Group() { parent_.group_end(); }
-        Group(BatchCopyV2& parent): parent_{parent} { parent_.group_begin(); }
+        Group(BatchCopy& parent): parent_{parent} { parent_.group_begin(); }
         explicit constexpr operator bool() const noexcept { return true; }
     private:
-        BatchCopyV2& parent_;
+        BatchCopy& parent_;
     };
     // clang-format on
 
@@ -45,15 +45,15 @@ public:
         if (TM_LIKELY(group_ && src == (const T*)src_ptr_ && dst == (T*)dst_ptr_)) {
             src_ptr_ += sizeof(T) * size;
             dst_ptr_ += sizeof(T) * size;
-            group_size_ += sizeof(T) * size;
+            gsize_ += sizeof(T) * size;
             count_ += 1;
             return dst + size;
         }
         else if (group_) {
             group_commit();
-            group_size_ = sizeof(T) * size;
-            src_ptr_    = reinterpret_cast<const char*>(src + size);
-            dst_ptr_    = reinterpret_cast<char*>(dst + size);
+            gsize_   = sizeof(T) * size;
+            src_ptr_ = reinterpret_cast<const char*>(src + size);
+            dst_ptr_ = reinterpret_cast<char*>(dst + size);
             count_ += 1;
             return dst + size;
         }
@@ -77,12 +77,12 @@ public:
 
     void Run();
 
-    Buffer_<BatchCopyV2*> buf()
+    Buffer_<BatchCopy*> buf()
     {
         return {&self_, 1, kCPU};
     }
 
-    friend std::ostream& operator<<(std::ostream& os, const BatchCopyV2& a)
+    friend std::ostream& operator<<(std::ostream& os, const BatchCopy& a)
     {
         os << "(" << a.count_ << ", " << a.src_.size() << ")";
         return os;
@@ -112,12 +112,12 @@ private:
 
     void group_commit()
     {
-        if (group_size_) {
-            src_.push_back(src_ptr_ - group_size_);
-            dst_.push_back(dst_ptr_ - group_size_);
-            size_.push_back(group_size_);
+        if (gsize_) {
+            src_.push_back(src_ptr_ - gsize_);
+            dst_.push_back(dst_ptr_ - gsize_);
+            size_.push_back(gsize_);
             src_ptr_ = dst_ptr_ = {};
-            group_size_         = {};
+            gsize_              = {};
         }
     }
 
@@ -126,14 +126,14 @@ private:
     std::vector<char*>       dst_;
     std::vector<size_t>      size_;
 
-    int         group_      = 0;
-    size_t      group_size_ = 0;
-    const char* src_ptr_    = {};
-    char*       dst_ptr_    = {};
+    int         group_   = 0;
+    size_t      gsize_   = 0;
+    const char* src_ptr_ = {};
+    char*       dst_ptr_ = {};
 
     size_t count_;
 
-    BatchCopyV2* self_;
+    BatchCopy* self_;
 };
 
 }  // namespace turbomind::core

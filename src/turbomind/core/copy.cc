@@ -46,14 +46,14 @@ const auto& GetCopyAPI()
 
 }  // namespace
 
-BatchCopyV2::~BatchCopyV2() = default;
+BatchCopy::~BatchCopy() = default;
 
-BatchCopyV2::BatchCopyV2(): self_{this}
+BatchCopy::BatchCopy(): self_{this}
 {
     Reset();
 }
 
-void BatchCopyV2::Run()
+void BatchCopy::Run()
 {
     if (src_.empty()) {
         return;

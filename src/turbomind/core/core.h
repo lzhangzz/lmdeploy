@@ -27,7 +27,7 @@ using core::Stream;
 using core::Event;
 using core::ExchOp;
 using core::BatchOp;
-using core::BatchCopyV2;
+using core::BatchCopy;
 
 using core::subrange;
 

@@ -59,7 +59,7 @@ public:
         const int bs0 = *env.at("bs0").data<int>();
         const int bsz = *env.at("bsz").data<int>();
 
-        auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
         // core::CopyT copy{};
 
         input_ids_offsets_buf_[0] = 0;
@@ -102,7 +102,7 @@ public:
 
         const int bs0  = *env.at("bs0").data<int>();
         const int bsz  = *env.at("bsz").data<int>();
-        auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
 
         // last output token + draft tokens
         const Buffer_<int> autoreg_ids = env.at("autoreg_ids").buffer();
@@ -420,7 +420,7 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 
     const int bs0  = *env.at("bs0").data<int>();
     const int bsz  = *env.at("bsz").data<int>();
-    auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
 
     for (int i = 0; i < rc.size(); ++i) {
         auto& c          = *rc[i];
@@ -449,7 +449,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
     const Buffer_<int> perm = env.at("permutation").buffer();
     const int          bsz  = *env.at("bsz").data<int>();
     const int          bs0  = *env.at("bs0").data<int>();
-    auto&              copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto&              copy = *env.at("copy").data<BatchCopy*>()[0];
 
     // core::CopyT copy{};
 
@@ -564,7 +564,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 {
     auto& d    = data_.at(phase);
-    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     copy(sequence_length_.front().buffer(), d.sequence_length.size(), d.sequence_length);
 
@@ -576,7 +576,7 @@ void LanguageModel::Impl::Unprep(int phase, TensorMap& env)
 void LanguageModel::Impl::Fetch(int phase, TensorMap& env)
 {
     auto& d    = data_.at(phase);
-    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     copy(d.sequence_length, d.sequence_length.size(), sequence_length_buf_);
     env.produce("sequence_length", sequence_length_buf_);

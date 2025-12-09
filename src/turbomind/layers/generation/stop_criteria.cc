@@ -36,7 +36,7 @@ void StopCriteria::Setup(int phase, TensorMap& env)
 
     const Buffer_<const RequestCache*> rs = env.at("requests").buffer();
 
-    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     for (int i = 0; i < rs.size(); ++i) {
         max_seq_len_buf_[i] = rs[i]->max_seq_len;

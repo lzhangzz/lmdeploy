@@ -149,7 +149,7 @@ struct Generation::Impl {
 
         const int  bs0  = *env.at("bs0").buffer().data<int>();
         const auto bsz  = perm.size();
-        auto&      copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto&      copy = *env.at("copy").data<BatchCopy*>()[0];
 
         // random states
         d.random_init_needed = false;
@@ -228,7 +228,7 @@ struct Generation::Impl {
 
         const int bs0  = *env.at("bs0").buffer().data<int>();
         const int bsz  = perm.size();
-        auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
 
         if (auto g = copy.group()) {
             Warp(random_state_.front(), d.random_state, bs0, perm, random_state_.back(), copy);
@@ -239,7 +239,7 @@ struct Generation::Impl {
     void Unprep(int phase, TensorMap& env)
     {
         const int bsz  = *env.at("bsz").buffer().data<int>();
-        auto&     copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
 
         auto& d = *data_.at(phase);
 
@@ -251,7 +251,7 @@ struct Generation::Impl {
     void Fetch(int phase, TensorMap& env)
     {
         auto& d    = *data_.at(phase);
-        auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
         copy(d.random_state, d.random_state.size(), random_state_buf_);
         env.produce("random_state", random_state_buf_);

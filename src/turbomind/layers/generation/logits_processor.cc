@@ -159,7 +159,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
 
     Buffer_<const RequestCache*> rs = env.at("requests").buffer();
 
-    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const int bsz = rs.size();
 

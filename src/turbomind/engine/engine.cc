@@ -574,7 +574,7 @@ void Engine::Impl::Setup(BatchData& d)
 
     // dbg(d.bs0, d.bsz, d.perm);
 
-    BatchCopyV2 copy{};
+    BatchCopy copy{};
 
     TensorMap env{{"block_ptrs", block_ptrs_buf_},
                   {"block_ptrs_offsets", block_ptrs_offsets_buf_},
@@ -604,8 +604,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
     Buffer_<int>  sequence_length;
 
     {
-        BatchCopyV2 copy;
-        TensorMap   env{{"copy", copy.buf()}};
+        BatchCopy copy;
+        TensorMap env{{"copy", copy.buf()}};
         Run(ExchOp::kFetch, b.phase, env);
         // dbg(copy);
         copy.Run();

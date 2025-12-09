@@ -60,7 +60,7 @@ struct ModelExecutor::Impl {
                       {"local_token_nums", Buffer{d.local_token_num.data(), (int)d.local_token_num.size(), kCPU}},
                       {"global_token_num", Buffer{&d.global_token_num, 1, kCPU}}};
 
-        BatchCopyV2 copy;
+        BatchCopy copy;
         env.produce("copy", copy.buf());
 
         model_.Run(BatchOp::kPrepare, d.phase, env);

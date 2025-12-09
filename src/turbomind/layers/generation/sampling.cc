@@ -160,7 +160,7 @@ void Sampling::Setup(int phase, TensorMap& env)
 {
     Buffer_<const RequestCache*> rc = env.at("requests").buffer();
 
-    auto& copy = *env.at("copy").data<BatchCopyV2*>()[0];
+    auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
     const auto bsz = rc.size();
 
