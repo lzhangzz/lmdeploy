@@ -40,10 +40,10 @@ public:
 
         data_.reserve(phases);
         for (int i = 0; i < phases; ++i) {
-            auto& d             = data_.emplace_back();
-            d.input_ids         = empty_like(input_ids_buf_, kDEVICE);
-            d.input_ids_offsets = empty_like(input_ids_offsets_buf_, kDEVICE);
-            d.decode_token_pos  = empty_like(decode_token_pos_buf_, kDEVICE);
+            auto& d              = data_.emplace_back();
+            d.input_ids          = empty_like(input_ids_buf_, kDEVICE);
+            d.input_ids_offsets  = empty_like(input_ids_offsets_buf_, kDEVICE);
+            d.selected_token_pos = empty_like(decode_token_pos_buf_, kDEVICE);
 
             d.autoreg_ids_pos = {max_batch_size_, kCPU};  // !
         }
@@ -83,7 +83,7 @@ public:
         // dbg(core::to_vector<int>(decode_token_pos_buf_.slice(0, bsz)));
 
         copy(input_ids_buf_, input_ids_offsets_buf_[bsz], d.input_ids);
-        copy(decode_token_pos_buf_, bsz, d.decode_token_pos);
+        copy(decode_token_pos_buf_, bsz, d.selected_token_pos);
         copy(input_ids_offsets_buf_, bsz + 1, d.input_ids_offsets);
 
         // dbg(decode_token_pos_buf_[0]);
@@ -120,7 +120,7 @@ public:
 
         env.produce("input_ids", d.input_ids.slice(0, d.input_token_num));
         env.produce("q_offsets", d.input_ids_offsets.slice(0, bsz + 1));
-        env.produce("decode_token_pos", d.decode_token_pos.slice(0, bsz));
+        env.produce("selected_token_pos", d.selected_token_pos.slice(0, bsz));
     }
 
     void Run(BatchOp op, int phase, TensorMap& env)
@@ -141,7 +141,7 @@ private:
         Buffer_<int> input_ids_offsets;
         int          input_token_num;
 
-        Buffer_<int> decode_token_pos;
+        Buffer_<int> selected_token_pos;
 
         Buffer_<int> autoreg_ids_pos;
 
@@ -184,6 +184,8 @@ struct LanguageModel::Impl {
     Buffer_<int> autoreg_ids_;
     // Buffer_<int> autoreg_ids_offsets_;
 
+    Buffer_<uint8_t> symm_buf_;
+
     Buffer_<int>  sequence_length_buf_;
     Buffer_<bool> finished_buf_;
 
@@ -193,6 +195,10 @@ struct LanguageModel::Impl {
 
         Buffer_<bool> is_decoding;
         Buffer_<bool> is_generate;
+
+        bool need_generate;
+        bool need_logits;
+        bool need_hidden_states;
     };
 
     vector<Data> data_;
@@ -231,7 +237,7 @@ struct LanguageModel::Impl {
          int                   phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
-    Tensor PostEmbedding(const Tensor& features, Buffer local_logits);
+    Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
 
     void Setup(int phase, TensorMap& env);
     void Prepare(int phase, TensorMap& env);
@@ -290,6 +296,21 @@ LanguageModel::Impl::Impl(DataType              dtype,
                                                model.tokenizer_size,
                                                weights.post_decoder_embedding.output_dim * tp_size_,
                                                phases);
+
+    if (ctx.comm.d_comm) {
+        auto symm_alloc = GetSymmAllocator(ctx.comm.d_comm);
+
+        // Native comm fuses allreduce & rmsnorm in token granularity
+        TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
+
+        const ssize_t max_fwd_tokens = engine.max_forward_token_num;
+
+        ssize_t bytes{};
+        bytes = std::max(bytes, byte_size(dtype_, max_fwd_tokens * engine.attn_dp_size * model.hidden_units));
+        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * model.vocab_size_padded));
+
+        symm_buf_ = {bytes, symm_alloc};
+    }
 }
 
 Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf)
@@ -313,9 +334,9 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     }
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
-        Tensor     temp{symm_buf, {token_num, tp_size_, local_hidden_units}};
 
-        auto local = temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1);
+        Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
+        Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
@@ -336,9 +357,9 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     }
     else {
         const auto local_hidden_units = embedding_table.shape(1);
-        Tensor     temp{symm_buf, {tp_size_, token_num, local_hidden_units}};
 
-        auto local = temp.slice(tp_rank_).squeeze(0);
+        Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
+        Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
@@ -359,7 +380,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     return input_embeds;
 }
 
-Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer local_logits)
+Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_buf)
 {
     NvtxScope scope("postDecodeEmbedding");
 
@@ -377,7 +398,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer local_l
         return logits;
     }
     else if (use_ag2d_) {
-        Tensor logits{local_logits, {bsz, tp_size_, local_vocab_size}};
+        Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
         linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1));
         sync_check_cuda_error();
@@ -395,7 +416,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer local_l
         return logits.view({bsz, -1});
     }
     else {
-        Tensor logits{local_logits, {tp_size_, bsz, local_vocab_size}};
+        Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
         linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0));
         sync_check_cuda_error();
@@ -422,10 +443,15 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     const int bsz  = *env.at("bsz").data<int>();
     auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
 
+    d.need_generate = d.need_hidden_states = d.need_logits = {};
+
     for (int i = 0; i < rc.size(); ++i) {
         auto& c          = *rc[i];
         d.is_decoding[i] = c.is_decoding;
         d.is_generate[i] = c.is_generate;
+        if (c.is_generate) {
+            d.need_generate = true;
+        }
         if (TM_UNLIKELY(!c.is_decoding)) {
             sequence_length_buf_[i] = c.history_len + c.alpha + c.input_len;
         }
@@ -469,11 +495,9 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
         // sequence_length = history_len + input_len
         for (int i = 0; i < bsz; ++i) {
             if (const int j = perm[i]; j < bs0 && d.is_decoding[i]) {
-                // dbg("auto-regress");
                 copy(sequence_length_.front().data<int>() + j, 1, sequence_length_.back().data<int>() + i);
             }
             else {
-                // dbg("prefill");
                 copy(d.sequence_length.data() + i, 1, sequence_length_.back().data<int>() + i);
             }
         }
@@ -506,6 +530,8 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 {
     const int bsz = *env.at("bsz").data<int>();
 
+    auto& d = data_.at(phase);
+
     {
         Buffer_<int> k_offsets = env.at("k_offsets").buffer();
         PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
@@ -513,52 +539,47 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
     input_processor_->Run(BatchOp::kForward, phase, env);  // input_ids
 
-    Buffer symm_buf;
-    if (auto buf = env.try_("symm_buf")) {
-        symm_buf = buf->buffer();
-    }
-
     {
         auto   input_ids    = env.at("input_ids").buffer();
-        Tensor input_embeds = LookupEmbedding(input_ids, symm_buf);
+        Tensor input_embeds = LookupEmbedding(input_ids, symm_buf_);
         TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
-        env.emplace("decoder_input", input_embeds);
+        env.produce("input_embeds", std::move(input_embeds));
     }
 
-    const int global_token_num = *env.at("global_token_num").data<int>();
+    // const int global_token_num = *env.at("global_token_num").data<int>();
+    // Tensor decoder_output{{global_token_num, (int)param_.hidden_units}, dtype_, kDEVICE};
+    // Tensor decode_hidden_states{{bsz, (int)param_.hidden_units}, dtype_, kDEVICE};
 
-    Tensor decoder_output{{global_token_num, (int)param_.hidden_units}, dtype_, kDEVICE};
-    Tensor decode_hidden_states{{bsz, (int)param_.hidden_units}, dtype_, kDEVICE};
+    env.produce("output_norm_weight", weights_.output_norm_weight);
 
-    env.emplace("decoder_output", decoder_output);
-    env.emplace("output_norm_weight", weights_.output_norm_weight);
-    env.emplace("decode_hidden_states", decode_hidden_states);
+    if (d.need_hidden_states) {
+        env.produce("output_hidden_states", {});
+    }
+
+    if (symm_buf_) {
+        env.produce("symm_buf", symm_buf_);
+    }
+
+    // env.emplace("decoder_output", decoder_output);
+    // env.emplace("decode_hidden_states", decode_hidden_states);
 
     unified_decoder_->Forward(phase, env, weights_.decoder_layer_weights);
 
     // env.at("batch").data<BatchData*>()[0]->Notify();
 
-    TM_DEBUG_TENSOR(decoder_output, "hidden_states", 1);
+    // TM_DEBUG_TENSOR(decoder_output, "hidden_states", 1);
 
     // output hidden states
     // output logits
 
     // TM_CHECK(0);
 
-    if (auto decode_hidden_states = env.at("decode_hidden_states")) {
-        auto logits     = PostEmbedding(decode_hidden_states, symm_buf);
-        auto f32_logits = empty_like(logits, kFloat32);
-        invokeCastFloat2D(logits, f32_logits, core::Context::stream().handle());
-        env.emplace("logits", f32_logits);
+    if (d.need_generate) {
+        auto logits = PostEmbedding(env.at("selected_hidden_states"), symm_buf_);
+        env.emplace("logits", logits);
         generation_->Run(BatchOp::kForward, phase, env);
+        Copy(env.at("output_ids").buffer(), autoreg_ids_);
     }
-
-    Copy(env.at("output_ids").buffer(), autoreg_ids_);
-
-    ///////////////////////////////////////////////////////////////
-    // Unprepare
-
-    auto& d = data_.at(phase);
 }
 
 void LanguageModel::Impl::Unprep(int phase, TensorMap& env)

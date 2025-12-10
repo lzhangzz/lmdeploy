@@ -22,6 +22,7 @@ public:
     }
 
     ModelExecutor(LanguageModel&                     model,
+                  int                                device_id,
                   Queue<std::unique_ptr<BatchData>>& inbound,
                   Queue<std::unique_ptr<BatchData>>& outbound);
 

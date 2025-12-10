@@ -23,6 +23,8 @@ struct ModelExecutor::Impl {
 
     LanguageModel& model_;
 
+    const int device_id_;
+
     Queue<unique_ptr<BatchData>>& inbound_;
     Queue<unique_ptr<BatchData>>& outbound_;
 
@@ -30,6 +32,7 @@ struct ModelExecutor::Impl {
 
     void InternalThreadEntry()
     {
+        check_cuda_error(cudaSetDevice(device_id_));
 
         Stream    stream  = Stream::create();
         Allocator h_alloc = Allocator(kCPU);
@@ -76,8 +79,11 @@ struct ModelExecutor::Impl {
         // TM_CHECK(0);
     }
 
-    Impl(LanguageModel& model, Queue<unique_ptr<BatchData>>& inbound, Queue<unique_ptr<BatchData>>& outbound):
-        model_{model}, inbound_{inbound}, outbound_{outbound}
+    Impl(LanguageModel&                model,
+         int                           device_id,
+         Queue<unique_ptr<BatchData>>& inbound,
+         Queue<unique_ptr<BatchData>>& outbound):
+        model_{model}, device_id_{device_id}, inbound_{inbound}, outbound_{outbound}
     {
     }
 
@@ -101,9 +107,10 @@ ModelExecutor::ModelExecutor(ModelExecutor&&) noexcept            = default;
 ModelExecutor& ModelExecutor::operator=(ModelExecutor&&) noexcept = default;
 
 ModelExecutor::ModelExecutor(LanguageModel&                model,
+                             int                           device_id,
                              Queue<unique_ptr<BatchData>>& inbound,
                              Queue<unique_ptr<BatchData>>& outbound):
-    impl_{std::make_unique<Impl>(model, inbound, outbound)}
+    impl_{std::make_unique<Impl>(model, device_id, inbound, outbound)}
 {
 }
 

@@ -6,6 +6,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/request.h"
@@ -288,6 +289,13 @@ struct Generation::Impl {
             env.emplace("token_ids_ptrs", d.token_ids_ptrs.slice(0, gs));
 
             auto logits = env.consume("logits");
+
+            if (logits.dtype() != kFloat32) {
+                auto tmp = empty_like(logits, kFloat32);
+                invokeCastFloat2D(logits, tmp, stream);
+                logits = std::move(tmp);
+            }
+
             env.produce("logits", logits.slice(0, gs));
 
             Buffer_<int> output_pos{max_batch_size_, kDEVICE};

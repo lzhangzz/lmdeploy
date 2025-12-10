@@ -45,4 +45,20 @@ struct Context {
     }
 };
 
+inline Allocator GetSymmAllocator(const comm::DeviceComm& comm)
+{
+    TM_CHECK(comm);
+    return core::SimpleAllocator::Create(
+        [&comm](auto size) {
+            auto p = comm->Allocate(size);
+            comm->Register(p, size);
+            return p;
+        },
+        [&comm](void* p, auto size) {
+            comm->Deregister(p);
+            comm->Free(p);
+        },
+        kDEVICE);
+}
+
 }  // namespace turbomind

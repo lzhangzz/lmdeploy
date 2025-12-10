@@ -167,8 +167,8 @@ Engine::Impl::Impl(DataType      dtype,
     gateway_{gateway},
     tp_group_{ctx.comm.h_tp_group},
     dp_group_{ctx.comm.h_dp_group},
-    tp_rank_{param.attn_tp_rank},
-    dp_rank_{dp_rank},
+    tp_rank_{tp_group_->rank()},
+    dp_rank_{dp_group_->rank()},
     device_id_{device_id},
     async_{phases > 1},
     model_{std::move(model)}
@@ -179,7 +179,7 @@ Engine::Impl::Impl(DataType      dtype,
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, device_id_, outbound_, inbound_};
 
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
@@ -684,6 +684,8 @@ void Engine::Impl::Update(const BatchData& b, std::vector<Signal>& signals)
 
 void Engine::Impl::InternalThreadEntry()
 {
+    check_cuda_error(cudaSetDevice(device_id_));
+
     auto stream = Stream::create();
 
     core::ContextGuard ctx{stream, Allocator(kCPU), Allocator(stream, false)};
@@ -715,6 +717,11 @@ void Engine::Impl::InternalThreadEntry()
         }
 
         /// TODO: broadcast to TP ranks
+        if (st.size() - st.finish == 0) {
+            tp_group_->Sync(true);
+        }
+
+        Broadcast(tp_group_, rs, 0);
 
         if (rs->abort) {
             TM_LOG_INFO("[Engine] stop requested.");
