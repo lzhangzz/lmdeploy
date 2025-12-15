@@ -1,3 +1,5 @@
+// Copyright (c) OpenMMLab. All rights reserved.
+
 #include <memory>
 
 #include "src/turbomind/core/core.h"
@@ -8,6 +10,7 @@
 
 namespace turbomind {
 
+// Model executor for auto-regressive language models
 class ModelExecutor {
 public:
     ~ModelExecutor();

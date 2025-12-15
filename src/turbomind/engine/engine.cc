@@ -1,3 +1,4 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include <algorithm>
 #include <chrono>
@@ -400,13 +401,16 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             seq.cache_len = std::min(seq.cache_len, step);
         }
 
-        const int* input_ids = r->inputs.at("input_ids").data<int>();
+        c->step0 = step;
+
+        // const int* input_ids = r->inputs.at("input_ids").data<int>();
+        auto& input_ids = r->inputs.at("input_ids");
 
         int* token_ids = c->token_ids = r->output_ids.data();
 
         /// TODO: move this somewhere else
         token_ids = std::copy_n(seq.tokens.data(), seq.tokens.size(), token_ids);
-        token_ids = std::copy_n(input_ids, input_len, token_ids);
+        token_ids = std::copy_n(input_ids.data<int>(), input_len, token_ids);
 
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
@@ -424,6 +428,17 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             }
         }
         c->max_seq_len = max_seq_len;
+
+        constexpr auto kAll = GenerationConfig::kAll;
+        const auto&    g    = r->gen_cfg;
+        if (g.output_logits) {
+            c->output_logits = g.output_logits == kAll ? Interval{c->step0} : Interval{c->prompt_len};
+            c->logits_offset = c->output_logits.begin();
+        }
+        if (g.output_last_hidden_state) {
+            c->output_hidden_states = g.output_last_hidden_state == kAll ? Interval{c->step0} : Interval{c->prompt_len};
+            c->hidden_states_offset = c->output_hidden_states.begin();
+        }
 
         incoming.push_back(c);
         s.rc.emplace_back(std::move(c));

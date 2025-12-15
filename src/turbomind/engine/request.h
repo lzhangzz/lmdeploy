@@ -11,6 +11,7 @@
 #include <ostream>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/interval.h"
 #include "src/turbomind/utils/metrics.h"
 
 namespace turbomind {
@@ -182,16 +183,20 @@ struct RequestCache {
     {
     }
 
-    // These members may be opaque handles from individual modules, but we tend to keep it simple
-    // as long as the complexity is manageable
+    // These members may be opaque handles from individual modules (pointers to forward declared types), but we tend to
+    // keep it simple as long as the complexity is manageable
 
     int*     token_ids    = nullptr;  // currently the `output_ids` buf of request
     uint8_t* random_state = nullptr;
 
-    int seq_len = 0;  // set at request init, updated per step
-
-    int prompt_len  = 0;  // set at request init, constant
+    int step0       = 0;  // set at request init, constant, first prefill step
+    int prompt_len  = 0;  // set at request init, constant, first decode step
     int max_seq_len = 0;  // set at request init, constant
+
+    int hidden_states_offset = 0;  // set at request init, constant
+    int logits_offset        = 0;  // set at request init, constant
+
+    int seq_len = 0;  // set at request init, updated per step
 
     int input_len   = 0;  // set at schedule (set to `seq.input_len`)
     int history_len = 0;  // set at schedule (set to `seq.cache_len`)
@@ -202,7 +207,10 @@ struct RequestCache {
     int alpha = 0;  // pending growth of cache_len (draft_len + input_len)
     int beta  = 0;  // pending growth of seq_len (draft_len + {0,1})
 
-    float rope_base{};
+    float rope_base = 0.f;
+
+    Interval output_hidden_states;
+    Interval output_logits;
 };
 
 }  // namespace turbomind
