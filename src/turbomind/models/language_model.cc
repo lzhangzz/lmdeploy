@@ -8,13 +8,13 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/copy.h"
-#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/interval.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch_data.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/layers/generation/generation.h"
+#include "src/turbomind/models/input_processor.h"
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -22,7 +22,6 @@
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
-#include "src/turbomind/utils/logger.h"
 
 #include "dbg.h"
 
@@ -31,138 +30,6 @@ namespace turbomind {
 using std::vector;
 using std::unique_ptr;
 using std::shared_ptr;
-
-class InputProcessor {
-public:
-    InputProcessor(const EngineParam& engine, int phases):
-        max_batch_size_{engine.max_batch_size}, max_forward_token_num_{engine.max_forward_token_num}
-    {
-        input_ids_buf_         = {max_forward_token_num_, kCPUpinned};
-        input_ids_offsets_buf_ = {max_batch_size_ + 1, kCPUpinned};
-        decode_token_pos_buf_  = {max_batch_size_, kCPUpinned};
-
-        data_.reserve(phases);
-        for (int i = 0; i < phases; ++i) {
-            auto& d              = data_.emplace_back();
-            d.input_ids          = empty_like(input_ids_buf_, kDEVICE);
-            d.input_ids_offsets  = empty_like(input_ids_offsets_buf_, kDEVICE);
-            d.selected_token_pos = empty_like(decode_token_pos_buf_, kDEVICE);
-
-            d.autoreg_ids_pos = {max_batch_size_, kCPU};  // !
-        }
-    }
-
-    void Setup(int phase, TensorMap& env)
-    {
-        auto& d = data_.at(phase);
-
-        const Buffer_<RequestCache*> rc   = env.at("requests").buffer();
-        const Buffer_<int>           perm = env.at("permutation").buffer();
-
-        const int bs0 = *env.at("bs0").data<int>();
-        const int bsz = *env.at("bsz").data<int>();
-
-        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
-        // core::CopyT copy{};
-
-        input_ids_offsets_buf_[0] = 0;
-        for (int i = 0; i < rc.size(); ++i) {
-            input_ids_offsets_buf_[i + 1] = input_ids_offsets_buf_[i];
-            if (const auto& c = *rc[i]; TM_UNLIKELY(!c.is_decoding)) {
-                const auto src = c.token_ids + c.history_len + c.alpha;
-                std::copy_n(src, c.input_len, input_ids_buf_.data() + input_ids_offsets_buf_[i]);
-                // dbg(std::vector<int>(src, src + c.input_len));
-                d.autoreg_ids_pos[i] = -1;
-                input_ids_offsets_buf_[i + 1] += c.input_len;
-            }
-            else {
-                d.autoreg_ids_pos[i] = input_ids_offsets_buf_[i];
-                input_ids_offsets_buf_[i + 1] += 1;
-            }
-            decode_token_pos_buf_[i] = input_ids_offsets_buf_[i + 1] - 1;
-        }
-
-        // dbg(core::to_vector<int>(input_ids_offsets_buf_.slice(0, bsz + 1)));
-        // dbg(core::to_vector<int>(decode_token_pos_buf_.slice(0, bsz)));
-
-        copy(input_ids_buf_, input_ids_offsets_buf_[bsz], d.input_ids);
-        copy(decode_token_pos_buf_, bsz, d.selected_token_pos);
-        copy(input_ids_offsets_buf_, bsz + 1, d.input_ids_offsets);
-
-        // dbg(decode_token_pos_buf_[0]);
-
-        d.input_token_num = input_ids_offsets_buf_[bsz];
-        // dbg(d.input_token_num);
-
-        env.produce("local_token_num", Buffer{&d.input_token_num, 1, kCPU});
-    }
-
-    void Prepare(int phase, TensorMap& env)
-    {
-        auto& d = data_.at(phase);
-
-        const Buffer_<int> perm = env.at("permutation").buffer();
-
-        const int bs0  = *env.at("bs0").data<int>();
-        const int bsz  = *env.at("bsz").data<int>();
-        auto&     copy = *env.at("copy").data<BatchCopy*>()[0];
-
-        // last output token + draft tokens
-        const Buffer_<int> autoreg_ids = env.at("autoreg_ids").buffer();
-
-        // core::CopyT copy{};
-
-        if (auto g = copy.group()) {
-            for (int i = 0; i < bsz; ++i) {
-                if (auto pos = d.autoreg_ids_pos[i]; pos >= 0) {
-                    TM_CHECK_LT(perm[i], bs0);
-                    copy(autoreg_ids.data() + perm[i], 1, &d.input_ids[pos]);
-                }
-            }
-        }
-
-        env.produce("input_ids", d.input_ids.slice(0, d.input_token_num));
-        env.produce("q_offsets", d.input_ids_offsets.slice(0, bsz + 1));
-        env.produce("selected_token_pos", d.selected_token_pos.slice(0, bsz));
-    }
-
-    void Run(BatchOp op, int phase, TensorMap& env)
-    {
-        switch (op) {
-            case BatchOp::kSetup:
-                return Setup(phase, env);
-            case BatchOp::kPrepare:
-                return Prepare(phase, env);
-            default:
-                return;
-        }
-    }
-
-private:
-    struct Data {
-        Buffer_<int> input_ids;
-        Buffer_<int> input_ids_offsets;
-        int          input_token_num;
-
-        Buffer_<int> selected_token_pos;
-
-        Buffer_<int> autoreg_ids_pos;
-
-        Tensor       input_embeds;
-        Buffer_<int> input_embeds_offsets;
-    };
-
-private:
-    const int max_batch_size_;
-    const int max_forward_token_num_;
-
-    std::vector<Data> data_;
-
-    Buffer_<int> input_ids_buf_;
-    Buffer_<int> input_ids_offsets_buf_;
-
-    Buffer_<int> decode_token_pos_buf_;
-};
 
 struct LanguageModel::Impl {
     const DataType       dtype_;
@@ -392,7 +259,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
         d.is_generate     = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_ = std::make_shared<InputProcessor>(engine, phases);
+    input_processor_ = std::make_shared<InputProcessor>(engine, param_, phases);
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, LoraParam{}, ctx, phases);
 
@@ -733,12 +600,16 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         PrefixSum(sequence_length_.front().data<int>(), bsz, k_offsets.data(), core::Context::stream().handle());
     }
 
-    input_processor_->Run(BatchOp::kForward, phase, env);  // input_ids
+    {  // compute input embeddings
+        auto input_ids = env.at("input_ids").buffer();
 
-    {
-        auto   input_ids    = env.at("input_ids").buffer();
         Tensor input_embeds = LookupEmbedding(input_ids, symm_buf_);
         TM_DEBUG_TENSOR(input_embeds, "embeddings", 1);
+
+        auto& copy = *env.at("copy").data<BatchCopy*>()[0];
+        input_processor_->PatchEmbedding(phase, input_embeds, copy);
+        copy.Run();
+
         env.produce("input_embeds", std::move(input_embeds));
     }
 

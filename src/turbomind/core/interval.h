@@ -16,6 +16,10 @@ public:
         {
             return x;
         }
+        friend bool operator<(const Size& a, const Size& b)
+        {
+            return a.x < b.x;
+        }
     };
 
     Interval() = default;

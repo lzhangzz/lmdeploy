@@ -183,6 +183,8 @@ struct RequestCache {
     {
     }
 
+    int status = Request::kOk;
+
     // These members may be opaque handles from individual modules (pointers to forward declared types), but we tend to
     // keep it simple as long as the complexity is manageable
 

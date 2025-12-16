@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 
 add_library(models STATIC
         language_model.cc
+        input_processor.cc
         llama/LlamaLinear.cu
         llama/BlockManager.cc
         llama/BlockTrie.cc

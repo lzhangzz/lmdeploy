@@ -5,6 +5,7 @@
 #include <functional>
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/core.h"
 
 #include "src/turbomind/models/llama/BlockManager.h"
 #include "src/turbomind/models/llama/BlockTrie.h"
@@ -39,8 +40,8 @@ struct Sequence {
     mutable float rope_theta = 0.f;
 
     // embedding data
-    mutable std::vector<std::vector<std::byte>> input_embeddings;
-    mutable std::vector<std::pair<int, int>>    input_embedding_ranges;
+    mutable std::vector<Tensor> input_embeds;
+    mutable std::vector<int>    input_embeds_offsets;
 
     explicit Sequence(uint64_t _id): id(_id) {}
 

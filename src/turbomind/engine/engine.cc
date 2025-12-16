@@ -348,9 +348,8 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
     const int offset = s.rc.size();
     int       index  = offset;
 
-    vector<RequestCache*> incoming;
-
-    // const int session_len = param_.session_len;
+    vector<unique_ptr<RequestCache>> incoming;
+    incoming.reserve(rs.size());
 
     for (const auto& r : rs) {
 
@@ -393,8 +392,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
         auto& seq = *ptr;
 
-        // auto c = std::make_unique<RequestCache>(r, seq);
-        auto c = new RequestCache{r, seq};
+        auto c = std::make_unique<RequestCache>(r, seq);
 
         if (step < seq.tokens.size()) {
             seq.tokens.resize(step);
@@ -429,6 +427,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
         c->max_seq_len = max_seq_len;
 
+        /// TODO: move this to output processor
         constexpr auto kAll = GenerationConfig::kAll;
         const auto&    g    = r->gen_cfg;
         if (g.output_logits) {
@@ -440,14 +439,21 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             c->hidden_states_offset = c->output_hidden_states.begin();
         }
 
-        incoming.push_back(c);
-        s.rc.emplace_back(std::move(c));
+        incoming.push_back(std::move(c));
     }
 
-    TensorMap env{{"requests", Buffer{incoming.data(), (int)incoming.size(), kCPU}}};
-    model_.Run(ExchOp::kAdd, -1, env);
+    Buffer_<RequestCache*> buf(incoming.size(), kCPU);
+    for (int i = 0; i < incoming.size(); ++i) {
+        buf[i] = incoming[i].get();
+    }
 
-    /// TODO: remove invalid requests (which failed in `Add`)
+    Run(BatchOp::kAdd, -1, TensorMap{{"requests", buf}});
+
+    for (auto& x : incoming) {
+        if (x->status == 0) {
+            s.rc.push_back(std::move(x));
+        }
+    }
 }
 
 void Engine::Impl::Schedule()
