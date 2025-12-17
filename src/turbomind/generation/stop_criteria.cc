@@ -1,8 +1,7 @@
 
 
-#include "src/turbomind/layers/generation/stop_criteria.h"
-#include "src/turbomind/core/allocator.h"
-#include "src/turbomind/layers/generation/utils.h"
+#include "src/turbomind/generation/stop_criteria.h"
+#include "src/turbomind/generation/utils.h"
 
 #include "src/turbomind/kernels/stop_criteria_kernels.h"
 

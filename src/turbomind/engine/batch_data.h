@@ -3,7 +3,6 @@
 
 #include <future>
 
-#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/core.h"
 
 namespace turbomind {

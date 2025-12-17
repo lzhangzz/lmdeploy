@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/layers/generation/sampling.h"
+#include "src/turbomind/generation/sampling.h"
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/sampling_kernels.h"

@@ -22,8 +22,8 @@
 #include "src/turbomind/kernels/ban_bad_words.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 
-#include "src/turbomind/layers/generation/logits_processor.h"
-#include "src/turbomind/layers/generation/utils.h"
+#include "src/turbomind/generation/logits_processor.h"
+#include "src/turbomind/generation/utils.h"
 
 namespace turbomind {
 

@@ -20,7 +20,7 @@
 
 #include "src/turbomind/core/core.h"
 
-#include "src/turbomind/layers/generation/base_param.h"
+#include "src/turbomind/generation/base_param.h"
 
 namespace turbomind {
 

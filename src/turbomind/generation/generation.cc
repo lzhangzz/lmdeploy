@@ -1,21 +1,19 @@
 
 #include <memory>
 
-#include "src/turbomind/layers/generation/generation.h"
+#include "src/turbomind/generation/generation.h"
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/exchange.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/request.h"
 
-#include "src/turbomind/layers/generation/logits_processor.h"
-#include "src/turbomind/layers/generation/sampling.h"
-#include "src/turbomind/layers/generation/stop_criteria.h"
+#include "src/turbomind/generation/logits_processor.h"
+#include "src/turbomind/generation/sampling.h"
+#include "src/turbomind/generation/stop_criteria.h"
 
-#include "src/turbomind/kernels/gpt_kernels.h"            // invokeTranspose2D
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
 
 #include "src/turbomind/models/llama/llama_kernels.h"  // invokePadLastTokenIds

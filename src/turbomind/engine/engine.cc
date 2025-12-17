@@ -705,8 +705,6 @@ void Engine::Impl::InternalThreadEntry()
         inbound_.push(std::make_unique<BatchData>(i));
     }
 
-    // std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
     while (true) {
 
         shared_ptr<RequestData> rs;
@@ -725,7 +723,6 @@ void Engine::Impl::InternalThreadEntry()
             rs->cancel = GetCanceled();
         }
 
-        /// TODO: broadcast to TP ranks
         if (st.size() - st.finish == 0) {
             tp_group_->Sync(true);
         }
