@@ -20,7 +20,6 @@
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/kernels/ban_bad_words.h"
-#include "src/turbomind/kernels/penalty_types.h"
 #include "src/turbomind/kernels/sampling_penalty_kernels.h"
 
 #include "src/turbomind/layers/generation/logits_processor.h"
@@ -28,9 +27,9 @@
 
 namespace turbomind {
 
-struct LogitsProcessorData {
+struct LogitsProcessor::Data {
 
-    LogitsProcessorData(int max_batch_size, DeviceType device)
+    Data(int max_batch_size, DeviceType device)
     {
         repetition_penalty_buf = {max_batch_size, device};
         min_lengths_buf        = {max_batch_size, device};
@@ -56,9 +55,9 @@ struct LogitsProcessorData {
 
 LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}
 {
-    buf_ = std::make_shared<LogitsProcessorData>(max_batch_size_, kCPUpinned);
+    buf_ = std::make_shared<Data>(max_batch_size_, kCPUpinned);
     for (int i = 0; i < phases; ++i) {
-        data_.push_back(std::make_shared<LogitsProcessorData>(max_batch_size_, kDEVICE));
+        data_.push_back(std::make_shared<Data>(max_batch_size_, kDEVICE));
     }
 }
 
@@ -68,8 +67,9 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     // the order is same with transformerss
     TM_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
 
-    Tensor_<int>   output_ids = env.at("output_ids");
-    Tensor_<float> logits     = env.at("logits");
+    Tensor_<float>      logits          = env.at("logits");
+    const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
+    const Buffer_<int>  sequence_length = env.at("sequence_length").buffer();
 
     const auto bsz = logits.shape(0);
 
@@ -77,49 +77,15 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
     auto stream = core::Context::stream().handle();
 
-    const int step             = 1;
-    const int max_input_length = 1;
-
     // repetition penalty
-    if (step > 1 && d.has_repetition_penalty) {
-        TM_CHECK(0) << "Modify `token_ids` layout before procceding.";
-        Tensor_<int>     output_ids = env.at("output_ids");
-        Buffer_<uint8_t> workspace(bsz * step * (sizeof(int) + sizeof(float)), kDEVICE);
-        invokeBatchApplyRepetitionPenalty(logits.data(),
-                                          d.repetition_penalty_buf.data(),
-                                          (int*)workspace.data(),
-                                          output_ids.data(),
-                                          bsz,
-                                          bsz,
-                                          vocab_size_padded_,
-                                          env.at("init_context_length").data<int>(),
-                                          max_input_length,
-                                          step,
-                                          RepetitionPenaltyType::Multiplicative,
-                                          stream);
+    if (d.has_repetition_penalty) {
+        ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, stream);
         sync_check_cuda_error();
     }
 
     // ban bad words
     if (auto& bad_words = d.bad_words_ten) {
-        TM_CHECK(0) << "Modify `token_ids` layout before procceding.";
-        TM_CHECK_EQ(bad_words.ndim(), 3);
-        Tensor_<int> output_ids    = env.at("output_ids");
-        const auto   bad_words_len = bad_words.shape(2);
-        invokeBanBadWords(logits.data(),
-                          output_ids.data(),
-                          nullptr,
-                          bsz,
-                          bsz,
-                          1,
-                          bad_words.data(),
-                          false,
-                          bad_words_len,
-                          0,
-                          vocab_size_padded_,
-                          step,
-                          stream);
-
+        BanBadWords(logits, token_ids_ptrs, sequence_length, bad_words, stream);
         sync_check_cuda_error();
     }
 
@@ -127,7 +93,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     if (d.has_min_length_penalty) {
         invokeMinLengthPenalty(logits.data(),
                                d.min_lengths_buf.data(),
-                               env.at("sequence_length").data<int>(),
+                               sequence_length.data(),
                                vocab_size_padded_,
                                bsz,
                                d.end_ids_ten.data(),

@@ -24,8 +24,6 @@
 
 namespace turbomind {
 
-struct LogitsProcessorData;
-
 class LogitsProcessor: public BaseGenerationParam {
 public:
     explicit LogitsProcessor(const BaseGenerationParam& base, int phases);
@@ -35,10 +33,11 @@ public:
     void Forward(int phase, TensorMap& env);
 
 private:
-    std::vector<std::shared_ptr<LogitsProcessorData>> data_;
+    struct Data;
 
-    // temp host buffer
-    std::shared_ptr<LogitsProcessorData> buf_;
+    std::vector<std::shared_ptr<Data>> data_;
+
+    std::shared_ptr<Data> buf_;  // temp host buffer
 };
 
 }  // namespace turbomind
