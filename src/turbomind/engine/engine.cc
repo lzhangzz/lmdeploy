@@ -427,18 +427,6 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         }
         c->max_seq_len = max_seq_len;
 
-        /// TODO: move this to output processor
-        constexpr auto kAll = GenerationConfig::kAll;
-        const auto&    g    = r->gen_cfg;
-        if (g.output_logits) {
-            c->output_logits = g.output_logits == kAll ? Interval{c->step0} : Interval{c->prompt_len};
-            c->logits_offset = c->output_logits.begin();
-        }
-        if (g.output_last_hidden_state) {
-            c->output_hidden_states = g.output_last_hidden_state == kAll ? Interval{c->step0} : Interval{c->prompt_len};
-            c->hidden_states_offset = c->output_hidden_states.begin();
-        }
-
         incoming.push_back(std::move(c));
     }
 

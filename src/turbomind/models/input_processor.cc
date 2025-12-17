@@ -35,7 +35,7 @@ public:
         }
     }
 
-    int AddOnce(RequestCache& c)
+    int Add(RequestCache& c)
     {
         auto& r = c.request;
         auto& s = c.sequence;
@@ -104,14 +104,14 @@ public:
 
         return 0;
     }
-    
+
     void Add(int phase, TensorMap& env)
     {
         const Buffer_<RequestCache*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *TM_CHECK_NOTNULL(rc[i]);
             if (c.status == 0) {
-                c.status = AddOnce(c);
+                c.status = Add(c);
             }
         }
     }

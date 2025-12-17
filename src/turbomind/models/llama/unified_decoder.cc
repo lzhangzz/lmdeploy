@@ -276,12 +276,12 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         selected_states = {{selected_pos.size(), (int)hidden_units_}, dtype, kDEVICE};
         CollectHiddenStates(hidden_states, selected_pos, selected_states, stream);
     }
-    args.produce("selected_hidden_states", selected_states);
+    args.produce("hidden_states", selected_states);
 
     // TM_DEBUG_TENSOR(selected_states.slice(0, selected_pos.size()), "out", 1);
 
     if (output_hidden_states) {
-        args.produce("hidden_states", hidden_states);
+        args.produce("full_hidden_states", hidden_states);
     }
 }
 

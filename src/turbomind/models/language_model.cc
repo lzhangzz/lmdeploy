@@ -20,6 +20,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+#include "src/turbomind/models/output_processor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -71,21 +72,13 @@ struct LanguageModel::Impl {
         Buffer_<bool> is_generate;
 
         int generative;
-
-        Interval full_hstate;  // requested range for full hidden states
-        Interval full_logits;  // requested range for full logits
-
-        // prevent requests being freed before hstate/logits are written
-        vector<shared_ptr<Request>> requests;
-
-        vector<std::tuple<int, int, Interval, Interval>> output_hstate;
-        vector<std::tuple<int, int, Interval, Interval>> output_logits;
     };
 
     vector<Data> data_;
 
-    std::shared_ptr<InputProcessor> input_processor_;
+    std::optional<InputProcessor>   input_processor_;
     std::unique_ptr<UnifiedDecoder> unified_decoder_;
+    std::optional<OutputProcessor>  output_processor_;
     std::unique_ptr<Generation>     generation_;  // token generator
 
     void Run(BatchOp op, int phase, TensorMap& env)
@@ -105,6 +98,7 @@ struct LanguageModel::Impl {
                 input_processor_->Run(op, phase, env);
                 unified_decoder_->Run(op, phase, env);
                 generation_->Run(op, phase, env);
+                output_processor_->Run(op, phase, env);
         }
     }
 
@@ -125,98 +119,6 @@ struct LanguageModel::Impl {
     void Forward(int phase, TensorMap& env);
     void Unprep(int phase, TensorMap& env);
     void Fetch(int phase, TensorMap& env);
-
-    template<class Ranges>
-    void OutputHiddenStates(const Ranges& ranges, const Tensor& h, int type, const vector<shared_ptr<Request>>& rs)
-    {
-        for (const auto& [i, t, src, dst] : ranges) {
-            if (t == type) {
-                auto& out = rs[i]->outputs.at("last_hidden_state");
-                if (tp_rank_ == 0) {
-                    dbg(&src, &dst);
-                    Copy(h.slice(src.begin(), (int)src.size()), out.slice(dst.begin(), (int)dst.size()));
-                }
-            }
-        }
-    }
-
-    void ComputeAndOutputLogits(const Data& data, const Tensor& h, const vector<shared_ptr<Request>>& rs)
-    {
-
-        const int step_size = max_logits_len_;
-
-        TM_CHECK_GT(step_size, 0);
-
-        // Coroutine frame
-        int  p      = 0;
-        auto ranges = data.output_logits;
-
-        bool success = false;
-        // Erode the range iteratively until empty
-        for (auto r = data.full_logits; r; r = -step_size | r) {
-            dbg(&r);
-            if (auto chunk = r & Interval{r.begin(), step_size}) {
-                dbg(&chunk);
-                // Compute & output full logits by chunks
-                auto logits = PostEmbedding(h.slice(chunk.begin(), (int)chunk.size()), symm_buf_);
-                success     = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2, rs);
-                if (success) {
-                    // all requests satisfied, exit early
-                    break;
-                }
-            }
-        }
-
-        TM_CHECK(success);
-    }
-
-    template<class Ranges>
-    void OutputLogits(Ranges& ranges_, const Tensor& l, int type, const vector<shared_ptr<Request>>& rs)
-    {
-        // Coroutine frame
-        int  p      = 0;
-        auto ranges = ranges_;
-
-        TM_CHECK(OutputLogitsImpl(ranges, p, l, /* base */ 0, type, rs));
-    }
-
-    template<class Ranges>
-    bool
-    OutputLogitsImpl(Ranges& ranges, int& p, const Tensor& l, int base, int type, const vector<shared_ptr<Request>>& rs)
-    {
-        const auto stream = core::Context::stream().handle();
-        for (; p < ranges.size(); ++p) {
-            if (auto& [i, t, src, dst] = ranges[p]; t == type) {
-                Tensor&        out   = rs[i]->outputs.at("logits");
-                const DataType dtype = out.dtype();
-                TM_CHECK_LE(base, src.begin());  // logical error
-                if (Interval msrc = src & Interval{base, Interval::Size{(int)l.shape(0)}}) {
-                    const int tokens = (int)msrc.size();
-                    Interval  mdst{dst.begin(), msrc.size()};
-                    // TODO: support strides in `DLTensor`, so that batched 1D copy can be used
-                    if (tp_rank_ == 0) {
-                        TM_CHECK_EQ(cudaMemcpy2DAsync(out.slice(mdst.begin(), tokens).raw_data(),
-                                                      byte_size(dtype, out.stride(0)),
-                                                      l.slice(msrc.begin(), tokens).raw_data(),
-                                                      byte_size(dtype, l.stride(0)),
-                                                      byte_size(dtype, param_.vocab_size),
-                                                      tokens,
-                                                      cudaMemcpyDefault,
-                                                      stream),
-                                    0);
-                    }
-                    // move to next request if they are empty after the erosion
-                    src = -(int)msrc.size() | src;
-                    dst = -(int)mdst.size() | dst;
-                }
-                if (src) {
-                    // request not compeleted, suspend and wait for next chunk
-                    return false;
-                }
-            }
-        }
-        return true;
-    }
 };
 
 LanguageModel::Impl::Impl(DataType              dtype,
@@ -233,8 +135,8 @@ LanguageModel::Impl::Impl(DataType              dtype,
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
-    tp_size_{engine.attn_tp_size},
-    tp_rank_{engine.attn_tp_rank},
+    tp_size_{comm_.h_tp_group->n_ranks()},
+    tp_rank_{comm_.h_tp_group->rank()},
     use_ag2d_{comm_.d_comm && comm_.d_comm->Query(comm::kHasAllGather2D)},
     debug_{isDebug()}
 {
@@ -259,7 +161,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
         d.is_generate     = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_ = std::make_shared<InputProcessor>(engine, param_, phases);
+    input_processor_.emplace(engine, param_, phases);
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, LoraParam{}, ctx, phases);
 
@@ -289,6 +191,10 @@ LanguageModel::Impl::Impl(DataType              dtype,
     else {
         max_logits_len_ = std::max<int>(max_fwd_tokens * model.hidden_units / vocab_size, engine.max_batch_size);
     }
+
+    output_processor_.emplace(param_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
+        return PostEmbedding(hstate, symm_buf_);
+    });
 }
 
 Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf)
@@ -408,25 +314,6 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     }
 }
 
-struct IntervalMatching {
-    Interval& target;
-    const int offset_d;
-    Interval  src;
-    Interval  dst;
-
-    bool operator()(const Interval& x, int offset_s, Interval& merged)
-    {
-        if (auto y = target & x; y && y.begin() == target.begin()) {
-            dst    = {y.begin() - offset_d, y.size()};
-            src    = {offset_s + (y.begin() - x.begin()), y.size()};
-            merged = merged | src;
-            target = -(int)y.size() | target;
-            return true;
-        }
-        return false;
-    }
-};
-
 void LanguageModel::Impl::Setup(int phase, TensorMap& env)
 {
     input_processor_->Run(BatchOp::kSetup, phase, env);
@@ -455,76 +342,9 @@ void LanguageModel::Impl::Setup(int phase, TensorMap& env)
     // core::CopyT copy{};
     copy(sequence_length_buf_, bsz, d.sequence_length);
 
-    vector<Interval> all_tokens;
-    vector<Interval> sel_tokens;
-
-    for (int i = 0; i < rc.size(); ++i) {
-        using Size = Interval::Size;
-        auto& c    = *rc[i];
-        all_tokens.emplace_back(c.history_len + c.alpha, Size{c.input_len});
-        sel_tokens.emplace_back(c.history_len + c.alpha + c.input_len - 1, Size{1});
-        if (!d.is_generate[i]) {
-            sel_tokens.back() = {};
-        }
-    }
-
-    const int token_num = *env.at("local_token_num").data<int>();
-
-    d.full_logits = {INT_MAX, 0};
-    d.full_hstate = {INT_MAX, 0};
-
-    Interval select_states{INT_MAX, 0};
-    Interval select_logits{INT_MAX, 0};
-
-    d.output_logits = {};
-    d.output_hstate = {};
-
-    int offset = 0;
-
-    vector<shared_ptr<Request>> rs;
-    rs.reserve(rc.size());
-    for (int i = 0; i < rc.size(); ++i) {
-        rs.push_back(rc[i]->request);
-    }
-    d.requests.swap(rs);
-
-    for (int i = 0; i < rc.size(); ++i) {
-        auto& c = *rc[i];
-        auto& g = c.request->gen_cfg;
-        if (c.output_hidden_states) {
-            IntervalMatching m{c.output_hidden_states, c.hidden_states_offset};
-            int              type = 0;
-            if (m(sel_tokens[i], i, select_states)) {
-                type = 1;
-            }
-            else if (m(all_tokens[i], offset, d.full_hstate)) {
-                type = 2;
-            }
-            if (type) {
-                d.output_hstate.emplace_back(i, type, m.src, m.dst);
-            }
-        }
-        if (c.output_logits) {
-            IntervalMatching m{c.output_logits, c.logits_offset};
-            int              type = 0;
-            if (m(sel_tokens[i], i, select_logits)) {
-                type = 1;
-            }
-            else if (m(all_tokens[i], offset, d.full_logits)) {
-                type = 2;
-            }
-            if (type) {
-                d.output_logits.emplace_back(i, type, m.src, m.dst);
-            }
-        }
-        offset += c.input_len;
-    }
-
-    // logits depends on hidden states
-    d.full_hstate = d.full_hstate | d.full_logits;
-
     unified_decoder_->Run(BatchOp::kSetup, phase, env);
     generation_->Run(BatchOp::kSetup, phase, env);
+    output_processor_->Run(BatchOp::kSetup, phase, env);
 }
 
 void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
@@ -587,6 +407,7 @@ void LanguageModel::Impl::Prepare(int phase, TensorMap& env)
 
     unified_decoder_->Run(BatchOp::kPrepare, phase, env);
     generation_->Run(BatchOp::kPrepare, phase, env);
+    output_processor_->Run(BatchOp::kPrepare, phase, env);
 }
 
 void LanguageModel::Impl::Forward(int phase, TensorMap& env)
@@ -613,10 +434,6 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         env.produce("input_embeds", std::move(input_embeds));
     }
 
-    if (d.full_hstate) {
-        env.produce("output_hidden_states", {});
-    }
-
     if (symm_buf_) {
         env.produce("symm_buf", symm_buf_);
     }
@@ -627,29 +444,15 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
     // env.at("batch").data<BatchData*>()[0]->Notify();
 
-    auto select_hstate = env.try_consume("selected_hidden_states");
-    auto full_hstate   = env.try_consume("hidden_states");
+    output_processor_->OutputHiddenStatesAndLogits(phase, env, 2);
 
-    auto& rs = d.requests;
+    auto& hidden_states = env.at("hidden_states");
 
-    OutputHiddenStates(d.output_hstate, select_hstate, 1, d.requests);
-    if (d.full_hstate) {
-        OutputHiddenStates(d.output_hstate, full_hstate, 2, d.requests);
-    }
+    env.produce("logits", PostEmbedding(hidden_states, symm_buf_));
 
-    if (d.full_logits) {
-        ComputeAndOutputLogits(d, full_hstate, d.requests);
-    }
-
-    Tensor logits;
-    if (select_hstate) {
-        logits = PostEmbedding(select_hstate, symm_buf_);
-        OutputLogits(d.output_logits, logits, 1, d.requests);
-    }
+    output_processor_->OutputHiddenStatesAndLogits(phase, env, 1);
 
     if (d.generative) {
-        TM_CHECK(logits);
-        env.emplace("logits", logits);
         generation_->Run(BatchOp::kForward, phase, env);
         Copy(env.at("output_ids").buffer(), autoreg_ids_);
     }
