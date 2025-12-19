@@ -245,12 +245,6 @@ class TurboMind:
         # update some attributes of `engine_config` which depends on
         # `session_len`
         self.engine_config = engine_config
-        if engine_config.max_prefill_token_num is not None \
-                and engine_config.num_tokens_per_iter == 0:
-            self.engine_config.num_tokens_per_iter = \
-                engine_config.max_prefill_token_num
-            self.engine_config.max_prefill_iters = (self.config.session_len + engine_config.max_prefill_token_num -
-                                                    1) // engine_config.max_prefill_token_num
 
         # pack `self.config` and `self.engine_config` into a dict
         self.config_dict = self.config.to_dict()
