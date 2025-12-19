@@ -22,34 +22,6 @@
 
 namespace turbomind {
 
-// token in:       C
-// cache in:  HHHHH
-// cache out: HHHHHC
-// token out:       G
-// -------------------------
-// token in:        C
-// cache in:  HHHHHH
-// cache out: HHHHHHC
-// token out:        G
-
-// token in:       C
-// cache in:  HHHHH
-// cache out: HHHHHC
-// token out:       G
-// draft out:        DDDD
-// --------------------------
-// token in:        CDDDD
-// cache in:  HHHHHH
-// cache out: HHHHHHCDDDD
-// token out:        VVG
-// draft out:           DDDD
-// --------------------------
-// token in:           CDDDD
-// cache in:  HHHHHHHHH
-// cache out: HHHHHHHHHCDDDD
-// token out:           VG
-// draft out:             DDDD
-
 using std::unique_ptr;
 using std::shared_ptr;
 using std::vector;
