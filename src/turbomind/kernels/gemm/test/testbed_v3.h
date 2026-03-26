@@ -239,11 +239,14 @@ struct Testbed_v3: Parameter {
     // - dequantize weight
     void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
     {
-        original.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
+        original.emplace(input_dim, output_dim, data_type, false);
+        original.allocate(data_type, group_size);
         rng_.NormalFloat(original.weight, 1., .1);
 
-        quant.emplace(input_dim, output_dim, data_type, false, weight_type, group_size);
-        dequant.emplace(input_dim, output_dim, data_type, false, data_type, group_size);
+        quant.emplace(input_dim, output_dim, data_type, false);
+        quant.allocate(weight_type, group_size);
+        dequant.emplace(input_dim, output_dim, data_type, false);
+        dequant.allocate(data_type, group_size);
 
         Buffer_<unsigned> rbits;
         // rbits = {original.weight.size(), kDEVICE};

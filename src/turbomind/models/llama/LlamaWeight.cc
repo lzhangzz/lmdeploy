@@ -43,7 +43,6 @@ LlamaWeight::LlamaWeight(DataType           data_type,
     embedding_size_(model.embedding_size),
     num_layer_(model.layer_num),
     data_type_{data_type},
-    weight_type_{model.weight_type},
     tp_size_(engine_param.attn_tp_size * engine_param.attn_cp_size),
     tp_rank_(engine_param.attn_tp_rank * engine_param.attn_cp_size + engine_param.attn_cp_rank)
 {
@@ -79,8 +78,10 @@ void LlamaWeight::initialize()
 {
     core::ContextGuard guard = context();
 
-    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type_, false, data_type_, 1);
-    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type_, false, data_type_, 1);
+    pre_decoder_embedding.emplace(embedding_size_, hidden_units_ / tp_size_, data_type_, false);
+    pre_decoder_embedding.allocate(data_type_, 0);
+    post_decoder_embedding.emplace(hidden_units_, vocab_size_padded_ / tp_size_, data_type_, false);
+    post_decoder_embedding.allocate(data_type_, 0);
     register_module("tok_embeddings", pre_decoder_embedding, tp_rank_);
     register_module("output", post_decoder_embedding, tp_rank_);
 

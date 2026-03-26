@@ -26,12 +26,14 @@ class LlamaReader(BaseReader):
     proj_pattern = 'proj'
     scale_inv_suffix = '_scale_inv'
 
-    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy, fp8_quant=False):
+    def __init__(self, new_params: dict, unused_params: dict, last_bin: bool, model_cfg: dict, policy,
+                 fp8_quant=False, model_format=None):
         super().__init__()
         self.params = unused_params
         self.params.update(new_params)
         self.last_bin = last_bin
         self.model_cfg = model_cfg
+        self.model_format = model_format
         tie_word_embeddings = self.model_cfg.get('tie_word_embeddings', False)
         if tie_word_embeddings:
             self.output_weight_key = self.tok_embeddings_key
@@ -132,6 +134,7 @@ class LlamaModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs: dict):
         super().__init__(model_path, tokenizer_path)
         self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
         _, model_config = get_model_arch(model_path)
         if hasattr(model_config, 'text_config'):
             model_config = model_config.text_config
@@ -147,7 +150,8 @@ class LlamaModel(BaseInputModel):
         mappings = getattr(self.Reader, 'mappings', [])
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, mappings)
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
+            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy,
+                                 fp8_quant=self.fp8_quant, model_format=self.model_format)
             yield i, reader
         torch.cuda.empty_cache()
 

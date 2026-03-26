@@ -1,6 +1,5 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include <filesystem>
 #include <future>
 #include <random>
 
@@ -21,7 +20,6 @@
 #include "src/turbomind/models/llama/LlamaWeight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -225,14 +223,55 @@ struct TurboMind::Impl {
                                                         moe_param_);
     }
 
-    TensorMap GetWeights(int index)
+    void AllocateWeight(int index, const std::string& name, DataType dtype, int group_size)
     {
-        const auto& tensor_ptr_map = TM_CHECK_NOTNULL(weights_[index])->get_parameters();
-        TensorMap   params;
-        for (const auto& [name, tensor_ptr] : tensor_ptr_map) {
-            params[name] = *tensor_ptr;
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
+        auto& weight = *TM_CHECK_NOTNULL(weights_[index]);
+        core::ContextGuard ctx_guard = weight.context();
+
+        // Split the full parameter name into module path + parameter suffix.
+        // e.g. "layers.0.attention.w_qkv.0.weight" → path "layers.0.attention.w_qkv.0", suffix "weight"
+        auto dot = name.rfind('.');
+        TM_CHECK(dot != std::string::npos) << "invalid parameter name: " << name;
+        std::string module_path = name.substr(0, dot);
+
+        if (auto* mod = weight.find_module(module_path)) {
+            if (auto* dense = dynamic_cast<LlamaDenseWeight*>(mod)) {
+                dense->allocate(dtype, group_size);
+                return;
+            }
         }
-        return params;
+
+        // Not a LlamaDenseWeight — raw tensors (conv1d, A_log, etc.) are
+        // pre-allocated in constructors with the correct shape and dtype.
+        // Do NOT replace them: Python writes through GetParameter(), so
+        // swapping the tensor here would break the destination handle.
+    }
+
+    Tensor GetParameter(int index, const std::string& name)
+    {
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
+        auto& weight = *TM_CHECK_NOTNULL(weights_[index]);
+
+        // Path-based lookup: O(depth) instead of O(total_params).
+        auto dot = name.rfind('.');
+        if (dot != std::string::npos) {
+            std::string module_path = name.substr(0, dot);
+            std::string param_suffix = name.substr(dot + 1);
+            if (auto* mod = weight.find_module(module_path)) {
+                auto params = mod->get_parameters();
+                auto it     = params.find(param_suffix);
+                if (it != params.end()) {
+                    return *it->second;
+                }
+            }
+        }
+
+        // Fallback to full traversal for non-module parameters (norms, etc.)
+        auto params = weight.get_parameters();
+        auto it     = params.find(name);
+        TM_CHECK(it != params.end()) << "parameter not found: " << name;
+        return *it->second;
     }
 
     void ProcessWeights(int index)
@@ -406,11 +445,6 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
     model_param_.linear_state_dtype     = data_type_;
 
-    if (auto uqel = model["unquantized_expert_layers"]) {
-        for (auto it = uqel.begin(); it != uqel.end(); ++it) {
-            model_param_.unquantized_expert_layers.insert(it->as<int>());
-        }
-    }
     model_param_.attn_sink = model["attn_sink"].as<bool>();
     model_param_.mlp_bias  = model["mlp_bias"].as<bool>();
     if (model["activation_type"].as<std::string>("") == "gpt-oss") {
@@ -500,10 +534,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
 
-    model_param_.weight_type        = data_type_from_string(model["weight_type"].as<std::string>());
-    model_param_.expert_weight_type = data_type_from_string(model["expert_weight_type"].as<std::string>());
-    model_param_.ffn_weight_type =
-        data_type_from_string(model["ffn_weight_type"].as<std::string>(model["weight_type"].as<std::string>()));
+    auto data_type_str = model["data_type"].as<std::string>();
 
     if (auto method = get_moe_method()) {
         moe_param_.method = *method;
@@ -788,9 +819,14 @@ void TurboMind::CreateWeights(int index)
     return impl_->CreateWeights(index);
 }
 
-TensorMap TurboMind::GetWeights(int index)
+void TurboMind::AllocateWeight(int index, const std::string& name, DataType dtype, int group_size)
 {
-    return impl_->GetWeights(index);
+    return impl_->AllocateWeight(index, name, dtype, group_size);
+}
+
+Tensor TurboMind::GetParameter(int index, const std::string& name)
+{
+    return impl_->GetParameter(index, name);
 }
 
 void TurboMind::ProcessWeights(int index)

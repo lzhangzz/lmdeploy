@@ -55,6 +55,21 @@ void Module::remove_parameter(Tensor& param)
     TM_CHECK(0) << "param " << &param << " not found";
 }
 
+Module* Module::find_module(const std::string& path)
+{
+    for (auto& [name, mod] : modules_) {
+        if (path == name) {
+            return mod;
+        }
+        if (path.size() > name.size() && path[name.size()] == '.' && path.compare(0, name.size(), name) == 0) {
+            if (auto found = mod->find_module(path.substr(name.size() + 1))) {
+                return found;
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::unordered_map<std::string, Tensor*> Module::get_parameters() const
 {
     std::unordered_map<std::string, Tensor*> m;

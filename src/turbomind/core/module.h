@@ -26,6 +26,12 @@ public:
 
     std::unordered_map<std::string, Tensor*> get_parameters() const;
 
+    /// Walk the module tree and return the module at ``path``.
+    /// Path segments are separated by '.' and matched greedily against
+    /// registered module names (which may themselves contain '.' for indexed
+    /// modules, e.g. "layers.0").  Returns ``nullptr`` when no module matches.
+    Module* find_module(const std::string& path);
+
 private:
     void get_parameters_impl(std::string prefix, std::unordered_map<std::string, Tensor*>& m) const;
 

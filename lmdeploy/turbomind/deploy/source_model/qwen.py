@@ -9,6 +9,8 @@ from ..config import RopeParam
 from ..loader import create_loader
 from .base import INPUT_MODELS
 from .llama import LlamaModel, LlamaReader
+from .qwen3_5_spec import Qwen3_5Spec
+from .qwen3_spec import Qwen3Spec
 
 
 class QwenReader(LlamaReader):
@@ -185,6 +187,12 @@ class Qwen3Reader(LlamaReader):
 class Qwen3Model(LlamaModel):
     Reader = Qwen3Reader
 
+    def readers(self):
+        loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
+        for i, param in loader.items():
+            yield i, Qwen3Spec(param, self.model_config, self.model_format)
+        torch.cuda.empty_cache()
+
     def model_info(self):
         cfg = self.model_config
         info = super().model_info()
@@ -205,6 +213,12 @@ class Qwen3MoeReader(Qwen2MoeReader):
 @INPUT_MODELS.register_module(name='qwen3-moe')
 class Qwen3MoeModel(LlamaModel):
     Reader = Qwen3MoeReader
+
+    def readers(self):
+        loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
+        for i, param in loader.items():
+            yield i, Qwen3Spec(param, self.model_config, self.model_format)
+        torch.cuda.empty_cache()
 
     def model_info(self):
         cfg = self.model_config
@@ -383,6 +397,12 @@ class Qwen3_5Reader(Qwen3_5ReaderMixin, Qwen3Reader):
 class Qwen3_5Model(Qwen3Model):
     Reader = Qwen3_5Reader
 
+    def readers(self):
+        loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
+        for i, param in loader.items():
+            yield i, Qwen3_5Spec(param, self.model_config, self.model_format)
+        torch.cuda.empty_cache()
+
     def model_info(self):
         if 'text_config' in self.model_config:
             self.model_config = self.model_config['text_config']
@@ -467,8 +487,7 @@ class Qwen3_5MoeModel(Qwen3MoeModel):
             loader.mappings = [self.map_packed_qwen35_experts]
 
         for i, param in loader.items():
-            reader = self.Reader(param, {}, False, self.model_config, policy=self.policy, fp8_quant=self.fp8_quant)
-            yield i, reader
+            yield i, Qwen3_5Spec(param, self.model_config, self.model_format)
         torch.cuda.empty_cache()
 
     def model_info(self):

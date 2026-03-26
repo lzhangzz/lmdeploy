@@ -19,9 +19,7 @@ struct GatedDeltaNetWeight: public core::Module {
                         bool     bias,
                         int      tp_size,
                         int      tp_rank,
-                        DataType data_type,
-                        DataType weight_type,
-                        int      group_size);
+                        DataType data_type);
 
     void prepare();
 

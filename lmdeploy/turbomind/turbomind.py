@@ -174,21 +174,10 @@ class TurboMind:
 
         self.session_len = self.config.session_len
 
-    def _check_unloaded_tm_params(self):
-        tm_params = self._tm_model.tm_params
-        if len(tm_params) > 0:
-            uninitialized = list(tm_params.keys())
-            logger.warning('the model may not be loaded successfully '
-                           f'with {len(tm_params)} uninitialized params:\n{uninitialized}')
-
     def _load_weights(self):
         """Load weights."""
-        self._get_model_params()
-
         with torch.cuda.device(self.devices[0]):
             self._tm_model.export()
-
-        self._check_unloaded_tm_params()
 
     def _process_weights(self):
         """Process weight."""
@@ -216,34 +205,6 @@ class TurboMind:
                 futures.append(executor.submit(_create_weight_func, device_id))
             for future in futures:
                 future.result()
-
-    def _get_model_params(self):
-        """Get turbomind model params when loading from hf."""
-
-        model_comm = self.model_comm
-        tm_params = self._tm_model.tm_params
-        tm_params.clear()
-
-        def _get_params(device_id, que):
-            out = model_comm.get_weights(device_id)
-            que.put(out)
-
-        que = Queue()
-        with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
-            futures = []
-            for device_id in range(self.gpu_count):
-                futures.append(executor.submit(_get_params, device_id, que))
-            for future in futures:
-                future.result()
-
-        for _ in range(self.gpu_count):
-            tensor_map = que.get()
-            for k, v in tensor_map.items():
-                if k not in tm_params:
-                    tm_params[k] = [v]
-                else:
-                    tm_params[k].append(v)
-        logger.warning(f'get {len(tm_params)} model params')
 
     def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
         """Postprocess turbomind config by."""
@@ -276,13 +237,14 @@ class TurboMind:
         self._postprocess_config(tm_model.tm_config, engine_config)
 
         model_comm = _tm.TurboMind.create(model_dir='',
-                                          config=yaml.safe_dump(self.config_dict),
-                                          weight_type=self.config.model_config.weight_type)
+                                          config=yaml.safe_dump(self.config_dict))
 
         # create empty weight
         self._create_weight(model_comm)
-        # output model
+        # output model -- give it access to model_comm for deferred allocation
         self._tm_model = tm_model
+        tm_model.model_comm = model_comm
+        tm_model.gpu_count = self.gpu_count
         return model_comm
 
     def sleep(self, level: int = 1):
@@ -319,7 +281,6 @@ class TurboMind:
             return func(*args).clone()
 
         if not hasattr(self, '_export_iter'):
-            self._get_model_params()
             que = Queue()
             tm_model = self._tm_model
             tm_model.input_model.model_path = que
@@ -336,7 +297,6 @@ class TurboMind:
             next(self._export_iter)
 
         if request.finished:
-            self._check_unloaded_tm_params()
             self._process_weights()
             if self._engine_created is False:
                 self._create_engine()
@@ -374,9 +334,6 @@ class TurboMind:
                    **kwargs)
 
     def close(self):
-        if hasattr(self, '_tm_model'):
-            # close immediately after init engine with empty_init=True
-            self._tm_model.tm_params.clear()
         if hasattr(self, '_export_iter'):
             del self._export_iter
         if self.model_comm is not None:

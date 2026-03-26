@@ -378,7 +378,10 @@ PYBIND11_MODULE(_turbomind, m)
             .value("TYPE_FP16", kFloat16)
             .value("TYPE_FP32", kFloat32)
             .value("TYPE_FP64", kFloat64)
-            .value("TYPE_BF16", kBfloat16);
+            .value("TYPE_BF16", kBfloat16)
+            .value("TYPE_FP8_E4M3", kFloat8_e4m3)
+            .value("TYPE_FP4_E2M1", kFloat4_e2m1)
+            .value("TYPE_UINT4", kUint4);
 
         // memory type
         py::enum_<ft::DeviceType>(m, "MemoryType")
@@ -507,7 +510,7 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<TurboMind, std::shared_ptr<TurboMind>>(m, "TurboMind")
         .def_static(
             "create",
-            [](std::string model_dir, std::string config, std::string weight_type) -> std::shared_ptr<TurboMind> {
+            [](std::string model_dir, std::string config) -> std::shared_ptr<TurboMind> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
@@ -521,18 +524,30 @@ PYBIND11_MODULE(_turbomind, m)
                 return model;
             },
             "model_dir"_a,
-            "config"_a      = "",
-            "weight_type"_a = "half")
+            "config"_a = "")
         .def(
             "create_request",
             [](TurboMind* model) { return model->CreateRequest(); },
             py::call_guard<py::gil_scoped_release>())
         .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
-            "get_weights",
-            [](TurboMind* model, int index) { return model->GetWeights(index); },
+            "allocate_weight",
+            [](TurboMind* model, int index, const std::string& name, ft::DataType dtype, int group_size) {
+                model->AllocateWeight(index, name, dtype, group_size);
+            },
             py::call_guard<py::gil_scoped_release>(),
-            "index"_a)
+            "index"_a,
+            "name"_a,
+            "dtype"_a,
+            "group_size"_a)
+        .def(
+            "get_parameter",
+            [](TurboMind* model, int index, const std::string& name) {
+                return std::make_shared<Tensor>(model->GetParameter(index, name));
+            },
+            py::call_guard<py::gil_scoped_release>(),
+            "index"_a,
+            "name"_a)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },

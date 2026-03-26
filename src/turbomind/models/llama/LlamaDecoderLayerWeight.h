@@ -61,10 +61,7 @@ private:
     int inter_size_;
 
     DataType data_type_;
-    DataType weight_type_;
-    DataType expert_weight_type_;
 
-    int  bit_size_;
     bool attn_bias_;
     int  attn_tp_size_;
     int  attn_tp_rank_;

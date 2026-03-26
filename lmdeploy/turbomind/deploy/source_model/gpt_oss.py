@@ -2,7 +2,11 @@
 
 import re
 
+import torch
+
+from ..loader import create_loader
 from .base import INPUT_MODELS
+from .gpt_oss_spec import GptOssSpec
 from .llama import LlamaModel, LlamaReader
 
 
@@ -46,6 +50,13 @@ class GptOssReader(LlamaReader):
 class GptOssModel(LlamaModel):
 
     Reader = GptOssReader
+
+    def readers(self):
+        loader = create_loader(
+            self.model_path, self.Reader.attn_layer_patten, [map_experts])
+        for i, param in loader.items():
+            yield i, GptOssSpec(param, self.model_config, self.model_format)
+        torch.cuda.empty_cache()
 
     def model_info(self):
         cfg = self.model_config

@@ -5,8 +5,12 @@ Architecture: MLA (Multi-head Latent Attention) + MoE with dense first layer.
 Weight layout follows HuggingFace checkpoint with model.layers.* (same family as DeepSeek2).
 """
 
+import torch
+
+from ..loader import create_loader
 from .base import INPUT_MODELS
 from .deepseek2 import DeepSeek2Model, DeepSeek2Reader
+from .glm4_moe_lite_spec import Glm4MoeLiteSpec
 
 
 class Glm4MoeLiteReader(DeepSeek2Reader):
@@ -36,9 +40,15 @@ class Glm4MoeLiteModel(DeepSeek2Model):
 
     Reader = Glm4MoeLiteReader
 
+    def readers(self):
+        pattern = self.Reader.attn_layer_patten
+        loader = create_loader(self.model_path, pattern, [])
+        for i, param in loader.items():
+            yield i, Glm4MoeLiteSpec(param, self.model_config, self.model_format)
+        torch.cuda.empty_cache()
+
     def model_info(self):
         cfg = self.model_config
-        # Set default MoE routing config for GLM-4 MoE Lite if not in HF config
         if 'topk_method' not in cfg:
             cfg['topk_method'] = 'noaux_tc'
         if 'topk_group' not in cfg:
@@ -49,7 +59,6 @@ class Glm4MoeLiteModel(DeepSeek2Model):
             cfg['scoring_func'] = 'sigmoid'
 
         info = super().model_info()
-        # GLM4 MoE Lite uses noaux_tc routing with sigmoid scoring
         info['topk_method'] = 'noaux_tc'
         info['scoring_func'] = 'sigmoid'
         if 'router_n_groups' in cfg and cfg['router_n_groups'] > 0:

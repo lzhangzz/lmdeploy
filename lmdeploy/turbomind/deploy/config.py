@@ -64,9 +64,6 @@ class ModelConfig:
     size_per_head: int = 128
     group_size: int = 32
     data_type: str = None
-    weight_type: str = None
-    expert_weight_type: str = None
-    ffn_weight_type: str = None
     session_len: int = None
     attn_tp_size: int = 1
     attn_cp_size: int = 1
@@ -98,10 +95,6 @@ class ModelConfig:
     linear_num_key_heads: int = 0
     linear_num_value_heads: int = 0
     attn_output_gate: bool = False
-    # Per-layer expert weight type override: layer indices whose
-    # MoE experts are unquantized (fp16) despite expert_weight_type=int4.
-    # Populated from modules_to_not_convert patterns like 'model.layers.0.'.
-    unquantized_expert_layers: list[int] = field(default_factory=list)
     # tuning
     tune_layer_num: int = 1
 
@@ -223,10 +216,6 @@ class TurbomindModelConfig:
     @property
     def session_len(self):
         return self.model_config.session_len
-
-    @property
-    def weight_type(self):
-        return self.model_config.weight_type
 
     @property
     def group_size(self):

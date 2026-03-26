@@ -25,12 +25,9 @@ def tprint(*args, **kwargs):
     tqdm.tqdm.write(s.getvalue())
 
 
-def _weight_dtype_map(weight_type: str, default=None):
-    """Map literal data type to torch dtype."""
-
-    _WEIGHT_DTYPE_MAP = dict(int4=torch.float16, float16=torch.float16, float32=torch.float16, bfloat16=torch.bfloat16)
-
-    return _WEIGHT_DTYPE_MAP.get(weight_type, default)
+def _compute_dtype(data_type: str) -> torch.dtype:
+    """Map the model's compute data_type string to a torch dtype."""
+    return torch.bfloat16 if data_type == 'bfloat16' else torch.float16
 
 
 def _pad_inter_size(inter_size: int, group_size: int, tp: int):
@@ -55,7 +52,8 @@ class BaseOutputModel(ABC):
         self.mlp_tp_size = self.model_config.mlp_tp_size
         self.out_dir = out_dir
         self.to_file = True if out_dir else False
-        self.tm_params = dict()
+        self.model_comm = None
+        self.gpu_count = 0
 
         # get `model_info` at first, which will be updated to `self.model_config` and `self.attention_config`
         self.input_model_info = self.input_model.model_info()
@@ -124,60 +122,68 @@ class BaseOutputModel(ABC):
             with open(config_path, 'w') as f:
                 yaml.safe_dump(self.tm_config.to_dict(), f)
 
+    def allocate_weight(self, param_name: str, cpp_dtype, group_size: int) -> None:
+        """Allocate a linear weight on the C++ side via allocate_weight."""
+        if self.model_comm is None:
+            return
+        for i in range(self.gpu_count):
+            try:
+                self.model_comm.allocate_weight(i, param_name, cpp_dtype, group_size)
+            except RuntimeError:
+                pass
+
     def export_weight(self, param: torch.Tensor, name: str) -> None:
         """Export turbomind weight."""
 
+        _CASTABLE = {torch.float32, torch.float16, torch.bfloat16}
+
+        def _cast(tensor: torch.Tensor) -> torch.Tensor:
+            """Cast standard float types to the model's compute dtype.
+
+            Non-float types (int32, uint8) and special float types (float8)
+            are left unchanged — their dtype is determined by the checkpoint
+            format and handled by the C++ side.
+            """
+            if tensor.dtype in _CASTABLE:
+                return tensor.to(_compute_dtype(self.model_config.data_type))
+            return tensor
+
         def _tofile(tensor, path):
-            """To file."""
             if tensor.dtype == torch.bfloat16:
                 tensor = tensor.view(torch.half)
             tensor.contiguous().cpu().numpy().tofile(path)
 
         if self.to_file:
-            if torch.is_floating_point(param):
-                torch_type = _weight_dtype_map(self.model_config.weight_type, torch.float16)
-                param = param.to(torch_type)
+            param = _cast(param)
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))
-        elif len(self.tm_params) > 0:
-            tm_params = self.tm_params
-            weight_type = self.model_config.weight_type
-            data_type = self.model_config.data_type
-            assert weight_type in ['float16', 'bfloat16', 'int4', 'fp8']
+        elif self.model_comm is not None:
+            try:
+                import _turbomind as _tm
+            except ImportError:
+                _tm = None
 
-            # currently, the tensor type should in
-            # [torch.float, torch.half, torch.bfloat16, torch.int32]
             torch_tensor = param if param.is_contiguous() else param.contiguous()
             torch_tensor = torch_tensor.cuda()
-            assert torch_tensor.dtype in [torch.int32, torch.float, torch.half, torch.bfloat16, torch.uint8]
-            FLOAT_TYPES = [torch.float, torch.half, torch.bfloat16]
-            if weight_type == 'fp8':
-                # avoid casting float scales to half
-                if torch_tensor.dtype == torch.bfloat16 and data_type == 'float16':
-                    torch_tensor = torch_tensor.half()
-            elif torch_tensor.dtype in FLOAT_TYPES:
-                if weight_type in ['float16', 'int4']:
-                    torch_tensor = torch_tensor.half()
-                elif weight_type == 'bfloat16':
-                    torch_tensor = torch_tensor.bfloat16()
-                else:
-                    torch_tensor = torch_tensor.half()
-            if name in tm_params:
+            torch_tensor = _cast(torch_tensor)
+
+            def _reconcile_dtype(tm_tensor, src_tensor):
+                """Match Python tensor dtype to C++ tensor dtype."""
+                if _tm is not None:
+                    if tm_tensor.type == _tm.DataType.TYPE_FP32 and src_tensor.dtype in [
+                            torch.float16, torch.bfloat16
+                    ]:
+                        return src_tensor.float()
+                    elif tm_tensor.type == _tm.DataType.TYPE_FP16 and src_tensor.dtype == torch.float32:
+                        return src_tensor.half()
+                return src_tensor
+
+            for i in range(self.gpu_count):
                 try:
-                    import _turbomind as _tm
-                except ImportError:
-                    _tm = None
-                for tm_tensor in tm_params[name]:
-                    # Match TurboMind tensor dtype to avoid byte_size mismatch (e.g. f32 256b vs f16 128b)
-                    if _tm is not None:
-                        if tm_tensor.type == _tm.DataType.TYPE_FP32 and torch_tensor.dtype in [
-                                torch.float16, torch.bfloat16
-                        ]:
-                            torch_tensor = torch_tensor.float()
-                        elif tm_tensor.type == _tm.DataType.TYPE_FP16 and torch_tensor.dtype == torch.float32:
-                            torch_tensor = torch_tensor.half()
-                    tm_tensor.copy_from(torch_tensor)
-                tm_params.pop(name)
+                    tm_tensor = self.model_comm.get_parameter(i, name)
+                    tm_tensor.copy_from(_reconcile_dtype(tm_tensor, torch_tensor))
+                except RuntimeError:
+                    continue
         else:
             tprint('skip export', name, param.shape)
 

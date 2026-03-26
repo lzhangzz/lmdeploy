@@ -40,7 +40,14 @@ struct LlamaDenseWeight: public core::Module {
     {
     }
 
-    void emplace(int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size);
+    /// Record dimensions and metadata only -- no tensor allocation, no
+    /// parameter registration.  Actual tensors are created by ``allocate()``.
+    void emplace(int input_dim, int output_dim, DataType data_type, bool bias);
+
+    /// Allocate weight (and scales/zeros) with the actual dtype, register
+    /// parameters and populate GEMM metadata.  This is the single allocation
+    /// entry point -- ``emplace()`` must have been called first.
+    void allocate(DataType actual_weight_type, int actual_group_size);
 
     void preprocess();
 
@@ -58,9 +65,10 @@ struct LlamaDenseWeight: public core::Module {
         return static_cast<bool>(weight);
     }
 
-    int input_dim  = 0;
-    int output_dim = 0;
-    int group_size = 1;
+    int  input_dim  = 0;
+    int  output_dim = 0;
+    int  group_size = 1;
+    bool has_bias   = false;
 
     Tensor weight;
     Tensor bias;
@@ -96,8 +104,6 @@ struct LlamaAttentionWeight: public core::Module {
                          int      tp_size,
                          int      tp_rank,
                          DataType data_type,
-                         DataType weight_type,
-                         int      group_size,
                          int      window_size,
                          bool     sink,
                          bool     attn_output_gate = false);
@@ -131,8 +137,6 @@ struct LlamaFfnWeight: core::Module {
                    int            tp_size,
                    int            tp_rank,
                    DataType       data_type,
-                   DataType       weight_type,
-                   int            group_size,
                    ActivationType act_type,
                    bool           fuse_silu_act);
 
@@ -162,8 +166,6 @@ struct MoeFfnWeight: core::Module {
                  int             hidden_dim,
                  bool            mlp_bias,
                  DataType        data_type,
-                 DataType        weight_type,
-                 int             group_size,
                  int             tp_size,
                  int             tp_rank,
                  ActivationType  act_type,

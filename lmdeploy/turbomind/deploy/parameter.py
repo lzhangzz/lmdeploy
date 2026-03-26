@@ -1,7 +1,75 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from __future__ import annotations
+
 from abc import abstractmethod
 
 import torch
+
+from .kind_map import get_normalizer, get_suffix_map
+from .linear import Linear
+
+# ---------------------------------------------------------------------------
+# New API: build_linear — produces Linear bundles from checkpoint keys
+# ---------------------------------------------------------------------------
+
+
+def build_linear(
+    params: dict[str, torch.Tensor],
+    prefix: str,
+    suffix_map: dict[str, str],
+    normalizer,
+    input_dim: int = 0,
+    output_dim: int = -1,
+) -> Linear | None:
+    """Build a ``Linear`` bundle from checkpoint tensors at *prefix*.
+
+    For each ``(suffix, kind)`` in *suffix_map*, probe ``prefix + suffix`` in
+    *params*.  Found tensors are normalised with *normalizer(tensor, kind)* and
+    collected into a ``Linear`` keyed by the TM kind.
+
+    If the format expects ``"zeros"`` (the suffix map has a zeros entry) but
+    the checkpoint does not provide them, symmetric int4 zero-points are
+    synthesised from the ``"scales"`` tensor shape.
+    """
+    tensors: dict[str, torch.Tensor] = {}
+    for suffix, kind in suffix_map.items():
+        key = prefix + suffix
+        if key in params:
+            tensors[kind] = normalizer(params[key], kind)
+
+    if not tensors:
+        return None
+
+    has_zeros_suffix = any(v == "zeros" for v in suffix_map.values())
+    if "scales" in tensors and "zeros" not in tensors and has_zeros_suffix:
+        tensors["zeros"] = torch.full(
+            tensors["scales"].shape, 8, dtype=torch.uint8, device=tensors["scales"].device
+        )
+
+    return Linear(tensors=tensors, input_dim=input_dim, output_dim=output_dim)
+
+
+def build_linear_from_format(
+    params: dict[str, torch.Tensor],
+    prefix: str,
+    model_format: str | None,
+    input_dim: int = 0,
+    output_dim: int = -1,
+) -> Linear | None:
+    """Convenience wrapper: select suffix map + normalizer from *model_format*."""
+    return build_linear(
+        params, prefix,
+        suffix_map=get_suffix_map(model_format),
+        normalizer=get_normalizer(model_format),
+        input_dim=input_dim,
+        output_dim=output_dim,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy helpers — still used by module.py export paths; will be removed
+# when module.py is refactored to use Linear bundles.
+# ---------------------------------------------------------------------------
 
 
 def identity(x):

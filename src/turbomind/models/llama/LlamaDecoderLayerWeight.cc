@@ -60,8 +60,6 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
     hidden_units_(model.hidden_units),
     inter_size_(model.inter_size.at(layer_id)),
     data_type_{data_type},
-    weight_type_(model.weight_type),
-    expert_weight_type_(model.expert_weight_type),
     attn_bias_(model.attn_bias),
     attn_tp_size_(engine.attn_tp_size),
     attn_tp_rank_(engine.attn_tp_rank),
@@ -84,13 +82,10 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
                                     attn_bias_,
                                     attn_tp_size_,
                                     attn_tp_rank_,
-                                    data_type_,
-                                    weight_type_,
-                                    model.group_size});
+                                    data_type_});
         register_module("linear_attn", *linear_attn_weights);
     }
     else {
-        // Attention uses weight_type (fp16 in mixed quant scenarios)
         self_attn_weights.reset(new LlamaAttentionWeight{hidden_units_,
                                                          size_per_head_,
                                                          head_num_,
@@ -101,20 +96,13 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
                                                          attn_tp_size_,
                                                          attn_tp_rank_,
                                                          data_type_,
-                                                         weight_type_,
-                                                         model.group_size,
                                                          model.window_size.empty() ? 0 : model.window_size.at(layer_id),
                                                          model.attn_sink,
                                                          model.attn_output_gate});
         register_module("attention", *self_attn_weights);
     }
 
-    // FFN uses ffn_weight_type, except for layers fully excluded from
-    // quantization (e.g. 'model.layers.0.' in modules_to_not_convert)
-    // where all weights—including FFN—are in data_type (fp16).
     if (inter_size_) {
-        const DataType ffn_wtype = model.unquantized_expert_layers.count(layer_id) ? data_type_ : model.ffn_weight_type;
-        const bool     is_cublas_gemm = byte_size(ffn_wtype, 8) == 16;
         ffn_weights.reset(new LlamaFfnWeight{
             hidden_units_,
             inter_size_,
@@ -122,26 +110,18 @@ LlamaDecoderLayerWeight::LlamaDecoderLayerWeight(
             mlp_tp_size_,
             mlp_tp_rank_,
             data_type_,
-            ffn_wtype,
-            model.group_size,
             model.act_type,
-            is_fuse_silu_act() && !is_cublas_gemm,
+            is_fuse_silu_act(),
         });
         register_module("feed_forward", *ffn_weights);
     }
 
-    // MoE routed experts use expert_weight_type (int4 for AWQ, e2m1 for mxfp4)
-    // unless the layer is in unquantized_expert_layers (e.g. layer 0 excluded
-    // from quantization via modules_to_not_convert).
-    if (layer_id < moe_param.expert_num.size() && moe_param.expert_num[layer_id]) {
-        const DataType moe_wtype = model.unquantized_expert_layers.count(layer_id) ? data_type_ : expert_weight_type_;
+    if (layer_id < (int)moe_param.expert_num.size() && moe_param.expert_num[layer_id]) {
         moe_weights.reset(new MoeFfnWeight{layer_id,
                                            moe_param,
                                            hidden_units_,
                                            model.mlp_bias,
                                            data_type_,
-                                           moe_wtype,
-                                           model.group_size,
                                            mlp_tp_size_,
                                            mlp_tp_rank_,
                                            model.act_type,

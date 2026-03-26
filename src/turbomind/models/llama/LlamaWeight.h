@@ -73,7 +73,6 @@ private:
     int num_layer_;
 
     DataType data_type_;
-    DataType weight_type_;
 
     std::unordered_map<std::string, Tensor> pinned_weights_;
 

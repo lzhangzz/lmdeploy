@@ -10,7 +10,6 @@
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -18,47 +17,58 @@
 
 namespace turbomind {
 
-void LlamaDenseWeight::emplace(
-    int input_dim, int output_dim, DataType data_type, bool bias, DataType weight_type, int group_size)
+void LlamaDenseWeight::emplace(int input_dim, int output_dim, DataType data_type, bool bias)
 {
     this->data_type   = data_type;
     this->input_type  = data_type;
-    this->weight_type = weight_type;
+    this->weight_type = data_type;
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
-    this->group_size  = group_size;
+    this->group_size  = 0;
+    this->has_bias    = bias;
+}
 
-    const bool is_qweight = weight_type == kUint4 || weight_type == kUint8;
+void LlamaDenseWeight::allocate(DataType actual_weight_type, int actual_group_size)
+{
+    weight_type  = actual_weight_type;
+    group_size   = actual_group_size;
+    input_type   = data_type;
+    weight_quant = {};
+    input_quant  = {};
 
-    weight = Tensor({input_dim, output_dim}, weight_type, kDEVICE);
+    const bool is_qweight = actual_weight_type == kUint4 || actual_weight_type == kUint8;
+
+    weight = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
     register_parameter(is_qweight ? "qweight" : "weight", weight);
 
-    if (bias) {
-        this->bias = Tensor{{output_dim}, data_type, kDEVICE};
-        register_parameter("bias", this->bias);
+    if (has_bias) {
+        bias = Tensor{{output_dim}, data_type, kDEVICE};
+        register_parameter("bias", bias);
     }
 
-    if (weight_type == kFloat8_e4m3) {
-        TM_CHECK_EQ(group_size, 128);
-        scales       = Tensor{{cdiv(input_dim, group_size), cdiv(output_dim, group_size)}, kFloat, kDEVICE};
-        weight_quant = QuantDesc{gemm::QuantType::kB, group_size};
+    scales = {};
+    zeros  = {};
+
+    if (actual_weight_type == kFloat8_e4m3) {
+        TM_CHECK_EQ(actual_group_size, 128);
+        scales       = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)}, kFloat, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kB, actual_group_size};
         if (getSMVersion() == 90) {
             input_type  = kFloat8_e4m3;
-            input_quant = QuantDesc{gemm::QuantType::kK, group_size};
+            input_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
         }
         register_parameter("scales", scales);
     }
-    else if (weight_type == kFloat4_e2m1) {
-        scales       = Tensor{{cdiv(input_dim, group_size), output_dim}, kUint8, kDEVICE};
-        input_type   = data_type;
-        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
+    else if (actual_weight_type == kFloat4_e2m1) {
+        scales       = Tensor{{cdiv(input_dim, actual_group_size), output_dim}, kUint8, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
         register_parameter("scales", scales);
     }
     else if (is_qweight) {
-        TM_CHECK(input_dim % group_size == 0) << input_dim << " " << group_size;
-        scales       = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
-        zeros        = Tensor{{input_dim / group_size, output_dim}, data_type, kDEVICE};
-        weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
+        TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
+        scales       = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
+        zeros        = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
+        weight_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
         register_parameter("scales", scales);
         register_parameter("zeros", zeros);
     }
@@ -66,7 +76,6 @@ void LlamaDenseWeight::emplace(
     k_desc = {};
     q_desc = {};
 
-    // default case: floating point, N-major
     k_desc.type  = weight.dtype();
     k_desc.order = gemm::kRowMajor;
     k_desc.rows  = input_dim;
@@ -270,24 +279,19 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
                                            int      tp_size,
                                            int      tp_rank,
                                            DataType data_type,
-                                           DataType weight_type,
-                                           int      group_size,
                                            int      window_size,
                                            bool     sink,
                                            bool     attn_output_gate)
 {
     this->window_size = window_size;
 
-    // attn_output_gate doubles Q dimension (extra gate projection fused into Q)
     const int q_factor = attn_output_gate ? 2 : 1;
 
     if (mla.kv_lora_rank == 0) {
         qkv.emplace(hidden_dim,
                     (head_num * q_factor + 2 * kv_head_num) * head_dim / tp_size,
                     data_type,
-                    bias,
-                    weight_type,
-                    group_size);
+                    bias);
         register_module("w_qkv", qkv, tp_rank);
         if (qk_norm) {
             q_a_layernorm  = Tensor{{head_dim}, data_type, kDEVICE};
@@ -299,31 +303,24 @@ LlamaAttentionWeight::LlamaAttentionWeight(int      hidden_dim,
     else {
         const int qk_nope_dim = head_dim - mla.qk_rope_dim;
         if (mla.q_lora_rank) {
-            q_a_proj.emplace(hidden_dim, mla.q_lora_rank, data_type, false, weight_type, group_size);
-            q_b_proj.emplace(mla.q_lora_rank, head_num * head_dim / tp_size, data_type, false, weight_type, group_size);
+            q_a_proj.emplace(hidden_dim, mla.q_lora_rank, data_type, false);
+            q_b_proj.emplace(mla.q_lora_rank, head_num * head_dim / tp_size, data_type, false);
             q_a_layernorm = Tensor{{q_b_proj.input_dim}, data_type, kDEVICE};
             register_module("q_a_proj", q_a_proj);
             register_module("q_b_proj", q_b_proj, tp_rank);
             register_parameter("q_a_layernorm", q_a_layernorm);
         }
         else {
-            q_proj.emplace(hidden_dim, head_num * head_dim / tp_size, data_type, false, weight_type, group_size);
+            q_proj.emplace(hidden_dim, head_num * head_dim / tp_size, data_type, false);
             register_module("q_proj", q_proj, tp_rank);
         }
-        kv_a_proj.emplace(hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, data_type, false, weight_type, group_size);
-        // kv_b_proj.emplace(mla.kv_lora_rank,
-        //                   head_num * (qk_nope_dim + mla.v_head_dim) / tp_size,
-        //                   data_type,
-        //                   false,
-        //                   weight_type,
-        //                   group_size);
+        kv_a_proj.emplace(hidden_dim, mla.kv_lora_rank + mla.qk_rope_dim, data_type, false);
 
         kv_a_layernorm = Tensor{{mla.kv_lora_rank}, data_type, kDEVICE};
         register_module("kv_a_proj", kv_a_proj);
-        // register_module("kv_b_proj", kv_b_proj, tp_rank);
         register_parameter("kv_a_layernorm", kv_a_layernorm);
     }
-    output.emplace((head_num * head_dim) / tp_size, hidden_dim, data_type, bias, weight_type, group_size);
+    output.emplace((head_num * head_dim) / tp_size, hidden_dim, data_type, bias);
     register_module("wo", output, tp_rank);
 
     if (sink) {
@@ -349,8 +346,6 @@ LlamaFfnWeight::LlamaFfnWeight(int            hidden_dim,
                                int            tp_size,
                                int            tp_rank,
                                DataType       data_type,
-                               DataType       weight_type,
-                               int            group_size,
                                ActivationType act_type,
                                bool           fuse_silu_act)
 {
@@ -363,15 +358,9 @@ LlamaFfnWeight::LlamaFfnWeight(int            hidden_dim,
     this->act_type      = act_type;
     this->is_fused_silu = fuse_silu_act && this->act_type == ActivationType::kSilu;
 
-    gating.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
-
-    intermediate.emplace(hidden_dim, inter_size, data_type, bias, weight_type, group_size);
-
-    output.emplace(inter_size, hidden_dim, data_type, bias, weight_type, group_size);
-
-    if (gating.input_type == kFloat8_e4m3) {  // SM90 FP8*FP8 GEMM, can't fuse
-        this->is_fused_silu = false;
-    }
+    gating.emplace(hidden_dim, inter_size, data_type, bias);
+    intermediate.emplace(hidden_dim, inter_size, data_type, bias);
+    output.emplace(inter_size, hidden_dim, data_type, bias);
 
     register_module("w1", gating, tp_rank);
     register_module("w3", intermediate, tp_rank);
@@ -510,6 +499,13 @@ void LlamaFfnWeight::prepare(bool fused_moe)
 
     auto stream = core::Context().stream().handle();
 
+    // Finalize fuse_silu based on actual weight type (known after allocate())
+    if (gating.weight_type != DataType{}) {
+        if (byte_size(gating.weight_type, 8) >= 16 || gating.input_type == kFloat8_e4m3) {
+            is_fused_silu = false;
+        }
+    }
+
     gating.preprocess();
     intermediate.preprocess();
 
@@ -519,9 +515,8 @@ void LlamaFfnWeight::prepare(bool fused_moe)
         gate_and_up.emplace(gating.input_dim,  //
                             gating.output_dim * 2,
                             gating.data_type,
-                            (bool)gating.bias,
-                            gating.weight_type,
-                            gating.group_size);
+                            (bool)gating.bias);
+        gate_and_up.allocate(gating.weight_type, gating.group_size);
         gate_and_up.preprocess();
         register_module("w1w3", gate_and_up, this->tp_rank);
 
@@ -552,8 +547,6 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
                            int             hidden_dim,
                            bool            mlp_bias,
                            DataType        data_type,
-                           DataType        weight_type,
-                           int             group_size,
                            int             tp_size,
                            int             tp_rank,
                            ActivationType  act_type,
@@ -569,7 +562,8 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
         return;
     }
 
-    gate.emplace(hidden_dim, expert_num, data_type, param.router_bias, data_type, 1);
+    gate.emplace(hidden_dim, expert_num, data_type, param.router_bias);
+    gate.allocate(data_type, 0);
     register_module("gate", gate);
 
     if (param.topk_method == "noaux_tc") {
@@ -579,8 +573,7 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
 
     method = param.method;
 
-    const bool is_cublas_gemm = method == MoeParam::kNaive && byte_size(weight_type, 8) == 16;
-    if (is_cublas_gemm || mlp_bias) {
+    if (mlp_bias) {
         fuse_silu_act = false;
     }
 
@@ -592,15 +585,14 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
                                                 tp_size,
                                                 tp_rank,
                                                 data_type,
-                                                weight_type,
-                                                group_size,
                                                 act_type,
                                                 fuse_silu_act});
         register_module("experts", *experts.back(), i);
     }
 
     if (param.shared_gate) {
-        shared_gate.emplace(hidden_dim, 1, data_type, false, data_type, 1);
+        shared_gate.emplace(hidden_dim, 1, data_type, false);
+        shared_gate.allocate(data_type, 0);
         register_module("shared_gate", shared_gate);
     }
 }
@@ -608,6 +600,15 @@ MoeFfnWeight::MoeFfnWeight(int             layer_id,
 void MoeFfnWeight::prepare()
 {
     const auto fused_moe = method == MoeParam::kFused;
+
+    // Refine fuse_silu based on actual expert weight types (set by allocate())
+    if (!experts.empty() && method == MoeParam::kNaive) {
+        if (byte_size(experts[0]->gating.weight_type, 8) >= 16) {
+            for (auto& e : experts) {
+                e->is_fused_silu = false;
+            }
+        }
+    }
 
     gate.prepare();
     shared_gate.prepare();

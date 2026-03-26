@@ -13,9 +13,7 @@ GatedDeltaNetWeight::GatedDeltaNetWeight(int      hidden_dim,
                                          bool     bias,
                                          int      tp_size,
                                          int      tp_rank,
-                                         DataType data_type,
-                                         DataType weight_type,
-                                         int      group_size):
+                                         DataType data_type):
     tp_rank_(tp_rank), tp_size_(tp_size)
 {
     const int key_dim    = num_k_heads * key_head_dim / tp_size;
@@ -23,17 +21,11 @@ GatedDeltaNetWeight::GatedDeltaNetWeight(int      hidden_dim,
     const int v_heads_tp = num_v_heads / tp_size;
     const int conv_dim   = key_dim * 2 + value_dim;
 
-    // GatedDeltaNet projections are stored as plain dense weights in the checkpoint
-    // (dense_wtype = data_type avoids quantization path for these projections).
-    const DataType dense_wtype = data_type;
-    const int      dense_gsz   = 0;
-
-    // Individual projections registered for checkpoint loading
-    in_proj_qkv.emplace(hidden_dim, conv_dim, data_type, bias, dense_wtype, dense_gsz);
-    in_proj_z.emplace(hidden_dim, value_dim, data_type, bias, dense_wtype, dense_gsz);
-    in_proj_b.emplace(hidden_dim, v_heads_tp, data_type, bias, dense_wtype, dense_gsz);
-    in_proj_a.emplace(hidden_dim, v_heads_tp, data_type, bias, dense_wtype, dense_gsz);
-    out_proj.emplace(value_dim, hidden_dim, data_type, bias, dense_wtype, dense_gsz);
+    in_proj_qkv.emplace(hidden_dim, conv_dim, data_type, bias);
+    in_proj_z.emplace(hidden_dim, value_dim, data_type, bias);
+    in_proj_b.emplace(hidden_dim, v_heads_tp, data_type, bias);
+    in_proj_a.emplace(hidden_dim, v_heads_tp, data_type, bias);
+    out_proj.emplace(value_dim, hidden_dim, data_type, bias);
 
     register_module("in_proj_qkv", in_proj_qkv, tp_rank_);
     register_module("in_proj_z", in_proj_z, tp_rank_);
@@ -145,9 +137,8 @@ void GatedDeltaNetWeight::prepare()
     in_proj_all.emplace(in_proj_qkv.input_dim,
                         out_all,
                         in_proj_qkv.data_type,
-                        /*bias=*/false,
-                        in_proj_qkv.weight_type,
-                        in_proj_qkv.group_size);
+                        /*bias=*/false);
+    in_proj_all.allocate(in_proj_qkv.weight_type, in_proj_qkv.group_size);
 
     concat_weights_4(
         in_proj_qkv.weight, in_proj_z.weight, in_proj_b.weight, in_proj_a.weight, in_proj_all.weight, stream);
