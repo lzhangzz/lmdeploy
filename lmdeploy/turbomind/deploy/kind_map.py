@@ -64,6 +64,10 @@ class WeightFormat:
         presence and tensor dtype are checked so that, e.g., an FP8 layer
         stored without ``weight_scale_inv`` is correctly classified as dense
         rather than fp8.
+    dequant : Callable[[dict[str, Tensor]], dict[str, Tensor]] | None
+        Optional fusion-time dequantizer: maps TM ``tensors`` to a dense
+        ``{weight, bias?}`` dict.  ``None`` means the format is not dequantized
+        in Python (e.g. GPTQ / MXFP4 stay as-is for mixed-format fusion).
     """
 
     name: str | None
@@ -75,6 +79,7 @@ class WeightFormat:
     block_out: int | None
     zeros_factory: Callable[[Tensor], Tensor] | None
     accepts: Callable[[dict[str, Tensor]], bool]
+    dequant: Callable[[dict[str, Tensor]], dict[str, Tensor]] | None
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -311,15 +316,25 @@ def _accepts_dense(available: dict[str, "Tensor"]) -> bool:
 
 
 def _accepts_awq(available: dict[str, "Tensor"]) -> bool:
-    """AWQ: packed u4-in-int32 quantized weight required."""
+    """AWQ: int32 qweight packed along N-dim (qweight.shape[-1] * 8 == scales.shape[-1])."""
     qw = available.get(".qweight")
-    return qw is not None and qw.dtype == torch.int32
+    if qw is None or qw.dtype != torch.int32:
+        return False
+    scales = available.get(".scales")
+    if scales is not None and qw.ndim >= 2 and scales.ndim >= 2:
+        return qw.shape[-1] * 8 == scales.shape[-1]
+    return True  # no scales to disambiguate; AWQ has priority
 
 
 def _accepts_gptq(available: dict[str, "Tensor"]) -> bool:
-    """GPTQ: packed u4-in-int32 quantized weight required."""
+    """GPTQ: int32 qweight packed along K-dim (qweight.shape[-1] == scales.shape[-1])."""
     qw = available.get(".qweight")
-    return qw is not None and qw.dtype == torch.int32
+    if qw is None or qw.dtype != torch.int32:
+        return False
+    scales = available.get(".scales")
+    if scales is not None and qw.ndim >= 2 and scales.ndim >= 2:
+        return qw.shape[-1] == scales.shape[-1]
+    return True
 
 
 def _accepts_compressed_tensor(available: dict[str, "Tensor"]) -> bool:
@@ -345,6 +360,40 @@ def _accepts_mxfp4(available: dict[str, "Tensor"]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Fusion-time dequantizers: TM tensors -> dense {weight, bias?}
+# ---------------------------------------------------------------------------
+
+
+def _dequant_awq(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+    from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
+
+    qweight = tensors["qweight"]
+    scales = tensors["scales"]
+    qzeros = tensors["zeros"]
+    group_size = qweight.shape[0] // scales.shape[0]
+    w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+    result: dict[str, Tensor] = {"weight": w}
+    if "bias" in tensors:
+        result["bias"] = tensors["bias"]
+    return result
+
+
+def _dequant_fp8(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+    weight = tensors["weight"]
+    scales = tensors["scales"]
+    block_size = 128
+    fp8_weight = weight.view(torch.float8_e4m3fn).float()
+    scale = scales.float()
+    scale = scale.repeat_interleave(block_size, dim=0)
+    scale = scale.repeat_interleave(block_size, dim=1)
+    scale = scale[: fp8_weight.shape[0], : fp8_weight.shape[1]]
+    result: dict[str, Tensor] = {"weight": (fp8_weight * scale).to(torch.bfloat16)}
+    if "bias" in tensors:
+        result["bias"] = tensors["bias"]
+    return result
+
+
+# ---------------------------------------------------------------------------
 # WeightFormat singletons
 # ---------------------------------------------------------------------------
 
@@ -358,6 +407,7 @@ DENSE_FORMAT = WeightFormat(
     block_out=None,
     zeros_factory=None,
     accepts=_accepts_dense,
+    dequant=None,
 )
 
 AWQ_FORMAT = WeightFormat(
@@ -370,6 +420,7 @@ AWQ_FORMAT = WeightFormat(
     block_out=None,
     zeros_factory=None,   # AWQ checkpoints always include qzeros
     accepts=_accepts_awq,
+    dequant=_dequant_awq,
 )
 
 GPTQ_FORMAT = WeightFormat(
@@ -382,6 +433,7 @@ GPTQ_FORMAT = WeightFormat(
     block_out=None,
     zeros_factory=_zeros_int4_symmetric,
     accepts=_accepts_gptq,
+    dequant=None,
 )
 
 COMPRESSED_TENSOR_FORMAT = WeightFormat(
@@ -394,6 +446,7 @@ COMPRESSED_TENSOR_FORMAT = WeightFormat(
     block_out=None,
     zeros_factory=_zeros_int4_symmetric,
     accepts=_accepts_compressed_tensor,
+    dequant=None,
 )
 
 FP8_FORMAT = WeightFormat(
@@ -406,6 +459,7 @@ FP8_FORMAT = WeightFormat(
     block_out=128,
     zeros_factory=None,
     accepts=_accepts_fp8,
+    dequant=_dequant_fp8,
 )
 
 MXFP4_FORMAT = WeightFormat(
@@ -418,6 +472,7 @@ MXFP4_FORMAT = WeightFormat(
     block_out=None,
     zeros_factory=None,
     accepts=_accepts_mxfp4,
+    dequant=None,
 )
 
 _WEIGHT_FORMAT_MAP: dict[str | None, WeightFormat] = {

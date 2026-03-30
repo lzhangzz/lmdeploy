@@ -863,67 +863,25 @@ class ModelWeightSpec(ABC):
 # -----------------------------------------------------------------------
 
 
-def _classify_format(linear: Linear) -> str:
-    """Return the format name of a Linear bundle."""
-    return linear.weight_format.name
-
-
 def _dequant_linear(linear: Linear) -> Linear:
-    """Dequantize a quantized Linear to dense (bf16/fp16).
-
-    Supports AWQ (int4) and blocked FP8 formats. Returns the input
-    unchanged if already dense.
-    """
-    fmt = _classify_format(linear)
-    if fmt == "dense":
+    """Dequantize a quantized Linear to dense when the format provides ``dequant``."""
+    fmt = linear.weight_format
+    if fmt is None or fmt.dequant is None:
         return linear
-
-    if fmt == "awq":
-        from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
-        qweight = linear.tensors["qweight"]
-        scales = linear.tensors["scales"]
-        qzeros = linear.tensors["zeros"]
-        group_size = qweight.shape[0] // scales.shape[0]
-        w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
-        bias = linear.tensors.get("bias")
-        tensors: dict[str, torch.Tensor] = {"weight": w}
-        if bias is not None:
-            tensors["bias"] = bias
-        return Linear(tensors=tensors, weight_format=DENSE_FORMAT)
-
-    if fmt == "fp8":
-        weight = linear.tensors["weight"]
-        scales = linear.tensors["scales"]
-        block_size = 128
-        fp8_weight = weight.view(torch.float8_e4m3fn).float()
-        scale = scales.float()
-        scale = scale.repeat_interleave(block_size, dim=0)
-        scale = scale.repeat_interleave(block_size, dim=1)
-        scale = scale[:fp8_weight.shape[0], :fp8_weight.shape[1]]
-        bias = linear.tensors.get("bias")
-        tensors = {"weight": (fp8_weight * scale).to(torch.bfloat16)}
-        if bias is not None:
-            tensors["bias"] = bias
-        return Linear(tensors=tensors, weight_format=DENSE_FORMAT)
-
-    return linear
+    new_tensors = fmt.dequant(linear.tensors)
+    return Linear(tensors=new_tensors, weight_format=DENSE_FORMAT)
 
 
 def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
     """Dequant linears to a common dense format if a fusion group has mixed formats."""
-    formats = {name: _classify_format(lin) for name, lin in linears.items()}
+    formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
         return linears
     return {name: _dequant_linear(lin) for name, lin in linears.items()}
 
 
 def _infer_cpp_linear_dtype(linear: Linear):
-    """Determine C++ DataType and group_size from a Linear bundle.
-
-    Uses ``linear.weight_format.cpp_dtype_name`` when available; falls back
-    to content-based inference for manually-constructed ``Linear`` objects
-    that lack an attached ``WeightFormat``.
-    """
+    """Determine C++ DataType and group_size from ``Linear.weight_format``."""
     try:
         import _turbomind as _tm
     except ImportError:
@@ -933,21 +891,11 @@ def _infer_cpp_linear_dtype(linear: Linear):
     if fmt is not None and fmt.cpp_dtype_name is not None:
         cpp_dtype = getattr(_tm.DataType, fmt.cpp_dtype_name, None)
         if cpp_dtype is not None:
-            block_in = fmt.block_in or 0
-            return cpp_dtype, block_in
+            return cpp_dtype, fmt.block_in or 0
 
-    # Fallback: infer from tensor dtype/content
-    if "qweight" in linear.tensors:
-        return _tm.DataType.TYPE_UINT4, 0
+    # Dense (or missing format): dtype from weight tensor
     weight = linear.tensors.get("weight")
     if weight is not None:
-        if weight.dtype == torch.float8_e4m3fn:
-            return _tm.DataType.TYPE_FP8_E4M3, 128
-        if weight.dtype == torch.uint8 and "scales" in linear.tensors:
-            scales = linear.tensors["scales"]
-            if scales.dtype == torch.uint8:
-                return _tm.DataType.TYPE_FP4_E2M1, 32
-            return _tm.DataType.TYPE_FP8_E4M3, 128
         if weight.dtype == torch.bfloat16:
             return _tm.DataType.TYPE_BF16, 0
         if weight.dtype == torch.float16:
