@@ -4,47 +4,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 
-import torch
 from mmengine import Registry
 
-from ..linear import Linear
-from ..parameter import build_linear
-
 INPUT_MODELS = Registry('source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
-
-
-class BaseReader(ABC):
-    """Mapping between TM modules and source modules."""
-
-    params: dict[str, torch.Tensor]
-
-    def __init__(self):
-        pass
-
-    def transform(self, x: torch.Tensor | None, kind: str) -> torch.Tensor | None:
-        return None if x is None else self._transform(x, kind)
-
-    @abstractmethod
-    def _transform(self, x: torch.Tensor, kind: str):
-        """Transform x."""
-        pass
-
-    # -- New API: build Linear bundles from checkpoint keys --
-
-    def read_linear(self, prefix: str) -> Linear | None:
-        """Build a ``Linear`` bundle for the checkpoint keys at *prefix*.
-
-        Probes all known suffixes and auto-detects the format via
-        ``WeightFormat.accepts``.
-        """
-        return build_linear(self.params, prefix)
-
-    def get(self, key: str) -> torch.Tensor | None:
-        """Retrieve a single raw tensor by its full checkpoint key."""
-        t = self.params.get(key)
-        if t is not None:
-            t = self.transform(t, "weight")
-        return t
 
 
 class BaseInputModel(ABC):
@@ -66,5 +28,5 @@ class BaseInputModel(ABC):
         pass
 
     @abstractmethod
-    def readers(self) -> Iterator[BaseReader]:
+    def readers(self) -> Iterator:
         pass

@@ -10,11 +10,138 @@ Demonstrates the composable-ops pipeline with:
 """
 from __future__ import annotations
 
+import re
+
 import torch
 
 from ..linear import Linear
+from ..loader import create_loader
 from ..module import ModelWeightSpec, SplitSide
 from ..parameter import build_linear
+from .base import INPUT_MODELS, BaseInputModel
+from .utils import load_model_config, parse_rope_param
+
+_LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+
+
+def _qwen35_model_info_base(cfg: dict) -> dict:
+    """Build the common model_info dict for all Qwen3.5 variants."""
+    attn_head_num = cfg['num_attention_heads']
+    hidden_units = cfg['hidden_size']
+    head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
+    rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
+
+    # partial_rotary_factor adjusts RoPE dim
+    rope_params = cfg.get('rope_parameters', {})
+    partial_rotary_factor = rope_params.get('partial_rotary_factor', cfg.get('partial_rotary_factor', 1.0))
+    if partial_rotary_factor < 1.0:
+        rope_param.dim = int(head_dim * partial_rotary_factor)
+
+    info = dict(
+        num_layer=cfg['num_hidden_layers'],
+        norm_eps=cfg['rms_norm_eps'],
+        head_num=attn_head_num,
+        kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
+        hidden_units=hidden_units,
+        size_per_head=head_dim,
+        inter_size=cfg.get('intermediate_size', 0),
+        vocab_size=cfg['vocab_size'],
+        max_position_embeddings=max_position_embeddings,
+        rope_param=rope_param,
+        qk_norm=True,
+        attn_bias=cfg.get('attention_bias', 0),
+    )
+
+    layer_types = cfg.get('layer_types', [])
+    if layer_types:
+        info.update(
+            layer_types=layer_types,
+            linear_key_head_dim=cfg.get('linear_key_head_dim', 0),
+            linear_value_head_dim=cfg.get('linear_value_head_dim', 0),
+            linear_conv_kernel_dim=cfg.get('linear_conv_kernel_dim', 0),
+            linear_num_key_heads=cfg.get('linear_num_key_heads', 0),
+            linear_num_value_heads=cfg.get('linear_num_value_heads', 0),
+            attn_output_gate=cfg.get('attn_output_gate', False),
+        )
+
+    return info
+
+
+@INPUT_MODELS.register_module(name='qwen3_5')
+class Qwen3_5InputModel(BaseInputModel):
+    """Input model for Qwen3.5 (dense + optional linear attention)."""
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        info = _qwen35_model_info_base(cfg)
+        info.update(
+            expert_num=cfg.get('num_experts', 0),
+            expert_inter_size=cfg.get('moe_intermediate_size', 0),
+            experts_per_token=cfg.get('num_experts_per_tok', 0),
+            moe_shared_gate=True,
+            scoring_func='softmax',
+            norm_topk_prob=True,
+        )
+        shared_expert_size = cfg.get('shared_expert_intermediate_size')
+        if shared_expert_size is not None:
+            info['inter_size'] = shared_expert_size
+        return info
+
+    def readers(self):
+        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
+        for i, param in loader.items():
+            yield i, Qwen3_5Spec(param, self.model_config)
+        torch.cuda.empty_cache()
+
+
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
+class Qwen3_5MoeInputModel(BaseInputModel):
+    """Input model for Qwen3.5-MoE."""
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    @staticmethod
+    def map_packed_qwen35_experts(name: str) -> str:
+        """Map packed expert names to weight names so that parameter.py can classify them."""
+        return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        info = _qwen35_model_info_base(cfg)
+        info.update(
+            expert_num=cfg.get('num_experts', 0),
+            expert_inter_size=cfg.get('moe_intermediate_size', 0),
+            experts_per_token=cfg.get('num_experts_per_tok', 0),
+            inter_size=cfg.get('shared_expert_intermediate_size', 0),
+            moe_shared_gate=True,
+            scoring_func='softmax',
+            norm_topk_prob=True,
+        )
+        return info
+
+    def readers(self):
+        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
+
+        has_packed_gate_up = any('mlp.experts.gate_up_proj' in k for k in loader.index.keys())
+        has_packed_down = any('mlp.experts.down_proj' in k for k in loader.index.keys())
+        if has_packed_gate_up and has_packed_down:
+            loader.mappings = [self.map_packed_qwen35_experts]
+
+        for i, param in loader.items():
+            yield i, Qwen3_5Spec(param, self.model_config)
+        torch.cuda.empty_cache()
 
 
 class Qwen3_5Spec(ModelWeightSpec):

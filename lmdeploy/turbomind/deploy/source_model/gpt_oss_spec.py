@@ -14,11 +14,78 @@ Key differences from standard Llama:
 """
 from __future__ import annotations
 
+import re
+
 import torch
 
 from ..linear import Linear
+from ..loader import create_loader
 from ..module import ModelWeightSpec, SplitSide
 from ..parameter import build_linear
+from .base import INPUT_MODELS, BaseInputModel
+from .utils import load_model_config, parse_rope_param
+
+_LAYER_PATTERN = r'model\.layers\.([0-9]+).'
+
+
+def map_experts(s: str) -> str:
+    s = re.sub(r'(experts.*proj)$', r'\1.weight', s)
+    s = re.sub(r'(experts.*proj)_bias$', r'\1.bias', s)
+    s = re.sub(r'(experts.*proj)_blocks$', r'\1.blocks', s)
+    s = re.sub(r'(experts.*proj)_scales$', r'\1.scales', s)
+    return s
+
+
+@INPUT_MODELS.register_module(name='gpt-oss')
+class GptOssInputModel(BaseInputModel):
+    """Input model for gpt-oss (MoE with packed experts)."""
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        attn_head_num = cfg['num_attention_heads']
+        hidden_units = cfg['hidden_size']
+        head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
+        rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
+        types = cfg['layer_types']
+        sliding_window = cfg['sliding_window']
+        info = dict(
+            num_layer=cfg['num_hidden_layers'],
+            norm_eps=cfg['rms_norm_eps'],
+            head_num=attn_head_num,
+            kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
+            hidden_units=hidden_units,
+            size_per_head=head_dim,
+            inter_size=0,
+            vocab_size=cfg['vocab_size'],
+            max_position_embeddings=max_position_embeddings,
+            rope_param=rope_param,
+        )
+        info.update(
+            attn_bias=int(cfg['attention_bias']),
+            mlp_bias=True,
+            expert_router_bias=True,
+            expert_num=cfg['num_local_experts'],
+            expert_inter_size=cfg['intermediate_size'],
+            experts_per_token=cfg['experts_per_token'],
+            norm_topk_prob=True,
+            window_size=[sliding_window if x == 'sliding_attention' else 0 for x in types],
+            attn_sink=True,
+            activation_type='gpt-oss',
+        )
+        return info
+
+    def readers(self):
+        loader = create_loader(self.model_path, _LAYER_PATTERN, [map_experts])
+        for i, param in loader.items():
+            yield i, GptOssSpec(param, self.model_config)
+        torch.cuda.empty_cache()
 
 
 class GptOssSpec(ModelWeightSpec):

@@ -9,10 +9,129 @@ Demonstrates the composable-ops pipeline with:
 """
 from __future__ import annotations
 
+import os
+
 import torch
 
 from ..linear import Linear
+from ..loader import create_loader
 from ..module import ModelWeightSpec
+from .base import INPUT_MODELS, BaseInputModel
+from .utils import get_yarn_params, load_model_config, parse_rope_param
+
+_LAYER_PATTERN = r'model\.layers\.([0-9]+).'
+
+
+@INPUT_MODELS.register_module(name='glm4-moe-lite')
+class Glm4MoeLiteInputModel(BaseInputModel):
+    """Input model for GLM-4 MoE Lite (e.g. GLM-4.7-Flash)."""
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+
+        # --- base transformer fields ---
+        attn_head_num = cfg['num_attention_heads']
+        hidden_units = cfg['hidden_size']
+
+        # --- MLA head geometry ---
+        qk_nope_dim = cfg['qk_nope_head_dim']
+        qk_rope_dim = cfg['qk_rope_head_dim']
+        kv_lora_rank = cfg['kv_lora_rank']
+        q_head_dim = qk_nope_dim + qk_rope_dim
+        size_per_head = q_head_dim
+        v_head_dim = cfg['v_head_dim']
+        softmax_scale = 0.0
+        disable_mla_fold = os.getenv('LMDEPLOY_MLA_FOLD', '1').lower() in ('0', 'false', 'no')
+        if kv_lora_rank and kv_lora_rank != qk_nope_dim and not disable_mla_fold:
+            size_per_head = kv_lora_rank + qk_rope_dim
+            v_head_dim = kv_lora_rank
+            softmax_scale = q_head_dim**(-0.5)
+        elif kv_lora_rank and kv_lora_rank != qk_nope_dim:
+            softmax_scale = q_head_dim**(-0.5)
+
+        # --- RoPE (dim = qk_rope_dim for MLA) ---
+        rope_param, max_position_embeddings = parse_rope_param(cfg, qk_rope_dim)
+
+        # --- MoE layout ---
+        num_layer = cfg['num_hidden_layers']
+        n_routed_experts = cfg.get('n_routed_experts', 0)
+        n_shared_experts = cfg.get('n_shared_experts', 1)
+        expert_inter_size = cfg['moe_intermediate_size']
+        first_k_dense = cfg.get('first_k_dense_replace', 1)
+        expert_num = [n_routed_experts] * num_layer
+        for i in range(first_k_dense):
+            expert_num[i] = 0
+        inter_size = [n_shared_experts * expert_inter_size] * num_layer
+        inter_size[0] = cfg.get('intermediate_size', n_shared_experts * expert_inter_size)
+
+        # Ensure required routing fields exist (GLM may omit them)
+        topk_method = cfg.get('topk_method', 'noaux_tc')
+        topk_group = cfg.get('topk_group', 1)
+        n_group = cfg.get('n_group', 1)
+        scoring_func = cfg.get('scoring_func', 'sigmoid')
+
+        info = dict(
+            num_layer=num_layer,
+            norm_eps=cfg['rms_norm_eps'],
+            head_num=attn_head_num,
+            kv_head_num=1,
+            hidden_units=hidden_units,
+            size_per_head=size_per_head,
+            vocab_size=cfg['vocab_size'],
+            max_position_embeddings=max_position_embeddings,
+            rope_param=rope_param,
+            kv_lora_rank=kv_lora_rank,
+            q_lora_rank=cfg.get('q_lora_rank') or 0,
+            qk_rope_dim=qk_rope_dim,
+            v_head_dim=v_head_dim,
+            inter_size=inter_size,
+            expert_num=expert_num,
+            expert_inter_size=expert_inter_size,
+            experts_per_token=cfg['num_experts_per_tok'],
+            norm_topk_prob=cfg.get('norm_topk_prob', True),
+            routed_scale=cfg.get('routed_scaling_factor', 1.0),
+            topk_method=topk_method,
+            topk_group=topk_group,
+            moe_group_num=n_group,
+            scoring_func=scoring_func,
+            tune_layer_num=2,
+        )
+        if softmax_scale:
+            info['softmax_scale'] = softmax_scale
+
+        # YaRN RoPE for MLA (override attention_factor + softmax_scale)
+        if 'rope_parameters' in cfg:
+            rope_scaling = cfg['rope_parameters']
+        else:
+            rope_scaling = cfg.get('rope_scaling')
+        if rope_scaling and rope_scaling.get('type') == 'yarn':
+            attention_factor, yarn_scale = get_yarn_params(rope_scaling)
+            yarn_scale *= q_head_dim**(-0.5)
+            rope_param.max_position_embeddings = rope_scaling['original_max_position_embeddings']
+            rope_param.attention_factor = attention_factor
+            info.update(rope_param=rope_param, softmax_scale=yarn_scale)
+
+        if 'router_n_groups' in cfg and cfg['router_n_groups'] > 0:
+            info['router_n_groups'] = cfg['router_n_groups']
+
+        # GLM-specific overrides
+        info['topk_method'] = 'noaux_tc'
+        info['scoring_func'] = 'sigmoid'
+
+        return info
+
+    def readers(self):
+        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
+        for i, param in loader.items():
+            yield i, Glm4MoeLiteSpec(param, self.model_config)
+        torch.cuda.empty_cache()
 
 
 class Glm4MoeLiteSpec(ModelWeightSpec):
