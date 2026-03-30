@@ -15,13 +15,20 @@ import re
 import torch
 
 from ..linear import Linear
-from ..loader import create_loader
 from ..module import ModelWeightSpec, SplitSide
 from ..parameter import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
 
 _LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+
+
+def map_packed_qwen35_experts(name: str) -> str:
+    """Map packed expert names to weight names so that parameter.py can classify them.
+
+    Only matches names ending without ``.weight``; a no-op for already-unpacked checkpoints.
+    """
+    return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
 
 
 def _qwen35_model_info_base(cfg: dict) -> dict:
@@ -65,83 +72,6 @@ def _qwen35_model_info_base(cfg: dict) -> dict:
         )
 
     return info
-
-
-@INPUT_MODELS.register_module(name='qwen3_5')
-class Qwen3_5InputModel(BaseInputModel):
-    """Input model for Qwen3.5 (dense + optional linear attention)."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
-
-    def model_info(self) -> dict:
-        cfg = self.model_config
-        info = _qwen35_model_info_base(cfg)
-        info.update(
-            expert_num=cfg.get('num_experts', 0),
-            expert_inter_size=cfg.get('moe_intermediate_size', 0),
-            experts_per_token=cfg.get('num_experts_per_tok', 0),
-            moe_shared_gate=True,
-            scoring_func='softmax',
-            norm_topk_prob=True,
-        )
-        shared_expert_size = cfg.get('shared_expert_intermediate_size')
-        if shared_expert_size is not None:
-            info['inter_size'] = shared_expert_size
-        return info
-
-    def readers(self):
-        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
-        for i, param in loader.items():
-            yield i, Qwen3_5Spec(param, self.model_config)
-        torch.cuda.empty_cache()
-
-
-@INPUT_MODELS.register_module(name='qwen3_5-moe')
-class Qwen3_5MoeInputModel(BaseInputModel):
-    """Input model for Qwen3.5-MoE."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
-
-    @staticmethod
-    def map_packed_qwen35_experts(name: str) -> str:
-        """Map packed expert names to weight names so that parameter.py can classify them."""
-        return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
-
-    def model_info(self) -> dict:
-        cfg = self.model_config
-        info = _qwen35_model_info_base(cfg)
-        info.update(
-            expert_num=cfg.get('num_experts', 0),
-            expert_inter_size=cfg.get('moe_intermediate_size', 0),
-            experts_per_token=cfg.get('num_experts_per_tok', 0),
-            inter_size=cfg.get('shared_expert_intermediate_size', 0),
-            moe_shared_gate=True,
-            scoring_func='softmax',
-            norm_topk_prob=True,
-        )
-        return info
-
-    def readers(self):
-        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
-
-        has_packed_gate_up = any('mlp.experts.gate_up_proj' in k for k in loader.index.keys())
-        has_packed_down = any('mlp.experts.down_proj' in k for k in loader.index.keys())
-        if has_packed_gate_up and has_packed_down:
-            loader.mappings = [self.map_packed_qwen35_experts]
-
-        for i, param in loader.items():
-            yield i, Qwen3_5Spec(param, self.model_config)
-        torch.cuda.empty_cache()
 
 
 class Qwen3_5Spec(ModelWeightSpec):
@@ -361,4 +291,65 @@ class Qwen3_5Spec(ModelWeightSpec):
                                       cfg.get("partial_rotary_factor", 1.0))
         if partial_rot < 1.0:
             info["rope_dim"] = int(head_dim * partial_rot)
+        return info
+
+
+@INPUT_MODELS.register_module(name='qwen3_5')
+class Qwen3_5InputModel(BaseInputModel):
+    """Input model for Qwen3.5 (dense + optional linear attention)."""
+
+    _layer_pattern = _LAYER_PATTERN
+    _spec_class = Qwen3_5Spec
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        info = _qwen35_model_info_base(cfg)
+        info.update(
+            expert_num=cfg.get('num_experts', 0),
+            expert_inter_size=cfg.get('moe_intermediate_size', 0),
+            experts_per_token=cfg.get('num_experts_per_tok', 0),
+            moe_shared_gate=True,
+            scoring_func='softmax',
+            norm_topk_prob=True,
+        )
+        shared_expert_size = cfg.get('shared_expert_intermediate_size')
+        if shared_expert_size is not None:
+            info['inter_size'] = shared_expert_size
+        return info
+
+
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
+class Qwen3_5MoeInputModel(BaseInputModel):
+    """Input model for Qwen3.5-MoE."""
+
+    _layer_pattern = _LAYER_PATTERN
+    _spec_class = Qwen3_5Spec
+    _loader_mappings = [map_packed_qwen35_experts]
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        info = _qwen35_model_info_base(cfg)
+        info.update(
+            expert_num=cfg.get('num_experts', 0),
+            expert_inter_size=cfg.get('moe_intermediate_size', 0),
+            experts_per_token=cfg.get('num_experts_per_tok', 0),
+            inter_size=cfg.get('shared_expert_intermediate_size', 0),
+            moe_shared_gate=True,
+            scoring_func='softmax',
+            norm_topk_prob=True,
+        )
         return info

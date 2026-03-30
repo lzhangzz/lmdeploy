@@ -12,6 +12,11 @@ INPUT_MODELS = Registry('source model', locations=['lmdeploy.turbomind.deploy.so
 class BaseInputModel(ABC):
     """Base class for input model."""
 
+    # Subclasses set these to enable the default readers() implementation.
+    _layer_pattern: str = ''
+    _spec_class = None
+    _loader_mappings: list = []
+
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         """Constructor for BaseInputModel.
 
@@ -27,6 +32,11 @@ class BaseInputModel(ABC):
         """Read model info."""
         pass
 
-    @abstractmethod
     def readers(self) -> Iterator:
-        pass
+        """Yield ``(layer_id, spec)`` for every layer in the checkpoint."""
+        import torch
+        from ..loader import create_loader
+        loader = create_loader(self.model_path, self._layer_pattern, self._loader_mappings)
+        for i, param in loader.items():
+            yield i, self._spec_class(param, self.model_config)
+        torch.cuda.empty_cache()

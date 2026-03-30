@@ -9,96 +9,11 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ..loader import create_loader
 from ..module import ModelWeightSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
-
-
-@INPUT_MODELS.register_module(name='qwen3')
-class Qwen3InputModel(BaseInputModel):
-    """Input model for Qwen3 (dense)."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
-
-    def model_info(self) -> dict:
-        cfg = self.model_config
-        attn_head_num = cfg['num_attention_heads']
-        hidden_units = cfg['hidden_size']
-        head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
-        rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
-        info = dict(
-            num_layer=cfg['num_hidden_layers'],
-            norm_eps=cfg['rms_norm_eps'],
-            head_num=attn_head_num,
-            kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
-            hidden_units=hidden_units,
-            size_per_head=head_dim,
-            inter_size=cfg.get('intermediate_size', 0),
-            vocab_size=cfg['vocab_size'],
-            max_position_embeddings=max_position_embeddings,
-            rope_param=rope_param,
-            qk_norm=True,
-            attn_bias=cfg.get('attention_bias', 0),
-        )
-        return info
-
-    def readers(self):
-        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
-        for i, param in loader.items():
-            yield i, Qwen3Spec(param, self.model_config)
-        torch.cuda.empty_cache()
-
-
-@INPUT_MODELS.register_module(name='qwen3-moe')
-class Qwen3MoeInputModel(BaseInputModel):
-    """Input model for Qwen3-MoE."""
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
-
-    def model_info(self) -> dict:
-        cfg = self.model_config
-        attn_head_num = cfg['num_attention_heads']
-        hidden_units = cfg['hidden_size']
-        head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
-        rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
-        info = dict(
-            num_layer=cfg['num_hidden_layers'],
-            norm_eps=cfg['rms_norm_eps'],
-            head_num=attn_head_num,
-            kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
-            hidden_units=hidden_units,
-            size_per_head=head_dim,
-            vocab_size=cfg['vocab_size'],
-            max_position_embeddings=max_position_embeddings,
-            rope_param=rope_param,
-            qk_norm=True,
-            attn_bias=cfg.get('attention_bias', 0),
-            expert_num=cfg.get('num_experts', 128),
-            experts_per_token=cfg.get('num_experts_per_tok', 8),
-            expert_inter_size=cfg.get('moe_intermediate_size', 768),
-            inter_size=0,
-            norm_topk_prob=cfg.get('norm_topk_prob', False),
-        )
-        return info
-
-    def readers(self):
-        loader = create_loader(self.model_path, _LAYER_PATTERN, [])
-        for i, param in loader.items():
-            yield i, Qwen3Spec(param, self.model_config)
-        torch.cuda.empty_cache()
 
 
 class Qwen3Spec(ModelWeightSpec):
@@ -209,4 +124,82 @@ class Qwen3Spec(ModelWeightSpec):
                 inter_size=0,
                 norm_topk_prob=cfg.get("norm_topk_prob", False),
             )
+        return info
+
+
+@INPUT_MODELS.register_module(name='qwen3')
+class Qwen3InputModel(BaseInputModel):
+    """Input model for Qwen3 (dense)."""
+
+    _layer_pattern = _LAYER_PATTERN
+    _spec_class = Qwen3Spec
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        attn_head_num = cfg['num_attention_heads']
+        hidden_units = cfg['hidden_size']
+        head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
+        rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
+        info = dict(
+            num_layer=cfg['num_hidden_layers'],
+            norm_eps=cfg['rms_norm_eps'],
+            head_num=attn_head_num,
+            kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
+            hidden_units=hidden_units,
+            size_per_head=head_dim,
+            inter_size=cfg.get('intermediate_size', 0),
+            vocab_size=cfg['vocab_size'],
+            max_position_embeddings=max_position_embeddings,
+            rope_param=rope_param,
+            qk_norm=True,
+            attn_bias=cfg.get('attention_bias', 0),
+        )
+        return info
+
+
+@INPUT_MODELS.register_module(name='qwen3-moe')
+class Qwen3MoeInputModel(BaseInputModel):
+    """Input model for Qwen3-MoE."""
+
+    _layer_pattern = _LAYER_PATTERN
+    _spec_class = Qwen3Spec
+
+    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
+        super().__init__(model_path, tokenizer_path)
+        self.model_config = load_model_config(model_path)
+        self.policy = kwargs.get('input_policy')
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
+
+    def model_info(self) -> dict:
+        cfg = self.model_config
+        attn_head_num = cfg['num_attention_heads']
+        hidden_units = cfg['hidden_size']
+        head_dim = cfg.get('head_dim', None) or hidden_units // attn_head_num
+        rope_param, max_position_embeddings = parse_rope_param(cfg, head_dim)
+        info = dict(
+            num_layer=cfg['num_hidden_layers'],
+            norm_eps=cfg['rms_norm_eps'],
+            head_num=attn_head_num,
+            kv_head_num=cfg.get('num_key_value_heads', attn_head_num),
+            hidden_units=hidden_units,
+            size_per_head=head_dim,
+            vocab_size=cfg['vocab_size'],
+            max_position_embeddings=max_position_embeddings,
+            rope_param=rope_param,
+            qk_norm=True,
+            attn_bias=cfg.get('attention_bias', 0),
+            expert_num=cfg.get('num_experts', 128),
+            experts_per_token=cfg.get('num_experts_per_tok', 8),
+            expert_inter_size=cfg.get('moe_intermediate_size', 768),
+            inter_size=0,
+            norm_topk_prob=cfg.get('norm_topk_prob', False),
+        )
         return info
