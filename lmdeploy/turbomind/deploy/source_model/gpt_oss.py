@@ -55,7 +55,7 @@ class GptOssModel(LlamaModel):
         loader = create_loader(
             self.model_path, self.Reader.attn_layer_patten, [map_experts])
         for i, param in loader.items():
-            yield i, GptOssSpec(param, self.model_config, self.model_format)
+            yield i, GptOssSpec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):

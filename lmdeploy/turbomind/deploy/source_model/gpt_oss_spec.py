@@ -16,78 +16,59 @@ from __future__ import annotations
 
 import torch
 
-from ..kind_map import get_normalizer, get_suffix_map
 from ..linear import Linear
-from ..linear import transpose as linear_transpose
-from ..module import ModelWeightSpec
-from ..parameter import build_linear_from_format
+from ..module import ModelWeightSpec, SplitSide
+from ..parameter import build_linear
 
 
 class GptOssSpec(ModelWeightSpec):
     """Weight spec for gpt-oss (MoE with packed experts)."""
 
-    _prefix = "model.layers"
+    _layer_prefix = "model.layers"
 
-    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict,
-                 model_format: str | None = None):
+    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict):
         self.params = params
         self.cfg = model_cfg
-        self.model_format = model_format
         self._n_experts = model_cfg["num_local_experts"]
 
     def _read_linear(self, prefix: str) -> Linear | None:
-        lin = build_linear_from_format(
-            self.params, prefix, self.model_format)
-        if ".self_attn." in prefix:
-            dense_lin = build_linear_from_format(
-                self.params, prefix, None)
-            if lin is None:
-                lin = dense_lin
-            elif dense_lin is not None:
-                merged = dict(dense_lin.tensors)
-                merged.update(lin.tensors)
-                lin = Linear(tensors=merged, input_dim=lin.input_dim, output_dim=lin.output_dim)
-        return lin
-
-    def _get(self, key: str) -> torch.Tensor | None:
-        return self.params.get(key)
+        return build_linear(self.params, prefix)
 
     def _read_packed_expert(self, prefix: str, expert: int) -> Linear | None:
-        """Read one expert from packed ``[n_experts, ...]`` tensors."""
-        suffix_map = get_suffix_map(self.model_format)
-        normalizer = get_normalizer(self.model_format)
-        tensors: dict[str, torch.Tensor] = {}
-        for suffix, kind in suffix_map.items():
-            key = prefix + suffix
-            packed = self.params.get(key)
-            if packed is None:
-                continue
-            raw = packed[expert]
-            t = normalizer(raw, kind)
-            if kind == "weight" and t.dim() == 2 and self.model_format != "mxfp4":
-                t = t.t()
-            tensors[kind] = t
-        if not tensors:
+        """Read one expert from packed ``[n_experts, ...]`` tensors.
+
+        gpt-oss stores expert weights in M-major (TM) ``[K, N]`` layout.
+        The dense normalizer assumes HF ``[N, K]`` input, so the weight gets
+        an extra ``.t()`` after normalisation to cancel the over-transpose.
+        Quantized normalizers (AWQ, GPTQ, MXFP4, FP8) produce TM already.
+        """
+        lin = build_linear(self.params, prefix, index=expert)
+        if lin is None:
             return None
-        return Linear(tensors=tensors, input_dim=0, output_dim=-1)
+        if lin.weight_format.name == "dense":
+            w = lin.tensors.get("weight")
+            if w is not None and w.dim() == 2:
+                lin.tensors["weight"] = w.t().contiguous()
+        return lin
 
     @staticmethod
     def _deinterleave(lin: Linear) -> tuple[Linear, Linear]:
-        """Split interleaved gate/up: even indices -> gate, odd -> up."""
+        """Split interleaved gate/up along the output dim: even -> gate, odd -> up.
+
+        In TM layout ``[in, out]`` the interleaving is along the last axis.
+        """
         gate_t: dict[str, torch.Tensor] = {}
         up_t: dict[str, torch.Tensor] = {}
         for kind, t in lin.tensors.items():
-            gate_t[kind] = t[::2]
-            up_t[kind] = t[1::2]
+            gate_t[kind] = t[..., ::2].contiguous()
+            up_t[kind] = t[..., 1::2].contiguous()
         return (
-            Linear(tensors=gate_t, input_dim=lin.input_dim,
-                   output_dim=lin.output_dim),
-            Linear(tensors=up_t, input_dim=lin.input_dim,
-                   output_dim=lin.output_dim),
+            Linear(tensors=gate_t, weight_format=lin.weight_format),
+            Linear(tensors=up_t, weight_format=lin.weight_format),
         )
 
-    def attn_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.self_attn"
+    def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
+        pfx = f"{self._layer_prefix}.{layer}.self_attn"
         result: dict[str, Linear] = {}
         for tm_name, hf_key in [
             ("w_qkv.q", "q_proj"),
@@ -97,24 +78,23 @@ class GptOssSpec(ModelWeightSpec):
         ]:
             lin = self._read_linear(f"{pfx}.{hf_key}")
             if lin is not None:
-                result[tm_name] = linear_transpose(lin)
+                result[tm_name] = lin
         return result
 
     def ffn_linears(self, layer: int) -> dict[str, Linear]:
         return {}
 
     def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.mlp.experts"
-        gate_up_lin = self._read_packed_expert(
-            f"{pfx}.gate_up_proj", expert)
+        pfx = f"{self._layer_prefix}.{layer}.mlp.experts"
+        gate_up_lin = self._read_packed_expert(f"{pfx}.gate_up_proj", expert)
         down_lin = self._read_packed_expert(f"{pfx}.down_proj", expert)
         if gate_up_lin is None or down_lin is None:
             return {}
         gate_lin, up_lin = self._deinterleave(gate_up_lin)
         return {
-            "w1": linear_transpose(gate_lin),
-            "w2": linear_transpose(down_lin),
-            "w3": linear_transpose(up_lin),
+            "w1": gate_lin,
+            "w2": down_lin,
+            "w3": up_lin,
         }
 
     def num_experts(self, layer: int) -> int:
@@ -122,23 +102,25 @@ class GptOssSpec(ModelWeightSpec):
 
     def attn_norm(self, layer: int) -> torch.Tensor | None:
         return self._get(
-            f"{self._prefix}.{layer}.input_layernorm.weight")
+            f"{self._layer_prefix}.{layer}.input_layernorm.weight")
 
     def ffn_norm(self, layer: int) -> torch.Tensor | None:
         return self._get(
-            f"{self._prefix}.{layer}.post_attention_layernorm.weight")
+            f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def moe_ffn_gate(self, layer: int) -> torch.Tensor | None:
-        return self._get(
-            f"{self._prefix}.{layer}.mlp.router.weight")
-
-    def moe_ffn_gate_bias(self, layer: int) -> torch.Tensor | None:
-        return self._get(
-            f"{self._prefix}.{layer}.mlp.router.bias")
-
-    def attn_sinks(self, layer: int) -> torch.Tensor | None:
-        return self._get(
-            f"{self._prefix}.{layer}.self_attn.sinks")
+    def raw_layer_tensors(self, layer: int):
+        tensors = []
+        gate = self._get(f"{self._layer_prefix}.{layer}.mlp.router.weight")
+        if gate is not None:
+            gate = gate.t() if gate.dim() > 1 else gate
+            tensors.append(("moe_ffn.gate.weight", gate, None))
+        gate_bias = self._get(f"{self._layer_prefix}.{layer}.mlp.router.bias")
+        if gate_bias is not None:
+            tensors.append(("moe_ffn.gate.bias", gate_bias, None))
+        sinks = self._get(f"{self._layer_prefix}.{layer}.self_attn.sinks")
+        if sinks is not None:
+            tensors.append(("attention.sinks", sinks, SplitSide.OUTPUT))
+        return tensors
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")

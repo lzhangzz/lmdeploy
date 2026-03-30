@@ -9,35 +9,24 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ..linear import transpose as linear_transpose
 from ..module import ModelWeightSpec
-from ..parameter import build_linear_from_format
 
 
 class Qwen3Spec(ModelWeightSpec):
     """Weight spec for Qwen3 (dense) and Qwen3-MoE."""
 
-    _prefix = "model.layers"
+    _layer_prefix = "model.layers"
 
-    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict,
-                 model_format: str | None = None):
+    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict):
         self.params = params
         self.cfg = model_cfg
-        self.model_format = model_format
         self._num_layer = model_cfg["num_hidden_layers"]
         self._n_experts = model_cfg.get("num_experts", 0)
 
-    def _read_linear(self, prefix: str) -> Linear | None:
-        return build_linear_from_format(
-            self.params, prefix, self.model_format)
-
-    def _get(self, key: str) -> torch.Tensor | None:
-        return self.params.get(key)
-
     # ---- Linear bundles: attention ----
 
-    def attn_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.self_attn"
+    def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
+        pfx = f"{self._layer_prefix}.{layer}.self_attn"
         result: dict[str, Linear] = {}
         for tm_name, hf_key in [
             ("w_qkv.q", "q_proj"),
@@ -47,7 +36,7 @@ class Qwen3Spec(ModelWeightSpec):
         ]:
             lin = self._read_linear(f"{pfx}.{hf_key}")
             if lin is not None:
-                result[tm_name] = linear_transpose(lin)
+                result[tm_name] = lin
         return result
 
     # ---- Linear bundles: FFN ----
@@ -55,21 +44,13 @@ class Qwen3Spec(ModelWeightSpec):
     def ffn_linears(self, layer: int) -> dict[str, Linear]:
         if self._n_experts > 0:
             return {}
-        pfx = f"{self._prefix}.{layer}.mlp"
+        pfx = f"{self._layer_prefix}.{layer}.mlp"
         return self._read_ffn_linears(pfx)
-
-    def _read_ffn_linears(self, pfx: str) -> dict[str, Linear]:
-        result: dict[str, Linear] = {}
-        for tm_name, hf_key in [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")]:
-            lin = self._read_linear(f"{pfx}.{hf_key}")
-            if lin is not None:
-                result[tm_name] = linear_transpose(lin)
-        return result
 
     # ---- Linear bundles: MoE experts ----
 
     def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.mlp.experts.{expert}"
+        pfx = f"{self._layer_prefix}.{layer}.mlp.experts.{expert}"
         return self._read_ffn_linears(pfx)
 
     def num_experts(self, layer: int) -> int:
@@ -78,18 +59,27 @@ class Qwen3Spec(ModelWeightSpec):
     # ---- Raw tensors ----
 
     def attn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.input_layernorm.weight")
+        return self._get(f"{self._layer_prefix}.{layer}.input_layernorm.weight")
 
     def ffn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.post_attention_layernorm.weight")
+        return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def qk_norm(self, layer: int) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        q = self._get(f"{self._prefix}.{layer}.self_attn.q_norm.weight")
-        k = self._get(f"{self._prefix}.{layer}.self_attn.k_norm.weight")
-        return q, k
-
-    def moe_ffn_gate(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.mlp.gate.weight")
+    def raw_layer_tensors(self, layer: int):
+        tensors = []
+        q = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_norm.weight")
+        k = self._get(f"{self._layer_prefix}.{layer}.self_attn.k_norm.weight")
+        if q is not None and k is not None:
+            q, k = self._permute_qk_tensors(q, k)
+        if q is not None:
+            tensors.append(("attention.q_norm", q, None))
+        if k is not None:
+            tensors.append(("attention.k_norm", k, None))
+        if self._n_experts > 0:
+            gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
+            if gate is not None:
+                gate = gate.t() if gate.dim() > 1 else gate
+                tensors.append(("moe_ffn.gate.weight", gate, None))
+        return tensors
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")

@@ -44,7 +44,7 @@ class Glm4MoeLiteModel(DeepSeek2Model):
         pattern = self.Reader.attn_layer_patten
         loader = create_loader(self.model_path, pattern, [])
         for i, param in loader.items():
-            yield i, Glm4MoeLiteSpec(param, self.model_config, self.model_format)
+            yield i, Glm4MoeLiteSpec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):

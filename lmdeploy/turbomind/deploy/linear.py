@@ -4,37 +4,31 @@
 Two weight types flow through the TurboMind weight loading pipeline:
 
 - ``Linear`` -- a bundle of tensors for a single linear layer (weight +
-  optional scales, zeros, bias) with input_dim / output_dim tags.
+  optional scales, zeros, bias).
 - Raw ``torch.Tensor`` -- everything else (norms, embeddings, scalars).
 
-Every dimension operation in this module is overloaded to accept either type.
-``Linear`` ops use the bundle's dim tags and apply to all components;
-raw ``Tensor`` ops take an explicit ``dim`` argument.
+**Tensor functions** accept an explicit ``dim`` argument and operate on a
+single ``torch.Tensor``.
+
+**Linear methods** operate on axis 0 (input) and axis -1 (output), which
+is the fixed TM layout contract.  ``split``, ``concat`` are safe as
+``Linear`` methods -- they work correctly across all component tensors
+regardless of quantization-induced dimension scaling.  ``permute`` and
+``pad`` remain Tensor-level functions because quantized components (e.g.
+FP8 block scales) have reduced dimensions that don't carry per-element
+structure.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import overload
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor
 
-
-@dataclass
-class Linear:
-    """Bundle of tensors for a single linear layer.
-
-    ``tensors`` maps a closed-set TM weight kind (e.g. ``"weight"``,
-    ``"scales"``, ``"zeros"``, ``"bias"``, ``"qweight"``) to the actual
-    tensor.  ``input_dim`` and ``output_dim`` are dimension indices that
-    are consistent across all component tensors (1-D tensors like bias
-    only use ``output_dim``).
-    """
-
-    tensors: dict[str, Tensor]
-    input_dim: int = 0
-    output_dim: int = -1
+if TYPE_CHECKING:
+    from .kind_map import WeightFormat
 
 
 # ---------------------------------------------------------------------------
@@ -78,107 +72,103 @@ def _permute_along(t: Tensor, dim: int, shape: list[int], order: list[int]) -> T
 
 
 # ---------------------------------------------------------------------------
-# split_out_dim
+# Tensor functions
 # ---------------------------------------------------------------------------
 
 
-@overload
-def split_out_dim(x: Linear, num: int) -> list[Linear]: ...
+def split_out_dim(t: Tensor, num: int, dim: int) -> list[Tensor]:
+    """Split *t* along *dim* into *num* equal parts."""
+    d = _norm(dim, t.dim())
+    return list(t.split(t.size(d) // num, dim=d))
 
 
-@overload
-def split_out_dim(x: Tensor, num: int, dim: int) -> list[Tensor]: ...
+def concat_out_dim(ts: list[Tensor], dim: int) -> Tensor:
+    """Concatenate tensors along *dim*."""
+    return torch.cat(ts, dim=_norm(dim, ts[0].dim()))
 
 
-def split_out_dim(x, num, dim=None):
-    """Split along output dim into *num* equal parts."""
-    if isinstance(x, Linear):
+def permute_out_dim(t: Tensor, shape: list[int], order: list[int], dim: int) -> Tensor:
+    """View *dim* as *shape*, permute sub-dims by *order*, flatten back."""
+    return _permute_along(t, _norm(dim, t.dim()), shape, order)
+
+
+def permute_in_dim(t: Tensor, shape: list[int], order: list[int], dim: int) -> Tensor:
+    """View *dim* as *shape*, permute sub-dims by *order*, flatten back."""
+    return _permute_along(t, _norm(dim, t.dim()), shape, order)
+
+
+def pad_out_dim(t: Tensor, target: int, dim: int) -> Tensor:
+    """Pad *dim* to *target* size with zeros."""
+    return _pad_1d(t, _norm(dim, t.dim()), target)
+
+
+def pad_in_dim(t: Tensor, target: int, dim: int) -> Tensor:
+    """Pad *dim* to *target* size with zeros."""
+    return _pad_1d(t, _norm(dim, t.dim()), target)
+
+
+def transpose(t: Tensor) -> Tensor:
+    """Swap dims 0 and 1."""
+    return t.t()
+
+
+# ---------------------------------------------------------------------------
+# Linear dataclass with methods
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Linear:
+    """Bundle of tensors for a single linear layer.
+
+    ``tensors`` maps a closed-set TM weight kind (e.g. ``"weight"``,
+    ``"scales"``, ``"zeros"``, ``"bias"``, ``"qweight"``) to the actual
+    tensor.
+
+    **Layout contract**: all ``Linear`` objects are in TM layout with
+    axis 0 as the input dimension and axis -1 as the output dimension.
+    ``commit_linear`` assumes this layout and does not re-transpose.
+    1-D tensors (e.g. bias) only have an output dimension (axis 0).
+    """
+
+    tensors: dict[str, Tensor]
+    weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
+
+    def split_out_dim(self, num: int) -> list[Linear]:
+        """Split along output dim into *num* equal parts."""
         buckets: list[dict[str, Tensor]] = [{} for _ in range(num)]
-        for kind, t in x.tensors.items():
-            d = _norm(x.output_dim, t.dim())
-            parts = t.split(t.size(d) // num, dim=d)
-            for i, part in enumerate(parts):
+        for kind, t in self.tensors.items():
+            for i, part in enumerate(split_out_dim(t, num, t.dim() - 1)):
                 buckets[i][kind] = part
-        return [Linear(tensors=b, input_dim=x.input_dim, output_dim=x.output_dim) for b in buckets]
-    assert dim is not None, "dim is required for Tensor"
-    d = _norm(dim, x.dim())
-    return list(x.split(x.size(d) // num, dim=d))
+        return [Linear(tensors=b, weight_format=self.weight_format) for b in buckets]
 
-
-# ---------------------------------------------------------------------------
-# split_in_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def split_in_dim(x: Linear, num: int) -> list[Linear]: ...
-
-
-@overload
-def split_in_dim(x: Tensor, num: int, dim: int) -> list[Tensor]: ...
-
-
-def split_in_dim(x, num, dim=None):
-    """Split along input dim into *num* equal parts."""
-    if isinstance(x, Linear):
+    def split_in_dim(self, num: int) -> list[Linear]:
+        """Split along input dim into *num* equal parts."""
         buckets: list[dict[str, Tensor]] = [{} for _ in range(num)]
-        for kind, t in x.tensors.items():
+        for kind, t in self.tensors.items():
             if not _has_input_dim(t):
                 for i in range(num):
                     buckets[i][kind] = t
                 continue
-            d = _norm(x.input_dim, t.dim())
-            parts = t.split(t.size(d) // num, dim=d)
-            for i, part in enumerate(parts):
+            for i, part in enumerate(split_out_dim(t, num, 0)):
                 buckets[i][kind] = part
-        return [Linear(tensors=b, input_dim=x.input_dim, output_dim=x.output_dim) for b in buckets]
-    assert dim is not None, "dim is required for Tensor"
-    d = _norm(dim, x.dim())
-    return list(x.split(x.size(d) // num, dim=d))
+        return [Linear(tensors=b, weight_format=self.weight_format) for b in buckets]
 
-
-# ---------------------------------------------------------------------------
-# concat_out_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def concat_out_dim(xs: list[Linear]) -> Linear: ...
-
-
-@overload
-def concat_out_dim(xs: list[Tensor], dim: int) -> Tensor: ...
-
-
-def concat_out_dim(xs, dim=None):
-    """Concatenate along output dim."""
-    if isinstance(xs[0], Linear):
+    @classmethod
+    def concat_out_dim(cls, xs: list[Linear]) -> Linear:
+        """Concatenate along output dim."""
         first = xs[0]
         result: dict[str, Tensor] = {}
         for kind in first.tensors:
-            d = _norm(first.output_dim, first.tensors[kind].dim())
-            result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=d)
-        return Linear(tensors=result, input_dim=first.input_dim, output_dim=first.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return torch.cat(xs, dim=_norm(dim, xs[0].dim()))
+            t = first.tensors[kind]
+            result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
+        fmts = {x.weight_format for x in xs}
+        wfmt = next(iter(fmts)) if len(fmts) == 1 else None
+        return Linear(tensors=result, weight_format=wfmt)
 
-
-# ---------------------------------------------------------------------------
-# concat_in_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def concat_in_dim(xs: list[Linear]) -> Linear: ...
-
-
-@overload
-def concat_in_dim(xs: list[Tensor], dim: int) -> Tensor: ...
-
-
-def concat_in_dim(xs, dim=None):
-    """Concatenate along input dim."""
-    if isinstance(xs[0], Linear):
+    @classmethod
+    def concat_in_dim(cls, xs: list[Linear]) -> Linear:
+        """Concatenate along input dim."""
         first = xs[0]
         result: dict[str, Tensor] = {}
         for kind in first.tensors:
@@ -186,146 +176,7 @@ def concat_in_dim(xs, dim=None):
             if not _has_input_dim(t0):
                 result[kind] = t0
                 continue
-            d = _norm(first.input_dim, t0.dim())
-            result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=d)
-        return Linear(tensors=result, input_dim=first.input_dim, output_dim=first.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return torch.cat(xs, dim=_norm(dim, xs[0].dim()))
-
-
-# ---------------------------------------------------------------------------
-# permute_out_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def permute_out_dim(x: Linear, shape: list[int], order: list[int]) -> Linear: ...
-
-
-@overload
-def permute_out_dim(x: Tensor, shape: list[int], order: list[int], dim: int) -> Tensor: ...
-
-
-def permute_out_dim(x, shape, order, dim=None):
-    """View output dim as *shape*, permute sub-dims by *order*, flatten back."""
-    if isinstance(x, Linear):
-        result: dict[str, Tensor] = {}
-        for kind, t in x.tensors.items():
-            d = _norm(x.output_dim, t.dim())
-            result[kind] = _permute_along(t, d, shape, order)
-        return Linear(tensors=result, input_dim=x.input_dim, output_dim=x.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return _permute_along(x, _norm(dim, x.dim()), shape, order)
-
-
-# ---------------------------------------------------------------------------
-# permute_in_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def permute_in_dim(x: Linear, shape: list[int], order: list[int]) -> Linear: ...
-
-
-@overload
-def permute_in_dim(x: Tensor, shape: list[int], order: list[int], dim: int) -> Tensor: ...
-
-
-def permute_in_dim(x, shape, order, dim=None):
-    """View input dim as *shape*, permute sub-dims by *order*, flatten back."""
-    if isinstance(x, Linear):
-        result: dict[str, Tensor] = {}
-        for kind, t in x.tensors.items():
-            if not _has_input_dim(t):
-                result[kind] = t
-                continue
-            d = _norm(x.input_dim, t.dim())
-            result[kind] = _permute_along(t, d, shape, order)
-        return Linear(tensors=result, input_dim=x.input_dim, output_dim=x.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return _permute_along(x, _norm(dim, x.dim()), shape, order)
-
-
-# ---------------------------------------------------------------------------
-# transpose
-# ---------------------------------------------------------------------------
-
-
-@overload
-def transpose(x: Linear) -> Linear: ...
-
-
-@overload
-def transpose(x: Tensor) -> Tensor: ...
-
-
-def transpose(x):
-    """Swap input and output dims (Linear) or dims 0 and 1 (Tensor)."""
-    if x is None:
-        return None
-    if isinstance(x, Linear):
-        result: dict[str, Tensor] = {}
-        for kind, t in x.tensors.items():
-            if t.dim() > 1:
-                d_in = _norm(x.input_dim, t.dim())
-                d_out = _norm(x.output_dim, t.dim())
-                dims = list(range(t.dim()))
-                dims[d_in], dims[d_out] = dims[d_out], dims[d_in]
-                result[kind] = t.permute(dims).contiguous()
-            else:
-                result[kind] = t
-        return Linear(tensors=result, input_dim=x.output_dim, output_dim=x.input_dim)
-    return x.t()
-
-
-# ---------------------------------------------------------------------------
-# pad_out_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def pad_out_dim(x: Linear, target: int) -> Linear: ...
-
-
-@overload
-def pad_out_dim(x: Tensor, target: int, dim: int) -> Tensor: ...
-
-
-def pad_out_dim(x, target, dim=None):
-    """Pad output dim to *target* size with zeros."""
-    if isinstance(x, Linear):
-        result: dict[str, Tensor] = {}
-        for kind, t in x.tensors.items():
-            d = _norm(x.output_dim, t.dim())
-            result[kind] = _pad_1d(t, d, target)
-        return Linear(tensors=result, input_dim=x.input_dim, output_dim=x.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return _pad_1d(x, _norm(dim, x.dim()), target)
-
-
-# ---------------------------------------------------------------------------
-# pad_in_dim
-# ---------------------------------------------------------------------------
-
-
-@overload
-def pad_in_dim(x: Linear, target: int) -> Linear: ...
-
-
-@overload
-def pad_in_dim(x: Tensor, target: int, dim: int) -> Tensor: ...
-
-
-def pad_in_dim(x, target, dim=None):
-    """Pad input dim to *target* size with zeros."""
-    if isinstance(x, Linear):
-        result: dict[str, Tensor] = {}
-        for kind, t in x.tensors.items():
-            if not _has_input_dim(t):
-                result[kind] = t
-                continue
-            d = _norm(x.input_dim, t.dim())
-            result[kind] = _pad_1d(t, d, target)
-        return Linear(tensors=result, input_dim=x.input_dim, output_dim=x.output_dim)
-    assert dim is not None, "dim is required for Tensor"
-    return _pad_1d(x, _norm(dim, x.dim()), target)
+            result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=0)
+        fmts = {x.weight_format for x in xs}
+        wfmt = next(iter(fmts)) if len(fmts) == 1 else None
+        return Linear(tensors=result, weight_format=wfmt)

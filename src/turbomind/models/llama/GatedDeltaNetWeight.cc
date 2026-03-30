@@ -21,16 +21,11 @@ GatedDeltaNetWeight::GatedDeltaNetWeight(int      hidden_dim,
     const int v_heads_tp = num_v_heads / tp_size;
     const int conv_dim   = key_dim * 2 + value_dim;
 
-    in_proj_qkv.emplace(hidden_dim, conv_dim, data_type, bias);
-    in_proj_z.emplace(hidden_dim, value_dim, data_type, bias);
-    in_proj_b.emplace(hidden_dim, v_heads_tp, data_type, bias);
-    in_proj_a.emplace(hidden_dim, v_heads_tp, data_type, bias);
+    const int out_all = conv_dim + value_dim + 2 * v_heads_tp;
+    in_proj_all.emplace(hidden_dim, out_all, data_type, bias);
     out_proj.emplace(value_dim, hidden_dim, data_type, bias);
 
-    register_module("in_proj_qkv", in_proj_qkv, tp_rank_);
-    register_module("in_proj_z", in_proj_z, tp_rank_);
-    register_module("in_proj_b", in_proj_b, tp_rank_);
-    register_module("in_proj_a", in_proj_a, tp_rank_);
+    register_module("in_proj_all", in_proj_all, tp_rank_);
     register_module("out_proj", out_proj, tp_rank_);
 
     // conv1d: depthwise weights, shape (conv_dim, d_conv)
@@ -50,107 +45,14 @@ GatedDeltaNetWeight::GatedDeltaNetWeight(int      hidden_dim,
     register_parameter("norm.weight", norm);
 }
 
-// ---------------------------------------------------------------------------
-// Row-wise concatenation of 4 weight matrices into a single pre-allocated
-// destination tensor.
-//
-// Each source weight has shape (input_dim, out_dim_i) in row-major storage.
-// The destination has shape (input_dim, sum_i out_dim_i) and rows are filled
-// by concatenating the corresponding source rows in order.
-//
-// Implemented with cudaMemcpy2DAsync so that no extra temporary is needed:
-// each source "column block" is scattered into the correct column range of
-// the destination in one pass per source.
-// ---------------------------------------------------------------------------
-static void
-concat_weights_4(const Tensor& a, const Tensor& b, const Tensor& c, const Tensor& d, Tensor& dst, cudaStream_t st)
-{
-    // Tensors are (K=input_dim, M=output_dim) in row-major order.
-    // Each row of `dst` is [a_row | b_row | c_row | d_row].
-    const int K       = dst.shape(0);
-    const int M_a     = a.shape(1);
-    const int M_b     = b.shape(1);
-    const int M_c     = c.shape(1);
-    const int M_d     = d.shape(1);
-    const int M_dst   = dst.shape(1);  // M_a + M_b + M_c + M_d
-    const int elem_sz = byte_size(dst.dtype(), 1);
-
-    // Pitch of the destination row in bytes
-    const size_t dst_pitch   = (size_t)M_dst * elem_sz;
-    const size_t src_pitch_a = (size_t)M_a * elem_sz;
-    const size_t src_pitch_b = (size_t)M_b * elem_sz;
-    const size_t src_pitch_c = (size_t)M_c * elem_sz;
-    const size_t src_pitch_d = (size_t)M_d * elem_sz;
-
-    char* dst_ptr = reinterpret_cast<char*>(dst.raw_data());
-
-    // Columns [0, M_a)
-    check_cuda_error(
-        cudaMemcpy2DAsync(dst_ptr, dst_pitch, a.raw_data(), src_pitch_a, src_pitch_a, K, cudaMemcpyDefault, st));
-
-    // Columns [M_a, M_a+M_b)
-    check_cuda_error(cudaMemcpy2DAsync(
-        dst_ptr + src_pitch_a, dst_pitch, b.raw_data(), src_pitch_b, src_pitch_b, K, cudaMemcpyDefault, st));
-
-    // Columns [M_a+M_b, M_a+M_b+M_c)
-    check_cuda_error(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b,
-                                       dst_pitch,
-                                       c.raw_data(),
-                                       src_pitch_c,
-                                       src_pitch_c,
-                                       K,
-                                       cudaMemcpyDefault,
-                                       st));
-
-    // Columns [M_a+M_b+M_c, M_dst)
-    check_cuda_error(cudaMemcpy2DAsync(dst_ptr + src_pitch_a + src_pitch_b + src_pitch_c,
-                                       dst_pitch,
-                                       d.raw_data(),
-                                       src_pitch_d,
-                                       src_pitch_d,
-                                       K,
-                                       cudaMemcpyDefault,
-                                       st));
-    sync_check_cuda_error();
-}
-
 void GatedDeltaNetWeight::prepare()
 {
     auto stream = core::Context::stream().handle();
 
-    // Preprocess individual weights (converts blockscale FP8, etc.)
-    in_proj_qkv.preprocess();
-    in_proj_z.preprocess();
-    in_proj_b.preprocess();
-    in_proj_a.preprocess();
+    in_proj_all.preprocess();
+    in_proj_all.prepare();
     out_proj.preprocess();
     out_proj.prepare();
-
-    // Build the fused input projection weight:
-    //   shape (hidden_dim,  conv_dim + value_dim + 2*v_heads_tp)
-    //   = [in_proj_qkv | in_proj_z | in_proj_b | in_proj_a]  (column-wise)
-    const int out_all = in_proj_qkv.output_dim  //
-                        + in_proj_z.output_dim  //
-                        + in_proj_b.output_dim  //
-                        + in_proj_a.output_dim;
-
-    in_proj_all.emplace(in_proj_qkv.input_dim,
-                        out_all,
-                        in_proj_qkv.data_type,
-                        /*bias=*/false);
-    in_proj_all.allocate(in_proj_qkv.weight_type, in_proj_qkv.group_size);
-
-    concat_weights_4(
-        in_proj_qkv.weight, in_proj_z.weight, in_proj_b.weight, in_proj_a.weight, in_proj_all.weight, stream);
-
-    // Prepare (convert/repack) the fused weight for GEMM
-    in_proj_all.prepare();
-
-    // Release the now-redundant individual weight tensors to free HBM
-    in_proj_qkv = {};
-    in_proj_z   = {};
-    in_proj_b   = {};
-    in_proj_a   = {};
 
     // Transpose conv1d from checkpoint layout [conv_dim, d_conv] to kernel layout [d_conv, conv_dim]
     {

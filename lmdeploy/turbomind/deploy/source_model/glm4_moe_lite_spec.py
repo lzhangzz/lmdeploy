@@ -12,9 +12,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ..linear import transpose as linear_transpose
 from ..module import ModelWeightSpec
-from ..parameter import build_linear_from_format
 
 
 class Glm4MoeLiteSpec(ModelWeightSpec):
@@ -25,31 +23,19 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
     are MoE with ``n_routed_experts`` experts per layer.
     """
 
-    _prefix = "model.layers"
+    _layer_prefix = "model.layers"
 
-    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict,
-                 model_format: str | None = None):
+    def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict):
         self.params = params
         self.cfg = model_cfg
-        self.model_format = model_format
         self._num_layer = model_cfg["num_hidden_layers"]
         self._n_experts = model_cfg.get("n_routed_experts", 0)
         self._first_k_dense = model_cfg.get("first_k_dense_replace", 1)
 
-    def _read_linear(self, prefix: str) -> Linear | None:
-        lin = build_linear_from_format(
-            self.params, prefix, self.model_format)
-        if lin is None and self.model_format not in (None, "hf"):
-            lin = build_linear_from_format(self.params, prefix, None)
-        return lin
-
-    def _get(self, key: str) -> torch.Tensor | None:
-        return self.params.get(key)
-
     # ---- Linear bundles: MLA attention ----
 
-    def attn_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.self_attn"
+    def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
+        pfx = f"{self._layer_prefix}.{layer}.self_attn"
 
         # Read all projections as raw (pre-transpose) Linear bundles
         raw: dict[str, Linear] = {}
@@ -70,18 +56,34 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
 
         self._mla_fold_and_pad(raw)
 
-        # Transpose and collect (kv_b_proj is removed by folding)
-        result: dict[str, Linear] = {}
-        for name, lin in raw.items():
-            result[name] = linear_transpose(lin)
-        return result
+        return raw
 
     def _mla_fold_and_pad(self, linears: dict[str, Linear]):
         """Fold kv_b_proj into q_b_proj and wo, then pad wo.
 
-        Mirrors the V1 ``MLA._export`` folding logic.  Operates on
-        pre-transpose tensors (HF layout: ``[out_features, in_features]``).
+        Mirrors the V1 ``MLA._export`` folding logic.  The fold arithmetic
+        requires HF layout ``[out_features, in_features]``.  Weight tensors
+        are temporarily transposed from TM to HF at the start and back to
+        TM at the end.
         """
+        # Temporarily convert weight tensors from TM [in, out] to HF [out, in].
+        for lin in linears.values():
+            for k in list(lin.tensors.keys()):
+                t = lin.tensors[k]
+                if t.dim() >= 2:
+                    lin.tensors[k] = t.t().contiguous()
+        try:
+            self._mla_fold_and_pad_hf(linears)
+        finally:
+            # Convert weight tensors back from HF [out, in] to TM [in, out].
+            for lin in linears.values():
+                for k in list(lin.tensors.keys()):
+                    t = lin.tensors[k]
+                    if t.dim() >= 2:
+                        lin.tensors[k] = t.t().contiguous()
+
+    def _mla_fold_and_pad_hf(self, linears: dict[str, Linear]):
+        """Inner fold logic; expects all weight tensors in HF layout [out, in]."""
         cfg = self.cfg
         head_num = cfg["num_attention_heads"]
         qk_rope_dim = cfg["qk_rope_head_dim"]
@@ -145,25 +147,17 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
     def ffn_linears(self, layer: int) -> dict[str, Linear]:
         if layer >= self._first_k_dense:
             return self._shared_expert_linears(layer)
-        pfx = f"{self._prefix}.{layer}.mlp"
+        pfx = f"{self._layer_prefix}.{layer}.mlp"
         return self._read_ffn_linears(pfx)
 
     def _shared_expert_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.mlp.shared_experts"
+        pfx = f"{self._layer_prefix}.{layer}.mlp.shared_experts"
         return self._read_ffn_linears(pfx)
-
-    def _read_ffn_linears(self, pfx: str) -> dict[str, Linear]:
-        result: dict[str, Linear] = {}
-        for tm_name, hf_key in [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")]:
-            lin = self._read_linear(f"{pfx}.{hf_key}")
-            if lin is not None:
-                result[tm_name] = linear_transpose(lin)
-        return result
 
     # ---- Linear bundles: MoE experts ----
 
     def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
-        pfx = f"{self._prefix}.{layer}.mlp.experts.{expert}"
+        pfx = f"{self._layer_prefix}.{layer}.mlp.experts.{expert}"
         return self._read_ffn_linears(pfx)
 
     def num_experts(self, layer: int) -> int:
@@ -171,30 +165,37 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
             return 0
         return self._n_experts
 
-    def has_shared_gate(self) -> bool:
-        return False
-
     # ---- Raw tensors ----
 
     def attn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.input_layernorm.weight")
+        return self._get(f"{self._layer_prefix}.{layer}.input_layernorm.weight")
 
     def ffn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.post_attention_layernorm.weight")
+        return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def mla_norm(self, layer: int) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        q = self._get(f"{self._prefix}.{layer}.self_attn.q_a_layernorm.weight")
-        kv = self._get(f"{self._prefix}.{layer}.self_attn.kv_a_layernorm.weight")
-        return q, kv
-
-    def moe_ffn_gate(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.mlp.gate.weight")
-
-    def moe_ffn_gate_bias(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.mlp.gate.bias")
-
-    def moe_ffn_gate_correction_bias(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._prefix}.{layer}.mlp.gate.e_score_correction_bias")
+    def raw_layer_tensors(self, layer: int):
+        tensors = []
+        # MLA layernorms (broadcast)
+        q_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
+        kv_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
+        if q_a is not None:
+            tensors.append(("attention.q_a_layernorm", q_a, None))
+        if kv_a is not None:
+            tensors.append(("attention.kv_a_layernorm", kv_a, None))
+        # MoE gate, bias, and correction bias (broadcast)
+        if self.num_experts(layer) > 0:
+            gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
+            if gate is not None:
+                gate = gate.t() if gate.dim() > 1 else gate
+                tensors.append(("moe_ffn.gate.weight", gate, None))
+            gate_bias = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.bias")
+            if gate_bias is not None:
+                tensors.append(("moe_ffn.gate.bias", gate_bias, None))
+            correction = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.gate.e_score_correction_bias")
+            if correction is not None:
+                tensors.append(("moe_ffn.gate.score_correction_bias", correction, None))
+        return tensors
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")

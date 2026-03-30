@@ -7,7 +7,6 @@ from collections.abc import Iterator
 import torch
 from mmengine import Registry
 
-from ..kind_map import get_normalizer, get_suffix_map
 from ..linear import Linear
 from ..parameter import build_linear
 
@@ -18,7 +17,6 @@ class BaseReader(ABC):
     """Mapping between TM modules and source modules."""
 
     params: dict[str, torch.Tensor]
-    model_format: str | None = None
 
     def __init__(self):
         pass
@@ -33,22 +31,13 @@ class BaseReader(ABC):
 
     # -- New API: build Linear bundles from checkpoint keys --
 
-    def read_linear(self, prefix: str, input_dim: int = 0,
-                    output_dim: int = -1) -> Linear | None:
+    def read_linear(self, prefix: str) -> Linear | None:
         """Build a ``Linear`` bundle for the checkpoint keys at *prefix*.
 
-        Uses the reader's ``model_format`` to select the suffix map and
-        normalizer, then probes ``prefix + suffix`` in ``self.params``.
+        Probes all known suffixes and auto-detects the format via
+        ``WeightFormat.accepts``.
         """
-        suffix_map = get_suffix_map(self.model_format)
-        normalizer = get_normalizer(self.model_format)
-        return build_linear(
-            self.params, prefix,
-            suffix_map=suffix_map,
-            normalizer=normalizer,
-            input_dim=input_dim,
-            output_dim=output_dim,
-        )
+        return build_linear(self.params, prefix)
 
     def get(self, key: str) -> torch.Tensor | None:
         """Retrieve a single raw tensor by its full checkpoint key."""

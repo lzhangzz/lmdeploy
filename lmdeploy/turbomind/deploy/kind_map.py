@@ -14,8 +14,82 @@ logic that previously lived in ``policy.py``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Callable
+
 import torch
 from torch import Tensor
+
+# ---------------------------------------------------------------------------
+# WeightFormat descriptor
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WeightFormat:
+    """Immutable descriptor for one checkpoint quantization format.
+
+    Fields
+    ------
+    name : str | None
+        Canonical format name (``None`` for dense/HF).
+    suffix_map : dict[str, str]
+        Mapping ``{checkpoint_suffix: tm_kind}``.
+    normalizer : Callable[[Tensor, str], Tensor]
+        Converts a raw checkpoint tensor to TM layout ``[in, out]``.
+    packer : Callable[[Tensor, str], Tensor] | None
+        Optional commit-time packer (e.g. ``pack_u4_row``). Applied in
+        ``commit_linear`` just before saving.  Receives ``(tensor, kind)``.
+    cpp_dtype_name : str | None
+        Attribute name on ``_turbomind.DataType`` for the C++ weight dtype,
+        or ``None`` for dense formats whose dtype is inferred from the tensor.
+    block_in : int | None
+        Grouping of input elements per scale entry along the input dim.
+        ``None`` → no per-element scale (dense).  ``0`` → read from
+        ``model_config.group_size`` at commit time.
+    block_out : int | None
+        Grouping of output elements per scale entry along the output dim.
+        ``None`` → no per-output scale.  ``0`` → read from model config.
+    zeros_factory : Callable[[Tensor], Tensor] | None
+        Optional factory called with the ``"scales"`` tensor to synthesize a
+        ``"zeros"`` tensor when one is absent from the checkpoint.  The
+        factory encapsulates the zero-point dtype, value, and shape so that
+        no format-specific logic leaks into ``build_linear``.
+        ``None`` means no synthesis (format either always provides zeros or
+        has no zero-point concept).
+    accepts : Callable[[dict[str, Tensor]], bool]
+        Predicate that receives a ``{suffix: raw_tensor}`` dict of the
+        checkpoint tensors actually present for a parameter and returns
+        ``True`` when the available tensors satisfy this format.  Both key
+        presence and tensor dtype are checked so that, e.g., an FP8 layer
+        stored without ``weight_scale_inv`` is correctly classified as dense
+        rather than fp8.
+    """
+
+    name: str | None
+    suffix_map: dict[str, str]
+    normalizer: Callable[[Tensor, str], Tensor]
+    packer: Callable[[Tensor, str], Tensor] | None
+    cpp_dtype_name: str | None
+    block_in: int | None
+    block_out: int | None
+    zeros_factory: Callable[[Tensor], Tensor] | None
+    accepts: Callable[[dict[str, Tensor]], bool]
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def complete_tensors(self, tensors: dict[str, Tensor]) -> None:
+        """Add any synthesizable tensors absent from the checkpoint in-place.
+
+        Each format knows its own completion rules.  Currently the only case
+        is symmetric int4 zero-point synthesis for GPTQ / compressed-tensors:
+        when ``scales`` are present but ``zeros`` are missing, call
+        ``zeros_factory(scales)`` to produce a default zero-point tensor.
+        """
+        if self.zeros_factory is not None and "scales" in tensors and "zeros" not in tensors:
+            tensors["zeros"] = self.zeros_factory(tensors["scales"])
+
 
 # ---------------------------------------------------------------------------
 # Per-format suffix -> TM kind mappings
@@ -102,21 +176,30 @@ def _unpack_awq_gemm(x: Tensor) -> Tensor:
 
 
 def _normalize_dense(x: Tensor, kind: str) -> Tensor:
-    return x.cuda()
+    x = x.cuda()
+    if x.dim() >= 2:
+        x = x.t()
+    return x
 
 
 def _normalize_awq(x: Tensor, kind: str) -> Tensor:
+    # AWQ checkpoints store weights in TM-native layout:
+    #   qweight: [K, N//8] int32  → after unpack → [K, N] (TM, no .t() needed)
+    #   scales:  [K//g, N] float16 → already TM
+    #   zeros:   [K//g, N//8] int32 → after unpack → [K//g, N] (TM, no .t() needed)
     x = x.cuda()
     if x.dtype == torch.int32:
         x = _unpack_awq_gemm(x)
     if kind == "zeros":
         x = x.to(torch.float16)
-    if kind in ("qweight", "zeros", "scales"):
-        x = x.t()
     return x
 
 
 def _normalize_gptq(x: Tensor, kind: str) -> Tensor:
+    # GPTQ checkpoint stores weights in TM-native layout:
+    #   qweight: [K//8, N] int32  → after unpack → [K, N] (TM, no .t() needed)
+    #   scales:  [K//g, N] float16 → already TM
+    #   zeros:   [K//g, N//8] int32 → after unpack → [K//g, N] (TM, no .t() needed)
     x = x.cuda()
     if x.dtype == torch.int32:
         xs = _get_u4_slices(x, torch.uint8)
@@ -126,8 +209,6 @@ def _normalize_gptq(x: Tensor, kind: str) -> Tensor:
             x = torch.stack(xs, dim=-1).view(x.size(0), -1) + 1
     if kind == "zeros":
         x = x.to(torch.float16)
-    if kind in ("qweight", "zeros", "scales"):
-        x = x.t()
     return x
 
 
@@ -136,13 +217,17 @@ def _normalize_mxfp4(x: Tensor, kind: str) -> Tensor:
     if kind == "weight":
         xs = _get_u4_slices(torch.flatten(x, start_dim=-2), torch.uint8)
         x = torch.flatten(torch.stack(xs, dim=-1), start_dim=-2)
+    if x.dim() >= 2:
+        x = x.t()
     return x
 
 
 def _normalize_fp8(x: Tensor, kind: str) -> Tensor:
     x = x.cuda()
     if x.dtype == torch.float8_e4m3fn:
-        return x.view(dtype=torch.uint8)
+        x = x.view(dtype=torch.uint8)
+    if x.dim() >= 2:
+        x = x.t()
     return x
 
 
@@ -156,10 +241,12 @@ def _normalize_compressed_tensor(x: Tensor, kind: str) -> Tensor:
             x = torch.stack(xs, dim=1).view(-1, x.size(-1))
     if kind == "zeros":
         x = x.to(torch.float16)
+    if x.dim() >= 2:
+        x = x.t()
     return x
 
 
-_NORMALIZER_MAP: dict[str | None, callable] = {
+_NORMALIZER_MAP: dict[str | None, Callable[[Tensor, str], Tensor]] = {
     None: _normalize_dense,
     "hf": _normalize_dense,
     "awq": _normalize_awq,
@@ -170,6 +257,199 @@ _NORMALIZER_MAP: dict[str | None, callable] = {
 }
 
 
-def get_normalizer(model_format: str | None):
+def get_normalizer(model_format: str | None) -> Callable[[Tensor, str], Tensor]:
     """Return a ``(tensor, kind) -> tensor`` normalizer for *model_format*."""
     return _NORMALIZER_MAP[model_format]
+
+
+# ---------------------------------------------------------------------------
+# Packer helpers (applied at commit_linear time)
+# ---------------------------------------------------------------------------
+
+
+def _pack_u4_qweight(tensor: Tensor, kind: str) -> Tensor:
+    """Pack uint8 4-bit values into int32 rows; applied to ``qweight``."""
+    if kind == "qweight" and tensor.dtype == torch.uint8:
+        from .parameter import pack_u4_row
+        return pack_u4_row(tensor)
+    return tensor
+
+
+def _pack_mxfp4_weight(tensor: Tensor, kind: str) -> Tensor:
+    """Pack uint8 4-bit values into int32 rows; applied to mxfp4 ``weight``."""
+    if kind == "weight" and tensor.dtype == torch.uint8:
+        from .parameter import pack_u4_row
+        return pack_u4_row(tensor)
+    return tensor
+
+
+# ---------------------------------------------------------------------------
+# Zeros factory helpers
+# ---------------------------------------------------------------------------
+
+
+def _zeros_int4_symmetric(scales: Tensor) -> Tensor:
+    """Synthesize symmetric int4 zero-points (all 8) matching *scales* shape.
+
+    Used by GPTQ and compressed-tensors, which may omit zero-points when
+    the quantization is symmetric (zero-point = 2**(bits-1) = 8 for int4).
+    """
+    return torch.full(scales.shape, 8, dtype=torch.uint8, device=scales.device)
+
+
+# ---------------------------------------------------------------------------
+# Format acceptance predicates
+# ---------------------------------------------------------------------------
+
+
+def _accepts_dense(available: dict[str, "Tensor"]) -> bool:
+    """Dense: only .weight and/or .bias present; weight must be floating-point."""
+    if not (available.keys() <= {".weight", ".bias"}):
+        return False
+    w = available.get(".weight")
+    return w is None or w.dtype.is_floating_point
+
+
+def _accepts_awq(available: dict[str, "Tensor"]) -> bool:
+    """AWQ: packed u4-in-int32 quantized weight required."""
+    qw = available.get(".qweight")
+    return qw is not None and qw.dtype == torch.int32
+
+
+def _accepts_gptq(available: dict[str, "Tensor"]) -> bool:
+    """GPTQ: packed u4-in-int32 quantized weight required."""
+    qw = available.get(".qweight")
+    return qw is not None and qw.dtype == torch.int32
+
+
+def _accepts_compressed_tensor(available: dict[str, "Tensor"]) -> bool:
+    """Compressed-tensors: weight_packed is int32."""
+    wp = available.get(".weight_packed")
+    return wp is not None and wp.dtype == torch.int32
+
+
+def _accepts_fp8(available: dict[str, "Tensor"]) -> bool:
+    """FP8: weight_scale_inv must be present; weight dtype must be float8_e4m3fn or uint8."""
+    if ".weight_scale_inv" not in available:
+        return False
+    w = available.get(".weight")
+    return w is None or w.dtype in (torch.float8_e4m3fn, torch.uint8)
+
+
+def _accepts_mxfp4(available: dict[str, "Tensor"]) -> bool:
+    """MXFP4: packed uint8 blocks (4-bit weights) and scales (E8M0, dtype not assumed) required."""
+    if ".scales" not in available:
+        return False
+    w = available.get(".blocks")
+    return w is None or w.dtype == torch.uint8
+
+
+# ---------------------------------------------------------------------------
+# WeightFormat singletons
+# ---------------------------------------------------------------------------
+
+DENSE_FORMAT = WeightFormat(
+    name="dense",
+    suffix_map=DENSE_SUFFIXES,
+    normalizer=_normalize_dense,
+    packer=None,
+    cpp_dtype_name=None,
+    block_in=None,
+    block_out=None,
+    zeros_factory=None,
+    accepts=_accepts_dense,
+)
+
+AWQ_FORMAT = WeightFormat(
+    name="awq",
+    suffix_map=AWQ_SUFFIXES,
+    normalizer=_normalize_awq,
+    packer=_pack_u4_qweight,
+    cpp_dtype_name="TYPE_UINT4",
+    block_in=0,   # group_size from model_config
+    block_out=None,
+    zeros_factory=None,   # AWQ checkpoints always include qzeros
+    accepts=_accepts_awq,
+)
+
+GPTQ_FORMAT = WeightFormat(
+    name="gptq",
+    suffix_map=GPTQ_SUFFIXES,
+    normalizer=_normalize_gptq,
+    packer=_pack_u4_qweight,
+    cpp_dtype_name="TYPE_UINT4",
+    block_in=0,   # group_size from model_config
+    block_out=None,
+    zeros_factory=_zeros_int4_symmetric,
+    accepts=_accepts_gptq,
+)
+
+COMPRESSED_TENSOR_FORMAT = WeightFormat(
+    name="compressed-tensors",
+    suffix_map=COMPRESSED_TENSOR_SUFFIXES,
+    normalizer=_normalize_compressed_tensor,
+    packer=_pack_u4_qweight,
+    cpp_dtype_name="TYPE_UINT4",
+    block_in=0,
+    block_out=None,
+    zeros_factory=_zeros_int4_symmetric,
+    accepts=_accepts_compressed_tensor,
+)
+
+FP8_FORMAT = WeightFormat(
+    name="fp8",
+    suffix_map=FP8_SUFFIXES,
+    normalizer=_normalize_fp8,
+    packer=None,
+    cpp_dtype_name="TYPE_FP8_E4M3",
+    block_in=128,
+    block_out=128,
+    zeros_factory=None,
+    accepts=_accepts_fp8,
+)
+
+MXFP4_FORMAT = WeightFormat(
+    name="mxfp4",
+    suffix_map=MXFP4_SUFFIXES,
+    normalizer=_normalize_mxfp4,
+    packer=_pack_mxfp4_weight,
+    cpp_dtype_name="TYPE_FP4_E2M1",
+    block_in=32,
+    block_out=None,
+    zeros_factory=None,
+    accepts=_accepts_mxfp4,
+)
+
+_WEIGHT_FORMAT_MAP: dict[str | None, WeightFormat] = {
+    None: DENSE_FORMAT,
+    "hf": DENSE_FORMAT,
+    "awq": AWQ_FORMAT,
+    "gptq": GPTQ_FORMAT,
+    "compressed-tensors": COMPRESSED_TENSOR_FORMAT,
+    "fp8": FP8_FORMAT,
+    "mxfp4": MXFP4_FORMAT,
+}
+
+
+def get_weight_format(model_format: str | None) -> WeightFormat:
+    """Return the ``WeightFormat`` singleton for *model_format*."""
+    return _WEIGHT_FORMAT_MAP[model_format]
+
+
+# ---------------------------------------------------------------------------
+# Format classification helpers
+# ---------------------------------------------------------------------------
+
+#: Ordered list of all formats used by ``build_linear`` for auto-detection.
+#: Quantized formats are listed first so they win over dense when tensors match.
+FORMAT_PRIORITY: list[WeightFormat] = [
+    AWQ_FORMAT,
+    GPTQ_FORMAT,
+    COMPRESSED_TENSOR_FORMAT,
+    FP8_FORMAT,
+    MXFP4_FORMAT,
+    DENSE_FORMAT,
+]
+
+#: Union of all checkpoint suffixes across every known format.
+ALL_SUFFIXES: frozenset[str] = frozenset(s for fmt in FORMAT_PRIORITY for s in fmt.suffix_map)

@@ -1,19 +1,33 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import enum
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import TYPE_CHECKING
 
 import torch
 
-from .linear import Linear, pad_out_dim
+from .kind_map import DENSE_FORMAT
+from .linear import Linear, _norm, pad_out_dim
 from .linear import transpose as linear_transpose
-from .parameter import get_params, pack_u4_row
+from .parameter import get_params
 
 if TYPE_CHECKING:
     from .source_model.base import BaseReader
     from .target_model.base import BaseOutputModel
+
+
+class SplitSide(enum.Enum):
+    """Semantic TP split direction for ``commit_linear`` / ``commit_tensor``.
+
+    ``OUTPUT`` — column-parallel: split along the output dimension
+    ``INPUT``  — row-parallel:    split along the input dimension
+    """
+
+    OUTPUT = "output"
+    INPUT = "input"
+
 
 def permute_v2(x: torch.Tensor, size_per_head: int = 128):
     """
@@ -660,14 +674,102 @@ class ModelWeightSpec(ABC):
     applies TP split rules, and commits each weight to C++.
     """
 
+    params: dict[str, torch.Tensor]
+
+    # Default values for configure() fields; overwritten by configure().
+    _attn_tp: int = 1
+    _permute_qk: bool = True
+    _repeat_kv: int = 0
+    _head_dim: int = 0
+    _rope_dim: int = 0
+    _attn_output_gate: bool = False
+    _kv_head_num: int = 0
+
+    # -- Configuration (called by TransformerV2 before processing) --
+
+    def configure(
+        self,
+        attn_tp: int = 1,
+        permute_qk: bool = True,
+        repeat_kv: int = 0,
+        head_dim: int = 0,
+        rope_dim: int = 0,
+        attn_output_gate: bool = False,
+        kv_head_num: int = 0,
+    ):
+        """Set TP and model parameters needed for QKV merge and GDN fusion.
+
+        Called by ``TransformerV2`` before processing each layer batch.
+        Idempotent — safe to call repeatedly with the same values.
+        """
+        self._attn_tp = attn_tp
+        self._permute_qk = permute_qk
+        self._repeat_kv = repeat_kv
+        self._head_dim = head_dim
+        self._rope_dim = rope_dim if rope_dim else head_dim
+        self._attn_output_gate = attn_output_gate
+        self._kv_head_num = kv_head_num
+
+    # -- Common helpers (subclasses may override) --
+
+    def _get(self, key: str) -> torch.Tensor | None:
+        """Get a raw tensor from the checkpoint params."""
+        return self.params.get(key)
+
+    def _read_linear(self, prefix: str) -> Linear | None:
+        """Read a Linear bundle from the checkpoint at *prefix*.
+
+        Probes all known suffixes and auto-detects the format via
+        ``WeightFormat.accepts``.  Override for model-specific logic.
+        """
+        from .parameter import build_linear
+        return build_linear(self.params, prefix)
+
+    _FFN_MAP = [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")]
+
+    def _read_ffn_linears(self, pfx: str) -> dict[str, Linear]:
+        """Read standard gate/down/up FFN linears."""
+        result: dict[str, Linear] = {}
+        for tm_name, hf_key in self._FFN_MAP:
+            lin = self._read_linear(f"{pfx}.{hf_key}")
+            if lin is not None:
+                result[tm_name] = lin
+        return result
+
     # -- Linear bundles (TP-split by the transformer) --
 
     def attn_linears(self, layer: int) -> dict[str, Linear]:
         """Return ``{tm_name: Linear}`` for attention weights.
 
-        Standard attention should return ``{"w_qkv": ..., "wo": ...}``.
-        MLA should return ``{"q_a_proj": ..., "q_b_proj": ..., ...}``.
+        Wraps ``_read_attn_linears()``.  If the raw dict contains the
+        ``w_qkv.{q,k,v}`` pattern, merges them into a single ``w_qkv``
+        ``Linear`` (already TP-interleaved and in TM layout).
+        MLA specs return non-QKV keys and the merge is skipped.
         """
+        raw = self._read_attn_linears(layer)
+        if "w_qkv.q" in raw and "w_qkv.k" in raw and "w_qkv.v" in raw:
+            q = raw.pop("w_qkv.q")
+            k = raw.pop("w_qkv.k")
+            v = raw.pop("w_qkv.v")
+            merged = merge_qkv_linear(
+                q, k, v,
+                tp=self._attn_tp,
+                head_dim=self._head_dim,
+                rope_dim=self._rope_dim,
+                permute_qk=self._permute_qk,
+                attn_output_gate=self._attn_output_gate,
+                repeat_kv=self._repeat_kv,
+                kv_head_num=self._kv_head_num,
+            )
+            raw["w_qkv"] = merged
+            # Pad wo bias with zeros if QKV has bias but wo does not
+            o_lin = raw.get("wo")
+            if o_lin is not None and "bias" in merged.tensors and "bias" not in o_lin.tensors:
+                o_lin.tensors["bias"] = torch.zeros_like(merged.tensors["bias"])
+        return raw
+
+    def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
+        """Override in subclasses to return raw attention ``Linear`` bundles."""
         return {}
 
     def ffn_linears(self, layer: int) -> dict[str, Linear]:
@@ -679,7 +781,19 @@ class ModelWeightSpec(ABC):
         return {}
 
     def linear_attn_linears(self, layer: int) -> dict[str, Linear]:
-        """Return ``{tm_name: Linear}`` for linear-attention (GDN) weights."""
+        """Return ``{tm_name: Linear}`` for linear-attention (GDN) weights.
+
+        Wraps ``_read_linear_attn_linears()``.  If the raw dict contains any
+        of the GDN in-proj keys, fuses them into ``in_proj_all`` with TP
+        interleaving via ``fuse_gdn_in_proj()``.
+        """
+        raw = self._read_linear_attn_linears(layer)
+        if any(k in raw for k in _GDN_IN_PROJ_KEYS):
+            raw = fuse_gdn_in_proj(raw, self._attn_tp)
+        return raw
+
+    def _read_linear_attn_linears(self, layer: int) -> dict[str, Linear]:
+        """Override in subclasses to return raw GDN ``Linear`` bundles."""
         return {}
 
     # -- Raw tensors (broadcast or simple split) --
@@ -699,32 +813,40 @@ class ModelWeightSpec(ABC):
     def norm_weight(self) -> torch.Tensor | None:
         return None
 
-    def moe_ffn_gate(self, layer: int) -> torch.Tensor | None:
-        return None
+    def raw_layer_tensors(
+        self, layer: int
+    ) -> list[tuple[str, torch.Tensor | None, SplitSide | None]]:
+        """Return raw per-layer tensors for ``TransformerV2`` to commit.
 
-    def moe_ffn_gate_bias(self, layer: int) -> torch.Tensor | None:
-        return None
+        Each entry is ``(tm_path, tensor, split_side)`` where *tm_path* is
+        the suffix after ``layers.{layer}.``.  ``split_side`` follows the
+        same convention as ``commit_tensor``:
 
-    def moe_ffn_gate_correction_bias(self, layer: int) -> torch.Tensor | None:
-        return None
+        - ``None``                — broadcast to all TP ranks (no split).
+        - ``SplitSide.OUTPUT``    — split along the last axis (dim -1).
+        - ``SplitSide.INPUT``     — split along the first axis (dim 0).
+        """
+        return []
 
-    def moe_ffn_shared_gate(self, layer: int) -> torch.Tensor | None:
-        return None
+    def _permute_qk_tensors(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply RoPE layout permutation to Q and K norm weights.
 
-    def qk_norm(self, layer: int) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        return None, None
-
-    def mla_norm(self, layer: int) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        return None, None
-
-    def linear_attn_norm(self, layer: int) -> torch.Tensor | None:
-        return None
-
-    def linear_attn_scalars(self, layer: int) -> dict[str, torch.Tensor]:
-        return {}
-
-    def attn_sinks(self, layer: int) -> torch.Tensor | None:
-        return None
+        Uses the ``_permute_qk``, ``_head_dim``, and ``_rope_dim`` fields
+        set by ``configure()``.
+        """
+        if not self._permute_qk:
+            return q, k
+        if self._rope_dim < self._head_dim:
+            q = permute_v2_partial(q, self._head_dim, self._rope_dim)
+            k = permute_v2_partial(k, self._head_dim, self._rope_dim)
+        else:
+            q = permute_v2(q, self._head_dim)
+            k = permute_v2(k, self._head_dim)
+        return q, k
 
     # -- metadata --
 
@@ -735,22 +857,86 @@ class ModelWeightSpec(ABC):
     def num_experts(self, layer: int) -> int:
         return 0
 
-    def has_shared_gate(self) -> bool:
-        return False
-
 
 # -----------------------------------------------------------------------
 # Commit helpers
 # -----------------------------------------------------------------------
 
 
+def _classify_format(linear: Linear) -> str:
+    """Return the format name of a Linear bundle."""
+    return linear.weight_format.name
+
+
+def _dequant_linear(linear: Linear) -> Linear:
+    """Dequantize a quantized Linear to dense (bf16/fp16).
+
+    Supports AWQ (int4) and blocked FP8 formats. Returns the input
+    unchanged if already dense.
+    """
+    fmt = _classify_format(linear)
+    if fmt == "dense":
+        return linear
+
+    if fmt == "awq":
+        from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
+        qweight = linear.tensors["qweight"]
+        scales = linear.tensors["scales"]
+        qzeros = linear.tensors["zeros"]
+        group_size = qweight.shape[0] // scales.shape[0]
+        w = dequantize_gemm(qweight, qzeros, scales, 4, group_size)
+        bias = linear.tensors.get("bias")
+        tensors: dict[str, torch.Tensor] = {"weight": w}
+        if bias is not None:
+            tensors["bias"] = bias
+        return Linear(tensors=tensors, weight_format=DENSE_FORMAT)
+
+    if fmt == "fp8":
+        weight = linear.tensors["weight"]
+        scales = linear.tensors["scales"]
+        block_size = 128
+        fp8_weight = weight.view(torch.float8_e4m3fn).float()
+        scale = scales.float()
+        scale = scale.repeat_interleave(block_size, dim=0)
+        scale = scale.repeat_interleave(block_size, dim=1)
+        scale = scale[:fp8_weight.shape[0], :fp8_weight.shape[1]]
+        bias = linear.tensors.get("bias")
+        tensors = {"weight": (fp8_weight * scale).to(torch.bfloat16)}
+        if bias is not None:
+            tensors["bias"] = bias
+        return Linear(tensors=tensors, weight_format=DENSE_FORMAT)
+
+    return linear
+
+
+def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
+    """Dequant linears to a common dense format if a fusion group has mixed formats."""
+    formats = {name: _classify_format(lin) for name, lin in linears.items()}
+    if len(set(formats.values())) <= 1:
+        return linears
+    return {name: _dequant_linear(lin) for name, lin in linears.items()}
+
+
 def _infer_cpp_linear_dtype(linear: Linear):
-    """Determine C++ DataType and group_size from a Linear bundle."""
+    """Determine C++ DataType and group_size from a Linear bundle.
+
+    Uses ``linear.weight_format.cpp_dtype_name`` when available; falls back
+    to content-based inference for manually-constructed ``Linear`` objects
+    that lack an attached ``WeightFormat``.
+    """
     try:
         import _turbomind as _tm
     except ImportError:
         return None, 0
 
+    fmt = linear.weight_format
+    if fmt is not None and fmt.cpp_dtype_name is not None:
+        cpp_dtype = getattr(_tm.DataType, fmt.cpp_dtype_name, None)
+        if cpp_dtype is not None:
+            block_in = fmt.block_in or 0
+            return cpp_dtype, block_in
+
+    # Fallback: infer from tensor dtype/content
     if "qweight" in linear.tensors:
         return _tm.DataType.TYPE_UINT4, 0
     weight = linear.tensors.get("weight")
@@ -769,16 +955,238 @@ def _infer_cpp_linear_dtype(linear: Linear):
     return None, 0
 
 
+# -----------------------------------------------------------------------
+# QKV merge and GDN fusion free functions
+# -----------------------------------------------------------------------
+
+_GDN_IN_PROJ_KEYS = ("in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a")
+
+
+def _block_ops_need_dequant(
+    lin: Linear, head_dim: int,
+    repeat_kv: bool, attn_output_gate: bool, permute_qk: bool,
+) -> bool:
+    """Return True if any planned QKV-merge operation crosses block boundaries.
+
+    For quantised formats with a non-None ``block_out``:
+
+    - KV repetition and output-gate splitting each split along the output
+      dimension at head_dim granularity.  This is block-safe only when
+      ``head_dim % block_out == 0`` (each KV head = integer number of blocks).
+    - RoPE permutation permutes elements within a head.  This is block-safe
+      only when ``block_out % head_dim == 0`` (each block = integer number
+      of heads, so permuting within one head is intra-block).
+
+    If any condition fails, the caller should dequantise to dense first.
+    """
+    wfmt = lin.weight_format
+    if wfmt is None or wfmt.block_out is None:
+        return False
+    block_out = wfmt.block_out
+    if (repeat_kv or attn_output_gate) and head_dim % block_out != 0:
+        return True
+    if permute_qk and block_out % head_dim != 0:
+        return True
+    return False
+
+
+def merge_qkv_linear(
+    q: Linear,
+    k: Linear,
+    v: Linear,
+    tp: int,
+    head_dim: int,
+    rope_dim: int,
+    permute_qk: bool = True,
+    attn_output_gate: bool = False,
+    repeat_kv: int = 0,
+    kv_head_num: int = 0,
+) -> Linear:
+    """Merge Q/K/V ``Linear`` bundles into a single interleaved ``w_qkv`` Linear.
+
+    Applies RoPE permutation, KV head repetition, and output-gate splitting
+    as required, then interleaves components for TP.  Returns a ``Linear``
+    in TM layout ``[in, out]``.
+
+    Per-kind routing
+    ----------------
+    - ``weight`` / ``qweight`` / ``bias``: per-element structure along the
+      output dim; all transforms applied when ``tensor.size(-1) % head_dim == 0``.
+    - ``scales`` / ``zeros`` with ``block_out > 0``: block structure; KV
+      repetition uses ``repeat_interleave`` at block granularity.  All other
+      per-element transforms (permute, gate-split) are skipped for these kinds.
+
+    Block-unsafe operations
+    -----------------------
+    If any planned transformation would cross block boundaries (detected via
+    ``_block_ops_need_dequant``), the entire group is dequantised to dense
+    bf16/fp16 before merging, with a warning.
+    """
+    group = _ensure_compatible_formats({"q": q, "k": k, "v": v})
+    q, k, v = group["q"], group["k"], group["v"]
+
+    # Pre-dequantise if any output-dimension transformation is inter-block.
+    if any(_block_ops_need_dequant(lin, head_dim, bool(repeat_kv),
+                                   attn_output_gate, permute_qk)
+           for lin in (q, k, v)):
+        import warnings
+        _wfmt = q.weight_format or k.weight_format or v.weight_format
+        warnings.warn(
+            f"QKV merge with format '{_wfmt.name if _wfmt else None}' "
+            f"(block_out={_wfmt.block_out if _wfmt else None}) and "
+            f"head_dim={head_dim}: inter-block transformation detected; "
+            f"dequantising to dense.")
+        q, k, v = _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
+
+    merged_tensors: dict[str, torch.Tensor] = {}
+    all_kinds = sorted(set(q.tensors) | set(k.tensors) | set(v.tensors))
+    for kind in all_kinds:
+        qt = q.tensors.get(kind)
+        kt = k.tensors.get(kind)
+        vt = v.tensors.get(kind)
+        if qt is None or kt is None or vt is None:
+            continue
+
+        # Block scales (scales/zeros with block_out > 0) carry one value per
+        # block of output elements; they need block-granular operations.
+        wfmt = q.weight_format
+        block_out = (wfmt.block_out or 0) if wfmt is not None else 0
+        is_block_kind = kind in ("scales", "zeros") and block_out > 0
+
+        # Per-element flag: True when the output dim is head_dim-aligned and
+        # the kind is not a block scale (so reshape/repeat work correctly).
+        full_res = not is_block_kind and (qt.size(-1) % head_dim == 0)
+        gate = None
+
+        if repeat_kv:
+            n = repeat_kv
+            kv_heads = kv_head_num // n
+            if is_block_kind:
+                # Block-scale KV repetition: repeat each output-block entry n
+                # times.  The pre-dequant check above guarantees alignment.
+                kt = kt.repeat_interleave(n, dim=-1)
+                vt = vt.repeat_interleave(n, dim=-1)
+            elif full_res:
+                kt = kt.reshape(-1, kv_heads, head_dim).repeat(1, 1, n).reshape(-1, kv_heads * n * head_dim)
+                vt = vt.reshape(-1, kv_heads, head_dim).repeat(1, 1, n).reshape(-1, kv_heads * n * head_dim)
+
+        if attn_output_gate and full_res:
+            head_num = qt.size(-1) // (head_dim * 2)
+            orig_shape = list(qt.shape)
+            if qt.dim() == 1:
+                qt = qt.unsqueeze(0)
+            qt = qt.view(qt.size(0), head_num, 2, head_dim)
+            q_real = qt[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
+            gate = qt[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
+            if len(orig_shape) == 1:
+                q_real = q_real.squeeze(0)
+                gate = gate.squeeze(0)
+            qt = q_real
+
+        if permute_qk and full_res:
+            if rope_dim < head_dim:
+                qt = permute_v2_partial(qt, head_dim, rope_dim)
+                kt = permute_v2_partial(kt, head_dim, rope_dim)
+            else:
+                qt = permute_v2(qt, head_dim)
+                kt = permute_v2(kt, head_dim)
+
+        if gate is not None:
+            merged_tensors[kind] = merge_qkvg_v2(qt, kt, vt, gate, tp)
+        else:
+            merged_tensors[kind] = merge_qkv_v2(qt, kt, vt, tp)
+
+    # All three linears share the same format after _ensure_compatible_formats.
+    return Linear(tensors=merged_tensors, weight_format=q.weight_format)
+
+
+def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear]:
+    """Fuse GDN input projections into ``in_proj_all`` with TP interleaving.
+
+    Pops ``in_proj_qkv``, ``in_proj_z``, ``in_proj_b``, ``in_proj_a`` from
+    *la_linears* and inserts a single ``in_proj_all``.  Returns the updated
+    dict (does not modify the input in place).
+
+    For ``tp=1`` this reduces to a plain ``concat_out_dim``.
+    """
+    result = dict(la_linears)
+    components: list[Linear] = []
+    for key in _GDN_IN_PROJ_KEYS:
+        lin = result.pop(key, None)
+        if lin is not None:
+            components.append(lin)
+    if not components:
+        return result
+
+    group = {f"c{i}": c for i, c in enumerate(components)}
+    group = _ensure_compatible_formats(group)
+    components = [group[f"c{i}"] for i in range(len(group))]
+
+    first = components[0]
+    if tp <= 1:
+        result["in_proj_all"] = Linear.concat_out_dim(components)
+        return result
+
+    fused_tensors: dict[str, torch.Tensor] = {}
+    for kind in first.tensors:
+        tensors = [lin.tensors[kind] for lin in components]
+        t0 = tensors[0]
+        d = t0.dim() - 1
+        if t0.dim() <= 1:
+            fused_tensors[kind] = torch.cat(tensors, dim=0)
+            continue
+        reshaped = []
+        for t in tensors:
+            shape = list(t.shape)
+            new_shape = shape[:d] + [tp, shape[d] // tp] + shape[d + 1:]
+            reshaped.append(t.reshape(new_shape))
+        fused = torch.cat(reshaped, dim=d + 1)
+        shape = list(fused.shape)
+        final = shape[:d] + [shape[d] * shape[d + 1]] + shape[d + 2:]
+        fused_tensors[kind] = fused.reshape(final)
+
+    # All components share the same format after _ensure_compatible_formats.
+    result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format)
+    return result
+
+
+_SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPUT: 0}
+
+
 def commit_linear(model: BaseOutputModel, linear: Linear, name: str,
-                  split_dim=None, split_num=1, copy=False):
+                  split_side: SplitSide | None = None, split_num: int = 1,
+                  copy: bool = False):
     """Export every tensor in a ``Linear`` bundle via ``model.save_split``.
 
-    uint8 tensors (unpacked 4-bit weights) are re-packed to int32 before
-    export so the C++ side receives the format it expects.
+    All ``Linear`` objects are expected in TM layout ``[in, out]``.
+    ``split_side`` controls TP partitioning:
+
+    - ``SplitSide.OUTPUT`` — column-parallel: split along the output dimension
+      (``dim=-1`` in TM layout, i.e. the output axis).
+    - ``SplitSide.INPUT``  — row-parallel: split along the input dimension
+      (``dim=0`` in TM layout, i.e. the input axis).
+    - ``None``             — broadcast to all TP ranks (no split).
+
+    Packing (e.g. uint8 → int32 for 4-bit weights) is handled by
+    ``linear.weight_format.packer`` if present.
 
     For deferred-emplace models, this also triggers C++ ``allocate()`` so
     the weight tensors are created before ``copy_from``.
     """
+    split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+
+    # For output-dimension TP splits, verify that block scales divide evenly.
+    if split_side == SplitSide.OUTPUT and split_num > 1:
+        wfmt = linear.weight_format
+        if wfmt is not None and wfmt.block_out:
+            for kind, tensor in linear.tensors.items():
+                if kind in ("scales", "zeros"):
+                    n_blocks = tensor.size(-1)
+                    assert n_blocks % split_num == 0, (
+                        f"TP split: {name}.{kind} has {n_blocks} output-dimension "
+                        f"scale blocks (block_out={wfmt.block_out}), which is not "
+                        f"divisible by split_num={split_num}.")
+
     cpp_dtype, group_size = None, 0
     if hasattr(model, 'model_comm') and model.model_comm is not None:
         cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
@@ -795,25 +1203,26 @@ def commit_linear(model: BaseOutputModel, linear: Linear, name: str,
                 alloc_name = f"{name}.{weight_kind}"
                 model.allocate_weight(alloc_name, cpp_dtype, group_size)
 
+    packer = linear.weight_format.packer if linear.weight_format else None
     for kind, tensor in linear.tensors.items():
-        if kind == "qweight" and tensor.dtype == torch.uint8:
-            tensor = pack_u4_row(tensor)
-        elif kind == "weight" and tensor.dtype == torch.uint8 and cpp_dtype is not None:
-            try:
-                import _turbomind as _tm
-            except ImportError:
-                _tm = None
-            if _tm is not None and cpp_dtype == _tm.DataType.TYPE_FP4_E2M1:
-                tensor = pack_u4_row(tensor)
+        if packer is not None:
+            tensor = packer(tensor, kind)
         model.save_split(tensor, f"{name}.{kind}",
                          split_dim=split_dim, split_num=split_num, copy=copy)
 
 
 def commit_tensor(model: BaseOutputModel, tensor: torch.Tensor | None,
-                  name: str, split_dim=None, split_num=1, copy=False):
-    """Export a single raw tensor."""
+                  name: str, split_side: SplitSide | None = None,
+                  split_num: int = 1, copy: bool = False):
+    """Export a single raw tensor.
+
+    ``split_side`` follows the same convention as ``commit_linear``:
+    ``SplitSide.OUTPUT`` splits along the last axis, ``SplitSide.INPUT``
+    along the first, and ``None`` broadcasts to all TP ranks.
+    """
     if tensor is None:
         return
+    split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
     if split_dim is not None or copy:
         model.save_split(tensor, name, split_dim=split_dim,
                          split_num=split_num, copy=copy)
@@ -825,29 +1234,30 @@ def commit_tensor(model: BaseOutputModel, tensor: torch.Tensor | None,
 # TP split rules
 # -----------------------------------------------------------------------
 
+# TP split rules use SplitSide.OUTPUT (column-parallel) or
+# SplitSide.INPUT (row-parallel).  Keys absent from the table are
+# broadcast to all TP ranks (no split needed).
 _ATTN_TP_RULES: dict[str, dict] = {
-    "w_qkv": dict(split_dim=-1),
-    "wo": dict(split_dim=0),
-    "q_proj": dict(split_dim=-1),
-    "q_a_proj": dict(),
-    "q_b_proj": dict(split_dim=-1),
-    "kv_a_proj": dict(),
-    "kv_b_proj": dict(split_dim=-1),
+    "w_qkv":     dict(split_side=SplitSide.OUTPUT),  # column-parallel
+    "wo":        dict(split_side=SplitSide.INPUT),   # row-parallel
+    "q_proj":    dict(split_side=SplitSide.OUTPUT),
+    "q_b_proj":  dict(split_side=SplitSide.OUTPUT),
+    "kv_b_proj": dict(split_side=SplitSide.OUTPUT),
 }
 
 _FFN_TP_RULES: dict[str, dict] = {
-    "w1": dict(split_dim=-1),
-    "w3": dict(split_dim=-1),
-    "w2": dict(split_dim=0),
+    "w1": dict(split_side=SplitSide.OUTPUT),
+    "w3": dict(split_side=SplitSide.OUTPUT),
+    "w2": dict(split_side=SplitSide.INPUT),
 }
 
 _LINEAR_ATTN_TP_RULES: dict[str, dict] = {
-    "conv1d": dict(split_dim=0),
-    "in_proj_qkv": dict(split_dim=-1),
-    "in_proj_z": dict(split_dim=-1),
-    "in_proj_b": dict(split_dim=-1),
-    "in_proj_a": dict(split_dim=-1),
-    "out_proj": dict(split_dim=0),
+    "in_proj_qkv": dict(split_side=SplitSide.OUTPUT),
+    "in_proj_z":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_b":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_a":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_all": dict(split_side=SplitSide.OUTPUT),
+    "out_proj":    dict(split_side=SplitSide.INPUT),
 }
 
 
@@ -870,10 +1280,6 @@ class TransformerV2:
         self.attn_tp = model.attn_tp_size
         self.mlp_tp = model.mlp_tp_size
         self.num_layer = cfg.num_layer
-        self.inter_size = cfg.inter_size
-        self.expert_inter_size = getattr(cfg, "expert_inter_size", 0)
-        self.expert_num = getattr(cfg, "expert_num", None)
-        self.has_moe_shared_gate = getattr(cfg, "moe_shared_gate", False)
         self.vocab_size = cfg.vocab_size
         self.head_dim = cfg.size_per_head
         self.head_num = cfg.head_num
@@ -893,225 +1299,67 @@ class TransformerV2:
         else:
             self._process_misc(spec)
 
-    # -- QKV merge helpers -------------------------------------------------
-
-    def _permute_qk(self, q, k):
-        """Apply RoPE layout permutation to Q and K weight tensors."""
-        if self.rope_dim < self.head_dim:
-            q = permute_v2_partial(q, self.head_dim, self.rope_dim)
-            k = permute_v2_partial(k, self.head_dim, self.rope_dim)
-        else:
-            q = permute_v2(q, self.head_dim)
-            k = permute_v2(k, self.head_dim)
-        return q, k
-
-    def _split_q_gate(self, q):
-        """Split interleaved Q+gate tensor into (q, gate)."""
-        output_dims = q.size(-1)
-        head_num = output_dims // (self.head_dim * 2)
-        orig_shape = list(q.shape)
-        if q.dim() == 1:
-            q = q.unsqueeze(0)
-        q = q.view(q.size(0), head_num, 2, self.head_dim)
-        q_real = q[:, :, 0, :].contiguous().reshape(-1, head_num * self.head_dim)
-        gate = q[:, :, 1, :].contiguous().reshape(-1, head_num * self.head_dim)
-        if len(orig_shape) == 1:
-            q_real = q_real.squeeze(0)
-            gate = gate.squeeze(0)
-        return q_real, gate
-
-    def _repeat_kv_tensor(self, t):
-        """Replicate KV heads for TP when tp > kv_head_num."""
-        n = self.repeat_kv
-        kv_head_num = self.model.model_config.kv_head_num // n
-        head_dim = self.head_dim
-        t = t.reshape(-1, kv_head_num, head_dim)
-        t = t.repeat(1, 1, n).reshape(-1, kv_head_num * n * head_dim)
-        return t
-
-    def _merge_qkv_kind(self, q, k, v, kind: str, layer: int):
-        """Merge one tensor kind of Q/K/V into a merged w_qkv tensor.
-
-        repeat_kv, split_q_gate, and permute_qk all operate along the output
-        dimension (head layout) and are safe to apply regardless of whether the
-        tensors are quantisation-grouped along the input dimension.
-
-        Block-compressed tensors (e.g. FP8 per-block scales with shape
-        [ceil(out/block), ceil(in/block)]) have a reduced output dimension
-        that does not carry per-element head structure.  We detect this via
-        ``q.size(-1) % head_dim != 0`` and skip per-element operations.
-        """
-        full_res = q.size(-1) % self.head_dim == 0
-        gate = None
-        if self.repeat_kv and full_res:
-            k = self._repeat_kv_tensor(k)
-            v = self._repeat_kv_tensor(v)
-        if self.attn_output_gate and q is not None and full_res:
-            q, gate = self._split_q_gate(q)
-        if self.permute_qk and full_res:
-            q, k = self._permute_qk(q, k)
-
-        if gate is not None:
-            merged = merge_qkvg_v2(q, k, v, gate, self.attn_tp)
-        else:
-            merged = merge_qkv_v2(q, k, v, self.attn_tp)
-        return merged
-
-    def _process_attn_qkv(self, layer: int, linears: dict[str, Linear], spec: ModelWeightSpec | None = None):
-        """Handle ``w_qkv.{q,k,v}`` + ``wo`` pattern: merge Q/K/V with RoPE
-        permutation and TP interleaving, then commit."""
-        q_lin = linears.pop("w_qkv.q")
-        k_lin = linears.pop("w_qkv.k")
-        v_lin = linears.pop("w_qkv.v")
-        o_lin = linears.pop("wo", None)
-
-        # Allocate the merged w_qkv on C++ side (deferred-emplace)
-        if hasattr(self.model, 'model_comm') and self.model.model_comm is not None:
-            cpp_dtype, group_size = _infer_cpp_linear_dtype(q_lin)
-            if cpp_dtype is not None:
-                if group_size == 0:
-                    group_size = max(1, self.group_size)
-                is_qweight = "qweight" in q_lin.tensors
-                weight_kind = "qweight" if is_qweight else "weight"
-                for rank in range(self.attn_tp):
-                    alloc_name = f"layers.{layer}.attention.w_qkv.{rank}.{weight_kind}"
-                    self.model.allocate_weight(alloc_name, cpp_dtype, group_size)
-
-        all_kinds = set(q_lin.tensors) | set(k_lin.tensors) | set(v_lin.tensors)
-        for kind in sorted(all_kinds):
-            q = q_lin.tensors.get(kind)
-            k = k_lin.tensors.get(kind)
-            v = v_lin.tensors.get(kind)
-            if q is None or k is None or v is None:
-                continue
-            merged = self._merge_qkv_kind(q, k, v, kind, layer)
-            if kind == "qweight" and merged.dtype == torch.uint8:
-                merged = pack_u4_row(merged)
-            self.model.save_split(merged,
-                                  f"layers.{layer}.attention.w_qkv.{kind}",
-                                  split_dim=-1, split_num=self.attn_tp)
-
-        if o_lin is not None:
-            has_qkv_bias = "bias" in q_lin.tensors
-            has_o_bias = "bias" in o_lin.tensors
-            if has_qkv_bias and not has_o_bias:
-                q_bias = q_lin.tensors["bias"]
-                o_lin.tensors["bias"] = torch.zeros_like(q_bias)
-            commit_linear(self.model, o_lin,
-                          f"layers.{layer}.attention.wo",
-                          split_dim=0, split_num=self.attn_tp)
-
-        for name, lin in linears.items():
-            rule = _ATTN_TP_RULES.get(name, {})
-            tp = self.attn_tp if rule.get("split_dim") is not None else 1
-            commit_linear(self.model, lin,
-                          f"layers.{layer}.attention.{name}",
-                          split_num=tp, **rule)
-
     # -- per-layer ---------------------------------------------------------
 
     def _process_layer(self, layer: int, spec: ModelWeightSpec):
+        # Provide TP and model params to spec for merge/fusion (idempotent).
+        spec.configure(
+            attn_tp=self.attn_tp,
+            permute_qk=self.permute_qk,
+            repeat_kv=self.repeat_kv,
+            head_dim=self.head_dim,
+            rope_dim=self.rope_dim,
+            attn_output_gate=self.attn_output_gate,
+            kv_head_num=self.model.model_config.kv_head_num,
+        )
+
         # Layer norms (broadcast, no TP split)
         commit_tensor(self.model, spec.attn_norm(layer),
                       f"layers.{layer}.attention_norm.weight")
         commit_tensor(self.model, spec.ffn_norm(layer),
                       f"layers.{layer}.ffn_norm.weight")
 
-        # Attention linears
-        attn_linears = spec.attn_linears(layer)
-        if "w_qkv.q" in attn_linears:
-            self._process_attn_qkv(layer, attn_linears, spec)
-        else:
-            for name, lin in attn_linears.items():
-                rule = _ATTN_TP_RULES.get(name, {})
-                tp = self.attn_tp if rule.get("split_dim") is not None else 1
-                commit_linear(self.model, lin,
-                              f"layers.{layer}.attention.{name}",
-                              split_num=tp, **rule)
-
-        # QK norm (with RoPE permutation)
-        q_norm, k_norm = spec.qk_norm(layer)
-        if q_norm is not None and k_norm is not None and self.permute_qk:
-            q_norm, k_norm = self._permute_qk(q_norm, k_norm)
-        if q_norm is not None:
-            commit_tensor(self.model, q_norm,
-                          f"layers.{layer}.attention.q_norm")
-        if k_norm is not None:
-            commit_tensor(self.model, k_norm,
-                          f"layers.{layer}.attention.k_norm")
-
-        # MLA norm
-        mla_q, mla_kv = spec.mla_norm(layer)
-        if mla_q is not None:
-            commit_tensor(self.model, mla_q,
-                          f"layers.{layer}.attention.q_a_layernorm")
-        if mla_kv is not None:
-            commit_tensor(self.model, mla_kv,
-                          f"layers.{layer}.attention.kv_a_layernorm")
-
-        # Attention sinks
-        sinks = spec.attn_sinks(layer)
-        if sinks is not None:
-            commit_tensor(self.model, sinks,
-                          f"layers.{layer}.attention.sinks",
-                          split_dim=-1, split_num=self.attn_tp)
+        # Attention linears (w_qkv already merged+permuted by base class)
+        for name, lin in spec.attn_linears(layer).items():
+            rule = _ATTN_TP_RULES.get(name, {})
+            tp = self.attn_tp if "split_side" in rule else 1
+            commit_linear(self.model, lin,
+                          f"layers.{layer}.attention.{name}",
+                          split_num=tp, **rule)
 
         # Dense FFN linears
         for name, lin in spec.ffn_linears(layer).items():
             rule = _FFN_TP_RULES.get(name, {})
-            tp = self.mlp_tp if rule.get("split_dim") is not None else 1
+            tp = self.mlp_tp if "split_side" in rule else 1
             commit_linear(self.model, lin,
                           f"layers.{layer}.feed_forward.{name}",
                           split_num=tp, **rule)
 
         # MoE experts
-        n_experts = spec.num_experts(layer)
-        for e in range(n_experts):
+        for e in range(spec.num_experts(layer)):
             for name, lin in spec.moe_ffn_linears(layer, e).items():
                 rule = _FFN_TP_RULES.get(name, {})
-                tp = self.mlp_tp if rule.get("split_dim") is not None else 1
+                tp = self.mlp_tp if "split_side" in rule else 1
                 commit_linear(self.model, lin,
                               f"layers.{layer}.moe_ffn.experts.{e}.{name}",
                               split_num=tp, **rule)
 
-        # MoE router
-        if n_experts > 0:
-            gate = spec.moe_ffn_gate(layer)
-            if gate is not None:
-                gate = linear_transpose(gate) if gate.dim() > 1 else gate
-                commit_tensor(self.model, gate,
-                              f"layers.{layer}.moe_ffn.gate.weight")
-            gate_bias = spec.moe_ffn_gate_bias(layer)
-            commit_tensor(self.model, gate_bias,
-                          f"layers.{layer}.moe_ffn.gate.bias")
-            correction = spec.moe_ffn_gate_correction_bias(layer)
-            commit_tensor(self.model, correction,
-                          f"layers.{layer}.moe_ffn.gate.score_correction_bias")
-
-        # MoE shared gate
-        if spec.has_shared_gate():
-            sg = spec.moe_ffn_shared_gate(layer)
-            if sg is not None:
-                sg = linear_transpose(sg) if sg.dim() > 1 else sg
-                commit_tensor(self.model, sg,
-                              f"layers.{layer}.moe_ffn.shared_gate.weight")
-
-        # Linear attention
+        # Linear attention linears (in_proj_all already fused by base class)
         for name, lin in spec.linear_attn_linears(layer).items():
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-            tp = self.attn_tp if rule.get("split_dim") is not None else 1
+            tp = self.attn_tp if "split_side" in rule else 1
             commit_linear(self.model, lin,
                           f"layers.{layer}.linear_attn.{name}",
                           split_num=tp, **rule)
 
-        for name, tensor in spec.linear_attn_scalars(layer).items():
+        # All raw per-layer tensors (norms, gates, sinks, scalars, etc.)
+        # Each entry is (tm_path, tensor, split_side) where split_side is
+        # "output", "input", or None (broadcast).
+        for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
+            tp = self.attn_tp if split_side is not None else 1
             commit_tensor(self.model, tensor,
-                          f"layers.{layer}.linear_attn.{name}.weight",
-                          split_dim=-1, split_num=self.attn_tp)
-
-        la_norm = spec.linear_attn_norm(layer)
-        commit_tensor(self.model, la_norm,
-                      f"layers.{layer}.linear_attn.norm.weight")
+                          f"layers.{layer}.{tm_path}",
+                          split_side=split_side, split_num=tp)
 
     # -- misc (embeddings, output head, final norm) ------------------------
 

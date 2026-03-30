@@ -190,7 +190,7 @@ class Qwen3Model(LlamaModel):
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
         for i, param in loader.items():
-            yield i, Qwen3Spec(param, self.model_config, self.model_format)
+            yield i, Qwen3Spec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):
@@ -217,7 +217,7 @@ class Qwen3MoeModel(LlamaModel):
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
         for i, param in loader.items():
-            yield i, Qwen3Spec(param, self.model_config, self.model_format)
+            yield i, Qwen3Spec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):
@@ -400,7 +400,7 @@ class Qwen3_5Model(Qwen3Model):
     def readers(self):
         loader = create_loader(self.model_path, self.Reader.attn_layer_patten, [])
         for i, param in loader.items():
-            yield i, Qwen3_5Spec(param, self.model_config, self.model_format)
+            yield i, Qwen3_5Spec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):
@@ -487,7 +487,7 @@ class Qwen3_5MoeModel(Qwen3MoeModel):
             loader.mappings = [self.map_packed_qwen35_experts]
 
         for i, param in loader.items():
-            yield i, Qwen3_5Spec(param, self.model_config, self.model_format)
+            yield i, Qwen3_5Spec(param, self.model_config)
         torch.cuda.empty_cache()
 
     def model_info(self):
