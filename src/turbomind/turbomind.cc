@@ -17,7 +17,7 @@
 #include "src/turbomind/engine/model_request.h"
 
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/LlamaWeight.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -185,7 +185,7 @@ struct TurboMind::Impl {
     vector<int> global_rank_;
 
     // Weights & engine instances for the ranks
-    vector<shared_ptr<LlamaWeight>> weights_;
+    vector<shared_ptr<ModelWeight>> weights_;
     vector<shared_ptr<Context>>     contexts_;
     vector<Engine>                  engines_;
 
@@ -217,61 +217,10 @@ struct TurboMind::Impl {
 
         CreateContext(index);
 
-        weights_[index] = std::make_shared<LlamaWeight>(data_type_,  //
+        weights_[index] = std::make_shared<ModelWeight>(data_type_,  //
                                                         model_param_,
                                                         engine_params_.at(index),
                                                         moe_param_);
-    }
-
-    void AllocateWeight(int index, const std::string& name, DataType dtype, int group_size)
-    {
-        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-        auto& weight = *TM_CHECK_NOTNULL(weights_[index]);
-        core::ContextGuard ctx_guard = weight.context();
-
-        // Split the full parameter name into module path + parameter suffix.
-        // e.g. "layers.0.attention.w_qkv.0.weight" → path "layers.0.attention.w_qkv.0", suffix "weight"
-        auto dot = name.rfind('.');
-        TM_CHECK(dot != std::string::npos) << "invalid parameter name: " << name;
-        std::string module_path = name.substr(0, dot);
-
-        if (auto* mod = weight.find_module(module_path)) {
-            if (auto* dense = dynamic_cast<LlamaDenseWeight*>(mod)) {
-                dense->allocate(dtype, group_size);
-                return;
-            }
-        }
-
-        // Not a LlamaDenseWeight — raw tensors (conv1d, A_log, etc.) are
-        // pre-allocated in constructors with the correct shape and dtype.
-        // Do NOT replace them: Python writes through GetParameter(), so
-        // swapping the tensor here would break the destination handle.
-    }
-
-    Tensor GetParameter(int index, const std::string& name)
-    {
-        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-        auto& weight = *TM_CHECK_NOTNULL(weights_[index]);
-
-        // Path-based lookup: O(depth) instead of O(total_params).
-        auto dot = name.rfind('.');
-        if (dot != std::string::npos) {
-            std::string module_path = name.substr(0, dot);
-            std::string param_suffix = name.substr(dot + 1);
-            if (auto* mod = weight.find_module(module_path)) {
-                auto params = mod->get_parameters();
-                auto it     = params.find(param_suffix);
-                if (it != params.end()) {
-                    return *it->second;
-                }
-            }
-        }
-
-        // Fallback to full traversal for non-module parameters (norms, etc.)
-        auto params = weight.get_parameters();
-        auto it     = params.find(name);
-        TM_CHECK(it != params.end()) << "parameter not found: " << name;
-        return *it->second;
     }
 
     void ProcessWeights(int index)
@@ -279,10 +228,8 @@ struct TurboMind::Impl {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
         FT_CHECK(weights_[index] != nullptr);
 
-        cudaDeviceProp props{};
-        check_cuda_error(cudaGetDeviceProperties(&props, engine_param_.devices[index]));
-
-        weights_[index]->prepare(props);
+        auto ctx_guard = weights_[index]->context();
+        weights_[index]->prepare();
         sync_check_cuda_error();
     }
 
@@ -328,12 +275,7 @@ struct TurboMind::Impl {
 
         if (keys.find("weights") != keys.end()) {
             TM_CHECK(weights_[index] != nullptr);
-            if (weights_[index]->is_initialized()) {
-                weights_[index]->to_device(kDEVICE);
-            }
-            else {
-                weights_[index]->initialize();
-            }
+            weights_[index]->to_device(kDEVICE);
         }
 
         if (keys.find("kv_cache") != keys.end()) {
@@ -819,14 +761,9 @@ void TurboMind::CreateWeights(int index)
     return impl_->CreateWeights(index);
 }
 
-void TurboMind::AllocateWeight(int index, const std::string& name, DataType dtype, int group_size)
+core::Module* TurboMind::root(int index)
 {
-    return impl_->AllocateWeight(index, name, dtype, group_size);
-}
-
-Tensor TurboMind::GetParameter(int index, const std::string& name)
-{
-    return impl_->GetParameter(index, name);
+    return impl_->weights_[index].get();
 }
 
 void TurboMind::ProcessWeights(int index)
@@ -862,6 +799,16 @@ unique_ptr<ModelRequest> TurboMind::CreateRequest()
 bool TurboMind::is_dummy_node() const noexcept
 {
     return impl_->n_queues_ == 0;
+}
+
+int TurboMind::GetAttnTpRank(int index)
+{
+    return impl_->engine_params_.at(index).attn_tp_rank;
+}
+
+int TurboMind::GetMlpTpRank(int index)
+{
+    return impl_->engine_params_.at(index).mlp_tp_rank;
 }
 
 }  // namespace turbomind

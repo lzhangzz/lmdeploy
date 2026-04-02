@@ -27,7 +27,7 @@
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -38,7 +38,7 @@ struct AttentionData;
 
 class UnifiedAttentionLayer {
 public:
-    using WeightType = LlamaAttentionWeight;
+    using WeightType = AttentionWeight;
 
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;

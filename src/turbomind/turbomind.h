@@ -7,6 +7,7 @@
 #include <string>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/module.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -22,15 +23,8 @@ public:
 
     void CreateWeights(int index);
 
-    /// Re-allocate a weight parameter with the given dtype and group_size.
-    /// For ``LlamaDenseWeight`` parameters the owning module's ``allocate()``
-    /// is invoked (updating scales/zeros/metadata). Other tensors keep the
-    /// storage allocated during weight creation.
-    void AllocateWeight(int index, const std::string& name, DataType dtype, int group_size);
-
-    /// Look up a single parameter tensor by name.  Returns the tensor
-    /// (shared ownership with the weight module) or throws if not found.
-    Tensor GetParameter(int index, const std::string& name);
+    /// Returns the root `Module` for GPU `index`'s weight tree.
+    core::Module* root(int index);
 
     void ProcessWeights(int index);
 
@@ -45,6 +39,12 @@ public:
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int index);
 
     std::unique_ptr<ModelRequest> CreateRequest();
+
+    /// Attention TP rank for GPU *index*.
+    int GetAttnTpRank(int index);
+
+    /// MLP TP rank for GPU *index*.
+    int GetMlpTpRank(int index);
 
 private:
     struct Impl;

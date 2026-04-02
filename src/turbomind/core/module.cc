@@ -1,93 +1,242 @@
+// Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/core/module.h"
+
 #include "src/turbomind/core/check.h"
-#include <optional>
+
+#include <sstream>
 
 namespace turbomind::core {
 
-Module::Module(): parent_{} {}
+// ======================================================================
+// Module
+// ======================================================================
 
-Module::~Module()
+Module::Module() = default;
+
+Module::~Module() = default;
+
+// ----- Hierarchy -----
+
+Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
 {
-    if (parent_) {
-        parent_->remove_module(*this);
-        parent_ = {};
+    TM_CHECK(child != nullptr);
+    TM_CHECK(child->parent_ == nullptr) << "module already has a parent";
+
+    child->parent_ = this;
+    child->name_   = name;
+
+    Module* raw = child.get();
+    children_.emplace_back(std::move(name), std::move(child));
+    return raw;
+}
+
+void Module::add_alias(std::string name, Module& target)
+{
+    aliases_.emplace_back(std::move(name), &target);
+}
+
+// ----- Parameters -----
+
+void Module::add_param(std::string name, Tensor& tensor)
+{
+    params_.emplace_back(std::move(name), &tensor);
+}
+
+// ----- Type info -----
+
+const char* Module::type() const
+{
+    return "Module";
+}
+
+// ----- Lifecycle -----
+
+Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
+{
+    // Default: return pre-existing param tensor if registered.
+    if (auto* t = param(param_name)) {
+        return *t;
+    }
+    return {};
+}
+
+void Module::prepare()
+{
+    for (auto& [name, child] : children_) {
+        child->prepare();
     }
 }
 
-void Module::register_module(std::string name, Module& module, std::optional<int> index)
+// ----- Lifecycle: release / to_device -----
+
+void Module::release()
 {
-    module.parent_ = this;
-    if (index) {
-        name += ".";
-        name += std::to_string(*index);
+    for (auto& [name, child] : children_) {
+        child->release();
     }
-    // std::cout << "register Module " << name << " " << &module << ", parent " << this << "\n";
-    modules_.emplace_back(std::move(name), &module);
-}
-
-void Module::register_parameter(std::string name, Tensor& param)
-{
-    // std::cout << "register Parameter " << name << " " << &param << " " << param.layout() << "\n";
-    params_.emplace_back(std::move(name), &param);
-}
-
-void Module::remove_module(Module& module)
-{
-    for (auto it = modules_.begin(); it != modules_.end(); ++it) {
-        if (it->second == &module) {
-            // std::cout << "erase " << it->first << " " << &module << " from " << this << "\n";
-            modules_.erase(it);
-            return;
+    for (auto& [name, tensor] : params_) {
+        if (tensor && *tensor) {
+            *tensor = Tensor{};
         }
     }
-    TM_CHECK(0) << "module " << &module << " not found";
 }
 
-void Module::remove_parameter(Tensor& param)
+void Module::to_device(DeviceType dev)
 {
-    for (auto it = params_.begin(); it != params_.end(); ++it) {
-        if (it->second == &param) {
-            params_.erase(it);
-            return;
+    for (auto& [name, child] : children_) {
+        child->to_device(dev);
+    }
+    for (auto& [name, tensor] : params_) {
+        if (tensor && *tensor && tensor->device().type != dev) {
+            Tensor dst{tensor->layout(), tensor->dtype(), Device{dev, tensor->device().id}};
+            Copy(*tensor, dst);
+            *tensor = std::move(dst);
         }
     }
-    TM_CHECK(0) << "param " << &param << " not found";
 }
 
-Module* Module::find_module(const std::string& path)
+// ----- Lazy child creation -----
+
+Module* Module::ensure_child(const std::string& /*segment*/)
 {
-    for (auto& [name, mod] : modules_) {
-        if (path == name) {
-            return mod;
+    return nullptr;  // base Module cannot create children lazily
+}
+
+// ----- Lookup -----
+
+Module* Module::child(const std::string& name) const
+{
+    for (auto& [n, c] : children_) {
+        if (n == name) {
+            return c.get();
         }
-        if (path.size() > name.size() && path[name.size()] == '.' && path.compare(0, name.size(), name) == 0) {
-            if (auto found = mod->find_module(path.substr(name.size() + 1))) {
-                return found;
-            }
+    }
+    for (auto& [n, c] : aliases_) {
+        if (n == name) {
+            return c;
         }
     }
     return nullptr;
 }
 
-std::unordered_map<std::string, Tensor*> Module::get_parameters() const
+Module* Module::get(const std::string& segment)
 {
-    std::unordered_map<std::string, Tensor*> m;
-    get_parameters_impl({}, m);
-    return m;
+    if (auto* c = child(segment)) {
+        return c;
+    }
+    return ensure_child(segment);
 }
 
-void Module::get_parameters_impl(std::string prefix, std::unordered_map<std::string, Tensor*>& m) const
+Tensor* Module::param(const std::string& name) const
 {
-    if (!prefix.empty()) {
-        prefix += ".";
+    for (auto& [n, p] : params_) {
+        if (n == name) {
+            return p;
+        }
     }
-    for (const auto& [k, v] : params_) {
-        m.emplace(prefix + k, v);
+    return nullptr;
+}
+
+std::unordered_map<std::string, Tensor*> Module::params() const
+{
+    std::unordered_map<std::string, Tensor*> out;
+    collect_params("", out);
+    return out;
+}
+
+// ----- Verification -----
+
+bool Module::verify(std::vector<std::string>& missing)
+{
+    for (auto& [name, child] : children_) {
+        child->verify(missing);
     }
-    for (const auto& [k, v] : modules_) {
-        v->get_parameters_impl(prefix + k, m);
+    for (auto& [name, tensor] : params_) {
+        if (!tensor || !*tensor) {
+            missing.push_back(full_path() + "." + name);
+        }
     }
+    return missing.empty();
+}
+
+// ----- Utilities -----
+
+std::string Module::full_path() const
+{
+    if (!parent_) {
+        return name_;
+    }
+    std::string pp = parent_->full_path();
+    if (pp.empty()) {
+        return name_;
+    }
+    return pp + "." + name_;
+}
+
+// ---- Private ----
+
+void Module::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
+{
+    std::string p = prefix.empty() ? "" : prefix + ".";
+    for (auto& [n, t] : params_) {
+        out.emplace(p + n, t);
+    }
+    for (auto& [n, c] : children_) {
+        c->collect_params(prefix.empty() ? n : prefix + "." + n, out);
+    }
+}
+
+// ======================================================================
+// ModuleList
+// ======================================================================
+
+ModuleList::ModuleList(Factory factory): factory_{std::move(factory)} {}
+
+Module* ModuleList::ensure_child(const std::string& segment)
+{
+    // Try to parse segment as an integer index.
+    int index = 0;
+    {
+        std::istringstream iss(segment);
+        if (!(iss >> index) || !iss.eof()) {
+            return nullptr;
+        }
+    }
+
+    // Negative indices are invalid.
+    if (index < 0) {
+        return nullptr;
+    }
+
+    // Grow the indexed vector if needed.
+    if (index >= static_cast<int>(indexed_.size())) {
+        indexed_.resize(index + 1, nullptr);
+    }
+
+    // Already created?
+    if (indexed_[index]) {
+        return indexed_[index];
+    }
+
+    // Create via factory.
+    auto child = factory_(index);
+    TM_CHECK(child != nullptr) << "ModuleList factory returned nullptr for index " << index;
+
+    auto* raw = add_child(segment, std::move(child));
+    indexed_[index] = raw;
+    return raw;
+}
+
+int ModuleList::size() const
+{
+    int n = 0;
+    for (auto* p : indexed_) {
+        if (p) {
+            ++n;
+        }
+    }
+    return n;
 }
 
 }  // namespace turbomind::core

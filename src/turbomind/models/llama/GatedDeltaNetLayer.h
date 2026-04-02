@@ -2,7 +2,7 @@
 
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/batch.h"
-#include "src/turbomind/models/llama/GatedDeltaNetWeight.h"
+#include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -15,7 +15,7 @@ public:
         int                        phase;
         Tensor                     input;
         Tensor                     output;
-        const GatedDeltaNetWeight* weights;
+        const DeltaNetWeight* weights;
         int                        layer_id;
     };
 

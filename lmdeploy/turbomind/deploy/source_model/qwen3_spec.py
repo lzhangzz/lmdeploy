@@ -75,9 +75,9 @@ class Qwen3Spec(ModelWeightSpec):
         if q is not None and k is not None:
             q, k = self._permute_qk_tensors(q, k)
         if q is not None:
-            tensors.append(("attention.q_norm", q, None))
+            tensors.append(("attention.q_norm.weight", q, None))
         if k is not None:
-            tensors.append(("attention.k_norm", k, None))
+            tensors.append(("attention.k_norm.weight", k, None))
         if self._n_experts > 0:
             gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:

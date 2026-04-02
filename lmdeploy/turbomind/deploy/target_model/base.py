@@ -122,28 +122,36 @@ class BaseOutputModel(ABC):
             with open(config_path, 'w') as f:
                 yaml.safe_dump(self.tm_config.to_dict(), f)
 
-    def allocate_weight(self, param_name: str, cpp_dtype, group_size: int) -> None:
-        """Allocate a linear weight on the C++ side via allocate_weight."""
+    def root(self, index: int):
+        """Return the C++ ``Module`` root for GPU *index*.
+
+        The module tree is built lazily: calling ``.get(segment)`` on the
+        returned handle triggers ``ensure_child()`` in C++, creating children
+        on demand as weights arrive.
+
+        Returns ``None`` when loading to file (``model_comm`` not set).
+        """
         if self.model_comm is None:
-            return
-        for i in range(self.gpu_count):
-            try:
-                self.model_comm.allocate_weight(i, param_name, cpp_dtype, group_size)
-            except RuntimeError:
-                pass
+            return None
+        return self.model_comm.root(index)
+
+    def tp_ranks(self, index: int):
+        """Return ``(attn_tp_rank, mlp_tp_rank)`` for GPU *index*.
+
+        Useful for determining which TP shard to copy to each GPU when using
+        the module-based loading path.
+        """
+        if self.model_comm is None:
+            return (0, 0)
+        return (self.model_comm.attn_tp_rank(index),
+                self.model_comm.mlp_tp_rank(index))
 
     def export_weight(self, param: torch.Tensor, name: str) -> None:
-        """Export turbomind weight."""
+        """Export turbomind weight to file."""
 
         _CASTABLE = {torch.float32, torch.float16, torch.bfloat16}
 
         def _cast(tensor: torch.Tensor) -> torch.Tensor:
-            """Cast standard float types to the model's compute dtype.
-
-            Non-float types (int32, uint8) and special float types (float8)
-            are left unchanged — their dtype is determined by the checkpoint
-            format and handled by the C++ side.
-            """
             if tensor.dtype in _CASTABLE:
                 return tensor.to(_compute_dtype(self.model_config.data_type))
             return tensor
@@ -157,33 +165,6 @@ class BaseOutputModel(ABC):
             param = _cast(param)
             tprint(name, param.shape)
             _tofile(param, osp.join(self.out_dir, name))
-        elif self.model_comm is not None:
-            try:
-                import _turbomind as _tm
-            except ImportError:
-                _tm = None
-
-            torch_tensor = param if param.is_contiguous() else param.contiguous()
-            torch_tensor = torch_tensor.cuda()
-            torch_tensor = _cast(torch_tensor)
-
-            def _reconcile_dtype(tm_tensor, src_tensor):
-                """Match Python tensor dtype to C++ tensor dtype."""
-                if _tm is not None:
-                    if tm_tensor.type == _tm.DataType.TYPE_FP32 and src_tensor.dtype in [
-                            torch.float16, torch.bfloat16
-                    ]:
-                        return src_tensor.float()
-                    elif tm_tensor.type == _tm.DataType.TYPE_FP16 and src_tensor.dtype == torch.float32:
-                        return src_tensor.half()
-                return src_tensor
-
-            for i in range(self.gpu_count):
-                try:
-                    tm_tensor = self.model_comm.get_parameter(i, name)
-                    tm_tensor.copy_from(_reconcile_dtype(tm_tensor, torch_tensor))
-                except RuntimeError:
-                    continue
         else:
             tprint('skip export', name, param.shape)
 

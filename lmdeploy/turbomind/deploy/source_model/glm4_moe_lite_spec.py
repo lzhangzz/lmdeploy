@@ -185,9 +185,9 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
         q_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
         kv_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
         if q_a is not None:
-            tensors.append(("attention.q_a_layernorm", q_a, None))
+            tensors.append(("attention.q_a_layernorm.weight", q_a, None))
         if kv_a is not None:
-            tensors.append(("attention.kv_a_layernorm", kv_a, None))
+            tensors.append(("attention.kv_a_layernorm.weight", kv_a, None))
         # MoE gate, bias, and correction bias (broadcast)
         if self.num_experts(layer) > 0:
             gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
@@ -200,7 +200,7 @@ class Glm4MoeLiteSpec(ModelWeightSpec):
             correction = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.e_score_correction_bias")
             if correction is not None:
-                tensors.append(("moe_ffn.gate.score_correction_bias", correction, None))
+                tensors.append(("moe_ffn.score_correction_bias", correction, None))
         return tensors
 
     def tok_embeddings(self) -> torch.Tensor | None:

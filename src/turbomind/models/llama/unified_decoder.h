@@ -1,8 +1,8 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
-#include "src/turbomind/models/llama/LlamaDecoderLayerWeight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -13,7 +13,7 @@ namespace turbomind {
 
 class UnifiedDecoder {
 public:
-    using WeightType = LlamaDecoderLayerWeight;
+    using WeightType = DecoderLayerWeight;
 
     UnifiedDecoder(const ModelParam&     model,
                    const EngineParam&    engine,

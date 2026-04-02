@@ -15,10 +15,12 @@
 #include "xgrammar/compiler.h"
 
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -396,6 +398,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def_property_readonly("type", [](const Tensor& t) { return t.dtype(); })
         .def_property_readonly("shape", [](const Tensor& t) { return t.shape(); })
         .def_property_readonly("data", [](const Tensor& t) { return t.raw_data(); })
+        .def_property_readonly("byte_size", [](const Tensor& t) { return t.byte_size(); })
+        .def("__bool__", [](const Tensor& t) { return t.byte_size() > 0; })
         .def(
             "copy_from",
             [](Tensor& self, py::object obj) {
@@ -505,6 +509,59 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "grammar"_a);
 
+    // Helper: set up the ModelWeight's context (stream + allocator) for any
+    // Python → C++ call that may trigger tensor allocation (get, alloc, prepare).
+    auto with_context = [](ft::core::Module& m, auto&& fn) -> decltype(auto) {
+        ft::core::Module* root = &m;
+        while (root->parent()) {
+            root = root->parent();
+        }
+        auto* mw = dynamic_cast<ft::ModelWeight*>(root);
+        if (mw) {
+            auto ctx_guard = mw->context();
+            return fn();
+        }
+        return fn();
+    };
+
+    // Module class — navigation and allocation interface
+    py::class_<ft::core::Module, std::shared_ptr<ft::core::Module>>(m, "Module")
+        .def("get",
+             [with_context](ft::core::Module& m, const std::string& segment) -> ft::core::Module* {
+                 return with_context(m, [&] { return m.get(segment); });
+             },
+             py::return_value_policy::reference,
+             "segment"_a)
+        .def("alloc",
+             [with_context](ft::core::Module& m, const std::string& param_name, ft::DataType dtype, int group_size) {
+                 return with_context(m, [&] {
+                     return std::make_shared<Tensor>(m.alloc(param_name, ft::core::WeightSpec{dtype, group_size}));
+                 });
+             },
+             "param_name"_a,
+             "dtype"_a,
+             "group_size"_a = 0)
+        .def("prepare",
+             [with_context](ft::core::Module& m) {
+                 with_context(m, [&] { m.prepare(); });
+             })
+        .def("child",
+             [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
+             py::return_value_policy::reference,
+             "name"_a)
+        .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
+        .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
+        .def("__getitem__",
+             [with_context](ft::core::Module& m, const std::string& key) -> ft::core::Module* {
+                 return with_context(m, [&] { return m.get(key); });
+             },
+             py::return_value_policy::reference)
+        .def("__getitem__",
+             [with_context](ft::core::Module& m, int idx) -> ft::core::Module* {
+                 return with_context(m, [&] { return m.get(std::to_string(idx)); });
+             },
+             py::return_value_policy::reference);
+
     // transformer model
     using ft::TurboMind;
     py::class_<TurboMind, std::shared_ptr<TurboMind>>(m, "TurboMind")
@@ -531,23 +588,10 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>())
         .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
-            "allocate_weight",
-            [](TurboMind* model, int index, const std::string& name, ft::DataType dtype, int group_size) {
-                model->AllocateWeight(index, name, dtype, group_size);
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "name"_a,
-            "dtype"_a,
-            "group_size"_a)
-        .def(
-            "get_parameter",
-            [](TurboMind* model, int index, const std::string& name) {
-                return std::make_shared<Tensor>(model->GetParameter(index, name));
-            },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "name"_a)
+            "root",
+            [](TurboMind* model, int index) -> ft::core::Module* { return model->root(index); },
+            py::return_value_policy::reference,
+            "index"_a)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },
@@ -575,5 +619,7 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "index"_a,
             "tags"_a)
-        .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); });
+        .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
+        .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
+        .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a);
 }

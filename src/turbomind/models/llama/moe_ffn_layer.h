@@ -4,7 +4,7 @@
 
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -17,7 +17,7 @@ public:
     struct ForwardParam {
         Tensor              input;
         Tensor              output;
-        const MoeFfnWeight* weights;
+        const MoeWeight* weights;
         float               scale;
         int                 layer_id;
     };
@@ -27,7 +27,7 @@ public:
     void Combine(ForwardParam& p);
 
 private:
-    Tensor_<float> Gate(const Tensor& input, const LlamaDenseWeight& gate);
+    Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 

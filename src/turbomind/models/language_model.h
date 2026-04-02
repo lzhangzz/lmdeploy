@@ -9,7 +9,7 @@
 
 namespace turbomind {
 
-class LlamaWeight;
+class ModelWeight;
 
 class LanguageModel {
 public:
@@ -30,7 +30,7 @@ public:
                   const AttentionParam& attn,
                   const MoeParam&       moe,
                   const Context&        ctx,
-                  const LlamaWeight&    weights,
+                  const ModelWeight&    weights,
                   int                   phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);

@@ -12,7 +12,7 @@
 
 #include "src/turbomind/kernels/quantization.h"
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
@@ -53,7 +53,7 @@ struct LlamaLinear::Impl {
         workspace_ = {};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LlamaDenseWeight& dense)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LinearWeight& dense)
     {
         const Tensor& B      = dense.weight;
         const Tensor& V      = dense.scales;
@@ -63,7 +63,7 @@ struct LlamaLinear::Impl {
     }
 
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout>
-    GetOperandA(const LlamaDenseWeight& dense, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
+    GetOperandA(const LinearWeight& dense, const Tensor& input, Buffer_<int> indices, const Buffer_<int>& offsets)
     {
         auto st = core::Context::stream().handle();
 
@@ -113,7 +113,7 @@ struct LlamaLinear::Impl {
 
     void Forward(Tensor&                 output,
                  const Tensor&           input,  //
-                 const LlamaDenseWeight& dense,
+                 const LinearWeight& dense,
                  const Buffer_<int>&     indices,
                  const Buffer_<int>&     offsets)
     {
@@ -182,14 +182,14 @@ struct LlamaLinear::Impl {
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
 Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
+                            const LinearWeight& weight,
                             std::optional<Tensor>   output)
 {
     return Forward(input, weight, {}, {}, output);
 }
 
 Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
+                            const LinearWeight& weight,
                             const Buffer_<int>&     indices,
                             const Buffer_<int>&     offsets,
                             std::optional<Tensor>   output)

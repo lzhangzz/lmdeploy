@@ -20,7 +20,7 @@
 #pragma once
 
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -36,7 +36,7 @@ public:
     struct ForwardParam {
         Tensor                input;
         Tensor                output;
-        const LlamaFfnWeight* weights;
+        const FfnWeight* weights;
         int                   layer_id;
     };
 

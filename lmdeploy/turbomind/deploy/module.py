@@ -136,6 +136,9 @@ class ModelWeightSpec(ABC):
     _rope_dim: int = 0
     _attn_output_gate: bool = False
     _kv_head_num: int = 0
+    # TODO: there dont belong here
+    _linear_qkv_split: tuple[int, int, int] | None = None
+    _gdn_qkv_split: tuple[int, int, int] | None = None
 
     # -- Configuration (called by TransformerV2 before processing) --
 
@@ -241,7 +244,8 @@ class ModelWeightSpec(ABC):
         """
         raw = self._read_linear_attn_linears(layer)
         if any(k in raw for k in _GDN_IN_PROJ_KEYS):
-            raw = fuse_gdn_in_proj(raw, self._attn_tp)
+            raw = fuse_gdn_in_proj(raw, self._attn_tp,
+                                   qkv_split=self._linear_qkv_split)
         return raw
 
     def _read_linear_attn_linears(self, layer: int) -> dict[str, Linear]:
@@ -500,7 +504,15 @@ def merge_qkv_linear(
     return Linear(tensors=merged_tensors, weight_format=q.weight_format)
 
 
-def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear]:
+def _tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
+    """Reshape last dim as [tp, per_tp] and flatten to interleave by TP rank."""
+    shape = list(t.shape)
+    new_shape = shape[:d] + [tp, shape[d] // tp] + shape[d + 1:]
+    return t.reshape(new_shape)
+
+
+def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int,
+                     qkv_split: tuple[int, int, int] | None = None) -> dict[str, Linear]:
     """Fuse GDN input projections into ``in_proj_all`` with TP interleaving.
 
     Pops ``in_proj_qkv``, ``in_proj_z``, ``in_proj_b``, ``in_proj_a`` from
@@ -508,6 +520,13 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear
     dict (does not modify the input in place).
 
     For ``tp=1`` this reduces to a plain ``concat_out_dim``.
+
+    When *qkv_split* ``(q_dim, k_dim, v_dim)`` is provided and ``tp > 1``,
+    the in_proj_qkv weight is split into its Q, K, V sub-projections and
+    each is TP-interleaved independently before concatenation.  This is
+    necessary because Q, K, V may have different output dimensions, so a
+    naive column split would mix data from different projections across
+    TP ranks.
     """
     result = dict(la_linears)
     components: list[Linear] = []
@@ -527,6 +546,53 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear
         result["in_proj_all"] = Linear.concat_out_dim(components)
         return result
 
+    # sub-projections Q, K, V with different output dims.  Split and
+    # interleave each separately to respect head boundaries.
+    if qkv_split is not None:
+        q_dim, k_dim, v_dim = qkv_split
+        qkv_lin = components[0]
+        rest = components[1:]
+
+        fused_tensors: dict[str, torch.Tensor] = {}
+        for kind in first.tensors:
+            qkv_t = qkv_lin.tensors.get(kind)
+            if qkv_t is None:
+                continue
+            d = qkv_t.dim() - 1
+            if qkv_t.dim() <= 1:
+                # 1-D tensors (bias): simple split
+                parts = [qkv_t[..., :q_dim], qkv_t[..., q_dim:q_dim + k_dim],
+                         qkv_t[..., q_dim + k_dim:]]
+                rest_ts = [lin.tensors.get(kind) for lin in rest
+                           if lin.tensors.get(kind) is not None]
+                fused_tensors[kind] = torch.cat(parts + rest_ts, dim=0)
+                continue
+
+            # Split QKV into Q, K, V along the output dim
+            q_t = qkv_t[..., :q_dim]
+            k_t = qkv_t[..., q_dim:q_dim + k_dim]
+            v_t = qkv_t[..., q_dim + k_dim:]
+
+            # TP-interleave each sub-projection independently
+            interleaved = [
+                _tp_interleave_tensor(q_t, tp, d),
+                _tp_interleave_tensor(k_t, tp, d),
+                _tp_interleave_tensor(v_t, tp, d),
+            ]
+            for lin in rest:
+                t = lin.tensors.get(kind)
+                if t is not None:
+                    interleaved.append(_tp_interleave_tensor(t, tp, d))
+
+            fused = torch.cat(interleaved, dim=d + 1)
+            shape = list(fused.shape)
+            final = shape[:d] + [shape[d] * shape[d + 1]] + shape[d + 2:]
+            fused_tensors[kind] = fused.reshape(final)
+
+        result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format)
+        return result
+
+    # Default path: all components have compatible output dims for naive split.
     fused_tensors: dict[str, torch.Tensor] = {}
     for kind in first.tensors:
         tensors = [lin.tensors[kind] for lin in components]
@@ -537,9 +603,7 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear
             continue
         reshaped = []
         for t in tensors:
-            shape = list(t.shape)
-            new_shape = shape[:d] + [tp, shape[d] // tp] + shape[d + 1:]
-            reshaped.append(t.reshape(new_shape))
+            reshaped.append(_tp_interleave_tensor(t, tp, d))
         fused = torch.cat(reshaped, dim=d + 1)
         shape = list(fused.shape)
         final = shape[:d] + [shape[d] * shape[d + 1]] + shape[d + 2:]
@@ -553,29 +617,78 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int) -> dict[str, Linear
 _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPUT: 0}
 
 
-def commit_linear(model: BaseOutputModel, linear: Linear, name: str,
-                  split_side: SplitSide | None = None, split_num: int = 1,
-                  copy: bool = False):
-    """Export every tensor in a ``Linear`` bundle via ``model.save_split``.
+def _torch_dtype_to_cpp(dtype: torch.dtype):
+    """Convert a torch dtype to the C++ ``DataType`` enum, or ``None``."""
+    try:
+        import _turbomind as _tm
+    except ImportError:
+        return None
+    _MAP = {
+        torch.float32:  _tm.DataType.TYPE_FP32,
+        torch.float16:  _tm.DataType.TYPE_FP16,
+        torch.bfloat16: _tm.DataType.TYPE_BF16,
+        torch.int32:    _tm.DataType.TYPE_INT32,
+        torch.int64:    _tm.DataType.TYPE_INT64,
+        torch.int8:     _tm.DataType.TYPE_INT8,
+        torch.uint8:    _tm.DataType.TYPE_UINT8,
+    }
+    return _MAP.get(dtype)
 
-    All ``Linear`` objects are expected in TM layout ``[in, out]``.
-    ``split_side`` controls TP partitioning:
 
-    - ``SplitSide.OUTPUT`` — column-parallel: split along the output dimension
-      (``dim=-1`` in TM layout, i.e. the output axis).
-    - ``SplitSide.INPUT``  — row-parallel: split along the input dimension
-      (``dim=0`` in TM layout, i.e. the input axis).
-    - ``None``             — broadcast to all TP ranks (no split).
+# -----------------------------------------------------------------------
+# Module-based commit helpers (new pipeline)
+# -----------------------------------------------------------------------
 
-    Packing (e.g. uint8 → int32 for 4-bit weights) is handled by
-    ``linear.weight_format.packer`` if present.
 
-    For deferred-emplace models, this also triggers C++ ``allocate()`` so
-    the weight tensors are created before ``copy_from``.
+def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
+    """Cast *shard* dtype to match *tm_tensor*'s C++ dtype when needed."""
+    try:
+        import _turbomind as _tm
+    except ImportError:
+        return shard
+
+    if tm_tensor.type == _tm.DataType.TYPE_FP32 and shard.dtype in (torch.float16, torch.bfloat16):
+        return shard.float()
+    if tm_tensor.type == _tm.DataType.TYPE_FP16 and shard.dtype != torch.float16:
+        return shard.half()
+    if tm_tensor.type == _tm.DataType.TYPE_BF16 and shard.dtype != torch.bfloat16:
+        return shard.to(torch.bfloat16)
+    return shard
+
+
+def commit_linear_module(module, linear: Linear, name: str,
+                         split_side: SplitSide | None = None,
+                         split_num: int = 1, rank: int = 0,
+                         copy: bool = False):
+    """Commit a ``Linear`` bundle to a C++ ``Module`` handle for a specific TP rank.
+
+    Unlike the legacy ``commit_linear`` which drives all GPUs via ``BaseOutputModel``,
+    this function operates on a **single** module (one GPU) and writes only the
+    shard corresponding to *rank*.
+
+    Parameters
+    ----------
+    module : C++ Module handle
+        Parent module (e.g. an ``AttentionWeight``).  ``module.get(name)``
+        lazily creates the child ``LinearWeight``.
+    linear : Linear
+        The linear bundle to commit.
+    name : str
+        Child module name within *module* (e.g. ``"w_qkv"``).
+    split_side : SplitSide | None
+        TP split semantics.
+    split_num : int
+        Number of TP shards.
+    rank : int
+        Which shard to extract and copy.
+    copy : bool
+        If ``True``, copy the tensor as-is (no split).
     """
+    linear_mod = module.get(name)
+
     split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
-    # For output-dimension TP splits, verify that block scales divide evenly.
+    # Block-scale TP split validation
     if split_side == SplitSide.OUTPUT and split_num > 1:
         wfmt = linear.weight_format
         if wfmt is not None and wfmt.block_out:
@@ -584,50 +697,107 @@ def commit_linear(model: BaseOutputModel, linear: Linear, name: str,
                     n_blocks = tensor.size(-1)
                     assert n_blocks % split_num == 0, (
                         f"TP split: {name}.{kind} has {n_blocks} output-dimension "
-                        f"scale blocks (block_out={wfmt.block_out}), which is not "
+                        f"scale blocks (block_out={wfmt.block_out}), not "
                         f"divisible by split_num={split_num}.")
 
-    cpp_dtype, group_size = None, 0
-    if hasattr(model, 'model_comm') and model.model_comm is not None:
-        cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
-        if cpp_dtype is not None:
-            if group_size == 0:
-                group_size = max(1, model.model_config.group_size)
-            is_qweight = "qweight" in linear.tensors
-            weight_kind = "qweight" if is_qweight else "weight"
-            if split_dim is not None or copy:
-                for rank in range(split_num):
-                    alloc_name = f"{name}.{rank}.{weight_kind}"
-                    model.allocate_weight(alloc_name, cpp_dtype, group_size)
-            else:
-                alloc_name = f"{name}.{weight_kind}"
-                model.allocate_weight(alloc_name, cpp_dtype, group_size)
+    cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
+    if group_size == 0:
+        group_size = max(1, 128)  # default; caller should pass correct value
 
     packer = linear.weight_format.packer if linear.weight_format else None
-    for kind, tensor in linear.tensors.items():
+
+    # Process "weight"/"qweight" first so that LinearWeight::alloc() triggers
+    # do_allocate() before we encounter "scales"/"zeros"/"bias".  Without this,
+    # lazy allocation returns an empty tensor for scales if it is iterated first.
+    def _kind_order(item):
+        k, _ = item
+        if k in ("weight", "qweight"):
+            return (0, k)
+        return (1, k)
+
+    for kind, tensor in sorted(linear.tensors.items(), key=_kind_order):
         if packer is not None:
             tensor = packer(tensor, kind)
-        model.save_split(tensor, f"{name}.{kind}",
-                         split_dim=split_dim, split_num=split_num, copy=copy)
+
+        # Bias is NOT split for row-parallel (INPUT-split) linears — it is
+        # replicated across all TP ranks and added after the all-reduce.
+        tensor_split_dim = split_dim
+        if kind == "bias" and split_side == SplitSide.INPUT:
+            tensor_split_dim = None
+
+        # Extract the shard for this rank
+        if tensor_split_dim is not None and split_num > 1:
+            split_size = tensor.shape[tensor_split_dim] // split_num
+            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
+        elif copy:
+            shard = tensor
+        else:
+            shard = tensor
+
+        shard = shard.cuda().contiguous()
+
+        # Allocate (first call triggers full allocation) and copy
+        dst = linear_mod.alloc(kind, cpp_dtype, group_size)
+        if dst:
+            shard = _cast_shard_for_tm(shard, dst)
+            # Pad shard with zeros when C++ allocation is larger (e.g. due to
+            # _pad_inter_size ensuring group_size alignment for TP splitting).
+            # Compare byte sizes since Python packed dtype (int32) may differ
+            # from C++ allocation dtype (e2m1, etc.) while having matching
+            # byte size when dimensions align.
+            if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
+                pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
+                if pad_dim < 0:
+                    pad_dim = shard.dim() + pad_dim
+                # Number of elements on the non-padded dimensions
+                outer = shard.numel() // shard.shape[pad_dim]
+                extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
+                new_shape = list(shard.shape)
+                new_shape[pad_dim] += extra
+                padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
+                idx = [slice(None)] * shard.dim()
+                idx[pad_dim] = slice(0, shard.shape[pad_dim])
+                padded[tuple(idx)].copy_(shard)
+                shard = padded
+            dst.copy_from(shard)
 
 
-def commit_tensor(model: BaseOutputModel, tensor: torch.Tensor | None,
-                  name: str, split_side: SplitSide | None = None,
-                  split_num: int = 1, copy: bool = False):
-    """Export a single raw tensor.
+def commit_tensor_module(module, tensor: torch.Tensor | None, name: str,
+                         split_side: SplitSide | None = None,
+                         split_num: int = 1, rank: int = 0,
+                         copy: bool = False):
+    """Commit a raw tensor to a C++ ``Module`` handle for a specific TP rank.
 
-    ``split_side`` follows the same convention as ``commit_linear``:
-    ``SplitSide.OUTPUT`` splits along the last axis, ``SplitSide.INPUT``
-    along the first, and ``None`` broadcasts to all TP ranks.
+    Parameters
+    ----------
+    module : C++ Module handle
+        Module that owns the parameter (e.g. a ``DecoderLayerWeight``).
+    tensor : torch.Tensor | None
+        The tensor data.  ``None`` is a no-op.
+    name : str
+        Parameter name within *module* (e.g. ``"weight"`` for a norm).
+    split_side, split_num, rank, copy
+        Same semantics as ``commit_linear_module``.
     """
     if tensor is None:
         return
+
     split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
-    if split_dim is not None or copy:
-        model.save_split(tensor, name, split_dim=split_dim,
-                         split_num=split_num, copy=copy)
+
+    if split_dim is not None and split_num > 1:
+        split_size = tensor.shape[split_dim] // split_num
+        shard = tensor.split(split_size, dim=split_dim)[rank]
     else:
-        model.export_weight(tensor, name)
+        shard = tensor
+
+    shard = shard.cuda().contiguous()
+    cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
+    if cpp_dtype is None:
+        return
+    dst = module.alloc(name, cpp_dtype, 0)
+    if dst:
+        shard = _cast_shard_for_tm(shard, dst)
+        dst.copy_from(shard)
 
 
 # -----------------------------------------------------------------------
@@ -713,53 +883,72 @@ class TransformerV2:
             kv_head_num=self.model.model_config.kv_head_num,
         )
 
-        # Layer norms (broadcast, no TP split)
-        commit_tensor(self.model, spec.attn_norm(layer),
-                      f"layers.{layer}.attention_norm.weight")
-        commit_tensor(self.model, spec.ffn_norm(layer),
-                      f"layers.{layer}.ffn_norm.weight")
+        for gpu_idx in range(self.model.gpu_count):
+            root = self.model.root(gpu_idx)
+            if root is None:
+                break
+            attn_tp_rank, mlp_tp_rank = self.model.tp_ranks(gpu_idx)
+            layer_mod = root["layers"][layer]
 
-        # Attention linears (w_qkv already merged+permuted by base class)
-        for name, lin in spec.attn_linears(layer).items():
-            rule = _ATTN_TP_RULES.get(name, {})
-            tp = self.attn_tp if "split_side" in rule else 1
-            commit_linear(self.model, lin,
-                          f"layers.{layer}.attention.{name}",
-                          split_num=tp, **rule)
+            # Layer norms (broadcast, no TP split)
+            commit_tensor_module(layer_mod["attention_norm"],
+                                 spec.attn_norm(layer), "weight")
+            commit_tensor_module(layer_mod["ffn_norm"],
+                                 spec.ffn_norm(layer), "weight")
 
-        # Dense FFN linears
-        for name, lin in spec.ffn_linears(layer).items():
-            rule = _FFN_TP_RULES.get(name, {})
-            tp = self.mlp_tp if "split_side" in rule else 1
-            commit_linear(self.model, lin,
-                          f"layers.{layer}.feed_forward.{name}",
-                          split_num=tp, **rule)
+            # Attention linears (w_qkv already merged+permuted by base class)
+            attn_mod = layer_mod["attention"]
+            for name, lin in spec.attn_linears(layer).items():
+                rule = _ATTN_TP_RULES.get(name, {})
+                tp = self.attn_tp if "split_side" in rule else 1
+                commit_linear_module(attn_mod, lin, name,
+                                     split_num=tp, rank=attn_tp_rank, **rule)
 
-        # MoE experts
-        for e in range(spec.num_experts(layer)):
-            for name, lin in spec.moe_ffn_linears(layer, e).items():
-                rule = _FFN_TP_RULES.get(name, {})
-                tp = self.mlp_tp if "split_side" in rule else 1
-                commit_linear(self.model, lin,
-                              f"layers.{layer}.moe_ffn.experts.{e}.{name}",
-                              split_num=tp, **rule)
+            # Dense FFN linears (skip if no FFN for this layer, e.g. MoE-only models)
+            ffn_linears = spec.ffn_linears(layer)
+            if ffn_linears:
+                ffn_mod = layer_mod["feed_forward"]
+                for name, lin in ffn_linears.items():
+                    rule = _FFN_TP_RULES.get(name, {})
+                    tp = self.mlp_tp if "split_side" in rule else 1
+                    commit_linear_module(ffn_mod, lin, name,
+                                         split_num=tp, rank=mlp_tp_rank, **rule)
 
-        # Linear attention linears (in_proj_all already fused by base class)
-        for name, lin in spec.linear_attn_linears(layer).items():
-            rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-            tp = self.attn_tp if "split_side" in rule else 1
-            commit_linear(self.model, lin,
-                          f"layers.{layer}.linear_attn.{name}",
-                          split_num=tp, **rule)
+            # MoE experts
+            if spec.num_experts(layer) > 0:
+                moe_mod = layer_mod["moe_ffn"]
+                for e in range(spec.num_experts(layer)):
+                    expert_mod = moe_mod["experts"][e]
+                    for name, lin in spec.moe_ffn_linears(layer, e).items():
+                        rule = _FFN_TP_RULES.get(name, {})
+                        tp = self.mlp_tp if "split_side" in rule else 1
+                        commit_linear_module(expert_mod, lin, name,
+                                             split_num=tp, rank=mlp_tp_rank, **rule)
 
-        # All raw per-layer tensors (norms, gates, sinks, scalars, etc.)
-        # Each entry is (tm_path, tensor, split_side) where split_side is
-        # "output", "input", or None (broadcast).
-        for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
-            tp = self.attn_tp if split_side is not None else 1
-            commit_tensor(self.model, tensor,
-                          f"layers.{layer}.{tm_path}",
-                          split_side=split_side, split_num=tp)
+            # Linear attention linears (in_proj_all already fused by base class)
+            for name, lin in spec.linear_attn_linears(layer).items():
+                rule = _LINEAR_ATTN_TP_RULES.get(name, {})
+                tp = self.attn_tp if "split_side" in rule else 1
+                linear_attn_mod = layer_mod["linear_attn"]
+                commit_linear_module(linear_attn_mod, lin, name,
+                                     split_num=tp, rank=attn_tp_rank, **rule)
+
+            # All raw per-layer tensors (norms, gates, sinks, scalars, etc.)
+            # Each entry is (tm_path, tensor, split_side) where tm_path is
+            # like "attention.q_norm" or "moe_ffn.gate.weight" and split_side
+            # is "output", "input", or None (broadcast).
+            for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
+                tp = self.attn_tp if split_side is not None else 1
+                rank = attn_tp_rank
+                # Split tm_path: last segment is the param name, everything
+                # before is the module path within the layer.
+                parts = tm_path.split(".")
+                mod = layer_mod
+                for seg in parts[:-1]:
+                    mod = mod[seg]
+                commit_tensor_module(mod, tensor, parts[-1],
+                                     split_side=split_side,
+                                     split_num=tp, rank=rank)
 
     # -- misc (embeddings, output head, final norm) ------------------------
 
@@ -767,18 +956,29 @@ class TransformerV2:
         tp = self.attn_tp * self.model.attn_cp_size
         padded_vocab = ((self.vocab_size + tp - 1) // tp) * tp
 
-        emb = spec.tok_embeddings()
-        if emb is not None:
-            emb = pad_out_dim(emb, padded_vocab, dim=0)
-            self.model.save_split(emb, "tok_embeddings.weight",
-                                  split_dim=1, split_num=tp)
+        for gpu_idx in range(self.model.gpu_count):
+            root = self.model.root(gpu_idx)
+            if root is None:
+                break
+            attn_tp_rank, _mlp_tp_rank = self.model.tp_ranks(gpu_idx)
 
-        norm = spec.norm_weight()
-        commit_tensor(self.model, norm, "norm.weight")
+            # Token embeddings (column-parallel: split hidden dim)
+            emb = spec.tok_embeddings()
+            if emb is not None:
+                emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
+                commit_tensor_module(root["tok_embeddings"], emb_padded, "weight",
+                                     split_side=SplitSide.OUTPUT,
+                                     split_num=tp, rank=attn_tp_rank)
 
-        output = spec.output_weight()
-        if output is not None:
-            output = pad_out_dim(output, padded_vocab, dim=0)
-            output = output.t()
-            self.model.save_split(output, "output.weight",
-                                  split_dim=1, split_num=tp)
+            # Final norm (broadcast)
+            norm = spec.norm_weight()
+            commit_tensor_module(root["norm"], norm, "weight")
+
+            # Output head (column-parallel, transposed)
+            output = spec.output_weight()
+            if output is not None:
+                output_padded = pad_out_dim(output, padded_vocab, dim=0)
+                output_t = output_padded.t()
+                commit_tensor_module(root["output"], output_t, "weight",
+                                     split_side=SplitSide.OUTPUT,
+                                     split_num=tp, rank=attn_tp_rank)

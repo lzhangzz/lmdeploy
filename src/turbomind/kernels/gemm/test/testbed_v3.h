@@ -11,7 +11,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -21,7 +21,7 @@ namespace turbomind {
 using std::vector;
 using std::unique_ptr;
 
-using DenseWeight = LlamaDenseWeight;
+using DenseWeight = LinearWeight;
 using Linear      = LlamaLinear;
 
 using namespace gemm;
@@ -75,6 +75,65 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
     }
 
     return out;
+}
+
+/// Link individual expert weights into a batched block view for fused MoE.
+static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWeight& d)
+{
+    const auto& e0 = *experts(0);
+
+    d.input_dim   = e0.input_dim;
+    d.output_dim  = e0.output_dim;
+    d.group_size  = e0.group_size;
+    d.data_type   = e0.data_type;
+    d.weight_type = e0.weight_type;
+    d.input_type  = e0.input_type;
+    d.weight_quant = e0.weight_quant;
+    d.input_quant  = e0.input_quant;
+    d.k_desc       = e0.k_desc;
+    d.q_desc       = e0.q_desc;
+    d.epilogue     = e0.epilogue;
+
+    d.k_desc.num = d.q_desc.num = n;
+
+    if (e0.bias) {
+        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
+    }
+
+    std::vector<std::pair<void*, int>> weights;
+    std::vector<std::pair<void*, int>> scales;
+
+    for (int i = 0; i < n; ++i) {
+        auto& e = *experts(i);
+        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
+        if (e.scales) {
+            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        }
+        if (e.bias) {
+            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        }
+    }
+
+    auto stream = core::Context::stream().handle();
+
+    if (d.weight_type == kFloat8_e4m3 && d.input_type == kFloat8_e4m3) {
+        auto make_blocked_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
+        d.scales = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.k_desc.offsets = d.q_desc.offsets = (int*)1;
+    }
+    else {
+        auto make_strided_ptr = [&](const auto& ptrs) {
+            return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
+        };
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_type, kDEVICE};
+        if (e0.scales) {
+            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        }
+        d.k_desc.ld = d.q_desc.ld = 0;
+    }
 }
 
 struct Testbed_v3: Parameter {
@@ -239,14 +298,14 @@ struct Testbed_v3: Parameter {
     // - dequantize weight
     void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
     {
-        original.emplace(input_dim, output_dim, data_type, false);
-        original.allocate(data_type, group_size);
+        original.configure(input_dim, output_dim, data_type, false);
+        original.alloc("weight", core::WeightSpec{data_type, group_size});
         rng_.NormalFloat(original.weight, 1., .1);
 
-        quant.emplace(input_dim, output_dim, data_type, false);
-        quant.allocate(weight_type, group_size);
-        dequant.emplace(input_dim, output_dim, data_type, false);
-        dequant.allocate(data_type, group_size);
+        quant.configure(input_dim, output_dim, data_type, false);
+        quant.alloc("weight", core::WeightSpec{weight_type, group_size});
+        dequant.configure(input_dim, output_dim, data_type, false);
+        dequant.alloc("weight", core::WeightSpec{data_type, group_size});
 
         Buffer_<unsigned> rbits;
         // rbits = {original.weight.size(), kDEVICE};
@@ -285,9 +344,9 @@ struct Testbed_v3: Parameter {
             TM_CHECK(0);
         }
 
-        original.prepare(0);
-        quant.prepare(expert_num > 0);
-        dequant.prepare(0);
+        original.prepare();
+        quant.prepare();
+        dequant.prepare();
     }
 
     void GetReference()

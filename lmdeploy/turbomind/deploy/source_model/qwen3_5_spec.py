@@ -84,6 +84,19 @@ class Qwen3_5Spec(ModelWeightSpec):
         self._num_layer = model_cfg["num_hidden_layers"]
         self._n_experts = model_cfg.get("num_experts", 0)
 
+        # QKV dimensions for GDN layers: Q/K share key heads, V uses value heads
+        ln_key_heads = model_cfg.get("linear_num_key_heads", 0)
+        ln_val_heads = model_cfg.get("linear_num_value_heads", 0)
+        ln_key_dim = model_cfg.get("linear_key_head_dim", 0)
+        ln_val_dim = model_cfg.get("linear_value_head_dim", 0)
+        if ln_key_heads and ln_val_heads:
+            q_dim = ln_key_heads * ln_key_dim
+            k_dim = ln_key_heads * ln_key_dim
+            v_dim = ln_val_heads * ln_val_dim
+            self._linear_qkv_split = (q_dim, k_dim, v_dim)
+        else:
+            self._linear_qkv_split = None
+
         if any(k.startswith("model.language_model.") for k in params):
             self._layer_prefix = "model.language_model.layers"
             self._embed_key = "model.language_model.embed_tokens.weight"
@@ -208,9 +221,9 @@ class Qwen3_5Spec(ModelWeightSpec):
             if q is not None and k is not None:
                 q, k = self._permute_qk_tensors(q, k)
             if q is not None:
-                tensors.append(("attention.q_norm", q, None))
+                tensors.append(("attention.q_norm.weight", q, None))
             if k is not None:
-                tensors.append(("attention.k_norm", k, None))
+                tensors.append(("attention.k_norm.weight", k, None))
         # MoE gate and shared gate (transposed, broadcast)
         if self._n_experts > 0:
             gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
@@ -231,8 +244,22 @@ class Qwen3_5Spec(ModelWeightSpec):
             conv1d = self._get(f"{pfx}.conv1d.weight")
             if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
                 conv1d = conv1d.squeeze(1)
+            # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
             if conv1d is not None:
-                tensors.append(("linear_attn.conv1d.weight", conv1d, SplitSide.INPUT))
+                conv1d = conv1d.t().contiguous()
+                if self._attn_tp > 1 and self._linear_qkv_split is not None:
+                    q_dim, k_dim, v_dim = self._linear_qkv_split
+                    d_conv = conv1d.shape[0]
+                    tp = self._attn_tp
+                    q_part = conv1d[:, :q_dim]
+                    k_part = conv1d[:, q_dim:q_dim + k_dim]
+                    v_part = conv1d[:, q_dim + k_dim:]
+                    conv1d = torch.cat([
+                        q_part.reshape(d_conv, tp, q_dim // tp),
+                        k_part.reshape(d_conv, tp, k_dim // tp),
+                        v_part.reshape(d_conv, tp, v_dim // tp),
+                    ], dim=2).reshape(d_conv, -1).contiguous()
+                tensors.append(("linear_attn.conv1d.weight", conv1d, SplitSide.OUTPUT))
             norm = self._get(f"{pfx}.norm.weight")
             if norm is not None:
                 tensors.append(("linear_attn.norm.weight", norm, None))

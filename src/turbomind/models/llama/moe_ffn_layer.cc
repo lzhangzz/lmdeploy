@@ -6,7 +6,6 @@
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
-#include "src/turbomind/models/llama/LlamaDenseWeight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -43,16 +42,6 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     const int max_token_num = engine.max_forward_token_num * engine.attn_dp_size;
     const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
-    // dbg(inter_size_,
-    //     hidden_dim_,
-    //     tp_size_,
-    //     param_.method,
-    //     param.expert_num,
-    //     max_expert_num,
-    //     max_token_num,
-    //     pad_token_num,
-    //     param_.experts_per_token);
-
     masks_   = {max_expert_num * pad_token_num, kDEVICE};
     f2n_     = {param_.experts_per_token * max_token_num, kDEVICE};
     f2E_     = {param_.experts_per_token * max_token_num, kDEVICE};
@@ -62,7 +51,7 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
     accum_   = {max_expert_num * kMoeGateMaxTiles, kDEVICE};
 }
 
-Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& gate)
+Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
 {
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
@@ -80,24 +69,24 @@ void MoeFfnLayer::Forward(ForwardParam& p)
     const auto& moe    = *p.weights;
 
     const size_t padded     = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
-    const int    expert_num = moe.experts.size();
+    const int    expert_num = moe.num_experts();
 
     FT_CHECK(expert_num);
 
-    auto logits = Gate(p.input, moe.gate);
+    auto logits = Gate(p.input, *moe.gate());
 
     TM_DEBUG_TENSOR(logits, "logits", 2);
 
     const auto st = core::Context::stream().handle();
 
-    // dump_logits(tokens, layer_id);
-
     if (param_.topk_method == "noaux_tc") {
         // invokeMoeGate_NoAuxTC clears accum and masks internally
         TM_CHECK_EQ(param_.n_group, 1);
         TM_CHECK_EQ(param_.topk_group, 1);
-        const float* correction_bias =
-            (moe.score_correction_bias.size() > 0) ? moe.score_correction_bias.data<float>() : nullptr;
+        const float* correction_bias = nullptr;
+        if (auto* scb = moe.score_correction_bias()) {
+            correction_bias = scb->size() > 0 ? scb->data<float>() : nullptr;
+        }
         invokeMoeGate_NoAuxTC(f2n_.data(),
                               f2E_.data(),
                               en2f_.data(),
@@ -180,31 +169,48 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         for (int i = 0; i < expert_num; ++i) {
             if (int count = h_offsets_[i + 1] - h_offsets_[i]) {
                 auto io = temp_.slice({h_offsets_[i], 0}, {count, -1});
-                expert_ffn_->forward({io, io, moe.experts.at(i).get(), p.layer_id});
+                expert_ffn_->forward({io, io, moe.expert(i), p.layer_id});
             }
         }
     }
     else {
 
-        auto& block = moe.block;
+        auto* block = moe.block();
 
         auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
-        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
-        sync_check_cuda_error();
+        if (block->w1w3() && block->w1w3()->weight) {
+            // Fused w1w3 path
+            Tensor inter = linear_.Forward(p.input, *block->w1w3(), indices, offsets_);
+            sync_check_cuda_error();
 
-        if (!block.is_fused_silu) {
-            Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, st);
+            if (!block->is_fused_silu()) {
+                Activation(inter, block->w1w3()->bias, f2E_, block->act_type(), st);
+                sync_check_cuda_error();
+            }
+
+            linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), *block->w2(), {}, offsets, temp_);
             sync_check_cuda_error();
         }
+        else {
+            // Separate w1/w3 path
+            Tensor gating = linear_.Forward(p.input, *block->w1(), indices, offsets_);
+            sync_check_cuda_error();
 
-        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
-        sync_check_cuda_error();
+            Tensor up = linear_.Forward(p.input, *block->w3(), indices, offsets_);
+            sync_check_cuda_error();
+
+            Activation(gating, up, block->act_type(), st);
+            sync_check_cuda_error();
+
+            linear_.Forward(gating, *block->w2(), {}, offsets, temp_);
+            sync_check_cuda_error();
+        }
     }
 
-    if (moe.shared_gate.weight) {
-        shared_scales_ = Gate(p.input, moe.shared_gate);
+    if (moe.shared_gate() && moe.shared_gate()->weight) {
+        shared_scales_ = Gate(p.input, *moe.shared_gate());
     }
 }
 
@@ -212,9 +218,11 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 {
     auto& moe = *p.weights;
 
+    const Tensor& block_bias = moe.block() && moe.block()->w2() ? moe.block()->w2()->bias : Tensor{};
+
     invokeMoeCombine(p.output,
                      temp_,
-                     p.weights->block.output.bias,
+                     block_bias,
                      scales_.data(),
                      en2f_.data(),
                      f2E_.data(),
