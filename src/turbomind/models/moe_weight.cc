@@ -118,13 +118,6 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     auto stream = core::Context::stream().handle();
 
-    fprintf(stderr, "[LINK] n=%d e0: input_dim=%d output_dim=%d "
-            "k_desc={type=%d order=%d rows=%d cols=%d ld=%d} "
-            "q_desc={type=%d order=%d rows=%d cols=%d ld=%d}\n",
-            n, e0.input_dim, e0.output_dim,
-            (int)e0.k_desc.type, (int)e0.k_desc.order, e0.k_desc.rows, e0.k_desc.cols, e0.k_desc.ld,
-            (int)e0.q_desc.type, (int)e0.q_desc.order, e0.q_desc.rows, e0.q_desc.cols, e0.q_desc.ld);
-
     if (d.weight_type == kFloat8_e4m3 && d.input_type == kFloat8_e4m3) {
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};

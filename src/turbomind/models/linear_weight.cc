@@ -143,20 +143,12 @@ Tensor LinearWeight::alloc(const std::string& param_name, const core::WeightSpec
 }
 
 // ======================================================================
-// preprocess (blockwise-to-groupwise scale conversion)
+// preprocess — now a no-op (blockscale→groupscale handled in Python)
 // ======================================================================
 
 void LinearWeight::preprocess()
 {
-    if (!weight) {
-        return;
-    }
-
-    // Blockwise-to-groupwise scale conversion
-    if (weight_quant.type == gemm::QuantType::kB && input_quant.type == gemm::QuantType::kNone) {
-        weight_quant.type = gemm::QuantType::kK;
-        scales = BlockscaleToGroupscale(scales, data_type, weight_quant.group_size);
-    }
+    // No-op: blockscale-to-groupscale conversion is done on the Python side.
 }
 
 // ======================================================================
@@ -165,8 +157,6 @@ void LinearWeight::preprocess()
 
 void LinearWeight::prepare()
 {
-    preprocess();
-
     if (!weight) {
         return;
     }

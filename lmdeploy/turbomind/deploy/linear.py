@@ -180,3 +180,61 @@ class Linear:
         fmts = {x.weight_format for x in xs}
         wfmt = next(iter(fmts)) if len(fmts) == 1 else None
         return Linear(tensors=result, weight_format=wfmt)
+
+
+# ---------------------------------------------------------------------------
+# Fusion helpers (w1 + w3 → w1w3)
+# ---------------------------------------------------------------------------
+
+
+def preprocess_linear(linear: Linear) -> Linear:
+    """Expand FP8 block scales to group scales (blockscale → groupscale).
+
+    Only needed for FP8 format when fused SiLU (interleave) will be used.
+    Expands scales from ``[K/gs, N/gs]`` to ``[K/gs, N]`` by repeating each
+    scale ``gs`` times along the output dimension.
+    """
+    fmt = linear.weight_format
+    if fmt is not None and fmt.name == "fp8":
+        scales = linear.tensors.get("scales")
+        if scales is not None and scales.dim() == 2:
+            block_size = fmt.block_in  # 128
+            new_scales = scales.repeat_interleave(block_size, dim=-1)
+            new_tensors = dict(linear.tensors)
+            new_tensors["scales"] = new_scales
+            return Linear(tensors=new_tensors, weight_format=linear.weight_format)
+    return linear
+
+
+def interleave_linears(w1: Linear, w3: Linear) -> Linear:
+    """Interleave w1 and w3 along the output dim for fused SiLU epilogue.
+
+    Output layout: ``[w1_out0, w3_out0, w1_out1, w3_out1, ...]``.
+    """
+    fused: dict[str, Tensor] = {}
+    for kind in w1.tensors:
+        t1 = w1.tensors[kind]
+        t3 = w3.tensors[kind]
+        if _has_input_dim(t1):
+            # 2-D: interleave along last (output) dim
+            fused[kind] = torch.stack([t1, t3], dim=-1).reshape(t1.shape[:-1] + (-1,))
+        else:
+            # 1-D (bias): interleave along the only dim
+            fused[kind] = torch.stack([t1, t3], dim=-1).reshape(-1)
+    fused[kind] = fused[kind].contiguous()
+    return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
+                  weight_format=w1.weight_format)
+
+
+def chunk_linears(w1: Linear, w3: Linear) -> Linear:
+    """Concatenate w1 and w3 along the output dim (chunk layout: ``[w1 | w3]``)."""
+    fused: dict[str, Tensor] = {}
+    for kind in w1.tensors:
+        t1 = w1.tensors[kind]
+        t3 = w3.tensors[kind]
+        if _has_input_dim(t1):
+            fused[kind] = torch.cat([t1, t3], dim=-1)
+        else:
+            fused[kind] = torch.cat([t1, t3])
+    return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
+                  weight_format=w1.weight_format)
