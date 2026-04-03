@@ -146,7 +146,7 @@ class LoadContext:
                                  split_side, split_num: int, rank: int):
         """Commit Linear tensor data to a pre-created C++ module handle.
 
-        This is the stripped-down version of ``commit_linear_module`` that works
+        This is the stripped-down version of ``commit_linear`` that works
         with a pre-created handle instead of using ``module.get(name)``.
         """
         from .module import _cast_shard_for_tm, _SPLIT_SIDE_TO_DIM, SplitSide
@@ -209,13 +209,13 @@ class LoadContext:
                 broadcast.
         """
         from .module import SplitSide as _SplitSide
-        from .module import commit_tensor_module
+        from .module import commit_tensor
 
         config = module_config or {}
         child_handle = self._handle.create_child(name, module_type, config)
 
         tp_side = _SplitSide[tp_rule] if tp_rule else None
-        commit_tensor_module(child_handle, tensor, 'weight',
+        commit_tensor(child_handle, tensor, 'weight',
                              split_side=tp_side,
                              split_num=self.tp_size if tp_side else 1,
                              rank=self.rank)

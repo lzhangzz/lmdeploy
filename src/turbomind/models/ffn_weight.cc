@@ -62,7 +62,7 @@ struct FfnWeightRegistrar {
         core::ModuleRegistry::instance().register_type(
             "FfnWeight",
             [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<FfnWeight>(
+                auto ffn = std::make_unique<FfnWeight>(
                     cfg_get(cfg, "hidden_dim"),
                     cfg_get(cfg, "inter_size"),
                     cfg_bool(cfg, "has_bias"),
@@ -71,6 +71,10 @@ struct FfnWeightRegistrar {
                     static_cast<DataType>(cfg_get(cfg, "data_type")),
                     static_cast<ActivationType>(cfg_get(cfg, "act_type")),
                     cfg_bool(cfg, "fuse_silu_act"));
+                if (cfg_bool(cfg, "fused_moe")) {
+                    ffn->set_fused_moe(true);
+                }
+                return ffn;
             });
     }
 };

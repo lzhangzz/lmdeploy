@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""GLM-4 MoE Lite (GLM-4.7-Flash) ModelWeightSpec for the new pipeline.
+"""GLM-4 MoE Lite (GLM-4.7-Flash) TextModelSpec for the new pipeline.
 
 Demonstrates the composable-ops pipeline with:
   - MLA (Multi-head Latent Attention) via ``read_linear``
@@ -14,14 +14,14 @@ import os
 import torch
 
 from ..linear import Linear
-from ..module import ModelWeightSpec
+from ..module import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import get_yarn_params, load_model_config, parse_rope_param
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
 
-class Glm4MoeLiteSpec(ModelWeightSpec):
+class Glm4MoeLiteSpec(TextModelSpec):
     """Weight spec for GLM-4 MoE Lite (e.g. GLM-4.7-Flash).
 
     Uses same key layout as DeepSeek2: ``model.layers.{i}.self_attn.*``,

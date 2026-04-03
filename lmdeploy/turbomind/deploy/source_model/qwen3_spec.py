@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Qwen3 ModelWeightSpec for the new pipeline.
+"""Qwen3 TextModelSpec for the new pipeline.
 
 Qwen3 is a standard Llama-like model with QK norm and optional MoE.
 No shared expert in the MoE variant, no linear attention, no zero-centered norm.
@@ -9,14 +9,14 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ..module import ModelWeightSpec
+from ..module import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
 
-class Qwen3Spec(ModelWeightSpec):
+class Qwen3TextSpec(TextModelSpec):
     """Weight spec for Qwen3 (dense) and Qwen3-MoE."""
 
     _layer_prefix = "model.layers"
@@ -133,7 +133,7 @@ class Qwen3InputModel(BaseInputModel):
     """Input model for Qwen3 (dense and MoE)."""
 
     _layer_pattern = _LAYER_PATTERN
-    _spec_class = Qwen3Spec
+    _spec_class = Qwen3TextSpec
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path)

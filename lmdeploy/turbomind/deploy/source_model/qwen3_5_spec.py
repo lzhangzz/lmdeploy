@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Qwen3.5 ModelWeightSpec for the new pipeline.
+"""Qwen3.5 TextModelSpec for the new pipeline.
 
 Demonstrates the composable-ops pipeline with:
   - Mixed full-attention and linear-attention (Gated Delta Net) layers
@@ -15,7 +15,7 @@ import re
 import torch
 
 from ..linear import Linear
-from ..module import ModelWeightSpec, SplitSide
+from ..module import TextModelSpec, SplitSide
 from ..parameter import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
@@ -74,7 +74,7 @@ def _qwen35_model_info_base(cfg: dict) -> dict:
     return info
 
 
-class Qwen3_5Spec(ModelWeightSpec):
+class Qwen3_5Spec(TextModelSpec):
     """Weight spec for Qwen3.5 (dense + linear attention + optional MoE)."""
 
     def __init__(self, params: dict[str, torch.Tensor], model_cfg: dict):

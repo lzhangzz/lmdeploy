@@ -102,11 +102,11 @@ def merge_qkvg_v2(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, gate: torch
 
 
 # ===================================================================
-# New pipeline: ModelWeightSpec + composable-ops Transformer
+# New pipeline: TextModelSpec + composable-ops TextModelLoader
 # ===================================================================
 
 
-class ModelWeightSpec(ABC):
+class TextModelSpec(ABC):
     """Declarative weight mapping for a model architecture.
 
     Subclasses define how to read and transform weights for a specific model.
@@ -776,20 +776,20 @@ def _fuse_and_commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
         else:
             w1w3 = chunk_linears(w1_shard, w3_shard)
 
-        commit_linear_module(ffn_mod, w1w3, "w1w3", copy=True)
+        commit_linear(ffn_mod, w1w3, "w1w3", copy=True)
         ffn_mod.set_fused_silu(fused_silu)
     else:
         # Block-scale boundaries misalign after TP split — commit w1/w3 separately.
         for name, shard in (("w1", w1_shard), ("w3", w3_shard)):
             rule = _FFN_TP_RULES.get(name, {})
-            commit_linear_module(ffn_mod, shard, name,
+            commit_linear(ffn_mod, shard, name,
                                  split_num=1, rank=0, **rule)
 
     # Commit w2 (row-parallel)
     if w2 is not None:
         rule = _FFN_TP_RULES.get("w2", {})
         tp2 = tp if "split_side" in rule else 1
-        commit_linear_module(ffn_mod, w2, "w2",
+        commit_linear(ffn_mod, w2, "w2",
                              split_num=tp2, rank=rank, **rule)
 
 
@@ -814,7 +814,36 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
     return shard
 
 
-def commit_linear_module(module, linear: Linear, name: str,
+def _infer_compute_dtype(linear: Linear):
+    """Get the model's compute dtype from a Linear's tensors.
+
+    For dense formats the weight itself carries the compute dtype.
+    For quantized formats we infer from scales or bias.
+    """
+    try:
+        import _turbomind as _tm
+    except ImportError:
+        return None
+    _MAP = {
+        torch.bfloat16: _tm.DataType.TYPE_BF16,
+        torch.float16:  _tm.DataType.TYPE_FP16,
+        torch.float32:  _tm.DataType.TYPE_FP32,
+    }
+    w = linear.tensors.get('weight')
+    if w is not None:
+        d = _MAP.get(w.dtype)
+        if d is not None:
+            return d
+    for key in ('scales', 'bias'):
+        t = linear.tensors.get(key)
+        if t is not None:
+            d = _MAP.get(t.dtype)
+            if d is not None:
+                return d
+    return None
+
+
+def commit_linear(module, linear: Linear, name: str,
                          split_side: SplitSide | None = None,
                          split_num: int = 1, rank: int = 0,
                          copy: bool = False):
@@ -827,8 +856,7 @@ def commit_linear_module(module, linear: Linear, name: str,
     Parameters
     ----------
     module : C++ Module handle
-        Parent module (e.g. an ``AttentionWeight``).  ``module.get(name)``
-        lazily creates the child ``LinearWeight``.
+        Parent module (e.g. an ``AttentionWeight``).
     linear : Linear
         The linear bundle to commit.
     name : str
@@ -842,7 +870,30 @@ def commit_linear_module(module, linear: Linear, name: str,
     copy : bool
         If ``True``, copy the tensor as-is (no split).
     """
-    linear_mod = module.get(name)
+    cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
+    if group_size == 0:
+        group_size = max(1, 128)  # default; caller should pass correct value
+
+    # Ensure the LinearWeight child exists
+    linear_mod = module.child(name)
+    if linear_mod is None:
+        w = linear.tensors.get('weight')
+        if w is None:
+            w = linear.tensors.get('qweight')
+        in_dim = w.shape[0]
+        out_dim = w.shape[-1]
+        if split_side == SplitSide.OUTPUT:
+            out_dim = out_dim // split_num
+        elif split_side == SplitSide.INPUT:
+            in_dim = in_dim // split_num
+        compute_dtype = _infer_compute_dtype(linear)
+        module.create_child(name, 'LinearWeight', {
+            'input_dim': in_dim,
+            'output_dim': out_dim,
+            'data_type': compute_dtype.value if compute_dtype else 0,
+            'has_bias': 1 if 'bias' in linear.tensors else 0,
+        })
+        linear_mod = module.get(name)
 
     split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
@@ -857,10 +908,6 @@ def commit_linear_module(module, linear: Linear, name: str,
                         f"TP split: {name}.{kind} has {n_blocks} output-dimension "
                         f"scale blocks (block_out={wfmt.block_out}), not "
                         f"divisible by split_num={split_num}.")
-
-    cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
-    if group_size == 0:
-        group_size = max(1, 128)  # default; caller should pass correct value
 
     packer = linear.weight_format.packer if linear.weight_format else None
 
@@ -920,7 +967,7 @@ def commit_linear_module(module, linear: Linear, name: str,
             dst.copy_from(shard)
 
 
-def commit_tensor_module(module, tensor: torch.Tensor | None, name: str,
+def commit_tensor(module, tensor: torch.Tensor | None, name: str,
                          split_side: SplitSide | None = None,
                          split_num: int = 1, rank: int = 0,
                          copy: bool = False):
@@ -935,7 +982,7 @@ def commit_tensor_module(module, tensor: torch.Tensor | None, name: str,
     name : str
         Parameter name within *module* (e.g. ``"weight"`` for a norm).
     split_side, split_num, rank, copy
-        Same semantics as ``commit_linear_module``.
+        Same semantics as ``commit_linear``.
     """
     if tensor is None:
         return

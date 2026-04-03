@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from .load_context import LoadContext, _act_type_id
 
 if TYPE_CHECKING:
-    from .module import ModelWeightSpec
+    from .module import TextModelSpec
     from .target_model.base import BaseOutputModel
 
 
@@ -15,7 +15,7 @@ class TextModelLoader:
     """Drives the model loading pipeline for text models.
 
     Replaces TransformerV2.  This is a generic driver with zero hardcoded
-    module paths.  All structure comes from the ModelWeightSpec.
+    module paths.  All structure comes from the TextModelSpec.
     """
 
     def __init__(self, model: BaseOutputModel):
@@ -23,7 +23,7 @@ class TextModelLoader:
         self.attn_tp = model.attn_tp_size
         self.mlp_tp = model.mlp_tp_size
 
-    def __call__(self, layer: int, spec: 'ModelWeightSpec'):
+    def __call__(self, layer: int, spec: 'TextModelSpec'):
         if layer < 0:
             self._load_global(spec)
         elif layer >= self.model.model_config.num_layer:
@@ -47,11 +47,11 @@ class TextModelLoader:
             'kv_head_num': cfg.kv_head_num,
         }
 
-    def _load_layer(self, layer: int, spec: 'ModelWeightSpec'):
+    def _load_layer(self, layer: int, spec: 'TextModelSpec'):
         from .module import (
             SplitSide,
-            commit_linear_module,
-            commit_tensor_module,
+            commit_linear,
+            commit_tensor,
             _ATTN_TP_RULES,
             _FFN_TP_RULES,
             _LINEAR_ATTN_TP_RULES,
@@ -99,9 +99,9 @@ class TextModelLoader:
             norm_cfg = {'dim': hidden, 'data_type': dtype}
             handle.create_child('attention_norm', 'NormWeight', norm_cfg)
             handle.create_child('ffn_norm', 'NormWeight', norm_cfg)
-            commit_tensor_module(handle.get('attention_norm'),
+            commit_tensor(handle.get('attention_norm'),
                                 spec.attn_norm(layer), 'weight')
-            commit_tensor_module(handle.get('ffn_norm'),
+            commit_tensor(handle.get('ffn_norm'),
                                 spec.ffn_norm(layer), 'weight')
 
             # --- Attention ---
@@ -134,7 +134,7 @@ class TextModelLoader:
                 for name, lin in attn_linears.items():
                     rule = _ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
-                    commit_linear_module(attn_mod, lin, name,
+                    commit_linear(attn_mod, lin, name,
                                          split_num=tp, rank=attn_rank, **rule)
 
             # --- Dense FFN ---
@@ -167,7 +167,7 @@ class TextModelLoader:
                     for name, lin in ffn_linears.items():
                         rule = _FFN_TP_RULES.get(name, {})
                         tp = self.mlp_tp if 'split_side' in rule else 1
-                        commit_linear_module(ffn_mod, lin, name,
+                        commit_linear(ffn_mod, lin, name,
                                              split_num=tp, rank=mlp_rank, **rule)
 
             # --- MoE ---
@@ -201,6 +201,50 @@ class TextModelLoader:
                     'fuse_silu_act': True,
                 })
                 moe_mod = handle.get('moe_ffn')
+
+                # Create gate LinearWeight for router
+                gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
+                if gate_linear is not None:
+                    commit_linear(moe_mod, gate_linear, 'gate')
+                else:
+                    # Spec handles gate via raw_layer_tensors; create the
+                    # LinearWeight child so the tensor is stored correctly.
+                    moe_mod.create_child('gate', 'LinearWeight', {
+                        'input_dim': hidden,
+                        'output_dim': spec.num_experts(layer),
+                        'data_type': dtype,
+                        'has_bias': getattr(mc, 'expert_router_bias', False),
+                    })
+
+                # Create shared_gate if needed
+                shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
+                if shared_gate_linear is not None:
+                    commit_linear(moe_mod, shared_gate_linear, 'shared_gate')
+                elif mc.moe_shared_gate:
+                    moe_mod.create_child('shared_gate', 'LinearWeight', {
+                        'input_dim': hidden,
+                        'output_dim': 1,
+                        'data_type': dtype,
+                        'has_bias': False,
+                    })
+
+                # Create experts ModuleList and expert children
+                experts_list = moe_mod.create_child('experts', 'ModuleList', {})
+                expert_inter = mc.expert_inter_size or 0
+                for e in range(spec.num_experts(layer)):
+                    expert_name = str(e)
+                    experts_list.create_child(expert_name, 'FfnWeight', {
+                        'hidden_dim': hidden,
+                        'inter_size': expert_inter,
+                        'has_bias': mc.mlp_bias,
+                        'tp_size': self.mlp_tp,
+                        'tp_rank': mlp_rank,
+                        'data_type': dtype,
+                        'act_type': _act_type_id(mc.activation_type),
+                        'fuse_silu_act': True,
+                        'fused_moe': True,
+                    })
+
                 for e in range(spec.num_experts(layer)):
                     expert_linears = spec.moe_ffn_linears(layer, e)
                     expert_mod = moe_mod.get('experts').get(str(e))
@@ -215,16 +259,30 @@ class TextModelLoader:
                         for name, lin in expert_linears.items():
                             rule = _FFN_TP_RULES.get(name, {})
                             tp = self.mlp_tp if 'split_side' in rule else 1
-                            commit_linear_module(expert_mod, lin, name,
+                            commit_linear(expert_mod, lin, name,
                                                  split_num=tp, rank=mlp_rank, **rule)
 
             # --- Linear attention (GDN) ---
-            for name, lin in spec.linear_attn_linears(layer).items():
-                rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-                tp = self.attn_tp if 'split_side' in rule else 1
+            la_linears = spec.linear_attn_linears(layer)
+            if la_linears:
+                handle.create_child('linear_attn', 'DeltaNetWeight', {
+                    'hidden_dim': hidden,
+                    'num_k_heads': mc.linear_num_key_heads,
+                    'num_v_heads': mc.linear_num_value_heads,
+                    'key_head_dim': mc.linear_key_head_dim,
+                    'value_head_dim': mc.linear_value_head_dim,
+                    'd_conv': mc.linear_conv_kernel_dim,
+                    'bias': 0,
+                    'tp_size': self.attn_tp,
+                    'tp_rank': attn_rank,
+                    'data_type': dtype,
+                })
                 linear_attn_mod = handle.get('linear_attn')
-                commit_linear_module(linear_attn_mod, lin, name,
-                                     split_num=tp, rank=attn_rank, **rule)
+                for name, lin in la_linears.items():
+                    rule = _LINEAR_ATTN_TP_RULES.get(name, {})
+                    tp = self.attn_tp if 'split_side' in rule else 1
+                    commit_linear(linear_attn_mod, lin, name,
+                                         split_num=tp, rank=attn_rank, **rule)
 
             # --- Raw per-layer tensors ---
             for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
@@ -233,13 +291,35 @@ class TextModelLoader:
                 parts = tm_path.split('.')
                 mod = handle
                 for seg in parts[:-1]:
-                    mod = mod.get(seg)
-                commit_tensor_module(mod, tensor, parts[-1],
+                    child = mod.child(seg)
+                    if child is None:
+                        # Auto-create missing intermediate modules as
+                        # NormWeight (generic parameter holder).
+                        # Adjust dimensions for TP split so allocation
+                        # matches the per-shard tensor size.
+                        if tensor.dim() > 1:
+                            shape_list = list(tensor.shape)
+                            if split_side is not None and tp > 1:
+                                split_dim_idx = -1 if split_side == SplitSide.OUTPUT else 0
+                                shape_list[split_dim_idx] //= tp
+                            dims_str = ' '.join(str(s) for s in shape_list)
+                            child = mod.create_child(
+                                seg, 'NormWeight',
+                                {'dims': dims_str, 'data_type': dtype})
+                        else:
+                            norm_dim = tensor.shape[-1] if tensor.dim() >= 1 else 0
+                            if split_side is not None and tp > 1:
+                                norm_dim //= tp
+                            child = mod.create_child(
+                                seg, 'NormWeight',
+                                {'dim': norm_dim, 'data_type': dtype})
+                    mod = child
+                commit_tensor(mod, tensor, parts[-1],
                                      split_side=split_side,
                                      split_num=tp, rank=rank)
 
-    def _load_global(self, spec: 'ModelWeightSpec'):
-        from .module import SplitSide, commit_tensor_module
+    def _load_global(self, spec: 'TextModelSpec'):
+        from .module import SplitSide, commit_tensor
         from .linear import pad_out_dim
 
         mc = self.model.model_config
@@ -266,7 +346,7 @@ class TextModelLoader:
                     'data_type': dtype,
                     'has_bias': False,
                 })
-                commit_tensor_module(root.get('tok_embeddings'), emb_padded,
+                commit_tensor(root.get('tok_embeddings'), emb_padded,
                                      'weight',
                                      split_side=SplitSide.OUTPUT,
                                      split_num=tp, rank=attn_rank)
@@ -276,7 +356,7 @@ class TextModelLoader:
             if norm is not None:
                 root.create_child('norm', 'NormWeight',
                                   {'dim': hidden, 'data_type': dtype})
-                commit_tensor_module(root.get('norm'), norm, 'weight')
+                commit_tensor(root.get('norm'), norm, 'weight')
 
             # Output head (column-parallel, transposed)
             output = spec.output_weight()
@@ -289,6 +369,6 @@ class TextModelLoader:
                     'data_type': dtype,
                     'has_bias': False,
                 })
-                commit_tensor_module(root.get('output'), output_t, 'weight',
+                commit_tensor(root.get('output'), output_t, 'weight',
                                      split_side=SplitSide.OUTPUT,
                                      split_num=tp, rank=attn_rank)

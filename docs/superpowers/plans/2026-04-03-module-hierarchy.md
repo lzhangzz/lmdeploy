@@ -295,39 +295,59 @@ static FfnWeightRegistrar _ffn_weight_reg;
 
 - [ ] **Step 4: Register AttentionWeight in attention_weight.cc**
 
+First, add a helper function at the top of the anonymous namespace (shared across all registrars in this file) for safe config value access with defaults:
+
 ```cpp
 namespace {
+// Helper: get int64_t config value with default (returns default if key missing).
+static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
+}
+
+// Helper: get bool config value (returns false if key missing).
+static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() && std::get<int64_t>(it->second);
+}
+```
+
+Then the registrar uses these helpers:
+
+```cpp
 struct AttentionWeightRegistrar {
     AttentionWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "AttentionWeight",
             [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 MLAParam mla;
-                mla.kv_lora_rank = std::get<int64_t>(cfg.at("kv_lora_rank", 0));
-                mla.q_lora_rank = std::get<int64_t>(cfg.at("q_lora_rank", 0));
-                mla.qk_rope_dim = std::get<int64_t>(cfg.at("qk_rope_dim", 0));
+                mla.kv_lora_rank = cfg_get(cfg, "kv_lora_rank");
+                mla.q_lora_rank  = cfg_get(cfg, "q_lora_rank");
+                mla.qk_rope_dim  = cfg_get(cfg, "qk_rope_dim");
+                mla.v_head_dim   = cfg_get(cfg, "v_head_dim");
                 return std::make_unique<AttentionWeight>(
-                    std::get<int64_t>(cfg.at("hidden_dim")),
-                    std::get<int64_t>(cfg.at("head_dim")),
-                    std::get<int64_t>(cfg.at("head_num")),
-                    std::get<int64_t>(cfg.at("kv_head_num")),
+                    cfg_get(cfg, "hidden_dim"),
+                    cfg_get(cfg, "head_dim"),
+                    cfg_get(cfg, "head_num"),
+                    cfg_get(cfg, "kv_head_num"),
                     mla,
-                    cfg.count("has_bias") && std::get<int64_t>(cfg.at("has_bias")),
-                    cfg.count("qk_norm") && std::get<int64_t>(cfg.at("qk_norm")),
-                    std::get<int64_t>(cfg.at("tp_size")),
-                    std::get<int64_t>(cfg.at("tp_rank")),
-                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))),
-                    std::get<int64_t>(cfg.at("window_size", 0)),
-                    cfg.count("attn_sink") && std::get<int64_t>(cfg.at("attn_sink")),
-                    cfg.count("attn_output_gate") && std::get<int64_t>(cfg.at("attn_output_gate")));
+                    cfg_bool(cfg, "has_bias"),
+                    cfg_bool(cfg, "qk_norm"),
+                    cfg_get(cfg, "tp_size"),
+                    cfg_get(cfg, "tp_rank"),
+                    static_cast<DataType>(cfg_get(cfg, "data_type")),
+                    cfg_get(cfg, "window_size"),
+                    cfg_bool(cfg, "attn_sink"),
+                    cfg_bool(cfg, "attn_output_gate"));
             });
     }
 };
 static AttentionWeightRegistrar _attn_weight_reg;
-} // anonymous namespace
 ```
 
-Note: The `cfg.at("key", default)` pattern needs a helper that returns a default value. Add a small helper or use `cfg.count("key") ? std::get<int64_t>(cfg.at("key")) : default_val`.
+Add `#include "src/turbomind/models/llama/llama_params.h"` at the top of the file if not already present (needed for `MLAParam`).
 
 - [ ] **Step 5: Register MoeWeight in moe_weight.cc**
 
@@ -339,23 +359,42 @@ struct MoeWeightRegistrar {
             "MoeWeight",
             [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 MoeParam moe_param;
-                // ... populate moe_param from config ...
+                moe_param.method           = static_cast<MoeParam::Method>(cfg_get(cfg, "method"));
+                moe_param.experts_per_token = cfg_get(cfg, "experts_per_token");
+                moe_param.inter_size       = cfg_get(cfg, "inter_size");
+                moe_param.norm_topk_prob   = cfg_bool(cfg, "norm_topk_prob");
+                moe_param.shared_gate      = cfg_bool(cfg, "shared_gate");
+                moe_param.routed_scale     = cfg.count("routed_scale")
+                    ? std::get<double>(cfg.at("routed_scale")) : 1.0;
+                moe_param.router_bias      = cfg_bool(cfg, "router_bias");
+                moe_param.topk_group      = cfg_get(cfg, "topk_group");
+                moe_param.topk_method     = cfg.count("topk_method")
+                    ? std::get<std::string>(cfg.at("topk_method")) : "greedy";
+                moe_param.n_group         = cfg_get(cfg, "n_group");
+                moe_param.scoring_func    = cfg.count("scoring_func")
+                    ? std::get<std::string>(cfg.at("scoring_func")) : "softmax";
+                moe_param.router_n_groups = cfg_get(cfg, "router_n_groups");
+                // expert_num is a per-layer count (scalar in new pipeline, not vector)
+                int expert_num = cfg_get(cfg, "expert_num");
+                moe_param.expert_num.assign(1, expert_num);
                 return std::make_unique<MoeWeight>(
-                    std::get<int64_t>(cfg.at("layer_id")),
+                    cfg_get(cfg, "layer_id"),
                     moe_param,
-                    std::get<int64_t>(cfg.at("hidden_dim")),
-                    cfg.count("mlp_bias") && std::get<int64_t>(cfg.at("mlp_bias")),
-                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))),
-                    std::get<int64_t>(cfg.at("tp_size")),
-                    std::get<int64_t>(cfg.at("tp_rank")),
-                    static_cast<ActivationType>(std::get<int64_t>(cfg.at("act_type"))),
-                    cfg.count("fuse_silu_act") && std::get<int64_t>(cfg.at("fuse_silu_act")));
+                    cfg_get(cfg, "hidden_dim"),
+                    cfg_bool(cfg, "mlp_bias"),
+                    static_cast<DataType>(cfg_get(cfg, "data_type")),
+                    cfg_get(cfg, "tp_size"),
+                    cfg_get(cfg, "tp_rank"),
+                    static_cast<ActivationType>(cfg_get(cfg, "act_type")),
+                    cfg_bool(cfg, "fuse_silu_act"));
             });
     }
 };
 static MoeWeightRegistrar _moe_weight_reg;
 } // anonymous namespace
 ```
+
+Note: `MoeParam::expert_num` is a `std::vector<int>` in the C++ struct but the new pipeline only needs the per-layer count. We pass it as a scalar `expert_num` config key and populate the vector with a single element. The old pipeline passed the full vector via `ModelParam`, but the new pipeline creates one `MoeWeight` per layer.
 
 - [ ] **Step 6: Register DeltaNetWeight in delta_net_weight.cc**
 
@@ -459,40 +498,34 @@ In `bind.cpp`, locate where Module methods are exposed to Python (the `.def("get
 
 ```cpp
 .def("create_child",
-    [](Module& self, const std::string& name,
+    [with_context](Module& self, const std::string& name,
        const std::string& type_name,
-       const std::map<std::string, core::ConfigValue>& config) -> py::object {
-        auto* child = self.create_child(name, type_name, config);
-        if (!child) {
-            throw std::runtime_error("Failed to create module type '" + type_name + "'");
-        }
-        return py::cast(child);
+       const py::dict& config) -> py::object {
+        return with_context(self, [&]() -> py::object {
+            // Convert py::dict to ModuleConfig
+            core::ModuleConfig cfg;
+            for (auto& [key, val] : config) {
+                try {
+                    cfg[key] = py::cast<int64_t>(val);
+                } catch (py::cast_error&) {
+                    try {
+                        cfg[key] = py::cast<double>(val);
+                    } catch (py::cast_error&) {
+                        cfg[key] = py::cast<std::string>(val);
+                    }
+                }
+            }
+            auto* child = self.create_child(name, type_name, cfg);
+            if (!child) {
+                throw std::runtime_error("Failed to create module type '" + type_name + "'");
+            }
+            return py::cast(child);
+        });
     },
     py::arg("name"), py::arg("type_name"), py::arg("config"))
 ```
 
-This requires the proper pybind11 type caster for `std::map<std::string, ConfigValue>`. Since ConfigValue is a variant, we need to register it. Add before the module bindings:
-
-```cpp
-// Register ConfigValue variant for automatic Python conversion
-py::class_<std::map<std::string, core::ConfigValue>>(m, "ModuleConfig")
-    .def(py::init<std::map<std::string, core::ConfigValue>>())
-    .def("__setitem__", [](std::map<std::string, core::ConfigValue>& m,
-                           const std::string& key, py::object val) {
-        // Try int first, then double, then string
-        try {
-            m[key] = py::cast<int64_t>(val);
-        } catch (py::cast_error&) {
-            try {
-                m[key] = py::cast<double>(val);
-            } catch (py::cast_error&) {
-                m[key] = py::cast<std::string>(val);
-            }
-        }
-    });
-```
-
-Alternatively, a simpler approach: accept a `py::dict` and convert in C++.
+Key: Wraps with `with_context` (same as existing `get` and `alloc` bindings) because `create_child` may trigger tensor allocation for the child module. Also uses `py::dict` instead of a custom `ModuleConfig` Python class — simpler and avoids needing a custom type caster for the `std::variant`-based `ConfigValue`.
 
 - [ ] **Step 2: Build and verify**
 
@@ -616,8 +649,10 @@ class LoadContext:
         """Create a LinearWeight child and commit weight data.
 
         Handles TP splitting, quantization packing, and dtype casting.
+        The child is created via create_child, then weights are committed
+        directly to the child handle.
         """
-        from .module import commit_linear, SplitSide as _SplitSide
+        from .module import commit_linear_module, SplitSide as _SplitSide
         from .module import _infer_cpp_linear_dtype
 
         # Infer C++ dtype and group_size from the Linear
@@ -625,20 +660,79 @@ class LoadContext:
         if group_size == 0:
             group_size = max(1, 128)
 
+        # Extract dimensions from weight tensor shape (Linear doesn't store dims)
+        weight = linear.tensors.get("weight") or linear.tensors.get("qweight")
+        input_dim = weight.shape[0] if weight is not None else 0
+        output_dim = weight.shape[-1] if weight is not None else 0
+
         # Create the LinearWeight child
         child_handle = self._handle.create_child(
             name, "LinearWeight",
-            {"input_dim": linear.input_dim if hasattr(linear, 'input_dim') else 0,
-             "output_dim": linear.output_dim if hasattr(linear, 'output_dim') else 0,
+            {"input_dim": input_dim,
+             "output_dim": output_dim,
              "data_type": cpp_dtype,
              "has_bias": "bias" in linear.tensors})
 
-        # Commit the weight data
-        tp_side = _SplitSide(tp_rule) if tp_rule else None
-        commit_linear(child_handle, linear,
-                      split_side=tp_side,
-                      split_num=self.tp_size if tp_side else 1,
-                      rank=self.rank)
+        # Commit the weight data directly to the child handle.
+        # We pass the child handle as `module` and an empty name "" so
+        # commit_linear_module calls module.get(name), but since name=""
+        # it returns module itself (base Module.get returns child of "" = self).
+        # Actually: just call the tensor commit loop inline.
+        tp_side = _SplitSide[tp_rule] if tp_rule else None
+        split_num = self.tp_size if tp_side else 1
+        self._commit_linear_to_handle(child_handle, linear, cpp_dtype,
+                                     group_size, tp_side, split_num, self.rank)
+
+    @staticmethod
+    def _commit_linear_to_handle(handle, linear: Linear, cpp_dtype, group_size,
+                                 split_side, split_num: int, rank: int):
+        """Commit Linear tensor data to a pre-created C++ module handle.
+
+        This is the stripped-down version of commit_linear_module that works
+        with a pre-created handle instead of using module.get(name).
+        """
+        from .module import _cast_shard_for_tm, _SPLIT_SIDE_TO_DIM
+
+        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+
+        packer = linear.weight_format.packer if linear.weight_format else None
+
+        def _kind_order(item):
+            k, _ = item
+            return (0, k) if k in ("weight", "qweight") else (1, k)
+
+        for kind, tensor in sorted(linear.tensors.items(), key=_kind_order):
+            if packer is not None:
+                tensor = packer(tensor, kind)
+
+            tensor_split_dim = split_dim
+            if kind == "bias" and split_side == "input":
+                tensor_split_dim = None
+
+            if tensor_split_dim is not None and split_num > 1:
+                split_size = tensor.shape[tensor_split_dim] // split_num
+                shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
+            else:
+                shard = tensor
+
+            shard = shard.cuda().contiguous()
+            dst = handle.alloc(kind, cpp_dtype, group_size)
+            if dst:
+                shard = _cast_shard_for_tm(shard, dst)
+                if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
+                    pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
+                    if pad_dim < 0:
+                        pad_dim = shard.dim() + pad_dim
+                    outer = shard.numel() // shard.shape[pad_dim]
+                    extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
+                    new_shape = list(shard.shape)
+                    new_shape[pad_dim] += extra
+                    padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
+                    idx = [slice(None)] * shard.dim()
+                    idx[pad_dim] = slice(0, shard.shape[pad_dim])
+                    padded[tuple(idx)].copy_(shard)
+                    shard = padded
+                dst.copy_from(shard)
 
     def load_tensor(self, name: str, tensor: torch.Tensor,
                     module_type: str = "NormWeight",
@@ -653,18 +747,20 @@ class LoadContext:
             module_config: Config dict for module creation.
             tp_rule: "output" or "input" for TP split, None for broadcast.
         """
-        from .module import commit_tensor, SplitSide as _SplitSide
+        from .module import commit_tensor_module, SplitSide as _SplitSide
         from .module import _torch_dtype_to_cpp
 
         config = module_config or {}
         child_handle = self._handle.create_child(name, module_type, config)
 
-        tp_side = _SplitSide(tp_rule) if tp_rule else None
-        commit_tensor(child_handle, tensor,
+        tp_side = _SplitSide[tp_rule] if tp_rule else None
+        commit_tensor_module(child_handle, tensor, "weight",
                       split_side=tp_side,
                       split_num=self.tp_size if tp_side else 1,
                       rank=self.rank)
 ```
+
+Key: `commit_tensor_module` takes `(module, tensor, name, ...)` where `name` is the parameter name within the child module (e.g., `"weight"` for a norm). The `SplitSide` enum is accessed via `SplitSide.OUTPUT` not `SplitSide["output"]`.
 
 - [ ] **Step 2: Commit**
 
@@ -718,15 +814,17 @@ class TextModelLoader:
 
     def _make_tp_config(self, rank: int, is_attn: bool = True) -> dict:
         tp = self.attn_tp if is_attn else self.mlp_tp
+        cfg = self.model.model_config
+        rope_param = self.model.attention_config.rope_param
         return {
             "tp_size": tp,
             "rank": rank,
-            "head_dim": self.model.model_config.size_per_head,
-            "rope_dim": ...,
+            "head_dim": cfg.size_per_head,
+            "rope_dim": rope_param.dim if rope_param else cfg.size_per_head,
             "permute_qk": getattr(self.model, "permute_qk", True),
             "repeat_kv": getattr(self.model, "repeat_kv", 0),
-            "attn_output_gate": getattr(self.model.model_config, "attn_output_gate", False),
-            "kv_head_num": self.model.model_config.kv_head_num,
+            "attn_output_gate": getattr(cfg, "attn_output_gate", False),
+            "kv_head_num": cfg.kv_head_num,
         }
 
     def _load_layer(self, layer: int, spec: TextModelSpec):

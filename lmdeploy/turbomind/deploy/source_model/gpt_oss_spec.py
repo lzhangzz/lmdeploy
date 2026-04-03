@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""gpt-oss ModelWeightSpec for the V2 pipeline.
+"""gpt-oss TextModelSpec for the V2 pipeline.
 
 Key differences from standard Llama:
   - MoE-only (inter_size=0): no dense FFN, all experts
@@ -19,7 +19,7 @@ import re
 import torch
 
 from ..linear import Linear
-from ..module import ModelWeightSpec, SplitSide
+from ..module import TextModelSpec, SplitSide
 from ..parameter import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
@@ -35,7 +35,7 @@ def map_experts(s: str) -> str:
     return s
 
 
-class GptOssSpec(ModelWeightSpec):
+class GptOssSpec(TextModelSpec):
     """Weight spec for gpt-oss (MoE with packed experts)."""
 
     _layer_prefix = "model.layers"
