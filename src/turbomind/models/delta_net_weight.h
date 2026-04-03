@@ -26,7 +26,6 @@ public:
                    int      tp_rank,
                    DataType data_type);
 
-    Module* ensure_child(const std::string& segment) override;
     void prepare() override;
 
     // --- Typed child accessors ---

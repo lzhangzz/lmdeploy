@@ -22,32 +22,6 @@ FfnWeight::FfnWeight(int hidden_dim, int inter_size, bool bias, int tp_size, int
     inter_size_ /= tp_size_;
 }
 
-core::Module* FfnWeight::ensure_child(const std::string& segment)
-{
-    if (segment == "w1") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_dim_, inter_size_, data_type_, bias_);
-        return add_child("w1", std::move(child));
-    }
-    if (segment == "w3") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_dim_, inter_size_, data_type_, bias_);
-        return add_child("w3", std::move(child));
-    }
-    if (segment == "w2") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(inter_size_, hidden_dim_, data_type_, bias_);
-        return add_child("w2", std::move(child));
-    }
-    if (segment == "w1w3") {
-        // Fused gate+up projection
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_dim_, inter_size_ * 2, data_type_, bias_);
-        return add_child("w1w3", std::move(child));
-    }
-    return nullptr;
-}
-
 void FfnWeight::prepare()
 {
     // Set epilogue on existing w1w3 child if fused silu is active.

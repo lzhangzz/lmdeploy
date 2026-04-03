@@ -25,7 +25,6 @@ public:
                 const EngineParam& engine_param,
                 const MoeParam&    moe_param);
 
-    core::Module* ensure_child(const std::string& segment) override;
     void                    prepare() override;
     bool                    verify(std::vector<std::string>& missing) override;
 

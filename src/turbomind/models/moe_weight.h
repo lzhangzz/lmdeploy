@@ -24,7 +24,6 @@ public:
               ActivationType   act_type,
               bool             fuse_silu_act);
 
-    Module* ensure_child(const std::string& segment) override;
     Tensor  alloc(const std::string& param_name, const core::WeightSpec& spec) override;
     void prepare() override;
     int num_experts() const { return expert_num_; }

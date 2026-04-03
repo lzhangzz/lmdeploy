@@ -29,34 +29,6 @@ ModelWeight::ModelWeight(DataType       data_type,
     alloca_ = core::Allocator{stream_, /*use_default_pool=*/true};
 }
 
-core::Module* ModelWeight::ensure_child(const std::string& segment)
-{
-    const int tp = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
-
-    if (segment == "tok_embeddings") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(vocab_size_padded_, hidden_units_ / tp, data_type_, false);
-        return add_child("tok_embeddings", std::move(child));
-    }
-    if (segment == "output") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_units_, vocab_size_padded_ / tp, data_type_, false);
-        return add_child("output", std::move(child));
-    }
-    if (segment == "norm") {
-        auto child = std::make_unique<NormWeight>(hidden_units_, data_type_);
-        return add_child("norm", std::move(child));
-    }
-    if (segment == "layers") {
-        auto factory = [this](int i) -> std::unique_ptr<Module> {
-            return std::make_unique<DecoderLayerWeight>(
-                i, model_param_, engine_param_, moe_param_);
-        };
-        return add_child("layers", std::make_unique<core::ModuleList>(factory));
-    }
-    return nullptr;
-}
-
 void ModelWeight::prepare()
 {
     for (auto& [name, child] : children_) {

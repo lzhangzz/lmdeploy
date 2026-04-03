@@ -32,43 +32,6 @@ MoeWeight::MoeWeight(int              layer_id,
     }
 }
 
-core::Module* MoeWeight::ensure_child(const std::string& segment)
-{
-    if (expert_num_ == 0) {
-        return nullptr;
-    }
-
-    if (segment == "gate") {
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_dim_, expert_num_, data_type_, moe_param_.router_bias);
-        return add_child("gate", std::move(child));
-    }
-    if (segment == "shared_gate") {
-        if (!moe_param_.shared_gate) {
-            return nullptr;
-        }
-        auto child = std::make_unique<LinearWeight>();
-        child->configure(hidden_dim_, 1, data_type_, false);
-        return add_child("shared_gate", std::move(child));
-    }
-    if (segment == "experts") {
-        auto factory = [this](int i) -> std::unique_ptr<Module> {
-            auto child = std::make_unique<FfnWeight>(hidden_dim_,
-                                                     moe_param_.inter_size,
-                                                     mlp_bias_,
-                                                     tp_size_,
-                                                     tp_rank_,
-                                                     data_type_,
-                                                     act_type_,
-                                                     fuse_silu_act_);
-            child->set_fused_moe(moe_param_.method == MoeParam::kFused);
-            return child;
-        };
-        return add_child("experts", std::make_unique<core::ModuleList>(factory));
-    }
-    return nullptr;
-}
-
 Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     if (param_name == "score_correction_bias" && expert_num_ > 0) {

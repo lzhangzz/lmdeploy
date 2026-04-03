@@ -15,7 +15,6 @@ public:
 
     AttentionWeight() = default;
 
-    /// Construct with config for lazy child creation.
     AttentionWeight(int          hidden_dim,
                     int          head_dim,
                     int          head_num,
@@ -29,8 +28,6 @@ public:
                     int          window_size,
                     bool         sink,
                     bool         attn_output_gate);
-
-    core::Module* ensure_child(const std::string& segment) override;
 
     void prepare() override;
 

@@ -2,7 +2,6 @@
 #pragma once
 
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 
@@ -19,12 +18,6 @@ public:
 
     DecoderLayerWeight() = default;
 
-    DecoderLayerWeight(int           layer_id,
-                       ModelParam    model_param,
-                       EngineParam   engine_param,
-                       MoeParam      moe_param);
-
-    core::Module* ensure_child(const std::string& segment) override;
     bool verify(std::vector<std::string>& missing) override;
 
     // Typed child accessors — defined in .cc where full types are visible
@@ -34,12 +27,6 @@ public:
     MoeWeight*       moe() const;
     NormWeight*      attn_norm() const;
     NormWeight*      ffn_norm() const;
-
-private:
-    int         layer_id_{};
-    ModelParam  model_param_{};
-    EngineParam engine_param_{};
-    MoeParam    moe_param_{};
 };
 
 }  // namespace turbomind

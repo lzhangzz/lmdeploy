@@ -17,7 +17,6 @@ public:
     FfnWeight(int hidden_dim, int inter_size, bool bias, int tp_size, int tp_rank,
               DataType data_type, ActivationType act_type, bool fuse_silu_act);
 
-    Module* ensure_child(const std::string& segment) override;
     void prepare() override;
 
     // --- Typed child accessors ---
