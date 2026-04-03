@@ -3,6 +3,7 @@
 #include "src/turbomind/models/linear_weight.h"
 
 #include "src/turbomind/core/allocator.h"
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/convert.h"
@@ -309,5 +310,24 @@ void LinearWeight::prepare()
         }
     }
 }
+
+namespace {
+struct LinearWeightRegistrar {
+    LinearWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "LinearWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                auto m = std::make_unique<LinearWeight>();
+                m->configure(
+                    std::get<int64_t>(cfg.at("input_dim")),
+                    std::get<int64_t>(cfg.at("output_dim")),
+                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))),
+                    cfg.count("has_bias") && std::get<int64_t>(cfg.at("has_bias")));
+                return m;
+            });
+    }
+};
+static LinearWeightRegistrar _linear_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

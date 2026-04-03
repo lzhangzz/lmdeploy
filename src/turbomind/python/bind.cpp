@@ -550,6 +550,33 @@ PYBIND11_MODULE(_turbomind, m)
              [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
              py::return_value_policy::reference,
              "name"_a)
+        .def("create_child",
+             [with_context](ft::core::Module& m, const std::string& name,
+                const std::string& type_name,
+                const py::dict& config) -> ft::core::Module* {
+                 return with_context(m, [&]() -> ft::core::Module* {
+                     // Convert py::dict to ModuleConfig
+                     turbomind::core::ModuleConfig cfg;
+                     for (auto& [key, val] : config) {
+                         try {
+                             cfg[py::cast<std::string>(key)] = py::cast<int64_t>(val);
+                         } catch (py::cast_error&) {
+                             try {
+                                 cfg[py::cast<std::string>(key)] = py::cast<double>(val);
+                             } catch (py::cast_error&) {
+                                 cfg[py::cast<std::string>(key)] = py::cast<std::string>(val);
+                             }
+                         }
+                     }
+                     auto* child = m.create_child(name, type_name, cfg);
+                     if (!child) {
+                         throw std::runtime_error("Failed to create module type '" + type_name + "'");
+                     }
+                     return child;
+                 });
+             },
+             py::return_value_policy::reference,
+             "name"_a, "type_name"_a, "config"_a)
         .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
         .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
         .def("__getitem__",

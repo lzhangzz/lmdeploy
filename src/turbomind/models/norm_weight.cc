@@ -2,6 +2,8 @@
 
 #include "src/turbomind/models/norm_weight.h"
 
+#include "src/turbomind/core/registry.h"
+
 namespace turbomind {
 
 NormWeight::NormWeight(int dim, DataType dtype, DeviceType device)
@@ -56,5 +58,20 @@ Tensor NormWeight::alloc(const std::string& param_name, const core::WeightSpec& 
     }
     return Module::alloc(param_name, spec);
 }
+
+namespace {
+struct NormWeightRegistrar {
+    NormWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "NormWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<NormWeight>(
+                    std::get<int64_t>(cfg.at("dim")),
+                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))));
+            });
+    }
+};
+static NormWeightRegistrar _norm_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

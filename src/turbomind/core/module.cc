@@ -3,6 +3,7 @@
 #include "src/turbomind/core/module.h"
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/registry.h"
 
 #include <sstream>
 
@@ -101,6 +102,19 @@ void Module::to_device(DeviceType dev)
 Module* Module::ensure_child(const std::string& /*segment*/)
 {
     return nullptr;  // base Module cannot create children lazily
+}
+
+// ----- Registry-driven child creation -----
+
+Module* Module::create_child(const std::string& name,
+                              const std::string& type_name,
+                              const ModuleConfig& config)
+{
+    auto mod = ModuleRegistry::instance().create(type_name, config);
+    if (!mod) {
+        return nullptr;
+    }
+    return add_child(name, std::move(mod));
 }
 
 // ----- Lookup -----
@@ -238,5 +252,22 @@ int ModuleList::size() const
     }
     return n;
 }
+
+namespace {
+struct ModuleListRegistrar {
+    ModuleListRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "ModuleList",
+            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
+                return std::make_unique<core::ModuleList>(
+                    [](int) -> std::unique_ptr<core::Module> {
+                        TM_CHECK(false) << "ModuleList factory should not be called";
+                        return nullptr;
+                    });
+            });
+    }
+};
+static ModuleListRegistrar _module_list_reg;
+} // anonymous namespace
 
 }  // namespace turbomind::core

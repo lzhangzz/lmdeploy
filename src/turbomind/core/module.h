@@ -10,6 +10,7 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/tensor.h"
 
 namespace turbomind::core {
@@ -77,6 +78,23 @@ public:
     /// Move tensors between CPU and GPU (for Sleep level 1 / WakeUp).
     /// Default recurses into children and moves registered parameters.
     virtual void to_device(DeviceType dev);
+
+    // ----- Registry-driven child creation -----
+
+    /// Create a child module using the type registry and attach it.
+    /// Returns pointer to the created child, or nullptr on failure.
+    Module* create_child(const std::string& name,
+                         const std::string& type_name,
+                         const ModuleConfig& config = {});
+
+    /// Typed child accessor. Returns nullptr if child not found or wrong type.
+    template<typename T>
+    T* get(const std::string& name) const {
+        return static_cast<T*>(child(name));
+    }
+
+    /// Expose children for iteration (execution side).
+    const auto& children() const { return children_; }
 
     // ----- Lazy child creation -----
 

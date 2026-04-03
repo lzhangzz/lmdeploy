@@ -12,6 +12,7 @@ add_library(core STATIC
         tensor.cc
         tensor.cu
         module.cc
+        registry.cc
         copy.cc)
 
 target_link_libraries(core PUBLIC cuda_utils logger CUDA::cudart CUDA::cuda_driver)

@@ -305,6 +305,28 @@ class ModelWeightSpec(ABC):
             k = permute_v2(k, self._head_dim)
         return q, k
 
+    # -- Composable loading (new pipeline) --
+
+    def load_layer(self, ctx, layer: int):
+        """Create modules and load weights for one layer using LoadContext.
+
+        Override in subclasses to use the new create_child-based pipeline.
+        The default implementation is not provided — specs opt in by
+        overriding this method.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement load_layer. "
+            "Use TransformerV2 pipeline instead.")
+
+    def load_global(self, ctx):
+        """Load non-layer modules (embeddings, output head, final norm).
+
+        Override in subclasses to use the new create_child-based pipeline.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement load_global. "
+            "Use TransformerV2 pipeline instead.")
+
     # -- metadata --
 
     @abstractmethod

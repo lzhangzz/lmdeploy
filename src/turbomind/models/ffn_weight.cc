@@ -2,6 +2,7 @@
 
 #include "src/turbomind/models/ffn_weight.h"
 
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind {
@@ -68,5 +69,38 @@ void FfnWeight::prepare()
         child->prepare();
     }
 }
+
+namespace {
+static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
+}
+
+static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() && std::get<int64_t>(it->second);
+}
+
+struct FfnWeightRegistrar {
+    FfnWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "FfnWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<FfnWeight>(
+                    cfg_get(cfg, "hidden_dim"),
+                    cfg_get(cfg, "inter_size"),
+                    cfg_bool(cfg, "has_bias"),
+                    cfg_get(cfg, "tp_size"),
+                    cfg_get(cfg, "tp_rank"),
+                    static_cast<DataType>(cfg_get(cfg, "data_type")),
+                    static_cast<ActivationType>(cfg_get(cfg, "act_type")),
+                    cfg_bool(cfg, "fuse_silu_act"));
+            });
+    }
+};
+static FfnWeightRegistrar _ffn_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind
