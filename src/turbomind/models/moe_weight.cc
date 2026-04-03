@@ -253,8 +253,10 @@ struct MoeWeightRegistrar {
                 moe_param.router_n_groups = cfg_get(cfg, "router_n_groups");
                 int expert_num = cfg_get(cfg, "expert_num");
                 moe_param.expert_num.assign(1, expert_num);
+                // Pass layer_id=0 so the constructor indexes into expert_num[0]
+                // (the vector has a single element for this per-layer instance).
                 return std::make_unique<MoeWeight>(
-                    cfg_get(cfg, "layer_id"),
+                    0,
                     moe_param,
                     cfg_get(cfg, "hidden_dim"),
                     cfg_bool(cfg, "mlp_bias"),
