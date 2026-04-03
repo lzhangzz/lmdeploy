@@ -107,11 +107,22 @@ Uses `std::variant<int64_t, std::string, double>` to handle:
 
 | Current | New | Purpose |
 |---------|-----|---------|
-| `ModelWeightSpec` | `ModelSpec` | Per-architecture checkpoint-to-module mapping |
+| `ModelWeightSpec` | `TextModelSpec` | Per-architecture checkpoint-to-module mapping |
 | `TransformerV2` | `TextModelLoader` | Drives loading for text models |
-| `WeightLoad` | (dropped) | Replaced by functional composition |
 | `commit_linear_module` | `commit_linear` | Copy Linear bundle to C++ |
 | `commit_tensor_module` | `commit_tensor` | Copy raw tensor to C++ |
+
+**Spec method names:**
+
+| Current | New | Notes |
+|---------|-----|-------|
+| `attn_norm(layer)` | (dropped) | Inline as one-liner in `load_layer` |
+| `ffn_norm(layer)` | (dropped) | Inline as one-liner in `load_layer` |
+| (new) | `load_attn(ctx, layer)` | Loads attention modules + weights |
+| (new) | `load_ffn(ctx, layer)` | Loads dense FFN modules + weights |
+| (new) | `load_experts(ctx, layer)` | Loads MoE experts + weights |
+| (new) | `load_linear_attn(ctx, layer)` | Loads linear attention (GDN) |
+| `load_misc(ctx)` | `load_global(ctx)` | Loads non-layer weights (embeddings, output, final norm) |
 
 #### LoadContext
 
@@ -154,14 +165,16 @@ class LoadContext:
         return LoadContext(self._handle.get(name), self._tp_config)
 ```
 
-#### ModelSpec Evolution
+#### TextModelSpec Evolution
 
-The spec gains `load_layer` and `load_misc` methods that use `LoadContext` for
+The spec gains `load_layer` and `load_global` methods that use `LoadContext` for
 functional composition. The existing weight-mapping methods
 (`_read_attn_linears`, `ffn_linears`, etc.) stay for subclasses to implement.
+The `attn_norm` and `ffn_norm` methods are dropped — norms are loaded inline
+as one-liners in `load_layer`.
 
 ```python
-class ModelSpec(ABC):
+class TextModelSpec(ABC):
     # -- Abstract: per-architecture weight reading (existing) --
     def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
         return {}
@@ -172,27 +185,90 @@ class ModelSpec(ABC):
     def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
         return {}
 
-    def attn_norm(self, layer: int) -> Tensor | None:
-        return None
-
-    def ffn_norm(self, layer: int) -> Tensor | None:
-        return None
-
     def raw_layer_tensors(self, layer: int):
         return []
 
     # ... existing abstract methods ...
+
+    # -- NEW: Composable loading sub-methods --
+
+    def load_attn(self, ctx: LoadContext, layer: int):
+        """Create attention modules and load weights."""
+        attn_linears = self.attn_linears(layer)
+        if not attn_linears:
+            return
+        attn = ctx.create("attention", "AttentionWeight",
+                          hidden_dim=..., head_dim=..., ...)
+        for name, lin in attn_linears.items():
+            attn.load_linear(name, lin, tp_rule=_ATTN_TP_RULES.get(name))
+        for path, tensor, side in self.raw_layer_tensors(layer):
+            if path.startswith("attention."):
+                attn.load_tensor(path.split(".")[-1], tensor, side)
+
+    def load_ffn(self, ctx: LoadContext, layer: int):
+        """Create dense FFN modules and load weights (with w1/w3 fusion)."""
+        ffn_linears = self.ffn_linears(layer)
+        if not ffn_linears:
+            return
+        ffn = ctx.create("feed_forward", "FfnWeight",
+                         hidden_dim=..., inter_size=..., ...)
+        load_fused_ffn(ffn, ffn_linears, self._tp_config)
+
+    def load_experts(self, ctx: LoadContext, layer: int):
+        """Create MoE expert modules and load weights."""
+        moe = ctx.create("moe_ffn", "MoeWeight",
+                         layer_id=layer, ...)
+        for e in range(self.num_experts(layer)):
+            expert = moe.create(str(e), "FfnWeight",
+                                hidden_dim=..., inter_size=..., ...)
+            expert_linears = self.moe_ffn_linears(layer, e)
+            load_fused_ffn(expert, expert_linears, self._tp_config)
+        # Gate
+        gate_tensor = self.moe_gate(layer)
+        if gate_tensor is not None:
+            moe.load_tensor("gate", gate_tensor, module_type="LinearWeight", ...)
+
+    def load_linear_attn(self, ctx: LoadContext, layer: int):
+        """Create linear attention (GDN/DeltaNet) modules and load weights."""
+        la_linears = self.linear_attn_linears(layer)
+        if not la_linears:
+            return
+        la = ctx.create("linear_attn", "DeltaNetWeight",
+                        hidden_dim=..., ...)
+        for name, lin in la_linears.items():
+            la.load_linear(name, lin, tp_rule=_LINEAR_ATTN_TP_RULES.get(name))
+
+    def load_global(self, ctx: LoadContext):
+        """Load non-layer modules (tok_embeddings, final norm, output head)."""
+        # Token embeddings
+        emb = self.tok_embeddings()
+        if emb is not None:
+            ctx.load_tensor("tok_embeddings", emb_padded,
+                            module_type="LinearWeight", ...)
+
+        # Final norm
+        norm = self.norm_weight()
+        if norm is not None:
+            ctx.load_tensor("norm", norm,
+                            module_type="NormWeight",
+                            module_config={"dim": self.hidden_dim, "dtype": self.data_type})
+
+        # Output head
+        output = self.output_weight()
+        if output is not None:
+            ctx.load_tensor("output", output_t,
+                            module_type="LinearWeight", ...)
 
     # -- NEW: Functional loading (default implementation) --
 
     def load_layer(self, ctx: LoadContext, layer: int):
         """Create modules and load weights for one layer.
 
-        Default implementation uses the existing abstract methods.
+        Default implementation composes load_attn, load_ffn, etc.
         Subclasses may override for full control.
         """
-        # Provide TP and model params to spec for merge/fusion (idempotent).
-        # Sets _attn_tp, _head_dim, _rope_dim, etc. on the spec so that
+        # Configure TP params for merge/fusion (idempotent).
+        # Sets _attn_tp, _head_dim, _rope_dim, etc. so that
         # merge_qkv_linear, fuse_gdn_in_proj, etc. work correctly.
         self.configure(
             attn_tp=ctx.tp_size,
@@ -204,71 +280,21 @@ class ModelSpec(ABC):
             kv_head_num=ctx.kv_head_num,
         )
 
-        # Norms
-        ctx.load_tensor("attention_norm", self.attn_norm(layer),
+        # Norms (inline one-liners — no separate method needed)
+        ctx.load_tensor("attention_norm", self._get(f"model.layers.{layer}.input_layernorm.weight"),
+                        module_type="NormWeight",
                         module_config={"dim": self.hidden_dim, "dtype": self.data_type})
-        ctx.load_tensor("ffn_norm", self.ffn_norm(layer),
+        ctx.load_tensor("ffn_norm", self._get(f"model.layers.{layer}.post_attention_layernorm.weight"),
+                        module_type="NormWeight",
                         module_config={"dim": self.hidden_dim, "dtype": self.data_type})
 
-        # Attention
-        attn_linears = self.attn_linears(layer)
-        if attn_linears:
-            attn = ctx.create("attention", "AttentionWeight",
-                              hidden_dim=..., head_dim=..., ...)
-            for name, lin in attn_linears.items():
-                attn.load_linear(name, lin, tp_rule=_ATTN_TP_RULES.get(name))
-            for path, tensor, side in self.raw_layer_tensors(layer):
-                if path.startswith("attention."):
-                    attn.load_tensor(path.split(".")[-1], tensor, side)
-
-        # FFN (dense)
-        ffn_linears = self.ffn_linears(layer)
-        if ffn_linears:
-            ffn = ctx.create("feed_forward", "FfnWeight",
-                             hidden_dim=..., inter_size=..., ...)
-            load_fused_ffn(ffn, ffn_linears, self._tp_config)
-
-        # MoE
+        # Composable sub-components
+        self.load_attn(ctx, layer)
         if self.num_experts(layer) > 0:
-            moe = ctx.create("moe_ffn", "MoeWeight",
-                             layer_id=layer, ...)
-            for e in range(self.num_experts(layer)):
-                expert = moe.create(str(e), "FfnWeight",
-                                    hidden_dim=..., inter_size=..., ...)
-                expert_linears = self.moe_ffn_linears(layer, e)
-                load_fused_ffn(expert, expert_linears, self._tp_config)
-            # Gate
-            gate_tensor = self.moe_gate(layer)
-            if gate_tensor is not None:
-                moe.load_tensor("gate", gate_tensor, module_type="LinearWeight", ...)
-
-        # Linear attention (GDN)
-        la_linears = self.linear_attn_linears(layer)
-        if la_linears:
-            la = ctx.create("linear_attn", "DeltaNetWeight",
-                            hidden_dim=..., ...)
-            for name, lin in la_linears.items():
-                la.load_linear(name, lin, tp_rule=_LINEAR_ATTN_TP_RULES.get(name))
-
-    def load_misc(self, ctx: LoadContext):
-        """Load non-layer modules (tok_embeddings, output head, final norm)."""
-        # Token embeddings
-        emb = self.tok_embeddings()
-        if emb is not None:
-            ctx.load_tensor("tok_embeddings", emb_padded,
-                            module_type="LinearWeight", ...)
-
-        # Final norm
-        norm = self.norm_weight()
-        if norm is not None:
-            ctx.load_tensor("norm", norm,
-                            module_config={"dim": self.hidden_dim, "dtype": self.data_type})
-
-        # Output head
-        output = self.output_weight()
-        if output is not None:
-            ctx.load_tensor("output", output_t,
-                            module_type="LinearWeight", ...)
+            self.load_experts(ctx, layer)
+        else:
+            self.load_ffn(ctx, layer)
+        self.load_linear_attn(ctx, layer)
 ```
 
 #### TextModelLoader
@@ -283,13 +309,13 @@ class TextModelLoader:
         self.model = model
         # ... extract config ...
 
-    def __call__(self, layer: int, spec: ModelSpec):
+    def __call__(self, layer: int, spec: TextModelSpec):
         if layer < 0:
-            self._load_misc(spec)
+            self._load_global(spec)
         else:
             self._load_layer(layer, spec)
 
-    def _load_layer(self, layer: int, spec: ModelSpec):
+    def _load_layer(self, layer: int, spec: TextModelSpec):
         for gpu in range(self.model.gpu_count):
             root = self.model.root(gpu)
             if root is None:
@@ -302,14 +328,14 @@ class TextModelLoader:
             ctx = LoadContext(layers[str(layer)], rank, ...)
             spec.load_layer(ctx, layer)
 
-    def _load_misc(self, spec: ModelSpec):
+    def _load_global(self, spec: TextModelSpec):
         for gpu in range(self.model.gpu_count):
             root = self.model.root(gpu)
             if root is None:
                 break
             rank = self.model.tp_ranks(gpu)
             ctx = LoadContext(root, rank, ...)
-            spec.load_misc(ctx)
+            spec.load_global(ctx)
 ```
 
 #### Reusable Functional Helpers
@@ -356,9 +382,10 @@ def load_fused_ffn(ctx: LoadContext, ffn_linears: dict, tp_config):
 | C++ `Module` | Add `create_child(name, type, config)` + registry + `get<T>()` |
 | C++ `ensure_child` | Removed from composite modules (creation driven by Python) |
 | Python `TransformerV2` | Replaced by `TextModelLoader` |
-| Python `ModelWeightSpec` | Renamed to `ModelSpec`, gains `load_layer`/`load_misc` |
+| Python `ModelWeightSpec` | Renamed to `TextModelSpec`, gains `load_layer`/`load_global` + composable sub-methods |
 | Python `LoadContext` | New class — composable loading primitives |
 | Python `commit_*_module` | Renamed to `commit_*` (drop "_module" suffix) |
+| Python `attn_norm`/`ffn_norm` | Dropped — inlined as one-liners in `load_layer` |
 
 ## Migration Path
 
@@ -370,9 +397,9 @@ code breaks.
 
 ### Step 2 — Python LoadContext + TextModelLoader (independent)
 
-Create `LoadContext`, `TextModelLoader`, and updated `ModelSpec` base class with
-`load_layer`/`load_misc` default implementations. These can coexist with the
-existing `TransformerV2` pipeline.
+Create `LoadContext`, `TextModelLoader`, and updated `TextModelSpec` base class
+with `load_layer`/`load_global` default implementations. These can coexist with
+the existing `TransformerV2` pipeline.
 
 ### Step 3 — Migrate One Architecture (integration)
 
