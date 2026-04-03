@@ -2,7 +2,6 @@
 #ifndef TURBOMIND_CORE_MODULE_H
 #define TURBOMIND_CORE_MODULE_H
 
-#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -21,11 +20,10 @@ struct WeightSpec {
     int      group_size = 0; // quantization group size (0 = not quantized)
 };
 
-/// Type-erased hierarchical module with virtual lifecycle and lazy child creation.
+/// Type-erased hierarchical module with virtual lifecycle.
 ///
-/// The module tree is built incrementally as weights arrive:
-///   - ``get(segment)`` returns an existing child or lazily creates one via
-///     the virtual ``ensure_child()`` hook.
+/// The module tree is built explicitly via ``create_child()`` from the Python
+/// loading pipeline. Children are looked up by name; no lazy creation.
 ///   - ``alloc(param_name, spec)`` allocates tensors on demand and returns
 ///     a handle for data copying.
 ///   - ``prepare()`` runs post-load processing (format conversion, fusion).
@@ -87,28 +85,23 @@ public:
                          const std::string& type_name,
                          const ModuleConfig& config = {});
 
-    /// Typed child accessor. Returns nullptr if child not found or wrong type.
+    /// Typed child accessor. Aborts if child not found.
     template<typename T>
     T* get(const std::string& name) const {
-        return static_cast<T*>(child(name));
+        auto* c = child(name);
+        TM_CHECK(c != nullptr) << "child '" << name << "' not found in " << type();
+        return static_cast<T*>(c);
     }
 
     /// Expose children for iteration (execution side).
     const auto& children() const { return children_; }
-
-    // ----- Lazy child creation -----
-
-    /// Override in composite modules to create children on demand.
-    /// Called by get() when a child doesn't exist yet.
-    /// Returns pointer to the newly-created child, or nullptr if segment is invalid.
-    virtual Module* ensure_child(const std::string& segment);
 
     // ----- Lookup -----
 
     /// Find a direct child by name (no creation).
     Module* child(const std::string& name) const;
 
-    /// Find or lazily create a child by single segment.
+    /// Find a child by single segment name.
     Module* get(const std::string& segment);
 
     /// Find a parameter by name within this module.
@@ -158,21 +151,15 @@ private:
 // ======================================================================
 
 /// A systematic container for indexed module sequences (layers, experts).
-/// Children are created lazily from a factory function.
+/// Children are added explicitly via ``add_child`` or ``create_child``.
 class ModuleList: public Module {
 public:
-    using Factory = std::function<std::unique_ptr<Module>(int index)>;
-
-    /// Factory is called lazily when an index is first accessed.
-    explicit ModuleList(Factory factory);
-
     const char* type() const override
     {
         return "ModuleList";
     }
 
-    /// Parses ``segment`` as an integer index, creates child via factory if not exists.
-    Module* ensure_child(const std::string& segment) override;
+    ModuleList() = default;
 
     /// Override to also track the child in the indexed_ vector.
     Module* add_child(std::string name, std::unique_ptr<Module> child) override;
@@ -181,8 +168,7 @@ public:
     int size() const;
 
 private:
-    Factory              factory_;
-    std::vector<Module*> indexed_;  // lazily populated
+    std::vector<Module*> indexed_;
 };
 
 }  // namespace turbomind::core

@@ -97,13 +97,6 @@ void Module::to_device(DeviceType dev)
     }
 }
 
-// ----- Lazy child creation -----
-
-Module* Module::ensure_child(const std::string& /*segment*/)
-{
-    return nullptr;  // base Module cannot create children lazily
-}
-
 // ----- Registry-driven child creation -----
 
 Module* Module::create_child(const std::string& name,
@@ -136,10 +129,9 @@ Module* Module::child(const std::string& name) const
 
 Module* Module::get(const std::string& segment)
 {
-    if (auto* c = child(segment)) {
-        return c;
-    }
-    return ensure_child(segment);
+    auto* c = child(segment);
+    TM_CHECK(c != nullptr) << "child '" << segment << "' not found in " << type();
+    return c;
 }
 
 Tensor* Module::param(const std::string& name) const
@@ -205,8 +197,6 @@ void Module::collect_params(const std::string& prefix, std::unordered_map<std::s
 // ModuleList
 // ======================================================================
 
-ModuleList::ModuleList(Factory factory): factory_{std::move(factory)} {}
-
 Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
 {
     // Parse index before moving name.
@@ -228,41 +218,6 @@ Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
     return raw;
 }
 
-Module* ModuleList::ensure_child(const std::string& segment)
-{
-    // Try to parse segment as an integer index.
-    int index = 0;
-    {
-        std::istringstream iss(segment);
-        if (!(iss >> index) || !iss.eof()) {
-            return nullptr;
-        }
-    }
-
-    // Negative indices are invalid.
-    if (index < 0) {
-        return nullptr;
-    }
-
-    // Grow the indexed vector if needed.
-    if (index >= static_cast<int>(indexed_.size())) {
-        indexed_.resize(index + 1, nullptr);
-    }
-
-    // Already created?
-    if (indexed_[index]) {
-        return indexed_[index];
-    }
-
-    // Create via factory.
-    auto child = factory_(index);
-    TM_CHECK(child != nullptr) << "ModuleList factory returned nullptr for index " << index;
-
-    auto* raw = add_child(segment, std::move(child));
-    indexed_[index] = raw;
-    return raw;
-}
-
 int ModuleList::size() const
 {
     int n = 0;
@@ -280,11 +235,7 @@ struct ModuleListRegistrar {
         core::ModuleRegistry::instance().register_type(
             "ModuleList",
             [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
-                return std::make_unique<core::ModuleList>(
-                    [](int) -> std::unique_ptr<core::Module> {
-                        TM_CHECK(false) << "ModuleList factory should not be called";
-                        return nullptr;
-                    });
+                return std::make_unique<core::ModuleList>();
             });
     }
 };
