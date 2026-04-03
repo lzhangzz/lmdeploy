@@ -2,6 +2,7 @@
 
 #include "src/turbomind/models/attention_weight.h"
 
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind {
@@ -148,5 +149,48 @@ Tensor* AttentionWeight::sinks() const
     auto* m = static_cast<NormWeight*>(child("sinks"));
     return m ? &m->weight() : nullptr;
 }
+
+namespace {
+static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
+}
+
+static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() && std::get<int64_t>(it->second);
+}
+
+struct AttentionWeightRegistrar {
+    AttentionWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "AttentionWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                MLAParam mla;
+                mla.kv_lora_rank = cfg_get(cfg, "kv_lora_rank");
+                mla.q_lora_rank  = cfg_get(cfg, "q_lora_rank");
+                mla.qk_rope_dim  = cfg_get(cfg, "qk_rope_dim");
+                mla.v_head_dim   = cfg_get(cfg, "v_head_dim");
+                return std::make_unique<AttentionWeight>(
+                    cfg_get(cfg, "hidden_dim"),
+                    cfg_get(cfg, "head_dim"),
+                    cfg_get(cfg, "head_num"),
+                    cfg_get(cfg, "kv_head_num"),
+                    mla,
+                    cfg_bool(cfg, "has_bias"),
+                    cfg_bool(cfg, "qk_norm"),
+                    cfg_get(cfg, "tp_size"),
+                    cfg_get(cfg, "tp_rank"),
+                    static_cast<DataType>(cfg_get(cfg, "data_type")),
+                    cfg_get(cfg, "window_size"),
+                    cfg_bool(cfg, "attn_sink"),
+                    cfg_bool(cfg, "attn_output_gate"));
+            });
+    }
+};
+static AttentionWeightRegistrar _attention_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

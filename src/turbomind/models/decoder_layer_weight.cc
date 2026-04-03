@@ -7,6 +7,8 @@
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/norm_weight.h"
 
+#include "src/turbomind/core/registry.h"
+
 namespace turbomind {
 
 DecoderLayerWeight::DecoderLayerWeight(int          layer_id,
@@ -122,5 +124,18 @@ FfnWeight*       DecoderLayerWeight::ffn() const { return static_cast<FfnWeight*
 MoeWeight*       DecoderLayerWeight::moe() const { return static_cast<MoeWeight*>(child("moe_ffn")); }
 NormWeight*      DecoderLayerWeight::attn_norm() const { return static_cast<NormWeight*>(child("attention_norm")); }
 NormWeight*      DecoderLayerWeight::ffn_norm() const { return static_cast<NormWeight*>(child("ffn_norm")); }
+
+namespace {
+struct DecoderLayerWeightRegistrar {
+    DecoderLayerWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "DecoderLayerWeight",
+            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
+                return std::make_unique<DecoderLayerWeight>();
+            });
+    }
+};
+static DecoderLayerWeightRegistrar _decoder_layer_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

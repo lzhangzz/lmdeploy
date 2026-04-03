@@ -207,6 +207,27 @@ void Module::collect_params(const std::string& prefix, std::unordered_map<std::s
 
 ModuleList::ModuleList(Factory factory): factory_{std::move(factory)} {}
 
+Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
+{
+    // Parse index before moving name.
+    int index = -1;
+    {
+        std::istringstream iss(name);
+        iss >> index;
+        if (!iss.eof()) {
+            index = -1;
+        }
+    }
+    auto* raw = Module::add_child(std::move(name), std::move(child));
+    if (index >= 0) {
+        if (index >= static_cast<int>(indexed_.size())) {
+            indexed_.resize(index + 1, nullptr);
+        }
+        indexed_[index] = raw;
+    }
+    return raw;
+}
+
 Module* ModuleList::ensure_child(const std::string& segment)
 {
     // Try to parse segment as an integer index.

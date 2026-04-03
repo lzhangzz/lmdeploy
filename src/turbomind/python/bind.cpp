@@ -561,10 +561,18 @@ PYBIND11_MODULE(_turbomind, m)
                          try {
                              cfg[py::cast<std::string>(key)] = py::cast<int64_t>(val);
                          } catch (py::cast_error&) {
-                             try {
-                                 cfg[py::cast<std::string>(key)] = py::cast<double>(val);
-                             } catch (py::cast_error&) {
-                                 cfg[py::cast<std::string>(key)] = py::cast<std::string>(val);
+                             // Fallback: try PyNumber_Index for pybind11 enum types
+                             PyObject* idx = PyNumber_Index(val.ptr());
+                             if (idx) {
+                                 cfg[py::cast<std::string>(key)] = PyLong_AsLongLong(idx);
+                                 Py_DECREF(idx);
+                             } else {
+                                 PyErr_Clear();
+                                 try {
+                                     cfg[py::cast<std::string>(key)] = py::cast<double>(val);
+                                 } catch (py::cast_error&) {
+                                     cfg[py::cast<std::string>(key)] = py::cast<std::string>(val);
+                                 }
                              }
                          }
                      }

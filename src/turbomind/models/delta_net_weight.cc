@@ -3,6 +3,8 @@
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/norm_weight.h"
 
+#include "src/turbomind/core/registry.h"
+
 namespace turbomind {
 
 DeltaNetWeight::DeltaNetWeight(int      hidden_dim,
@@ -103,5 +105,28 @@ Tensor* DeltaNetWeight::norm() const
     auto* m = static_cast<NormWeight*>(child("norm"));
     return m ? &m->weight() : nullptr;
 }
+
+namespace {
+struct DeltaNetWeightRegistrar {
+    DeltaNetWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "DeltaNetWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<DeltaNetWeight>(
+                    std::get<int64_t>(cfg.at("hidden_dim")),
+                    std::get<int64_t>(cfg.at("num_k_heads")),
+                    std::get<int64_t>(cfg.at("num_v_heads")),
+                    std::get<int64_t>(cfg.at("key_head_dim")),
+                    std::get<int64_t>(cfg.at("value_head_dim")),
+                    std::get<int64_t>(cfg.at("d_conv")),
+                    cfg.count("bias") && std::get<int64_t>(cfg.at("bias")),
+                    std::get<int64_t>(cfg.at("tp_size")),
+                    std::get<int64_t>(cfg.at("tp_rank")),
+                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))));
+            });
+    }
+};
+static DeltaNetWeightRegistrar _delta_net_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

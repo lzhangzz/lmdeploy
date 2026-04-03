@@ -45,7 +45,7 @@ public:
 
     /// Owns child; registers it under the given local name.
     /// Returns raw pointer to the added child.
-    Module* add_child(std::string name, std::unique_ptr<Module> child);
+    virtual Module* add_child(std::string name, std::unique_ptr<Module> child);
 
     /// Non-owning alias (for fused refs, views).
     void add_alias(std::string name, Module& target);
@@ -173,6 +173,9 @@ public:
 
     /// Parses ``segment`` as an integer index, creates child via factory if not exists.
     Module* ensure_child(const std::string& segment) override;
+
+    /// Override to also track the child in the indexed_ vector.
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
 
     /// Number of children created so far.
     int size() const;

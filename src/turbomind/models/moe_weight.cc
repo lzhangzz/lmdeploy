@@ -1,6 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/moe_weight.h"
+
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -214,5 +216,57 @@ void MoeWeight::prepare()
         }
     }
 }
+
+namespace {
+static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
+}
+
+static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
+{
+    auto it = cfg.find(key);
+    return it != cfg.end() && std::get<int64_t>(it->second);
+}
+
+struct MoeWeightRegistrar {
+    MoeWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "MoeWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                MoeParam moe_param;
+                moe_param.method           = static_cast<MoeParam::Method>(cfg_get(cfg, "method"));
+                moe_param.experts_per_token = cfg_get(cfg, "experts_per_token");
+                moe_param.inter_size       = cfg_get(cfg, "inter_size");
+                moe_param.norm_topk_prob   = cfg_bool(cfg, "norm_topk_prob");
+                moe_param.shared_gate      = cfg_bool(cfg, "shared_gate");
+                moe_param.routed_scale     = cfg.count("routed_scale")
+                    ? static_cast<float>(std::get<double>(cfg.at("routed_scale"))) : 1.0f;
+                moe_param.router_bias      = cfg_bool(cfg, "router_bias");
+                moe_param.topk_group      = cfg_get(cfg, "topk_group");
+                moe_param.topk_method     = cfg.count("topk_method")
+                    ? std::get<std::string>(cfg.at("topk_method")) : "greedy";
+                moe_param.n_group         = cfg_get(cfg, "n_group");
+                moe_param.scoring_func    = cfg.count("scoring_func")
+                    ? std::get<std::string>(cfg.at("scoring_func")) : "softmax";
+                moe_param.router_n_groups = cfg_get(cfg, "router_n_groups");
+                int expert_num = cfg_get(cfg, "expert_num");
+                moe_param.expert_num.assign(1, expert_num);
+                return std::make_unique<MoeWeight>(
+                    cfg_get(cfg, "layer_id"),
+                    moe_param,
+                    cfg_get(cfg, "hidden_dim"),
+                    cfg_bool(cfg, "mlp_bias"),
+                    static_cast<DataType>(cfg_get(cfg, "data_type")),
+                    cfg_get(cfg, "tp_size"),
+                    cfg_get(cfg, "tp_rank"),
+                    static_cast<ActivationType>(cfg_get(cfg, "act_type")),
+                    cfg_bool(cfg, "fuse_silu_act"));
+            });
+    }
+};
+static MoeWeightRegistrar _moe_weight_reg;
+}  // anonymous namespace
 
 }  // namespace turbomind

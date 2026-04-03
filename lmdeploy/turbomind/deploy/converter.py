@@ -8,7 +8,7 @@ from lmdeploy.utils import get_logger
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
-from .module import Transformer
+from .text_model_loader import TextModelLoader
 from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, BaseOutputModel
@@ -207,7 +207,7 @@ def get_tm_model(model_path,
 
     output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
                                                         cfg=tm_cfg,
-                                                        model_cls=Transformer,
+                                                        model_cls=TextModelLoader,
                                                         out_dir=out_dir)
 
     return output_model
