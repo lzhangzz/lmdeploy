@@ -113,7 +113,7 @@ class ModelWeightSpec(ABC):
     Methods return ``Linear`` for linear layers and raw ``Tensor`` for norms,
     embeddings, scalars, etc.
 
-    The ``TransformerV2`` consumes a spec: it iterates the returned dicts,
+    The ``TextModelLoader`` consumes a spec: it iterates the returned dicts,
     applies TP split rules, and commits each weight to C++.
     """
 
@@ -131,7 +131,7 @@ class ModelWeightSpec(ABC):
     _linear_qkv_split: tuple[int, int, int] | None = None
     _gdn_qkv_split: tuple[int, int, int] | None = None
 
-    # -- Configuration (called by TransformerV2 before processing) --
+    # -- Configuration (called by TextModelLoader before processing) --
 
     def configure(
         self,
@@ -145,7 +145,7 @@ class ModelWeightSpec(ABC):
     ):
         """Set TP and model parameters needed for QKV merge and GDN fusion.
 
-        Called by ``TransformerV2`` before processing each layer batch.
+        Called by ``TextModelLoader`` before processing each layer batch.
         Idempotent — safe to call repeatedly with the same values.
         """
         self._attn_tp = attn_tp
@@ -263,7 +263,7 @@ class ModelWeightSpec(ABC):
     def raw_layer_tensors(
         self, layer: int
     ) -> list[tuple[str, torch.Tensor | None, SplitSide | None]]:
-        """Return raw per-layer tensors for ``TransformerV2`` to commit.
+        """Return raw per-layer tensors for ``TextModelLoader`` to commit.
 
         Each entry is ``(tm_path, tensor, split_side)`` where *tm_path* is
         the suffix after ``layers.{layer}.``.  ``split_side`` follows the
