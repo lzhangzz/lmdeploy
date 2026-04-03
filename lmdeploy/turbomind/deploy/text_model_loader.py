@@ -26,6 +26,8 @@ class TextModelLoader:
     def __call__(self, layer: int, spec: 'ModelWeightSpec'):
         if layer < 0:
             self._load_global(spec)
+        elif layer >= self.model.model_config.num_layer:
+            return 0
         else:
             self._load_layer(layer, spec)
         return 1
