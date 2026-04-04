@@ -11,6 +11,17 @@ using gemm::Epilogue;
 using gemm::MatrixLayout;
 using gemm::QuantDesc;
 
+struct LinearDtypes {
+    DataType input_dtype{};
+    DataType output_dtype{};
+    DataType scale_dtype{};
+
+    gemm::QuantDesc input_quant{};
+    gemm::QuantDesc weight_quant{};
+};
+
+LinearDtypes ResolveDtypes(DataType data_type, DataType weight_format, int group_size, int sm);
+
 class LinearWeight: public core::Module {
 public:
     const char* type() const override { return "LinearWeight"; }

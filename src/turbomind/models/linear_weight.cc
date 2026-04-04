@@ -19,6 +19,49 @@ static bool IsDenseFloatType(DataType t)
     return t == kFloat || t == kHalf || t == kBfloat16;
 }
 
+LinearDtypes ResolveDtypes(DataType data_type, DataType weight_format, int group_size, int sm)
+{
+    LinearDtypes r;
+    r.output_dtype = data_type;
+    r.input_dtype  = data_type;
+    r.scale_dtype  = data_type;
+
+    const bool is_qweight = weight_format == kUint4 || weight_format == kUint8;
+
+    if (IsDenseFloatType(weight_format)) {
+        // Dense FP16/BF16/FP32 — no quantization descriptors
+        return r;
+    }
+
+    if (weight_format == kFloat8_e4m3) {
+        TM_CHECK_EQ(group_size, 128)
+            << "FP8 weight format requires group_size=128, got " << group_size;
+        r.weight_quant = QuantDesc{gemm::QuantType::kB, group_size};
+        if (sm == 90) {
+            r.input_dtype = kFloat8_e4m3;
+            r.input_quant = QuantDesc{gemm::QuantType::kK, group_size};
+            r.scale_dtype = kFloat;
+        }
+        return r;
+    }
+
+    if (weight_format == kFloat4_e2m1) {
+        r.scale_dtype  = kUint8;
+        r.weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
+        return r;
+    }
+
+    if (is_qweight) {
+        TM_CHECK(group_size > 0 && group_size <= 256)
+            << "Invalid group_size for quantized weight: " << group_size;
+        r.weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
+        return r;
+    }
+
+    TM_CHECK(0) << "Unsupported weight format: " << to_string(weight_format);
+    return r;
+}
+
 // ======================================================================
 // configure
 // ======================================================================
