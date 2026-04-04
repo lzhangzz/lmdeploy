@@ -73,7 +73,7 @@ struct LlamaLinear::Impl {
         const int m = indices ? indices.size() : input.shape(0);
 
         // Currently, FP8 only; INT8 may be added later
-        if (input.dtype() != dense.input_type) {
+        if (input.dtype() != dense.input_dtype()) {
             QuantizeSymm(A, U, input, st);
             sync_check_cuda_error();
         }
@@ -122,8 +122,8 @@ struct LlamaLinear::Impl {
         Operation op{};
         op.dispatch  = dispatch_policy_;
         op.epilogue  = dense.epilogue;
-        op.quant_a   = dense.input_quant;
-        op.quant_b   = dense.weight_quant;
+        op.quant_a   = dense.resolved_.input_quant;
+        op.quant_b   = dense.resolved_.weight_quant;
         op.batch_dim = 0;
 
         auto&& [A, desc_A, U, desc_U] = GetOperandA(dense, input, indices, offsets);
@@ -132,7 +132,7 @@ struct LlamaLinear::Impl {
         Tensor& D = output;
         if (!D) {
             int dim = dense.epilogue == Epilogue::kGatedSilu ? dense.output_dim / 2 : dense.output_dim;
-            D       = Tensor{{desc_A.rows, dim}, dense.data_type, kDEVICE};
+            D       = Tensor{{desc_A.rows, dim}, dense.output_dtype(), kDEVICE};
         }
 
         // std::cout << "D: " << D << " " << desc_B.num << "\n";

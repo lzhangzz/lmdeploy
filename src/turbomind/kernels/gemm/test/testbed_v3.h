@@ -86,10 +86,8 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
     d.output_dim  = e0.output_dim;
     d.group_size  = e0.group_size;
     d.data_type   = e0.data_type;
-    d.weight_type = e0.weight_type;
-    d.input_type  = e0.input_type;
-    d.weight_quant = e0.weight_quant;
-    d.input_quant  = e0.input_quant;
+    d.weight_format = e0.weight_format;
+    d.resolved_     = e0.resolved_;
     d.k_desc       = e0.k_desc;
     d.q_desc       = e0.q_desc;
     d.epilogue     = e0.epilogue;
@@ -116,7 +114,7 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
 
     auto stream = core::Context::stream().handle();
 
-    if (d.weight_type == kFloat8_e4m3 && d.input_type == kFloat8_e4m3) {
+    if (d.weight_format == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
@@ -128,7 +126,7 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_type, kDEVICE};
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
         if (e0.scales) {
             d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
         }
