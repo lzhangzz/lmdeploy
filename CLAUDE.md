@@ -54,7 +54,7 @@ while bugs:
 
 Do not stop with active bugs.
 
-When needed, use the model-server MCP tools (`get_model_config`, `get_checkpoint_info`) to inspect model dimensions and weight shapes for debugging. Do not write code to obtain such information yourself.
+When needed, use the model-server MCP tools (`get_model_config`, `get_weight_info`) to inspect model dimensions and weight shapes for debugging. Do not write code to obtain such information yourself.
 
 ## GPU usage
 
