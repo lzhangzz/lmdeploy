@@ -69,11 +69,8 @@ LinearDtypes ResolveDtypes(DataType data_type, DataType weight_format, int group
 void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, bool has_bias)
 {
     this->data_type   = data_type;
-    this->input_type  = data_type;
-    this->weight_type = data_type;
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
-    this->group_size  = 0;
     has_bias_         = has_bias;
 }
 
@@ -83,13 +80,9 @@ void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, 
 
 void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_size)
 {
-    weight_type  = actual_weight_type;
-    group_size   = actual_group_size;
-    input_type   = data_type;
-    weight_quant = {};
-    input_quant  = {};
-
-    const bool is_qweight = actual_weight_type == kUint4 || actual_weight_type == kUint8;
+    weight_format = actual_weight_type;
+    group_size    = actual_group_size;
+    resolved_     = ResolveDtypes(data_type, actual_weight_type, actual_group_size, getSMVersion());
 
     weight = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
     add_param("weight", weight);
@@ -103,25 +96,18 @@ void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_siz
     zeros  = {};
 
     if (actual_weight_type == kFloat8_e4m3) {
-        TM_CHECK_EQ(actual_group_size, 128);
-        scales       = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)}, kFloat, kDEVICE};
-        weight_quant = QuantDesc{gemm::QuantType::kB, actual_group_size};
-        if (getSMVersion() == 90) {
-            input_type  = kFloat8_e4m3;
-            input_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
-        }
+        scales = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
+                        resolved_.scale_dtype, kDEVICE};
         add_param("scales", scales);
     }
     else if (actual_weight_type == kFloat4_e2m1) {
-        scales       = Tensor{{cdiv(input_dim, actual_group_size), output_dim}, kUint8, kDEVICE};
-        weight_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
+        scales = Tensor{{cdiv(input_dim, actual_group_size), output_dim}, kUint8, kDEVICE};
         add_param("scales", scales);
     }
-    else if (is_qweight) {
+    else if (actual_weight_type == kUint4 || actual_weight_type == kUint8) {
         TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-        scales       = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
-        zeros        = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
-        weight_quant = QuantDesc{gemm::QuantType::kK, actual_group_size};
+        scales = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
+        zeros  = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
         add_param("scales", scales);
         add_param("zeros", zeros);
     }
@@ -207,7 +193,7 @@ void LinearWeight::prepare()
 
     auto stream = core::Context::stream().handle();
 
-    if (weight_type == kFloat8_e4m3 && input_type == kFloat8_e4m3) {
+    if (weight_format == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
         // FP8 native path: transpose weight and scales for native kernels.
         auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
             using T = decltype(dtype);
@@ -223,7 +209,7 @@ void LinearWeight::prepare()
         TM_CHECK_EQ(scales.dtype(), kFloat);
         process(scales, q_desc, float{});
     }
-    else if (weight_type == kFloat8_e4m3) {
+    else if (weight_format == kFloat8_e4m3) {
         // FP8 non-native path (non-SM90)
     }
     else {
@@ -231,14 +217,14 @@ void LinearWeight::prepare()
         using namespace gemm;
 
         auto [conv_w, conv_s] =
-            GetConverters(data_type, weight_type, input_type, is_grouped_, getSMVersion());
+            GetConverters(data_type, weight_format, input_dtype(), is_grouped_, getSMVersion());
 
         if (conv_w) {
             const auto order_w = conv_w->order;
             const bool is_A    = get_operand_tag(conv_w->pack) == OPERAND_A;
             const bool is_B    = !is_A;
 
-            const int bits = byte_size(weight_type, 8);
+            const int bits = byte_size(weight_format, 8);
 
             Tensor_<uint16_t> tmp{{input_dim, output_dim}, kDEVICE};
 
@@ -275,7 +261,7 @@ void LinearWeight::prepare()
             }
 
             MatrixLayout kd = w_desc;
-            kd.type = weight_type;
+            kd.type = weight_format;
             if (bits == 4) {
                 kd.type = data_type_v<uint4_t>;
             }
@@ -288,7 +274,7 @@ void LinearWeight::prepare()
             TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight.raw_data(), kd, stream) == 0);
             sync_check_cuda_error();
 
-            kd.type = weight_type;
+            kd.type = weight_format;
             if (is_A) {
                 kd = transpose(kd);
             }
@@ -311,7 +297,7 @@ void LinearWeight::prepare()
                 zeros     = {};
                 scales    = empty_like(tmp_q);
             }
-            else if (weight_type == kFloat8_e4m3) {
+            else if (weight_format == kFloat8_e4m3) {
                 tmp_q = empty_like(scales);
                 Copy(scales, tmp_q);
                 scale_type = kUint16;
@@ -322,7 +308,7 @@ void LinearWeight::prepare()
                 scale_type = kUint8;
             }
 
-            if (data_type == kHalf && weight_type == kFloat4_e2m1) {
+            if (data_type == kHalf && weight_format == kFloat4_e2m1) {
                 AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
                 sync_check_cuda_error();
             }

@@ -55,12 +55,16 @@ public:
     int  output_dim = 0;
     int  group_size = 0;
 
-    DataType data_type{};
-    DataType weight_type{};
-    DataType input_type{};
+    // --- Input (immutable after setter) ---
+    DataType data_type{};       // model-scope default compute dtype, set in configure()
+    DataType weight_format{};   // checkpoint weight storage format, set in do_allocate()
 
-    QuantDesc   weight_quant{};
-    QuantDesc   input_quant{};
+    // --- Derived (computed once in do_allocate via ResolveDtypes) ---
+    LinearDtypes resolved_{};
+
+    DataType input_dtype() const  { return resolved_.input_dtype; }
+    DataType output_dtype() const { return resolved_.output_dtype; }
+
     Epilogue    epilogue{};
 
     MatrixLayout k_desc{};
