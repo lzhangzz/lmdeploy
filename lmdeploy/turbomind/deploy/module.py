@@ -752,7 +752,8 @@ def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
 
 
 def _fuse_and_commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
-                         tp: int, rank: int, act_type: str, is_moe: bool = False):
+                         tp: int, rank: int, act_type: str, is_moe: bool = False,
+                         model_dtype=None):
     """Preprocess, split, fuse (interleave or chunk) and commit FFN weights.
 
     Unified flow: split w1/w3 by TP rank first, then fuse per-rank shards,
@@ -776,21 +777,24 @@ def _fuse_and_commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
         else:
             w1w3 = chunk_linears(w1_shard, w3_shard)
 
-        commit_linear(ffn_mod, w1w3, "w1w3", copy=True)
+        commit_linear(ffn_mod, w1w3, "w1w3", copy=True,
+                           model_dtype=model_dtype)
         ffn_mod.set_fused_silu(fused_silu)
     else:
         # Block-scale boundaries misalign after TP split — commit w1/w3 separately.
         for name, shard in (("w1", w1_shard), ("w3", w3_shard)):
             rule = _FFN_TP_RULES.get(name, {})
             commit_linear(ffn_mod, shard, name,
-                                 split_num=1, rank=0, **rule)
+                                 split_num=1, rank=0, model_dtype=model_dtype,
+                                 **rule)
 
     # Commit w2 (row-parallel)
     if w2 is not None:
         rule = _FFN_TP_RULES.get("w2", {})
         tp2 = tp if "split_side" in rule else 1
         commit_linear(ffn_mod, w2, "w2",
-                             split_num=tp2, rank=rank, **rule)
+                             split_num=tp2, rank=rank, model_dtype=model_dtype,
+                             **rule)
 
 
 # -----------------------------------------------------------------------
@@ -834,6 +838,16 @@ def _infer_compute_dtype(linear: Linear):
         d = _MAP.get(w.dtype)
         if d is not None:
             return d
+        # FP8 weights: compute dtype is BF16 (or FP16 depending on model),
+        # not FP32.  Fall through to scales/bias only for non-FP8 dtypes.
+        _fp8_dtypes = {torch.uint8}
+        for _attr in ('float8_e4m3fn', 'float8_e5m2fn'):
+            _dt = getattr(torch, _attr, None)
+            if _dt is not None:
+                _fp8_dtypes.add(_dt)
+        if w.dtype in _fp8_dtypes:
+            # FP8 stored as uint8 after normalization; prefer BF16.
+            return _tm.DataType.TYPE_BF16
     for key in ('scales', 'bias'):
         t = linear.tensors.get(key)
         if t is not None:
@@ -846,7 +860,7 @@ def _infer_compute_dtype(linear: Linear):
 def commit_linear(module, linear: Linear, name: str,
                          split_side: SplitSide | None = None,
                          split_num: int = 1, rank: int = 0,
-                         copy: bool = False):
+                         copy: bool = False, model_dtype=None):
     """Commit a ``Linear`` bundle to a C++ ``Module`` handle for a specific TP rank.
 
     Unlike the legacy ``commit_linear`` which drives all GPUs via ``BaseOutputModel``,
@@ -869,6 +883,12 @@ def commit_linear(module, linear: Linear, name: str,
         Which shard to extract and copy.
     copy : bool
         If ``True``, copy the tensor as-is (no split).
+    model_dtype : int | None
+        The model's configured compute dtype (C++ DataType value).  When set,
+        dense (non-quantized) weights use this dtype instead of the weight
+        tensor's dtype.  This prevents dtype mismatches when the checkpoint
+        stores weights in a different precision than the model config (e.g.
+        BF16 weights in an FP16 model).
     """
     cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
     if group_size == 0:
@@ -887,6 +907,15 @@ def commit_linear(module, linear: Linear, name: str,
         elif split_side == SplitSide.INPUT:
             in_dim = in_dim // split_num
         compute_dtype = _infer_compute_dtype(linear)
+        # For dense (non-quantized) weights, prefer the model's configured
+        # compute dtype to avoid dtype mismatches (e.g. BF16 checkpoint
+        # weights in an FP16-configured model).
+        if model_dtype is not None and compute_dtype is not None:
+            fmt = linear.weight_format
+            if fmt is None or fmt.name == 'dense':
+                import _turbomind as _tm
+                model_dt = _tm.DataType(model_dtype) if isinstance(model_dtype, int) else model_dtype
+                compute_dtype = model_dt
         module.create_child(name, 'LinearWeight', {
             'input_dim': in_dim,
             'output_dim': out_dim,

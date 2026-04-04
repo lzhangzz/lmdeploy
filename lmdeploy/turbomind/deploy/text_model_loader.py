@@ -135,7 +135,8 @@ class TextModelLoader:
                     rule = _ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
                     commit_linear(attn_mod, lin, name,
-                                         split_num=tp, rank=attn_rank, **rule)
+                                         split_num=tp, rank=attn_rank,
+                                         model_dtype=dtype, **rule)
 
             # --- Dense FFN ---
             ffn_linears = spec.ffn_linears(layer)
@@ -162,13 +163,15 @@ class TextModelLoader:
                 if w1 is not None and w3 is not None:
                     _fuse_and_commit_ffn(ffn_mod, w1, w3, w2,
                                          self.mlp_tp, mlp_rank,
-                                         mc.activation_type, is_moe=False)
+                                         mc.activation_type, is_moe=False,
+                                         model_dtype=dtype)
                 else:
                     for name, lin in ffn_linears.items():
                         rule = _FFN_TP_RULES.get(name, {})
                         tp = self.mlp_tp if 'split_side' in rule else 1
                         commit_linear(ffn_mod, lin, name,
-                                             split_num=tp, rank=mlp_rank, **rule)
+                                             split_num=tp, rank=mlp_rank,
+                                             model_dtype=dtype, **rule)
 
             # --- MoE ---
             if spec.num_experts(layer) > 0:
@@ -205,7 +208,8 @@ class TextModelLoader:
                 # Create gate LinearWeight for router
                 gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
                 if gate_linear is not None:
-                    commit_linear(moe_mod, gate_linear, 'gate')
+                    commit_linear(moe_mod, gate_linear, 'gate',
+                                       model_dtype=dtype)
                 else:
                     # Spec handles gate via raw_layer_tensors; create the
                     # LinearWeight child so the tensor is stored correctly.
@@ -219,7 +223,8 @@ class TextModelLoader:
                 # Create shared_gate if needed
                 shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
                 if shared_gate_linear is not None:
-                    commit_linear(moe_mod, shared_gate_linear, 'shared_gate')
+                    commit_linear(moe_mod, shared_gate_linear, 'shared_gate',
+                                       model_dtype=dtype)
                 elif mc.moe_shared_gate:
                     moe_mod.create_child('shared_gate', 'LinearWeight', {
                         'input_dim': hidden,
@@ -254,13 +259,15 @@ class TextModelLoader:
                     if w1 is not None and w3 is not None:
                         _fuse_and_commit_ffn(expert_mod, w1, w3, w2,
                                              self.mlp_tp, mlp_rank,
-                                             mc.activation_type, is_moe=True)
+                                             mc.activation_type, is_moe=True,
+                                             model_dtype=dtype)
                     else:
                         for name, lin in expert_linears.items():
                             rule = _FFN_TP_RULES.get(name, {})
                             tp = self.mlp_tp if 'split_side' in rule else 1
                             commit_linear(expert_mod, lin, name,
-                                                 split_num=tp, rank=mlp_rank, **rule)
+                                                 split_num=tp, rank=mlp_rank,
+                                                 model_dtype=dtype, **rule)
 
             # --- Linear attention (GDN) ---
             la_linears = spec.linear_attn_linears(layer)
@@ -282,7 +289,8 @@ class TextModelLoader:
                     rule = _LINEAR_ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
                     commit_linear(linear_attn_mod, lin, name,
-                                         split_num=tp, rank=attn_rank, **rule)
+                                         split_num=tp, rank=attn_rank,
+                                         model_dtype=dtype, **rule)
 
             # --- Raw per-layer tensors ---
             for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
