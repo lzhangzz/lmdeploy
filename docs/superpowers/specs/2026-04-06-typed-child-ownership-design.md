@@ -31,12 +31,7 @@ ModuleBase              — non-template, owns traversal + lifecycle
 
 ### Ownership model
 
-Two vectors in `ModuleBase`:
-
-- `owned_` : `vector<pair<string, unique_ptr<Module>>>` — owns children
-- `children_` : `vector<pair<string, Module*>>` — non-owning, for generic traversal
-
-`ModuleBase::add_child` (virtual) populates both. The CRTP override in `Module<Derived>` additionally populates the typed member pointers from `kChildren`.
+`ModuleBase` keeps a single `children_` vector of `vector<pair<string, unique_ptr<Module>>>` — same as today. The CRTP override in `Module<Derived>::add_child` populates typed member pointers from `kChildren`, then delegates to `ModuleBase::add_child` for ownership.
 
 ### Tuple declaration
 
