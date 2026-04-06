@@ -10,16 +10,16 @@
 namespace turbomind::core {
 
 // ======================================================================
-// Module
+// ModuleBase
 // ======================================================================
 
-Module::Module() = default;
+ModuleBase::ModuleBase() = default;
 
-Module::~Module() = default;
+ModuleBase::~ModuleBase() = default;
 
 // ----- Hierarchy -----
 
-Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
+ModuleBase* ModuleBase::add_child(std::string name, std::unique_ptr<ModuleBase> child)
 {
     TM_CHECK(child != nullptr);
     TM_CHECK(child->parent_ == nullptr) << "module already has a parent";
@@ -27,33 +27,33 @@ Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
     child->parent_ = this;
     child->name_   = name;
 
-    Module* raw = child.get();
+    ModuleBase* raw = child.get();
     children_.emplace_back(std::move(name), std::move(child));
     return raw;
 }
 
-void Module::add_alias(std::string name, Module& target)
+void ModuleBase::add_alias(std::string name, ModuleBase& target)
 {
     aliases_.emplace_back(std::move(name), &target);
 }
 
 // ----- Parameters -----
 
-void Module::add_param(std::string name, Tensor& tensor)
+void ModuleBase::add_param(std::string name, Tensor& tensor)
 {
     params_.emplace_back(std::move(name), &tensor);
 }
 
 // ----- Type info -----
 
-const char* Module::type() const
+const char* ModuleBase::type() const
 {
-    return "Module";
+    return "ModuleBase";
 }
 
 // ----- Lifecycle -----
 
-Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
+Tensor ModuleBase::alloc(const std::string& param_name, const WeightSpec& spec)
 {
     // Default: return pre-existing param tensor if registered.
     if (auto* t = param(param_name)) {
@@ -62,7 +62,7 @@ Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
     return {};
 }
 
-void Module::prepare()
+void ModuleBase::prepare()
 {
     for (auto& [name, child] : children_) {
         child->prepare();
@@ -71,7 +71,7 @@ void Module::prepare()
 
 // ----- Lifecycle: release / to_device -----
 
-void Module::release()
+void ModuleBase::release()
 {
     for (auto& [name, child] : children_) {
         child->release();
@@ -83,7 +83,7 @@ void Module::release()
     }
 }
 
-void Module::to_device(DeviceType dev)
+void ModuleBase::to_device(DeviceType dev)
 {
     for (auto& [name, child] : children_) {
         child->to_device(dev);
@@ -99,7 +99,7 @@ void Module::to_device(DeviceType dev)
 
 // ----- Registry-driven child creation -----
 
-Module* Module::create_child(const std::string& name,
+ModuleBase* ModuleBase::create_child(const std::string& name,
                               const std::string& type_name,
                               const ModuleConfig& config)
 {
@@ -112,7 +112,7 @@ Module* Module::create_child(const std::string& name,
 
 // ----- Lookup -----
 
-Module* Module::child(const std::string& name) const
+ModuleBase* ModuleBase::child(const std::string& name) const
 {
     for (auto& [n, c] : children_) {
         if (n == name) {
@@ -127,14 +127,14 @@ Module* Module::child(const std::string& name) const
     return nullptr;
 }
 
-Module* Module::get(const std::string& segment)
+ModuleBase* ModuleBase::get(const std::string& segment)
 {
     auto* c = child(segment);
     TM_CHECK(c != nullptr) << "child '" << segment << "' not found in " << type();
     return c;
 }
 
-Tensor* Module::param(const std::string& name) const
+Tensor* ModuleBase::param(const std::string& name) const
 {
     for (auto& [n, p] : params_) {
         if (n == name) {
@@ -144,7 +144,7 @@ Tensor* Module::param(const std::string& name) const
     return nullptr;
 }
 
-std::unordered_map<std::string, Tensor*> Module::params() const
+std::unordered_map<std::string, Tensor*> ModuleBase::params() const
 {
     std::unordered_map<std::string, Tensor*> out;
     collect_params("", out);
@@ -153,7 +153,7 @@ std::unordered_map<std::string, Tensor*> Module::params() const
 
 // ----- Verification -----
 
-bool Module::verify(std::vector<std::string>& missing)
+bool ModuleBase::verify(std::vector<std::string>& missing)
 {
     for (auto& [name, child] : children_) {
         child->verify(missing);
@@ -168,7 +168,7 @@ bool Module::verify(std::vector<std::string>& missing)
 
 // ----- Utilities -----
 
-std::string Module::full_path() const
+std::string ModuleBase::full_path() const
 {
     if (!parent_) {
         return name_;
@@ -182,7 +182,7 @@ std::string Module::full_path() const
 
 // ---- Private ----
 
-void Module::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
+void ModuleBase::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
 {
     std::string p = prefix.empty() ? "" : prefix + ".";
     for (auto& [n, t] : params_) {
@@ -197,7 +197,7 @@ void Module::collect_params(const std::string& prefix, std::unordered_map<std::s
 // ModuleList
 // ======================================================================
 
-Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
+ModuleBase* ModuleList::add_child(std::string name, std::unique_ptr<ModuleBase> child)
 {
     // Parse index before moving name.
     int index = -1;
@@ -208,7 +208,7 @@ Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
             index = -1;
         }
     }
-    auto* raw = Module::add_child(std::move(name), std::move(child));
+    auto* raw = ModuleBase::add_child(std::move(name), std::move(child));
     if (index >= 0) {
         if (index >= static_cast<int>(indexed_.size())) {
             indexed_.resize(index + 1, nullptr);
@@ -234,7 +234,7 @@ struct ModuleListRegistrar {
     ModuleListRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "ModuleList",
-            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
+            [](const core::ModuleConfig&) -> std::unique_ptr<core::ModuleBase> {
                 return std::make_unique<core::ModuleList>();
             });
     }

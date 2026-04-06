@@ -18,7 +18,7 @@ void ModuleRegistry::register_type(const std::string& name, Factory factory)
     factories_[name] = std::move(factory);
 }
 
-std::unique_ptr<Module> ModuleRegistry::create(const std::string& type,
+std::unique_ptr<ModuleBase> ModuleRegistry::create(const std::string& type,
                                                 const ModuleConfig& config) const
 {
     auto it = factories_.find(type);
