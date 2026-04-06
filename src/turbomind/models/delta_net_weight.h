@@ -9,9 +9,10 @@
 namespace turbomind {
 
 /// Weight module for Gated DeltaNet (linear attention) layers.
-class DeltaNetWeight: public core::Module {
+class DeltaNetWeight: public core::Module<DeltaNetWeight> {
 public:
-    const char* type() const override { return "DeltaNetWeight"; }
+    static constexpr const char* kTypeName = "DeltaNetWeight";
+    const char* type() const override { return kTypeName; }
 
     DeltaNetWeight() = default;
 
@@ -28,13 +29,31 @@ public:
 
     void prepare() override;
 
-    // --- Typed child accessors ---
-    LinearWeight* in_proj_all() const { return static_cast<LinearWeight*>(child("in_proj_all")); }
-    LinearWeight* out_proj() const { return static_cast<LinearWeight*>(child("out_proj")); }
-    Tensor*       conv1d() const;
-    Tensor*       A_log() const;
-    Tensor*       dt_bias() const;
-    Tensor*       norm() const;
+    // --- Typed child members ---
+    LinearWeight* in_proj_all_ = nullptr;
+    LinearWeight* out_proj_    = nullptr;
+    NormWeight*   conv1d_      = nullptr;
+    NormWeight*   A_log_       = nullptr;
+    NormWeight*   dt_bias_     = nullptr;
+    NormWeight*   norm_        = nullptr;
+
+    static constexpr auto kChildren = std::make_tuple(
+        std::pair{"in_proj_all", &DeltaNetWeight::in_proj_all_},
+        std::pair{"out_proj",    &DeltaNetWeight::out_proj_},
+        std::pair{"conv1d",      &DeltaNetWeight::conv1d_},
+        std::pair{"A_log",       &DeltaNetWeight::A_log_},
+        std::pair{"dt_bias",     &DeltaNetWeight::dt_bias_},
+        std::pair{"norm",        &DeltaNetWeight::norm_}
+    );
+    friend class core::Module<DeltaNetWeight>;
+
+    // --- Typed accessors ---
+    LinearWeight* in_proj_all() const { return in_proj_all_; }
+    LinearWeight* out_proj() const { return out_proj_; }
+    NormWeight*   conv1d() const { return conv1d_; }
+    NormWeight*   A_log() const { return A_log_; }
+    NormWeight*   dt_bias() const { return dt_bias_; }
+    NormWeight*   norm() const { return norm_; }
 
 private:
     int      hidden_dim_{};

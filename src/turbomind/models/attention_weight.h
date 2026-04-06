@@ -9,9 +9,10 @@
 
 namespace turbomind {
 
-class AttentionWeight: public core::Module {
+class AttentionWeight: public core::Module<AttentionWeight> {
 public:
-    const char* type() const override { return "AttentionWeight"; }
+    static constexpr const char* kTypeName = "AttentionWeight";
+    const char* type() const override { return kTypeName; }
 
     AttentionWeight() = default;
 
@@ -31,19 +32,48 @@ public:
 
     void prepare() override;
 
-    // --- Typed child accessors ---
-    LinearWeight* w_qkv() const { return static_cast<LinearWeight*>(child("w_qkv")); }
-    LinearWeight* wo() const { return static_cast<LinearWeight*>(child("wo")); }
-    LinearWeight* q_proj() const { return static_cast<LinearWeight*>(child("q_proj")); }
-    LinearWeight* q_a_proj() const { return static_cast<LinearWeight*>(child("q_a_proj")); }
-    LinearWeight* q_b_proj() const { return static_cast<LinearWeight*>(child("q_b_proj")); }
-    LinearWeight* kv_a_proj() const { return static_cast<LinearWeight*>(child("kv_a_proj")); }
-    NormWeight*   q_norm_mod() const { return static_cast<NormWeight*>(child("q_norm")); }
-    NormWeight*   k_norm_mod() const { return static_cast<NormWeight*>(child("k_norm")); }
-    NormWeight*   q_a_layernorm_mod() const { return static_cast<NormWeight*>(child("q_a_layernorm")); }
-    NormWeight*   kv_a_layernorm_mod() const { return static_cast<NormWeight*>(child("kv_a_layernorm")); }
+    // --- Typed child members ---
+    LinearWeight* w_qkv_              = nullptr;
+    LinearWeight* wo_                 = nullptr;
+    LinearWeight* q_proj_             = nullptr;
+    LinearWeight* q_a_proj_           = nullptr;
+    LinearWeight* q_b_proj_           = nullptr;
+    LinearWeight* kv_a_proj_          = nullptr;
+    NormWeight*   q_norm_mod_         = nullptr;
+    NormWeight*   k_norm_mod_         = nullptr;
+    NormWeight*   q_a_layernorm_mod_  = nullptr;
+    NormWeight*   kv_a_layernorm_mod_ = nullptr;
+    NormWeight*   sinks_mod_          = nullptr;
 
-    // Convenience: return the underlying tensor directly
+    static constexpr auto kChildren = std::make_tuple(
+        std::pair{"w_qkv",          &AttentionWeight::w_qkv_},
+        std::pair{"wo",             &AttentionWeight::wo_},
+        std::pair{"q_proj",         &AttentionWeight::q_proj_},
+        std::pair{"q_a_proj",       &AttentionWeight::q_a_proj_},
+        std::pair{"q_b_proj",       &AttentionWeight::q_b_proj_},
+        std::pair{"kv_a_proj",      &AttentionWeight::kv_a_proj_},
+        std::pair{"q_norm",         &AttentionWeight::q_norm_mod_},
+        std::pair{"k_norm",         &AttentionWeight::k_norm_mod_},
+        std::pair{"q_a_layernorm",  &AttentionWeight::q_a_layernorm_mod_},
+        std::pair{"kv_a_layernorm", &AttentionWeight::kv_a_layernorm_mod_},
+        std::pair{"sinks",          &AttentionWeight::sinks_mod_}
+    );
+    friend class core::Module<AttentionWeight>;
+
+    // --- Typed accessors ---
+    LinearWeight* w_qkv() const { return w_qkv_; }
+    LinearWeight* wo() const { return wo_; }
+    LinearWeight* q_proj() const { return q_proj_; }
+    LinearWeight* q_a_proj() const { return q_a_proj_; }
+    LinearWeight* q_b_proj() const { return q_b_proj_; }
+    LinearWeight* kv_a_proj() const { return kv_a_proj_; }
+    NormWeight*   q_norm_mod() const { return q_norm_mod_; }
+    NormWeight*   k_norm_mod() const { return k_norm_mod_; }
+    NormWeight*   q_a_layernorm_mod() const { return q_a_layernorm_mod_; }
+    NormWeight*   kv_a_layernorm_mod() const { return kv_a_layernorm_mod_; }
+    NormWeight*   sinks_mod() const { return sinks_mod_; }
+
+    // Convenience tensor accessors
     Tensor* q_norm() const;
     Tensor* k_norm() const;
     Tensor* q_a_layernorm() const;

@@ -37,36 +37,12 @@ void DeltaNetWeight::prepare()
     }
 }
 
-Tensor* DeltaNetWeight::conv1d() const
-{
-    auto* m = static_cast<NormWeight*>(child("conv1d"));
-    return m ? &m->weight() : nullptr;
-}
-
-Tensor* DeltaNetWeight::A_log() const
-{
-    auto* m = static_cast<NormWeight*>(child("A_log"));
-    return m ? &m->weight() : nullptr;
-}
-
-Tensor* DeltaNetWeight::dt_bias() const
-{
-    auto* m = static_cast<NormWeight*>(child("dt_bias"));
-    return m ? &m->weight() : nullptr;
-}
-
-Tensor* DeltaNetWeight::norm() const
-{
-    auto* m = static_cast<NormWeight*>(child("norm"));
-    return m ? &m->weight() : nullptr;
-}
-
 namespace {
 struct DeltaNetWeightRegistrar {
     DeltaNetWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "DeltaNetWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
                 return std::make_unique<DeltaNetWeight>(
                     std::get<int64_t>(cfg.at("hidden_dim")),
                     std::get<int64_t>(cfg.at("num_k_heads")),

@@ -46,28 +46,23 @@ void AttentionWeight::prepare()
 // Convenience tensor accessors
 Tensor* AttentionWeight::q_norm() const
 {
-    auto* m = q_norm_mod();
-    return m ? &m->weight() : nullptr;
+    return q_norm_mod_ ? &q_norm_mod_->weight() : nullptr;
 }
 Tensor* AttentionWeight::k_norm() const
 {
-    auto* m = k_norm_mod();
-    return m ? &m->weight() : nullptr;
+    return k_norm_mod_ ? &k_norm_mod_->weight() : nullptr;
 }
 Tensor* AttentionWeight::q_a_layernorm() const
 {
-    auto* m = q_a_layernorm_mod();
-    return m ? &m->weight() : nullptr;
+    return q_a_layernorm_mod_ ? &q_a_layernorm_mod_->weight() : nullptr;
 }
 Tensor* AttentionWeight::kv_a_layernorm() const
 {
-    auto* m = kv_a_layernorm_mod();
-    return m ? &m->weight() : nullptr;
+    return kv_a_layernorm_mod_ ? &kv_a_layernorm_mod_->weight() : nullptr;
 }
 Tensor* AttentionWeight::sinks() const
 {
-    auto* m = static_cast<NormWeight*>(child("sinks"));
-    return m ? &m->weight() : nullptr;
+    return sinks_mod_ ? &sinks_mod_->weight() : nullptr;
 }
 
 namespace {
@@ -87,7 +82,7 @@ struct AttentionWeightRegistrar {
     AttentionWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "AttentionWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
                 MLAParam mla;
                 mla.kv_lora_rank = cfg_get(cfg, "kv_lora_rank");
                 mla.q_lora_rank  = cfg_get(cfg, "q_lora_rank");
