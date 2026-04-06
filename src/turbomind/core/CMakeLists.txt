@@ -9,6 +9,7 @@ add_library(core STATIC
         context.cc
         buffer.cc
         layout.cc
+        data_format.cc
         tensor.cc
         tensor.cu
         module.cc
