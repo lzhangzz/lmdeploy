@@ -14,9 +14,11 @@ namespace turbomind {
 class DecoderLayerWeight;
 
 /// Root weight module for a model. Owns the full weight tree.
-class ModelWeight: public core::Module {
+class ModelWeight: public core::Module<ModelWeight> {
 public:
-    const char* type() const override { return "ModelWeight"; }
+    static constexpr const char* kTypeName = "ModelWeight";
+
+    const char* type() const override { return kTypeName; }
 
     ModelWeight() = default;
 
@@ -33,10 +35,24 @@ public:
         return core::ContextGuard{stream_, alloca_};
     }
 
+    // --- Typed child members ---
+    LinearWeight*        tok_embeddings_ = nullptr;
+    LinearWeight*        output_         = nullptr;
+    NormWeight*          norm_           = nullptr;
+    core::ModuleList*    layers_         = nullptr;
+
+    static constexpr auto kChildren = std::make_tuple(
+        std::pair{"tok_embeddings", &ModelWeight::tok_embeddings_},
+        std::pair{"output",         &ModelWeight::output_},
+        std::pair{"norm",           &ModelWeight::norm_},
+        std::pair{"layers",         &ModelWeight::layers_}
+    );
+    friend class core::Module<ModelWeight>;
+
     // --- Typed child accessors ---
-    LinearWeight*        tok_embeddings() const { return static_cast<LinearWeight*>(child("tok_embeddings")); }
-    LinearWeight*        output() const { return static_cast<LinearWeight*>(child("output")); }
-    NormWeight*          norm() const { return static_cast<NormWeight*>(child("norm")); }
+    LinearWeight*        tok_embeddings() const { return tok_embeddings_; }
+    LinearWeight*        output() const { return output_; }
+    NormWeight*          norm() const { return norm_; }
     DecoderLayerWeight*  layer(int i) const;
     std::vector<DecoderLayerWeight*> layers() const;
     int                  num_layers() const { return num_layer_; }
