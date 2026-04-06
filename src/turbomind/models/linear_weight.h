@@ -2,6 +2,7 @@
 #pragma once
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
@@ -11,16 +12,16 @@ using gemm::Epilogue;
 using gemm::MatrixLayout;
 using gemm::QuantDesc;
 
-struct LinearDtypes {
-    DataType input_dtype{};
-    DataType output_dtype{};
-    DataType scale_dtype{};
-
+/// Compute-time dtype policy derived from DataFormat + hardware.
+struct LinearPolicy {
+    DataType        input_dtype{};
+    DataType        output_dtype{};
     gemm::QuantDesc input_quant{};
     gemm::QuantDesc weight_quant{};
 };
 
-LinearDtypes ResolveDtypes(DataType data_type, DataType weight_format, int group_size, int sm);
+/// Derive compute dtypes and GEMM quant descriptors from storage format + hardware.
+LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, int sm);
 
 class LinearWeight: public core::Module {
 public:
@@ -59,11 +60,12 @@ public:
     DataType data_type{};       // model-scope default compute dtype, set in configure()
     DataType weight_format{};   // checkpoint weight storage format, set in do_allocate()
 
-    // --- Derived (computed once in do_allocate via ResolveDtypes) ---
-    LinearDtypes resolved_{};
+    // --- Derived (computed once in do_allocate via ResolveLinearPolicy) ---
+    DataFormat    format_{};
+    LinearPolicy  policy_{};
 
-    DataType input_dtype() const  { return resolved_.input_dtype; }
-    DataType output_dtype() const { return resolved_.output_dtype; }
+    DataType input_dtype() const  { return policy_.input_dtype; }
+    DataType output_dtype() const { return policy_.output_dtype; }
 
     Epilogue    epilogue{};
 
