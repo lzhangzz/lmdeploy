@@ -14,6 +14,7 @@
 
 #include "xgrammar/compiler.h"
 
+#include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/ffn_weight.h"
@@ -392,6 +393,20 @@ PYBIND11_MODULE(_turbomind, m)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
     }
+
+    // DataFormat descriptors
+    py::class_<turbomind::QuantParamDesc>(m, "QuantParamDesc")
+        .def_readonly("dtype", &turbomind::QuantParamDesc::dtype)
+        .def_readonly("transposed", &turbomind::QuantParamDesc::transposed)
+        .def("present", &turbomind::QuantParamDesc::present);
+
+    py::class_<turbomind::DataFormat>(m, "DataFormat")
+        .def_readonly("dtype", &turbomind::DataFormat::dtype)
+        .def_readonly("block_sizes", &turbomind::DataFormat::block_sizes)
+        .def_readonly("scales", &turbomind::DataFormat::scales)
+        .def_readonly("zeros", &turbomind::DataFormat::zeros)
+        .def("is_quantized", &turbomind::DataFormat::is_quantized)
+        .def("rank", &turbomind::DataFormat::rank);
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
