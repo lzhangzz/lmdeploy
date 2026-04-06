@@ -170,7 +170,7 @@ Tensor LinearWeight::alloc(const std::string& param_name, const core::WeightSpec
         return zeros;
     }
 
-    return Module::alloc(param_name, spec);
+    return ModuleBase::alloc(param_name, spec);
 }
 
 // ======================================================================
@@ -346,7 +346,7 @@ struct LinearWeightRegistrar {
     LinearWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "LinearWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
                 auto m = std::make_unique<LinearWeight>();
                 m->configure(
                     std::get<int64_t>(cfg.at("input_dim")),

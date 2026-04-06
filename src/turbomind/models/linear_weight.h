@@ -23,7 +23,7 @@ struct LinearPolicy {
 /// Derive compute dtypes and GEMM quant descriptors from storage format + hardware.
 LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, int sm);
 
-class LinearWeight: public core::Module {
+class LinearWeight: public core::ModuleBase {
 public:
     const char* type() const override { return "LinearWeight"; }
 

@@ -6,7 +6,7 @@
 
 namespace turbomind {
 
-class NormWeight: public core::Module {
+class NormWeight: public core::ModuleBase {
 public:
     const char* type() const override { return "NormWeight"; }
 
