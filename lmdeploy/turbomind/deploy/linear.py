@@ -27,6 +27,11 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
+try:
+    from _turbomind import DataFormat
+except ImportError:
+    DataFormat = None
+
 if TYPE_CHECKING:
     from .kind_map import WeightFormat
 
@@ -133,6 +138,7 @@ class Linear:
 
     tensors: dict[str, Tensor]
     weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
+    data_format: DataFormat | None = field(default=None, compare=False, repr=False)
 
     def split_out_dim(self, num: int) -> list[Linear]:
         """Split along output dim into *num* equal parts."""
@@ -140,7 +146,8 @@ class Linear:
         for kind, t in self.tensors.items():
             for i, part in enumerate(split_out_dim(t, num, t.dim() - 1)):
                 buckets[i][kind] = part
-        return [Linear(tensors=b, weight_format=self.weight_format) for b in buckets]
+        return [Linear(tensors=b, weight_format=self.weight_format,
+                       data_format=self.data_format) for b in buckets]
 
     def split_in_dim(self, num: int) -> list[Linear]:
         """Split along input dim into *num* equal parts."""
@@ -152,7 +159,8 @@ class Linear:
                 continue
             for i, part in enumerate(split_out_dim(t, num, 0)):
                 buckets[i][kind] = part
-        return [Linear(tensors=b, weight_format=self.weight_format) for b in buckets]
+        return [Linear(tensors=b, weight_format=self.weight_format,
+                       data_format=self.data_format) for b in buckets]
 
     @classmethod
     def concat_out_dim(cls, xs: list[Linear]) -> Linear:
@@ -164,7 +172,9 @@ class Linear:
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
         fmts = {x.weight_format for x in xs}
         wfmt = next(iter(fmts)) if len(fmts) == 1 else None
-        return Linear(tensors=result, weight_format=wfmt)
+        dfmts = {x.data_format for x in xs}
+        dfmt = next(iter(dfmts)) if len(dfmts) == 1 else None
+        return Linear(tensors=result, weight_format=wfmt, data_format=dfmt)
 
     @classmethod
     def concat_in_dim(cls, xs: list[Linear]) -> Linear:
@@ -179,7 +189,9 @@ class Linear:
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=0)
         fmts = {x.weight_format for x in xs}
         wfmt = next(iter(fmts)) if len(fmts) == 1 else None
-        return Linear(tensors=result, weight_format=wfmt)
+        dfmts = {x.data_format for x in xs}
+        dfmt = next(iter(dfmts)) if len(dfmts) == 1 else None
+        return Linear(tensors=result, weight_format=wfmt, data_format=dfmt)
 
 
 # ---------------------------------------------------------------------------
@@ -188,21 +200,19 @@ class Linear:
 
 
 def preprocess_linear(linear: Linear) -> Linear:
-    """Expand FP8 block scales to group scales (blockscale → groupscale).
-
-    Only needed for FP8 format when fused SiLU (interleave) will be used.
-    Expands scales from ``[K/gs, N/gs]`` to ``[K/gs, N]`` by repeating each
-    scale ``gs`` times along the output dimension.
-    """
-    fmt = linear.weight_format
-    if fmt is not None and fmt.name == "fp8":
+    """Expand FP8 block scales to group scales (blockscale -> groupscale)."""
+    fmt = linear.data_format
+    if fmt is not None and fmt.is_quantized() and fmt.scales.present():
         scales = linear.tensors.get("scales")
         if scales is not None and scales.dim() == 2:
-            block_size = fmt.block_in  # 128
-            new_scales = scales.repeat_interleave(block_size, dim=-1)
-            new_tensors = dict(linear.tensors)
-            new_tensors["scales"] = new_scales
-            return Linear(tensors=new_tensors, weight_format=linear.weight_format)
+            block_size = fmt.block_sizes[-1] if len(fmt.block_sizes) > 1 else 1
+            if block_size > 1:
+                new_scales = scales.repeat_interleave(block_size, dim=-1)
+                new_tensors = dict(linear.tensors)
+                new_tensors["scales"] = new_scales
+                return Linear(tensors=new_tensors,
+                              weight_format=linear.weight_format,
+                              data_format=linear.data_format)
     return linear
 
 
@@ -223,7 +233,8 @@ def interleave_linears(w1: Linear, w3: Linear) -> Linear:
             fused[kind] = torch.stack([t1, t3], dim=-1).reshape(-1)
     fused[kind] = fused[kind].contiguous()
     return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
-                  weight_format=w1.weight_format)
+                  weight_format=w1.weight_format,
+                  data_format=w1.data_format)
 
 
 def chunk_linears(w1: Linear, w3: Linear) -> Linear:
@@ -237,4 +248,5 @@ def chunk_linears(w1: Linear, w3: Linear) -> Linear:
         else:
             fused[kind] = torch.cat([t1, t3])
     return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
-                  weight_format=w1.weight_format)
+                  weight_format=w1.weight_format,
+                  data_format=w1.data_format)
