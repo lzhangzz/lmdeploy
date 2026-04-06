@@ -837,6 +837,8 @@ cd /data/lmdeploy-modeling/build && ninja
 
 - [ ] **Step 2: Verify model inference across all model classes**
 
+All models in the test matrix are pre-verified working with TP=1 and TP=2. Any failure after refactoring is a regression from our changes.
+
 Use the turbomind-tester agent to test one model from each class with TP=1. Verify each response is meaningful (not gibberish) and at least 128 tokens.
 
 Test matrix:
