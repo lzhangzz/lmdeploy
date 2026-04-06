@@ -54,7 +54,8 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
     d.group_size   = e0.group_size;
     d.data_type    = e0.data_type;
     d.weight_format = e0.weight_format;
-    d.resolved_     = e0.resolved_;
+    d.format_       = e0.format_;
+    d.policy_       = e0.policy_;
     d.k_desc       = e0.k_desc;
     d.q_desc       = e0.q_desc;
     d.epilogue     = e0.epilogue;

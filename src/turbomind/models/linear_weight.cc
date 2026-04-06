@@ -19,47 +19,40 @@ static bool IsDenseFloatType(DataType t)
     return t == kFloat || t == kHalf || t == kBfloat16;
 }
 
-LinearDtypes ResolveDtypes(DataType data_type, DataType weight_format, int group_size, int sm)
+LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, int sm)
 {
-    LinearDtypes r;
-    r.output_dtype = data_type;
-    r.input_dtype  = data_type;
-    r.scale_dtype  = data_type;
+    LinearPolicy p;
+    p.output_dtype = data_type;
+    p.input_dtype  = data_type;
 
-    const bool is_qweight = weight_format == kUint4 || weight_format == kUint8;
-
-    if (IsDenseFloatType(weight_format)) {
-        // Dense FP16/BF16/FP32 — no quantization descriptors
-        return r;
+    if (!format.is_quantized()) {
+        return p;
     }
 
-    if (weight_format == kFloat8_e4m3) {
-        TM_CHECK_EQ(group_size, 128)
-            << "FP8 weight format requires group_size=128, got " << group_size;
-        r.weight_quant = QuantDesc{gemm::QuantType::kB, group_size};
+    if (format.dtype == kFloat8_e4m3) {
+        int gs = format.block_sizes[1];
+        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kB, gs};
         if (sm == 90) {
-            r.input_dtype = kFloat8_e4m3;
-            r.input_quant = QuantDesc{gemm::QuantType::kK, group_size};
-            r.scale_dtype = kFloat;
+            p.input_dtype  = kFloat8_e4m3;
+            p.input_quant  = gemm::QuantDesc{gemm::QuantType::kK, gs};
         }
-        return r;
+        return p;
     }
 
-    if (weight_format == kFloat4_e2m1) {
-        r.scale_dtype  = kUint8;
-        r.weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
-        return r;
+    if (format.dtype == kFloat4_e2m1) {
+        int gs = format.block_sizes[1];
+        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
+        return p;
     }
 
-    if (is_qweight) {
-        TM_CHECK(group_size > 0 && group_size <= 256)
-            << "Invalid group_size for quantized weight: " << group_size;
-        r.weight_quant = QuantDesc{gemm::QuantType::kK, group_size};
-        return r;
+    if (format.dtype == kUint4 || format.dtype == kUint8) {
+        int gs = format.block_sizes[1];
+        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
+        return p;
     }
 
-    TM_CHECK(0) << "Unsupported weight format: " << to_string(weight_format);
-    return r;
+    TM_CHECK(0) << "Unsupported weight format for policy: " << to_string(format.dtype);
+    return p;
 }
 
 // ======================================================================
@@ -82,7 +75,8 @@ void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_siz
 {
     weight_format = actual_weight_type;
     group_size    = actual_group_size;
-    resolved_     = ResolveDtypes(data_type, actual_weight_type, actual_group_size, getSMVersion());
+    format_       = MakeLinearWeightFormat(data_type, actual_weight_type, actual_group_size);
+    policy_       = ResolveLinearPolicy(format_, data_type, getSMVersion());
 
     weight = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
     add_param("weight", weight);
@@ -95,20 +89,27 @@ void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_siz
     scales = {};
     zeros  = {};
 
-    if (actual_weight_type == kFloat8_e4m3) {
-        scales = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
-                        resolved_.scale_dtype, kDEVICE};
+    if (format_.scales.present()) {
+        if (actual_weight_type == kFloat8_e4m3) {
+            scales = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
+                            format_.scales.dtype, kDEVICE};
+        }
+        else if (actual_weight_type == kFloat4_e2m1) {
+            scales = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
+                            format_.scales.dtype, kDEVICE};
+        }
+        else {
+            TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
+            scales = Tensor{{input_dim / actual_group_size, output_dim},
+                            format_.scales.dtype, kDEVICE};
+        }
         add_param("scales", scales);
     }
-    else if (actual_weight_type == kFloat4_e2m1) {
-        scales = Tensor{{cdiv(input_dim, actual_group_size), output_dim}, kUint8, kDEVICE};
-        add_param("scales", scales);
-    }
-    else if (actual_weight_type == kUint4 || actual_weight_type == kUint8) {
+
+    if (format_.zeros.present()) {
         TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-        scales = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
-        zeros  = Tensor{{input_dim / actual_group_size, output_dim}, data_type, kDEVICE};
-        add_param("scales", scales);
+        zeros = Tensor{{input_dim / actual_group_size, output_dim},
+                        format_.zeros.dtype, kDEVICE};
         add_param("zeros", zeros);
     }
 
