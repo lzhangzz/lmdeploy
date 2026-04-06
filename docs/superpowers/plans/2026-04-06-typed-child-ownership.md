@@ -835,18 +835,18 @@ git commit -m "refactor(bind): update Python bindings and public API to ModuleBa
 cd /data/lmdeploy-modeling/build && ninja
 ```
 
-- [ ] **Step 2: Verify model inference**
+- [ ] **Step 2: Verify model inference across all model classes**
 
-Use the turbomind-tester agent to test at least one model (e.g., Llama-3-8B) with TP=1 to confirm the refactoring doesn't break inference. Verify the response is meaningful (not gibberish) and at least 128 tokens.
+Use the turbomind-tester agent to test one model from each class with TP=1. Verify each response is meaningful (not gibberish) and at least 128 tokens.
 
-```bash
-# Check GPU is available first
-get_gpu_usage
-```
+Test matrix:
 
-Then use the turbomind-tester agent to test:
-- A standard dense model (e.g., Llama-3-8B)
-- If time permits, a MoE model and/or MLA model
+| Model | Architecture | Covers |
+|-------|-------------|--------|
+| `Qwen/Qwen3-4B` | Dense GQA | `AttentionWeight` (standard), `FfnWeight`, `DecoderLayerWeight`, `ModelWeight` |
+| `Qwen/Qwen3-30B-A3B` | MoE | Adds `MoeWeight` with `ModuleList` experts |
+| `zai-org/GLM-4.7-Flash` | MoE + MLA | Adds low-rank attention projections (q_lora_rank, kv_lora_rank) |
+| `unsloth/gpt-oss-20b-BF16` | MoE + sliding window + bias | Adds attention bias, sliding window |
 
 - [ ] **Step 3: Verify no regressions in child access**
 
