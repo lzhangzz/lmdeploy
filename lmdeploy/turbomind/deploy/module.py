@@ -338,7 +338,7 @@ def _dequant_linear(linear: Linear) -> Linear:
     if fmt is None or fmt.dequant is None:
         return linear
     new_tensors = fmt.dequant(linear.tensors)
-    return Linear(tensors=new_tensors, weight_format=DENSE_FORMAT)
+    return Linear(tensors=new_tensors, weight_format=DENSE_FORMAT, data_format=None)
 
 
 def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
@@ -514,7 +514,8 @@ def merge_qkv_linear(
             merged_tensors[kind] = merge_qkv_v2(qt, kt, vt, tp)
 
     # All three linears share the same format after _ensure_compatible_formats.
-    return Linear(tensors=merged_tensors, weight_format=q.weight_format)
+    return Linear(tensors=merged_tensors, weight_format=q.weight_format,
+                  data_format=q.data_format)
 
 
 def _tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
@@ -602,7 +603,8 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int,
             final = shape[:d] + [shape[d] * shape[d + 1]] + shape[d + 2:]
             fused_tensors[kind] = fused.reshape(final)
 
-        result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format)
+        result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format,
+                                       data_format=first.data_format)
         return result
 
     # Default path: all components have compatible output dims for naive split.
@@ -623,7 +625,8 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int,
         fused_tensors[kind] = fused.reshape(final)
 
     # All components share the same format after _ensure_compatible_formats.
-    result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format)
+    result["in_proj_all"] = Linear(tensors=fused_tensors, weight_format=first.weight_format,
+                                   data_format=first.data_format)
     return result
 
 
@@ -725,7 +728,8 @@ def _shard_linear_for_tp(linear: Linear, tp: int, rank: int) -> Linear:
             split_size = t.size(0) // tp
             shard_tensors[kind] = t[rank * split_size:(rank + 1) * split_size].contiguous()
 
-    return Linear(tensors=shard_tensors, weight_format=fmt)
+    return Linear(tensors=shard_tensors, weight_format=fmt,
+                  data_format=linear.data_format)
 
 
 def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
@@ -893,6 +897,15 @@ def commit_linear(module, linear: Linear, name: str,
     cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
     if group_size == 0:
         group_size = max(1, 128)  # default; caller should pass correct value
+
+    # Ensure the Linear has a DataFormat attached (deferred creation for formats
+    # like AWQ/GPTQ where group_size is not known at build_linear time).
+    if linear.data_format is None and linear.weight_format is not None:
+        linear = Linear(tensors=linear.tensors,
+                        weight_format=linear.weight_format,
+                        data_format=linear.weight_format.to_data_format(
+                            cpp_dtype.value if cpp_dtype else 0,
+                            group_size))
 
     # Ensure the LinearWeight child exists
     linear_mod = module.child(name)

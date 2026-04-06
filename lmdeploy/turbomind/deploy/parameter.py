@@ -52,7 +52,8 @@ def build_linear(
         return None
 
     fmt.complete_tensors(tensors)
-    return Linear(tensors=tensors, weight_format=fmt)
+    data_format = fmt.to_data_format(0, group_size=0)
+    return Linear(tensors=tensors, weight_format=fmt, data_format=data_format)
 
 
 

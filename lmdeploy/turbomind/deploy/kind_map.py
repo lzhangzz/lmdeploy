@@ -84,6 +84,32 @@ class WeightFormat:
     def __hash__(self) -> int:
         return hash(self.name)
 
+    def to_data_format(self, cpp_dtype: int, group_size: int = 0):
+        """Construct a C++ DataFormat from this WeightFormat.
+
+        Returns None when group_size is needed but not yet known (block_in==0
+        and group_size==0), or when the format is dense (block_in is None).
+        """
+        try:
+            from _turbomind import MakeLinearWeightFormat
+        except ImportError:
+            return None
+        if self.block_in is None:
+            return None
+        gs = group_size if self.block_in == 0 else self.block_in
+        # Formats with block_in==0 need a real group_size; defer to commit time.
+        if gs == 0:
+            return None
+        if self.cpp_dtype_name is not None:
+            try:
+                import _turbomind as _tm
+            except ImportError:
+                return None
+            dt = getattr(_tm.DataType, self.cpp_dtype_name, None)
+            if dt is not None:
+                return MakeLinearWeightFormat(dt, dt, gs)
+        return None
+
     def complete_tensors(self, tensors: dict[str, Tensor]) -> None:
         """Add any synthesizable tensors absent from the checkpoint in-place.
 

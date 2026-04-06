@@ -408,6 +408,9 @@ PYBIND11_MODULE(_turbomind, m)
         .def("is_quantized", &turbomind::DataFormat::is_quantized)
         .def("rank", &turbomind::DataFormat::rank);
 
+    m.def("MakeLinearWeightFormat", &turbomind::MakeLinearWeightFormat,
+          py::arg("data_type"), py::arg("weight_format"), py::arg("group_size"));
+
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
         .def_property_readonly("where", [](const Tensor& t) { return t.device().type; })
