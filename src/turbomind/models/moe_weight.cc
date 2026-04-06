@@ -41,7 +41,7 @@ Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& s
         }
         return score_correction_bias_;
     }
-    return Module::alloc(param_name, spec);
+    return Module<MoeWeight>::alloc(param_name, spec);
 }
 
 // Adapted from LinkExperts in LlamaDenseWeight.cc for LinearWeight
@@ -104,17 +104,16 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
 FfnWeight* MoeWeight::expert(int i) const
 {
-    auto* ml = static_cast<core::ModuleList*>(child("experts"));
-    if (!ml) {
+    if (!experts_) {
         return nullptr;
     }
-    return static_cast<FfnWeight*>(ml->child(std::to_string(i)));
+    return static_cast<FfnWeight*>(experts_->child(std::to_string(i)));
 }
 
 void MoeWeight::prepare()
 {
     // First prepare all children (experts, gate, etc.)
-    for (auto& [name, child] : children_) {
+    for (auto& [name, child] : children()) {
         child->prepare();
     }
 
@@ -196,7 +195,7 @@ struct MoeWeightRegistrar {
     MoeWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "MoeWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
                 MoeParam moe_param;
                 moe_param.method           = static_cast<MoeParam::Method>(cfg_get(cfg, "method"));
                 moe_param.experts_per_token = cfg_get(cfg, "experts_per_token");
