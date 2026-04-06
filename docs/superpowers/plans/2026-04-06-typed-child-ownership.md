@@ -847,6 +847,7 @@ Test matrix:
 | `Qwen/Qwen3-30B-A3B` | MoE | Adds `MoeWeight` with `ModuleList` experts |
 | `zai-org/GLM-4.7-Flash` | MoE + MLA | Adds low-rank attention projections (q_lora_rank, kv_lora_rank) |
 | `unsloth/gpt-oss-20b-BF16` | MoE + sliding window + bias | Adds attention bias, sliding window |
+| `Qwen/Qwen3.5-27B` | Hybrid dense + GatedDeltaNet | Adds `DeltaNetWeight` (linear attention layers interleaved with full attention), `attn_output_gate` |
 
 - [ ] **Step 3: Verify no regressions in child access**
 
