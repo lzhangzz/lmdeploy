@@ -30,6 +30,7 @@ public:
                     bool         attn_output_gate);
 
     void prepare() override;
+    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 
     // --- Typed child members ---
     core::Submodule<LinearWeight> w_qkv             {*this, "w_qkv"};
@@ -42,7 +43,7 @@ public:
     core::Submodule<NormWeight>   k_norm_mod        {*this, "k_norm"};
     core::Submodule<NormWeight>   q_a_layernorm_mod {*this, "q_a_layernorm"};
     core::Submodule<NormWeight>   kv_a_layernorm_mod{*this, "kv_a_layernorm"};
-    core::Submodule<NormWeight>   sinks_mod         {*this, "sinks"};
+    core::Parameter              sinks_             {*this, "sinks"};
 
     // Convenience tensor accessors
     Tensor* q_norm() const;

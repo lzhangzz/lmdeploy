@@ -62,7 +62,18 @@ Tensor* AttentionWeight::kv_a_layernorm() const
 }
 Tensor* AttentionWeight::sinks() const
 {
-    return sinks_mod ? &sinks_mod->weight() : nullptr;
+    return sinks_ ? const_cast<Tensor*>(sinks_.ptr()) : nullptr;
+}
+
+Tensor AttentionWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
+{
+    if (param_name == "sinks" && !sinks_) {
+        *sinks_ = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
+    }
+    if (param_name == "sinks") {
+        return *sinks_;
+    }
+    return Module::alloc(param_name, spec);
 }
 
 namespace {
