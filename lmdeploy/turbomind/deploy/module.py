@@ -929,13 +929,12 @@ def commit_linear(module, linear: Linear, name: str,
                 import _turbomind as _tm
                 model_dt = _tm.DataType(model_dtype) if isinstance(model_dtype, int) else model_dtype
                 compute_dtype = model_dt
-        module.create_child(name, 'LinearWeight', {
+        linear_mod = module.create_child(name, 'LinearWeight', {
             'input_dim': in_dim,
             'output_dim': out_dim,
             'data_type': compute_dtype.value if compute_dtype else 0,
             'has_bias': 1 if 'bias' in linear.tensors else 0,
         })
-        linear_mod = module.get(name)
 
     split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
