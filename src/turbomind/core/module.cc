@@ -39,6 +39,26 @@ Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
 
     Module* raw = child.get();
     children_.emplace_back(std::move(name), std::move(child));
+
+    // Wire parent's slots to the new child
+    for (auto& [slot_name, pp] : slots_) {
+        if (*pp == nullptr && children_.back().first == slot_name) {
+            *pp = raw;
+        }
+    }
+
+    // Wire existing siblings' slots to the new child
+    for (auto& [cname, cptr] : children_) {
+        if (cptr.get() == raw) {
+            continue;  // skip the child we just added (already handled above)
+        }
+        for (auto& [slot_name, pp] : cptr->slots_) {
+            if (*pp == nullptr && children_.back().first == slot_name) {
+                *pp = raw;
+            }
+        }
+    }
+
     return raw;
 }
 
