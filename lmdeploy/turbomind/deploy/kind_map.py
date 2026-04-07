@@ -559,6 +559,8 @@ def build_linear(
     detected ``WeightFormat`` for downstream use in ``commit_linear``.
     Returns ``None`` if no tensors are found at *prefix*.
     """
+    from .linear import Linear
+
     available: dict[str, torch.Tensor] = {
         s: params[prefix + s] for s in ALL_SUFFIXES if (prefix + s) in params
     }
