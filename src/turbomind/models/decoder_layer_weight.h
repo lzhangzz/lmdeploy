@@ -21,21 +21,12 @@ public:
     bool verify(std::vector<std::string>& missing) override;
 
     // --- Typed child members ---
-    AttentionWeight* attention_    = nullptr;
-    DeltaNetWeight*  linear_attn_  = nullptr;
-    FfnWeight*       feed_forward_ = nullptr;
-    MoeWeight*       moe_ffn_      = nullptr;
-    NormWeight*      attn_norm_    = nullptr;
-    NormWeight*      ffn_norm_     = nullptr;
-
-
-    // --- Typed accessors ---
-    AttentionWeight* attention() const { return attention_; }
-    DeltaNetWeight*  linear_attn() const { return linear_attn_; }
-    FfnWeight*       ffn() const { return feed_forward_; }
-    MoeWeight*       moe() const { return moe_ffn_; }
-    NormWeight*      attn_norm() const { return attn_norm_; }
-    NormWeight*      ffn_norm() const { return ffn_norm_; }
+    core::Submodule<AttentionWeight> attention    {*this, "attention"};
+    core::Submodule<DeltaNetWeight>  linear_attn  {*this, "linear_attn"};
+    core::Submodule<FfnWeight>       feed_forward {*this, "feed_forward"};
+    core::Submodule<MoeWeight>       moe_ffn      {*this, "moe_ffn"};
+    core::Submodule<NormWeight>      attn_norm    {*this, "attention_norm"};
+    core::Submodule<NormWeight>      ffn_norm     {*this, "ffn_norm"};
 };
 
 }  // namespace turbomind

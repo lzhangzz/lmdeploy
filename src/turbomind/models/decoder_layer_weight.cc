@@ -15,15 +15,15 @@ bool DecoderLayerWeight::verify(std::vector<std::string>& missing)
 {
     Module::verify(missing);
     // At least one of attention or linear_attn must exist
-    if (!attention_ && !linear_attn_) {
+    if (!attention && !linear_attn) {
         missing.push_back(full_path() + ": missing attention or linear_attn");
     }
     // At least one of feed_forward or moe_ffn must exist
-    if (!feed_forward_ && !moe_ffn_) {
+    if (!feed_forward && !moe_ffn) {
         missing.push_back(full_path() + ": missing feed_forward or moe_ffn");
     }
     // attention_norm must exist
-    if (!attn_norm_) {
+    if (!attn_norm) {
         missing.push_back(full_path() + ": missing attention_norm");
     }
     return missing.empty();
