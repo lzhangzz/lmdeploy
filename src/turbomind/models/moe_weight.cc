@@ -104,10 +104,10 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
 FfnWeight* MoeWeight::expert(int i) const
 {
-    if (!experts_) {
+    if (!experts) {
         return nullptr;
     }
-    return static_cast<FfnWeight*>(experts_->child(std::to_string(i)));
+    return static_cast<FfnWeight*>(experts->child(std::to_string(i)));
 }
 
 void MoeWeight::prepare()

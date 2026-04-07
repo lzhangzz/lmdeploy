@@ -28,15 +28,12 @@ public:
     void prepare() override;
     int num_experts() const { return expert_num_; }
 
-    // --- Typed child members ---
-    LinearWeight*     gate_        = nullptr;
-    LinearWeight*     shared_gate_ = nullptr;
-    core::ModuleList* experts_     = nullptr;
-
+    // --- Typed child members (Submodule) ---
+    core::Submodule<LinearWeight>     gate        {*this, "gate"};
+    core::Submodule<LinearWeight>     shared_gate {*this, "shared_gate"};
+    core::Submodule<core::ModuleList> experts     {*this, "experts"};
 
     // --- Typed accessors ---
-    LinearWeight* gate() const { return gate_; }
-    LinearWeight* shared_gate() const { return shared_gate_; }
     FfnWeight*    expert(int i) const;
     FfnWeight*    block() const { return block_.get(); }
     Tensor*       score_correction_bias() const { return const_cast<Tensor*>(param("score_correction_bias")); }

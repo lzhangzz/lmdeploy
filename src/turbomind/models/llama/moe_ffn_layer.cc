@@ -73,7 +73,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     FT_CHECK(expert_num);
 
-    auto logits = Gate(p.input, *moe.gate());
+    auto logits = Gate(p.input, *moe.gate.get());
 
     TM_DEBUG_TENSOR(logits, "logits", 2);
 
@@ -209,8 +209,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
     }
 
-    if (moe.shared_gate() && moe.shared_gate()->weight) {
-        shared_scales_ = Gate(p.input, *moe.shared_gate());
+    if (moe.shared_gate && moe.shared_gate->weight) {
+        shared_scales_ = Gate(p.input, *moe.shared_gate.get());
     }
 }
 
