@@ -29,9 +29,9 @@ commit.py (Shard & Commit)
 C++ Module tree (unchanged)
 ```
 
-Each layer depends only on the layer below. `commit.py` never calls
-`spec.py`. `transforms.py` operates on `Linear` objects without touching
-C++ modules.
+Each layer depends only on the layer below. `commit.py` imports only
+`SplitSide` (a simple enum) from `spec.py`. `transforms.py` operates on
+`Linear` objects without touching C++ modules.
 
 ## File Assignments
 
@@ -41,6 +41,7 @@ Responsible for reading weights from checkpoint, detecting format, building
 `Linear` bundles, and assembling composite weights (QKV merge, GDN fusion).
 
 **Contents:**
+- `SplitSide` enum — semantic TP split direction (used by `TextModelSpec.raw_layer_tensors()` return type)
 - `TextModelSpec` ABC — the declarative model weight interface
 - `_dequant_linear()` — dequantize when needed for merge
 - `_ensure_compatible_formats()` — unify formats before merge
@@ -72,7 +73,7 @@ Responsible for the final step: allocating C++ tensors and copying data to
 GPU. Also owns TP split rules (configuration for the sharding step).
 
 **Contents:**
-- `SplitSide` enum — semantic TP split direction
+- `SplitSide` is imported from `spec.py` (defined there because `TextModelSpec` uses it)
 - `_SPLIT_SIDE_TO_DIM` mapping
 - Dtype helpers: `_torch_dtype_to_cpp()`, `_cast_shard_for_tm()`
 - Format inference: `_infer_cpp_linear_dtype()`, `_infer_compute_dtype()`
@@ -153,7 +154,7 @@ def commit_ffn(ffn_mod, w1, w3, w2, tp, rank, act_type,
 - All existing model specs (GptOssSpec, Qwen3Spec, Qwen3.5Spec, etc.)
   continue working without code changes
 - `text_model_loader.py` continues working via facade re-exports
-- Run existing model tests to verify correctness
+- Run existing model tests to verify correctness with TP=1 and TP=2
 - Line counts: spec.py ~250, transforms.py ~100, commit.py ~350, module.py ~30
 
 ## Out of Scope
