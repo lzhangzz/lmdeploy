@@ -34,19 +34,15 @@ public:
     }
 
     // --- Typed child members ---
-    LinearWeight*        tok_embeddings_ = nullptr;
-    LinearWeight*        output_         = nullptr;
-    NormWeight*          norm_           = nullptr;
-    core::ModuleList*    layers_         = nullptr;
+    core::Submodule<LinearWeight>     tok_embeddings {*this, "tok_embeddings"};
+    core::Submodule<LinearWeight>     output         {*this, "output"};
+    core::Submodule<NormWeight>       norm           {*this, "norm"};
+    core::Submodule<core::ModuleList> layers         {*this, "layers"};
 
-
-    // --- Typed child accessors ---
-    LinearWeight*        tok_embeddings() const { return tok_embeddings_; }
-    LinearWeight*        output() const { return output_; }
-    NormWeight*          norm() const { return norm_; }
-    DecoderLayerWeight*  layer(int i) const;
-    std::vector<DecoderLayerWeight*> layers() const;
-    int                  num_layers() const { return num_layer_; }
+    // --- Accessors ---
+    DecoderLayerWeight*               layer(int i) const;
+    std::vector<DecoderLayerWeight*>  layers_list() const;
+    int                               num_layers() const { return num_layer_; }
 
     // --- Lifecycle (same as old LlamaWeight) ---
     bool is_initialized() const { return initialized_; }

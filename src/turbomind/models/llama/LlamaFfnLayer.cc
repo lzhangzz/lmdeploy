@@ -39,7 +39,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor gating;
     Tensor inter;
 
-    auto* fused     = mlp.w1w3();
+    auto fused     = mlp.w1w3;
     bool  use_fused = fused && fused->weight;
 
     if (use_fused) {
@@ -52,11 +52,11 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        gating = linear_.Forward(param.input, *mlp.w1());
+        gating = linear_.Forward(param.input, *mlp.w1);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.Forward(param.input, *mlp.w3());
+        inter = linear_.Forward(param.input, *mlp.w3);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
@@ -72,7 +72,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.Forward(gating, *mlp.w2(), param.output);
+        linear_.Forward(gating, *mlp.w2, param.output);
         sync_check_cuda_error();
     }
 }

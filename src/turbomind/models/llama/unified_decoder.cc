@@ -183,7 +183,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attn_norm()->weight(), rmsnorm_eps_, stream);
+    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attn_norm->weight(), rmsnorm_eps_, stream);
     sync_check_cuda_error();
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
@@ -206,12 +206,12 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         /////////////////////////////////////////////
         /// self-attention or linear-attention
-        if (weights.at(layer)->linear_attn()) {
+        if (weights.at(layer)->linear_attn) {
             linear_attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn(), layer});
+                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn, layer});
         }
         else {
-            auto* attn = weights.at(layer)->attention();
+            auto attn = weights.at(layer)->attention;
             attn_layer_->Forward(
                 {phase, local_hidden_states, local_hidden_states, attn, layer});
         }
@@ -221,17 +221,17 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         // For gated delta networks, we may need a different output.bias name or it doesn't have it.
         // We will just use `output.bias` from either layer.
         Tensor out_bias;
-        if (weights.at(layer)->linear_attn()) {
-            out_bias = weights.at(layer)->linear_attn()->out_proj->bias;
+        if (weights.at(layer)->linear_attn) {
+            out_bias = weights.at(layer)->linear_attn->out_proj->bias;
         }
         else {
-            out_bias = weights.at(layer)->attention()->wo->bias;
+            out_bias = weights.at(layer)->attention->wo->bias;
         }
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
                                  out_bias,
-                                 weights.at(layer)->ffn_norm()->weight(),
+                                 weights.at(layer)->ffn_norm->weight(),
                                  local_token_num,
                                  attn_tp_group_,
                                  0,
@@ -245,18 +245,18 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         std::optional<MoeFfnLayer::ForwardParam> moe_fwd_param;
 
-        if (weights.at(layer)->moe()) {
+        if (weights.at(layer)->moe_ffn) {
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
-                                                      weights.at(layer)->moe(),
+                                                      weights.at(layer)->moe_ffn,
                                                       ffn_layer_ ? 1.f : 0.f,
                                                       layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
         }
 
-        if (ffn_layer_ && weights.at(layer)->ffn()) {
+        if (ffn_layer_ && weights.at(layer)->feed_forward) {
             ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, weights.at(layer)->ffn(), (int)layer});
+                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward, (int)layer});
         }
 
         if (moe_fwd_param) {
@@ -267,7 +267,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         const bool last = layer == layer_num_ - 1;
 
-        auto& scale_weight = !last ? weights.at(layer + 1)->attn_norm()->weight() : args.at("output_norm_weight");
+        auto& scale_weight = !last ? weights.at(layer + 1)->attn_norm->weight() : args.at("output_norm_weight");
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,

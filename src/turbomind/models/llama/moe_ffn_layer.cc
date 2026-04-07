@@ -180,31 +180,31 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
-        if (block->w1w3() && block->w1w3()->weight) {
+        if (block->w1w3 && block->w1w3->weight) {
             // Fused w1w3 path
-            Tensor inter = linear_.Forward(p.input, *block->w1w3(), indices, offsets_);
+            Tensor inter = linear_.Forward(p.input, *block->w1w3, indices, offsets_);
             sync_check_cuda_error();
 
             if (!block->is_fused_silu()) {
-                Activation(inter, block->w1w3()->bias, f2E_, block->act_type(), st);
+                Activation(inter, block->w1w3->bias, f2E_, block->act_type(), st);
                 sync_check_cuda_error();
             }
 
-            linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), *block->w2(), {}, offsets, temp_);
+            linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), *block->w2, {}, offsets, temp_);
             sync_check_cuda_error();
         }
         else {
             // Separate w1/w3 path
-            Tensor gating = linear_.Forward(p.input, *block->w1(), indices, offsets_);
+            Tensor gating = linear_.Forward(p.input, *block->w1, indices, offsets_);
             sync_check_cuda_error();
 
-            Tensor up = linear_.Forward(p.input, *block->w3(), indices, offsets_);
+            Tensor up = linear_.Forward(p.input, *block->w3, indices, offsets_);
             sync_check_cuda_error();
 
             Activation(gating, up, block->act_type(), st);
             sync_check_cuda_error();
 
-            linear_.Forward(gating, *block->w2(), {}, offsets, temp_);
+            linear_.Forward(gating, *block->w2, {}, offsets, temp_);
             sync_check_cuda_error();
         }
     }
@@ -218,7 +218,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 {
     auto& moe = *p.weights;
 
-    const Tensor& block_bias = moe.block() && moe.block()->w2() ? moe.block()->w2()->bias : Tensor{};
+    const Tensor& block_bias = moe.block() && moe.block()->w2 ? moe.block()->w2->bias : Tensor{};
 
     invokeMoeCombine(p.output,
                      temp_,

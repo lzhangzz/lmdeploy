@@ -177,6 +177,9 @@ struct Submodule {
 
     explicit operator bool() const { return pointer != nullptr; }
 
+    /// Safe accessor returning nullptr if not set (no abort).
+    T* get() const { return static_cast<T*>(pointer); }
+
     operator T*() const
     {
         return static_cast<T*>(TM_CHECK_NOTNULL(pointer));

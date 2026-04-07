@@ -38,23 +38,23 @@ void ModelWeight::prepare()
 
 DecoderLayerWeight* ModelWeight::layer(int i) const
 {
-    if (!layers_) {
+    if (!layers) {
         return nullptr;
     }
-    return static_cast<DecoderLayerWeight*>(layers_->child(std::to_string(i)));
+    return static_cast<DecoderLayerWeight*>(layers->child(std::to_string(i)));
 }
 
-std::vector<DecoderLayerWeight*> ModelWeight::layers() const
+std::vector<DecoderLayerWeight*> ModelWeight::layers_list() const
 {
     if (!layers_cache_.empty()) {
         return layers_cache_;
     }
-    if (!layers_) {
+    if (!layers) {
         return {};
     }
-    layers_cache_.resize(layers_->size());
-    for (int i = 0; i < layers_->size(); ++i) {
-        layers_cache_[i] = static_cast<DecoderLayerWeight*>(layers_->child(std::to_string(i)));
+    layers_cache_.resize(layers->size());
+    for (int i = 0; i < layers->size(); ++i) {
+        layers_cache_[i] = static_cast<DecoderLayerWeight*>(layers->child(std::to_string(i)));
     }
     return layers_cache_;
 }
@@ -62,10 +62,10 @@ std::vector<DecoderLayerWeight*> ModelWeight::layers() const
 bool ModelWeight::verify(std::vector<std::string>& missing)
 {
     Module::verify(missing);
-    if (!tok_embeddings_) {
+    if (!tok_embeddings) {
         missing.push_back(full_path() + ": missing tok_embeddings");
     }
-    if (!norm_) {
+    if (!norm) {
         missing.push_back(full_path() + ": missing norm");
     }
     return missing.empty();

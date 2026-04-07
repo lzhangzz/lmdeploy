@@ -169,11 +169,11 @@ LanguageModel::Impl::Impl(DataType              dtype,
                                                engine.max_batch_size,
                                                engine.session_len,
                                                model.vocab_size,
-                                               weights.output()->output_dim * tp_size_,
+                                               weights.output->output_dim * tp_size_,
                                                comm_.h_tp_group,
                                                phases);
 
-    const int     vocab_size     = weights_.output()->output_dim * tp_size_;
+    const int     vocab_size     = weights_.output->output_dim * tp_size_;
     const ssize_t max_fwd_tokens = engine.max_forward_token_num;
 
     if (ctx.comm.d_comm) {
@@ -204,7 +204,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
     const int hidden_units = param_.hidden_units;
 
-    const auto& embedding_table = weights_.tok_embeddings()->weight;
+    const auto& embedding_table = weights_.tok_embeddings->weight;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
@@ -274,7 +274,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const auto st = core::Context::stream().handle();
 
     const int bsz              = features.shape(0);
-    const int local_vocab_size = weights_.output()->output_dim;
+    const int local_vocab_size = weights_.output->output_dim;
     const int vocab_size       = local_vocab_size * tp_size_;
 
     if (bsz == 0) {
@@ -283,7 +283,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
 
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
-        linear_.Forward(features, *weights_.output(), logits);
+        linear_.Forward(features, *weights_.output, logits);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
@@ -291,7 +291,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     else if (use_ag2d_) {
         Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.Forward(features, *weights_.output(), local.squeeze(1));
+        linear_.Forward(features, *weights_.output, local.squeeze(1));
         sync_check_cuda_error();
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
@@ -309,7 +309,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     else {
         Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.Forward(features, *weights_.output(), local.squeeze(0));
+        linear_.Forward(features, *weights_.output, local.squeeze(0));
         sync_check_cuda_error();
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
         sync_check_cuda_error();
@@ -439,9 +439,9 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         env.produce("symm_buf", symm_buf_);
     }
 
-    env.produce("output_norm_weight", weights_.norm()->weight());
+    env.produce("output_norm_weight", weights_.norm->weight());
 
-    unified_decoder_->Forward(phase, env, weights_.layers());
+    unified_decoder_->Forward(phase, env, weights_.layers_list());
 
 
     // env.at("batch").data<BatchData*>()[0]->Notify();

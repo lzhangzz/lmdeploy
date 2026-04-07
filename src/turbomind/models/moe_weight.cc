@@ -131,41 +131,41 @@ void MoeWeight::prepare()
         // Link each linear in the block to the corresponding expert linears
         auto get_expert_w1w3 = [this](int i) -> LinearWeight* {
             auto* exp = expert(i);
-            return exp ? exp->w1w3() : nullptr;
+            return exp ? exp->w1w3.get() : nullptr;
         };
         auto get_expert_w1 = [this](int i) -> LinearWeight* {
             auto* exp = expert(i);
-            return exp ? exp->w1() : nullptr;
+            return exp ? exp->w1.get() : nullptr;
         };
         auto get_expert_w3 = [this](int i) -> LinearWeight* {
             auto* exp = expert(i);
-            return exp ? exp->w3() : nullptr;
+            return exp ? exp->w3.get() : nullptr;
         };
         auto get_expert_w2 = [this](int i) -> LinearWeight* {
             auto* exp = expert(i);
-            return exp ? exp->w2() : nullptr;
+            return exp ? exp->w2.get() : nullptr;
         };
 
         if (get_expert_w1w3(0)) {
             // Fused w1w3 path: experts have a single fused gate+up projection
             block_->add_child("w1w3", std::make_unique<LinearWeight>());
-            LinkLinearExperts(get_expert_w1w3, expert_num_, *block_->w1w3());
+            LinkLinearExperts(get_expert_w1w3, expert_num_, *block_->w1w3);
         }
         else {
             // Separate w1/w3 path: link individually
             block_->add_child("w1", std::make_unique<LinearWeight>());
             block_->add_child("w3", std::make_unique<LinearWeight>());
             if (get_expert_w1(0)) {
-                LinkLinearExperts(get_expert_w1, expert_num_, *block_->w1());
+                LinkLinearExperts(get_expert_w1, expert_num_, *block_->w1);
             }
             if (get_expert_w3(0)) {
-                LinkLinearExperts(get_expert_w3, expert_num_, *block_->w3());
+                LinkLinearExperts(get_expert_w3, expert_num_, *block_->w3);
             }
         }
 
         block_->add_child("w2", std::make_unique<LinearWeight>());
         if (get_expert_w2(0)) {
-            LinkLinearExperts(get_expert_w2, expert_num_, *block_->w2());
+            LinkLinearExperts(get_expert_w2, expert_num_, *block_->w2);
         }
 
         // Propagate the actual fused-silu state from the first expert to
