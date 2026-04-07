@@ -92,6 +92,17 @@ Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
     return {};
 }
 
+Tensor Module::create_param(const std::string& name,
+                            const std::vector<size_t>& shape,
+                            DataType dtype,
+                            int group_size)
+{
+    auto layout = Layout{std::vector<ssize_t>(shape.begin(), shape.end())};
+    auto tensor = Tensor{std::move(layout), dtype, kDEVICE};
+    add_param(name, tensor);
+    return tensor;
+}
+
 void Module::prepare()
 {
     for (auto& [name, child] : children_) {

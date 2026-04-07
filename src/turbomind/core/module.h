@@ -73,6 +73,13 @@ public:
     /// ``spec`` carries quantization metadata — only used by LinearWeight.
     virtual Tensor alloc(const std::string& param_name, const WeightSpec& spec);
 
+    /// Create and register a named parameter tensor with the given shape/dtype.
+    /// Returns the allocated Tensor for the caller to fill via copy_from().
+    Tensor create_param(const std::string& name,
+                        const std::vector<size_t>& shape,
+                        DataType dtype,
+                        int group_size = 0);
+
     /// Post-load processing: weight format conversion, fusion.
     /// Default recurses into children.
     virtual void prepare();
