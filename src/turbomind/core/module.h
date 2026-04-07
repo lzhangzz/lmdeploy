@@ -192,6 +192,30 @@ struct Submodule {
 };
 
 // ======================================================================
+// Parameter — self-registering tensor member (like PyTorch nn.Parameter)
+// ======================================================================
+
+class Parameter {
+    std::string name_;
+    Tensor      tensor_;
+
+public:
+    Parameter(Module& parent, std::string name)
+        : name_(std::move(name))
+    {
+        parent.add_param(name_, tensor_);
+    }
+
+    explicit operator bool() const { return static_cast<bool>(tensor_); }
+
+    Tensor&       operator*()        { return tensor_; }
+    const Tensor& operator*()  const { return tensor_; }
+
+    Tensor*       ptr()              { return &tensor_; }
+    const Tensor* ptr()        const { return &tensor_; }
+};
+
+// ======================================================================
 // ModuleList — indexed container for layer/expert sequences
 // ======================================================================
 
