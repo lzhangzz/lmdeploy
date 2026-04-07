@@ -560,6 +560,21 @@ PYBIND11_MODULE(_turbomind, m)
              "param_name"_a,
              "dtype"_a,
              "group_size"_a = 0)
+        .def("create_param",
+             [with_context](ft::core::Module& m,
+                            const std::string& name,
+                            std::vector<size_t> shape,
+                            ft::DataType dtype,
+                            int group_size) {
+                 return with_context(m, [&] {
+                     return std::make_shared<Tensor>(
+                         m.create_param(name, shape, dtype, group_size));
+                 });
+             },
+             "name"_a,
+             "shape"_a,
+             "dtype"_a,
+             "group_size"_a = 0)
         .def("prepare",
              [with_context](ft::core::Module& m) {
                  with_context(m, [&] { m.prepare(); });
