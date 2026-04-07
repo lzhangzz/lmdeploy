@@ -40,17 +40,17 @@ void DeltaNetWeight::prepare()
 Tensor DeltaNetWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     if (param_name == "A_log" && !A_log_) {
-        *A_log_ = Tensor{{num_v_heads_ / tp_size_}, spec.dtype, kDEVICE};
+        *A_log_ = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
     }
     if (param_name == "A_log") return *A_log_;
 
     if (param_name == "dt_bias" && !dt_bias_) {
-        *dt_bias_ = Tensor{{num_v_heads_ / tp_size_}, spec.dtype, kDEVICE};
+        *dt_bias_ = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
     }
     if (param_name == "dt_bias") return *dt_bias_;
 
     if (param_name == "conv1d" && !conv1d_) {
-        int conv_dim = (num_k_heads_ * key_head_dim_ + num_v_heads_ * (value_head_dim_ + key_head_dim_)) / tp_size_;
+        int conv_dim = (num_k_heads_ * key_head_dim_ * 2 + num_v_heads_ * value_head_dim_) / tp_size_;
         *conv1d_ = Tensor{{d_conv_, conv_dim}, spec.dtype, kDEVICE};
     }
     if (param_name == "conv1d") return *conv1d_;
