@@ -8,10 +8,9 @@
 
 namespace turbomind {
 
-class FfnWeight: public core::Module<FfnWeight> {
+class FfnWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "FfnWeight";
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "FfnWeight"; }
 
     FfnWeight() = default;
 
@@ -26,13 +25,6 @@ public:
     mutable LinearWeight* w2_   = nullptr;
     mutable LinearWeight* w1w3_ = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"w1",   &FfnWeight::w1_},
-        std::pair{"w3",   &FfnWeight::w3_},
-        std::pair{"w2",   &FfnWeight::w2_},
-        std::pair{"w1w3", &FfnWeight::w1w3_}
-    );
-    friend class core::Module<FfnWeight>;
 
     // --- Typed accessors (now return cached pointers) ---
     LinearWeight* w1()   const { return w1_; }

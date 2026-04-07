@@ -13,7 +13,7 @@ namespace turbomind {
 
 bool DecoderLayerWeight::verify(std::vector<std::string>& missing)
 {
-    ModuleBase::verify(missing);
+    Module::verify(missing);
     // At least one of attention or linear_attn must exist
     if (!attention_ && !linear_attn_) {
         missing.push_back(full_path() + ": missing attention or linear_attn");
@@ -34,7 +34,7 @@ struct DecoderLayerWeightRegistrar {
     DecoderLayerWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "DecoderLayerWeight",
-            [](const core::ModuleConfig&) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
                 return std::make_unique<DecoderLayerWeight>();
             });
     }

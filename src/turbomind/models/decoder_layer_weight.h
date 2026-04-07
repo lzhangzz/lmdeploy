@@ -12,10 +12,9 @@ class MoeWeight;
 class NormWeight;
 
 /// Architecture-independent decoder layer weight composite.
-class DecoderLayerWeight: public core::Module<DecoderLayerWeight> {
+class DecoderLayerWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "DecoderLayerWeight";
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "DecoderLayerWeight"; }
 
     DecoderLayerWeight() = default;
 
@@ -29,15 +28,6 @@ public:
     NormWeight*      attn_norm_    = nullptr;
     NormWeight*      ffn_norm_     = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"attention",      &DecoderLayerWeight::attention_},
-        std::pair{"linear_attn",    &DecoderLayerWeight::linear_attn_},
-        std::pair{"feed_forward",   &DecoderLayerWeight::feed_forward_},
-        std::pair{"moe_ffn",        &DecoderLayerWeight::moe_ffn_},
-        std::pair{"attention_norm", &DecoderLayerWeight::attn_norm_},
-        std::pair{"ffn_norm",       &DecoderLayerWeight::ffn_norm_}
-    );
-    friend class core::Module<DecoderLayerWeight>;
 
     // --- Typed accessors ---
     AttentionWeight* attention() const { return attention_; }

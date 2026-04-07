@@ -10,7 +10,7 @@
 namespace turbomind::core {
 
 // Forward declaration — full definition in module.h.
-class ModuleBase;
+class Module;
 
 /// Configuration value type for module factory system.
 /// Supports integer, string, and floating-point values.
@@ -22,7 +22,7 @@ using ModuleConfig = std::map<std::string, ConfigValue>;
 /// Module type registry. Maps type name strings to factory functions.
 class ModuleRegistry {
 public:
-    using Factory = std::function<std::unique_ptr<ModuleBase>(const ModuleConfig&)>;
+    using Factory = std::function<std::unique_ptr<Module>(const ModuleConfig&)>;
 
     static ModuleRegistry& instance();
 
@@ -32,7 +32,7 @@ public:
 
     /// Create a module instance by type name.
     /// Returns nullptr if type name is not registered.
-    std::unique_ptr<ModuleBase> create(const std::string& type,
+    std::unique_ptr<Module> create(const std::string& type,
                                     const ModuleConfig& config) const;
 
     /// Check if a type name is registered.

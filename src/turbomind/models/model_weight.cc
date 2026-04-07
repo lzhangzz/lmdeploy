@@ -61,7 +61,7 @@ std::vector<DecoderLayerWeight*> ModelWeight::layers() const
 
 bool ModelWeight::verify(std::vector<std::string>& missing)
 {
-    ModuleBase::verify(missing);
+    Module::verify(missing);
     if (!tok_embeddings_) {
         missing.push_back(full_path() + ": missing tok_embeddings");
     }

@@ -9,10 +9,9 @@
 
 namespace turbomind {
 
-class AttentionWeight: public core::Module<AttentionWeight> {
+class AttentionWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "AttentionWeight";
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "AttentionWeight"; }
 
     AttentionWeight() = default;
 
@@ -45,20 +44,6 @@ public:
     NormWeight*   kv_a_layernorm_mod_ = nullptr;
     NormWeight*   sinks_mod_          = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"w_qkv",          &AttentionWeight::w_qkv_},
-        std::pair{"wo",             &AttentionWeight::wo_},
-        std::pair{"q_proj",         &AttentionWeight::q_proj_},
-        std::pair{"q_a_proj",       &AttentionWeight::q_a_proj_},
-        std::pair{"q_b_proj",       &AttentionWeight::q_b_proj_},
-        std::pair{"kv_a_proj",      &AttentionWeight::kv_a_proj_},
-        std::pair{"q_norm",         &AttentionWeight::q_norm_mod_},
-        std::pair{"k_norm",         &AttentionWeight::k_norm_mod_},
-        std::pair{"q_a_layernorm",  &AttentionWeight::q_a_layernorm_mod_},
-        std::pair{"kv_a_layernorm", &AttentionWeight::kv_a_layernorm_mod_},
-        std::pair{"sinks",          &AttentionWeight::sinks_mod_}
-    );
-    friend class core::Module<AttentionWeight>;
 
     // --- Typed accessors ---
     LinearWeight* w_qkv() const { return w_qkv_; }

@@ -41,7 +41,7 @@ Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& s
         }
         return score_correction_bias_;
     }
-    return Module<MoeWeight>::alloc(param_name, spec);
+    return Module::alloc(param_name, spec);
 }
 
 // Adapted from LinkExperts in LlamaDenseWeight.cc for LinearWeight
@@ -195,7 +195,7 @@ struct MoeWeightRegistrar {
     MoeWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "MoeWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 MoeParam moe_param;
                 moe_param.method           = static_cast<MoeParam::Method>(cfg_get(cfg, "method"));
                 moe_param.experts_per_token = cfg_get(cfg, "experts_per_token");

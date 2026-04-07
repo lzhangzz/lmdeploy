@@ -42,7 +42,7 @@ struct DeltaNetWeightRegistrar {
     DeltaNetWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "DeltaNetWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 return std::make_unique<DeltaNetWeight>(
                     std::get<int64_t>(cfg.at("hidden_dim")),
                     std::get<int64_t>(cfg.at("num_k_heads")),

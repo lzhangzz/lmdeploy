@@ -14,11 +14,9 @@ namespace turbomind {
 class DecoderLayerWeight;
 
 /// Root weight module for a model. Owns the full weight tree.
-class ModelWeight: public core::Module<ModelWeight> {
+class ModelWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "ModelWeight";
-
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "ModelWeight"; }
 
     ModelWeight() = default;
 
@@ -41,13 +39,6 @@ public:
     NormWeight*          norm_           = nullptr;
     core::ModuleList*    layers_         = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"tok_embeddings", &ModelWeight::tok_embeddings_},
-        std::pair{"output",         &ModelWeight::output_},
-        std::pair{"norm",           &ModelWeight::norm_},
-        std::pair{"layers",         &ModelWeight::layers_}
-    );
-    friend class core::Module<ModelWeight>;
 
     // --- Typed child accessors ---
     LinearWeight*        tok_embeddings() const { return tok_embeddings_; }

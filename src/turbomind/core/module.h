@@ -4,7 +4,6 @@
 
 #include <memory>
 #include <string>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -18,32 +17,11 @@
 
 namespace turbomind::core {
 
-namespace detail {
-
-/// Extract the member type from a pointer-to-member type.
-/// E.g., `member_type<FfnWeight* Derived::*>` → `FfnWeight`.
-template<typename T>
-struct member_type;
-
-template<typename Class, typename Member>
-struct member_type<Member Class::*> {
-    using type = Member;
-};
-
-template<typename T>
-using member_type_t = typename member_type<T>::type;
-
-}  // namespace detail
-
-/// Quantization metadata passed to ``ModuleBase::alloc``.
+/// Quantization metadata passed to ``Module::alloc``.
 struct WeightSpec {
     DataType dtype{};        // storage dtype of the weight (e.g., kUint4, kFloat8_e4m3, kFloat16)
     int      group_size = 0; // quantization group size (0 = not quantized)
 };
-
-// Forward declarations.
-template<typename Derived>
-class Module;
 
 /// Type-erased hierarchical module with virtual lifecycle.
 ///
@@ -53,25 +31,25 @@ class Module;
 ///     a handle for data copying.
 ///   - ``prepare()`` runs post-load processing (format conversion, fusion).
 ///   - ``verify()`` walks the tree and collects uninitialized params/modules.
-class ModuleBase {
+class Module {
 public:
-    virtual ~ModuleBase();
+    virtual ~Module();
 
-    ModuleBase();
+    Module();
 
-    ModuleBase(const ModuleBase&)            = delete;
-    ModuleBase& operator=(const ModuleBase&) = delete;
-    ModuleBase(ModuleBase&&)                 = delete;
-    ModuleBase& operator=(ModuleBase&&)      = delete;
+    Module(const Module&)            = delete;
+    Module& operator=(const Module&) = delete;
+    Module(Module&&)                 = delete;
+    Module& operator=(Module&&)      = delete;
 
     // ----- Hierarchy (type-erased, owning) -----
 
     /// Owns child; registers it under the given local name.
     /// Returns raw pointer to the added child.
-    virtual ModuleBase* add_child(std::string name, std::unique_ptr<ModuleBase> child);
+    virtual Module* add_child(std::string name, std::unique_ptr<Module> child);
 
     /// Non-owning alias (for fused refs, views).
-    void add_alias(std::string name, ModuleBase& target);
+    void add_alias(std::string name, Module& target);
 
     // ----- Parameters -----
 
@@ -106,7 +84,7 @@ public:
 
     /// Create a child module using the type registry and attach it.
     /// Returns pointer to the created child, or nullptr on failure.
-    ModuleBase* create_child(const std::string& name,
+    Module* create_child(const std::string& name,
                          const std::string& type_name,
                          const ModuleConfig& config = {});
 
@@ -124,10 +102,10 @@ public:
     // ----- Lookup -----
 
     /// Find a direct child by name (no creation).
-    ModuleBase* child(const std::string& name) const;
+    Module* child(const std::string& name) const;
 
     /// Find a child by single segment name.
-    ModuleBase* get(const std::string& segment);
+    Module* get(const std::string& segment);
 
     /// Find a parameter by name within this module.
     Tensor* param(const std::string& name) const;
@@ -148,7 +126,7 @@ public:
     std::string full_path() const;
 
     /// Access the parent module (nullptr for root).
-    ModuleBase* parent() const noexcept
+    Module* parent() const noexcept
     {
         return parent_;
     }
@@ -160,80 +138,48 @@ public:
     }
 
 protected:
-    ModuleBase*   parent_ = nullptr;
+    Module*   parent_ = nullptr;
     std::string   name_;
 
-    std::vector<std::pair<std::string, std::unique_ptr<ModuleBase>>> children_;
-    std::vector<std::pair<std::string, ModuleBase*>>                 aliases_;
-    std::vector<std::pair<std::string, Tensor*>>                     params_;
+    std::vector<std::pair<std::string, std::unique_ptr<Module>>> children_;
+    std::vector<std::pair<std::string, Module*>>                 aliases_;
+    std::vector<std::pair<std::string, Tensor*>>                 params_;
+
+    std::vector<std::pair<const char*, Module**>> slots_;
+
+    void add_slot(const char* name, Module** pp)
+    {
+        slots_.emplace_back(name, pp);
+    }
 
 private:
     void collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const;
 };
 
 // ======================================================================
-// Module<Derived> — CRTP base for concrete modules with typed children
+// Submodule<T> — auto-registering typed child reference
 // ======================================================================
 
-/// CRTP template that overrides ``add_child`` to populate typed member
-/// pointers from ``Derived::kChildren`` (a static constexpr tuple).
-///
-/// Each entry in ``kChildren`` is a ``std::pair<const char*, ChildType* Derived::*>``
-/// mapping a child name to a pointer-to-member.  When ``add_child`` is called,
-/// the template iterates the tuple via ``std::apply`` and sets the matching
-/// member pointer, then delegates to ``ModuleBase::add_child`` for ownership.
-///
-/// Concrete modules inherit ``Module<ConcreteModule>`` and declare:
-///   - ``static constexpr auto kChildren = std::make_tuple(...);``
-///   - ``static constexpr const char* kTypeName = "ConcreteModule";``
-///   - Typed member pointers for each child (e.g., ``FfnWeight* ffn_;``)
-template<typename Derived>
-class Module: public ModuleBase {
-public:
-    ModuleBase* add_child(std::string name, std::unique_ptr<ModuleBase> child) override
+template<class T>
+struct Submodule {
+    const char* name;
+    Module*     pointer = nullptr;
+
+    Submodule(Module& parent, const char* n): name(n)
     {
-        ModuleBase* raw = child.get();
-        bool matched = false;
-        auto* self = static_cast<Derived*>(this);
-        std::apply([&](const auto&... entry) {
-            (try_match(entry, name, raw, self, matched), ...);
-        }, Derived::kChildren);
-
-        TM_CHECK(matched)
-            << "child name '" << name << "' is not recognized by "
-            << Derived::kTypeName;
-
-        return ModuleBase::add_child(std::move(name), std::move(child));
+        parent.add_slot(n, &pointer);
     }
 
-    const char* type() const override
+    explicit operator bool() const { return pointer != nullptr; }
+
+    operator T*() const
     {
-        return Derived::kTypeName;
+        return static_cast<T*>(TM_CHECK_NOTNULL(pointer));
     }
 
-private:
-    /// Attempt to match a single kChildren tuple entry against the child name.
-    /// On match, static_cast the raw pointer and assign to the typed member.
-    template<typename MemberPtr>
-    static void try_match(
-        const std::pair<const char*, MemberPtr>& entry,
-        const std::string& name,
-        ModuleBase* raw,
-        Derived* self,
-        bool& matched)
+    T* operator->() const
     {
-        if (matched) {
-            return;
-        }
-        if (name == entry.first) {
-            // MemberPtr is e.g. `FfnWeight* Derived::*`.
-            // detail::member_type_t<MemberPtr> is `FfnWeight*`.
-            // So ChildType = FfnWeight.
-            using ChildPtr  = detail::member_type_t<MemberPtr>;
-            using ChildType = std::remove_pointer_t<ChildPtr>;
-            self->*(entry.second) = static_cast<ChildType*>(raw);
-            matched = true;
-        }
+        return static_cast<T*>(TM_CHECK_NOTNULL(pointer));
     }
 };
 
@@ -243,7 +189,7 @@ private:
 
 /// A systematic container for indexed module sequences (layers, experts).
 /// Children are added explicitly via ``add_child`` or ``create_child``.
-class ModuleList: public ModuleBase {
+class ModuleList: public Module {
 public:
     const char* type() const override
     {
@@ -253,13 +199,13 @@ public:
     ModuleList() = default;
 
     /// Override to also track the child in the indexed_ vector.
-    ModuleBase* add_child(std::string name, std::unique_ptr<ModuleBase> child) override;
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
 
     /// Number of children created so far.
     int size() const;
 
 private:
-    std::vector<ModuleBase*> indexed_;
+    std::vector<Module*> indexed_;
 };
 
 }  // namespace turbomind::core

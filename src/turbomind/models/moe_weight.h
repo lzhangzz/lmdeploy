@@ -8,10 +8,9 @@
 
 namespace turbomind {
 
-class MoeWeight: public core::Module<MoeWeight> {
+class MoeWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "MoeWeight";
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "MoeWeight"; }
 
     MoeWeight() = default;
 
@@ -34,12 +33,6 @@ public:
     LinearWeight*     shared_gate_ = nullptr;
     core::ModuleList* experts_     = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"gate",        &MoeWeight::gate_},
-        std::pair{"shared_gate", &MoeWeight::shared_gate_},
-        std::pair{"experts",     &MoeWeight::experts_}
-    );
-    friend class core::Module<MoeWeight>;
 
     // --- Typed accessors ---
     LinearWeight* gate() const { return gate_; }

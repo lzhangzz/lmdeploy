@@ -9,10 +9,9 @@
 namespace turbomind {
 
 /// Weight module for Gated DeltaNet (linear attention) layers.
-class DeltaNetWeight: public core::Module<DeltaNetWeight> {
+class DeltaNetWeight: public core::Module {
 public:
-    static constexpr const char* kTypeName = "DeltaNetWeight";
-    const char* type() const override { return kTypeName; }
+    const char* type() const override { return "DeltaNetWeight"; }
 
     DeltaNetWeight() = default;
 
@@ -37,15 +36,6 @@ public:
     NormWeight*   dt_bias_     = nullptr;
     NormWeight*   norm_        = nullptr;
 
-    static constexpr auto kChildren = std::make_tuple(
-        std::pair{"in_proj_all", &DeltaNetWeight::in_proj_all_},
-        std::pair{"out_proj",    &DeltaNetWeight::out_proj_},
-        std::pair{"conv1d",      &DeltaNetWeight::conv1d_},
-        std::pair{"A_log",       &DeltaNetWeight::A_log_},
-        std::pair{"dt_bias",     &DeltaNetWeight::dt_bias_},
-        std::pair{"norm",        &DeltaNetWeight::norm_}
-    );
-    friend class core::Module<DeltaNetWeight>;
 
     // --- Typed accessors ---
     LinearWeight* in_proj_all() const { return in_proj_all_; }

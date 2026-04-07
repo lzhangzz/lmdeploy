@@ -761,7 +761,7 @@ void TurboMind::CreateWeights(int index)
     return impl_->CreateWeights(index);
 }
 
-core::ModuleBase* TurboMind::root(int index)
+core::Module* TurboMind::root(int index)
 {
     return impl_->weights_[index].get();
 }

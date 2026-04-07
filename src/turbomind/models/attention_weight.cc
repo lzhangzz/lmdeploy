@@ -82,7 +82,7 @@ struct AttentionWeightRegistrar {
     AttentionWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "AttentionWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 MLAParam mla;
                 mla.kv_lora_rank = cfg_get(cfg, "kv_lora_rank");
                 mla.q_lora_rank  = cfg_get(cfg, "q_lora_rank");

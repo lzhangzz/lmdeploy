@@ -10,50 +10,60 @@
 namespace turbomind::core {
 
 // ======================================================================
-// ModuleBase
+// Module
 // ======================================================================
 
-ModuleBase::ModuleBase() = default;
+Module::Module() = default;
 
-ModuleBase::~ModuleBase() = default;
+Module::~Module() = default;
 
 // ----- Hierarchy -----
 
-ModuleBase* ModuleBase::add_child(std::string name, std::unique_ptr<ModuleBase> child)
+Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
 {
     TM_CHECK(child != nullptr);
     TM_CHECK(child->parent_ == nullptr) << "module already has a parent";
 
+    // Wire child's slots against existing children
+    for (auto& [slot_name, pp] : child->slots_) {
+        for (auto& [cname, cptr] : children_) {
+            if (cname == slot_name) {
+                *pp = cptr.get();
+                break;
+            }
+        }
+    }
+
     child->parent_ = this;
     child->name_   = name;
 
-    ModuleBase* raw = child.get();
+    Module* raw = child.get();
     children_.emplace_back(std::move(name), std::move(child));
     return raw;
 }
 
-void ModuleBase::add_alias(std::string name, ModuleBase& target)
+void Module::add_alias(std::string name, Module& target)
 {
     aliases_.emplace_back(std::move(name), &target);
 }
 
 // ----- Parameters -----
 
-void ModuleBase::add_param(std::string name, Tensor& tensor)
+void Module::add_param(std::string name, Tensor& tensor)
 {
     params_.emplace_back(std::move(name), &tensor);
 }
 
 // ----- Type info -----
 
-const char* ModuleBase::type() const
+const char* Module::type() const
 {
-    return "ModuleBase";
+    return "Module";
 }
 
 // ----- Lifecycle -----
 
-Tensor ModuleBase::alloc(const std::string& param_name, const WeightSpec& spec)
+Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
 {
     // Default: return pre-existing param tensor if registered.
     if (auto* t = param(param_name)) {
@@ -62,7 +72,7 @@ Tensor ModuleBase::alloc(const std::string& param_name, const WeightSpec& spec)
     return {};
 }
 
-void ModuleBase::prepare()
+void Module::prepare()
 {
     for (auto& [name, child] : children_) {
         child->prepare();
@@ -71,7 +81,7 @@ void ModuleBase::prepare()
 
 // ----- Lifecycle: release / to_device -----
 
-void ModuleBase::release()
+void Module::release()
 {
     for (auto& [name, child] : children_) {
         child->release();
@@ -83,7 +93,7 @@ void ModuleBase::release()
     }
 }
 
-void ModuleBase::to_device(DeviceType dev)
+void Module::to_device(DeviceType dev)
 {
     for (auto& [name, child] : children_) {
         child->to_device(dev);
@@ -99,7 +109,7 @@ void ModuleBase::to_device(DeviceType dev)
 
 // ----- Registry-driven child creation -----
 
-ModuleBase* ModuleBase::create_child(const std::string& name,
+Module* Module::create_child(const std::string& name,
                               const std::string& type_name,
                               const ModuleConfig& config)
 {
@@ -112,7 +122,7 @@ ModuleBase* ModuleBase::create_child(const std::string& name,
 
 // ----- Lookup -----
 
-ModuleBase* ModuleBase::child(const std::string& name) const
+Module* Module::child(const std::string& name) const
 {
     for (auto& [n, c] : children_) {
         if (n == name) {
@@ -127,14 +137,14 @@ ModuleBase* ModuleBase::child(const std::string& name) const
     return nullptr;
 }
 
-ModuleBase* ModuleBase::get(const std::string& segment)
+Module* Module::get(const std::string& segment)
 {
     auto* c = child(segment);
     TM_CHECK(c != nullptr) << "child '" << segment << "' not found in " << type();
     return c;
 }
 
-Tensor* ModuleBase::param(const std::string& name) const
+Tensor* Module::param(const std::string& name) const
 {
     for (auto& [n, p] : params_) {
         if (n == name) {
@@ -144,7 +154,7 @@ Tensor* ModuleBase::param(const std::string& name) const
     return nullptr;
 }
 
-std::unordered_map<std::string, Tensor*> ModuleBase::params() const
+std::unordered_map<std::string, Tensor*> Module::params() const
 {
     std::unordered_map<std::string, Tensor*> out;
     collect_params("", out);
@@ -153,7 +163,7 @@ std::unordered_map<std::string, Tensor*> ModuleBase::params() const
 
 // ----- Verification -----
 
-bool ModuleBase::verify(std::vector<std::string>& missing)
+bool Module::verify(std::vector<std::string>& missing)
 {
     for (auto& [name, child] : children_) {
         child->verify(missing);
@@ -168,7 +178,7 @@ bool ModuleBase::verify(std::vector<std::string>& missing)
 
 // ----- Utilities -----
 
-std::string ModuleBase::full_path() const
+std::string Module::full_path() const
 {
     if (!parent_) {
         return name_;
@@ -182,7 +192,7 @@ std::string ModuleBase::full_path() const
 
 // ---- Private ----
 
-void ModuleBase::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
+void Module::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
 {
     std::string p = prefix.empty() ? "" : prefix + ".";
     for (auto& [n, t] : params_) {
@@ -197,7 +207,7 @@ void ModuleBase::collect_params(const std::string& prefix, std::unordered_map<st
 // ModuleList
 // ======================================================================
 
-ModuleBase* ModuleList::add_child(std::string name, std::unique_ptr<ModuleBase> child)
+Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
 {
     // Parse index before moving name.
     int index = -1;
@@ -208,7 +218,7 @@ ModuleBase* ModuleList::add_child(std::string name, std::unique_ptr<ModuleBase> 
             index = -1;
         }
     }
-    auto* raw = ModuleBase::add_child(std::move(name), std::move(child));
+    auto* raw = Module::add_child(std::move(name), std::move(child));
     if (index >= 0) {
         if (index >= static_cast<int>(indexed_.size())) {
             indexed_.resize(index + 1, nullptr);
@@ -234,7 +244,7 @@ struct ModuleListRegistrar {
     ModuleListRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "ModuleList",
-            [](const core::ModuleConfig&) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
                 return std::make_unique<core::ModuleList>();
             });
     }

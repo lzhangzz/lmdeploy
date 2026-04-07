@@ -56,7 +56,7 @@ Tensor NormWeight::alloc(const std::string& param_name, const core::WeightSpec& 
     if (param_name == "weight") {
         return weight_;
     }
-    return ModuleBase::alloc(param_name, spec);
+    return Module::alloc(param_name, spec);
 }
 
 namespace {
@@ -64,7 +64,7 @@ struct NormWeightRegistrar {
     NormWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "NormWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 auto dtype = static_cast<DataType>(std::get<int64_t>(cfg.at("data_type")));
                 // Check for multi-dimensional "dims" string (e.g. "4 10240")
                 if (auto it = cfg.find("dims"); it != cfg.end()) {

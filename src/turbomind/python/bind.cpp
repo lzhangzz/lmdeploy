@@ -530,8 +530,8 @@ PYBIND11_MODULE(_turbomind, m)
 
     // Helper: set up the ModelWeight's context (stream + allocator) for any
     // Python → C++ call that may trigger tensor allocation (get, alloc, prepare).
-    auto with_context = [](ft::core::ModuleBase& m, auto&& fn) -> decltype(auto) {
-        ft::core::ModuleBase* root = &m;
+    auto with_context = [](ft::core::Module& m, auto&& fn) -> decltype(auto) {
+        ft::core::Module* root = &m;
         while (root->parent()) {
             root = root->parent();
         }
@@ -544,15 +544,15 @@ PYBIND11_MODULE(_turbomind, m)
     };
 
     // Module class — navigation and allocation interface
-    py::class_<ft::core::ModuleBase, std::shared_ptr<ft::core::ModuleBase>>(m, "Module")
+    py::class_<ft::core::Module, std::shared_ptr<ft::core::Module>>(m, "Module")
         .def("get",
-             [with_context](ft::core::ModuleBase& m, const std::string& segment) -> ft::core::ModuleBase* {
+             [with_context](ft::core::Module& m, const std::string& segment) -> ft::core::Module* {
                  return with_context(m, [&] { return m.get(segment); });
              },
              py::return_value_policy::reference,
              "segment"_a)
         .def("alloc",
-             [with_context](ft::core::ModuleBase& m, const std::string& param_name, ft::DataType dtype, int group_size) {
+             [with_context](ft::core::Module& m, const std::string& param_name, ft::DataType dtype, int group_size) {
                  return with_context(m, [&] {
                      return std::make_shared<Tensor>(m.alloc(param_name, ft::core::WeightSpec{dtype, group_size}));
                  });
@@ -561,18 +561,18 @@ PYBIND11_MODULE(_turbomind, m)
              "dtype"_a,
              "group_size"_a = 0)
         .def("prepare",
-             [with_context](ft::core::ModuleBase& m) {
+             [with_context](ft::core::Module& m) {
                  with_context(m, [&] { m.prepare(); });
              })
         .def("child",
-             [](ft::core::ModuleBase& m, const std::string& name) -> ft::core::ModuleBase* { return m.child(name); },
+             [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
              py::return_value_policy::reference,
              "name"_a)
         .def("create_child",
-             [with_context](ft::core::ModuleBase& m, const std::string& name,
+             [with_context](ft::core::Module& m, const std::string& name,
                 const std::string& type_name,
-                const py::dict& config) -> ft::core::ModuleBase* {
-                 return with_context(m, [&]() -> ft::core::ModuleBase* {
+                const py::dict& config) -> ft::core::Module* {
+                 return with_context(m, [&]() -> ft::core::Module* {
                      // Convert py::dict to ModuleConfig
                      turbomind::core::ModuleConfig cfg;
                      for (auto& [key, val] : config) {
@@ -603,20 +603,20 @@ PYBIND11_MODULE(_turbomind, m)
              },
              py::return_value_policy::reference,
              "name"_a, "type_name"_a, "config"_a)
-        .def("type", [](ft::core::ModuleBase& m) -> const char* { return m.type(); })
-        .def("full_path", [](ft::core::ModuleBase& m) -> std::string { return m.full_path(); })
+        .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
+        .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
         .def("__getitem__",
-             [with_context](ft::core::ModuleBase& m, const std::string& key) -> ft::core::ModuleBase* {
+             [with_context](ft::core::Module& m, const std::string& key) -> ft::core::Module* {
                  return with_context(m, [&] { return m.get(key); });
              },
              py::return_value_policy::reference)
         .def("__getitem__",
-             [with_context](ft::core::ModuleBase& m, int idx) -> ft::core::ModuleBase* {
+             [with_context](ft::core::Module& m, int idx) -> ft::core::Module* {
                  return with_context(m, [&] { return m.get(std::to_string(idx)); });
              },
              py::return_value_policy::reference)
         .def("set_fused_silu",
-             [](ft::core::ModuleBase& m, bool val) {
+             [](ft::core::Module& m, bool val) {
                  if (auto* ffn = dynamic_cast<turbomind::FfnWeight*>(&m)) {
                      ffn->set_fused_silu(val);
                  }
@@ -650,7 +650,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
         .def(
             "root",
-            [](TurboMind* model, int index) -> ft::core::ModuleBase* { return model->root(index); },
+            [](TurboMind* model, int index) -> ft::core::Module* { return model->root(index); },
             py::return_value_policy::reference,
             "index"_a)
         .def(

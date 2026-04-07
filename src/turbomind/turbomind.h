@@ -23,8 +23,8 @@ public:
 
     void CreateWeights(int index);
 
-    /// Returns the root `ModuleBase` for GPU `index`'s weight tree.
-    core::ModuleBase* root(int index);
+    /// Returns the root `Module` for GPU `index`'s weight tree.
+    core::Module* root(int index);
 
     void ProcessWeights(int index);
 

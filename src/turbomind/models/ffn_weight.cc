@@ -61,7 +61,7 @@ struct FfnWeightRegistrar {
     FfnWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "FfnWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::ModuleBase> {
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
                 auto ffn = std::make_unique<FfnWeight>(
                     cfg_get(cfg, "hidden_dim"),
                     cfg_get(cfg, "inter_size"),
