@@ -97,11 +97,11 @@ class TextModelLoader:
 
             # --- Layer norms ---
             norm_cfg = {'dim': hidden, 'data_type': dtype}
-            handle.create_child('attention_norm', 'NormWeight', norm_cfg)
-            handle.create_child('ffn_norm', 'NormWeight', norm_cfg)
-            commit_tensor(handle.get('attention_norm'),
+            attention_norm = handle.create_child('attention_norm', 'NormWeight', norm_cfg)
+            ffn_norm = handle.create_child('ffn_norm', 'NormWeight', norm_cfg)
+            commit_tensor(attention_norm,
                                 spec.attn_norm(layer), 'weight')
-            commit_tensor(handle.get('ffn_norm'),
+            commit_tensor(ffn_norm,
                                 spec.ffn_norm(layer), 'weight')
 
             # --- Attention ---
@@ -112,7 +112,7 @@ class TextModelLoader:
                 if ws_list and layer < len(ws_list):
                     window_size = ws_list[layer]
 
-                handle.create_child('attention', 'AttentionWeight', {
+                attn_mod = handle.create_child('attention', 'AttentionWeight', {
                     'hidden_dim': hidden,
                     'head_dim': mc.size_per_head,
                     'head_num': mc.head_num,
@@ -130,7 +130,6 @@ class TextModelLoader:
                     'attn_sink': mc.attn_sink,
                     'attn_output_gate': mc.attn_output_gate,
                 })
-                attn_mod = handle.get('attention')
                 for name, lin in attn_linears.items():
                     rule = _ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
@@ -146,7 +145,7 @@ class TextModelLoader:
                 if is_list and layer < len(is_list):
                     inter_size = is_list[layer]
 
-                handle.create_child('feed_forward', 'FfnWeight', {
+                ffn_mod = handle.create_child('feed_forward', 'FfnWeight', {
                     'hidden_dim': hidden,
                     'inter_size': inter_size,
                     'has_bias': mc.mlp_bias,
@@ -156,7 +155,6 @@ class TextModelLoader:
                     'act_type': _act_type_id(mc.activation_type),
                     'fuse_silu_act': True,
                 })
-                ffn_mod = handle.get('feed_forward')
                 w1 = ffn_linears.get('w1')
                 w3 = ffn_linears.get('w3')
                 w2 = ffn_linears.get('w2')
@@ -180,7 +178,7 @@ class TextModelLoader:
                 if en_list and layer < len(en_list):
                     expert_num = en_list[layer]
 
-                handle.create_child('moe_ffn', 'MoeWeight', {
+                moe_mod = handle.create_child('moe_ffn', 'MoeWeight', {
                     'layer_id': layer,
                     'method': 1,  # kFused
                     'experts_per_token': mc.experts_per_token,
@@ -203,7 +201,6 @@ class TextModelLoader:
                     'act_type': _act_type_id(mc.activation_type),
                     'fuse_silu_act': True,
                 })
-                moe_mod = handle.get('moe_ffn')
 
                 # Create gate LinearWeight for router
                 gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
@@ -252,7 +249,7 @@ class TextModelLoader:
 
                 for e in range(spec.num_experts(layer)):
                     expert_linears = spec.moe_ffn_linears(layer, e)
-                    expert_mod = moe_mod.get('experts').get(str(e))
+                    expert_mod = moe_mod.child('experts').child(str(e))
                     w1 = expert_linears.get('w1')
                     w3 = expert_linears.get('w3')
                     w2 = expert_linears.get('w2')
@@ -272,7 +269,7 @@ class TextModelLoader:
             # --- Linear attention (GDN) ---
             la_linears = spec.linear_attn_linears(layer)
             if la_linears:
-                handle.create_child('linear_attn', 'DeltaNetWeight', {
+                linear_attn_mod = handle.create_child('linear_attn', 'DeltaNetWeight', {
                     'hidden_dim': hidden,
                     'num_k_heads': mc.linear_num_key_heads,
                     'num_v_heads': mc.linear_num_value_heads,
@@ -284,7 +281,6 @@ class TextModelLoader:
                     'tp_rank': attn_rank,
                     'data_type': dtype,
                 })
-                linear_attn_mod = handle.get('linear_attn')
                 for name, lin in la_linears.items():
                     rule = _LINEAR_ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
@@ -348,13 +344,13 @@ class TextModelLoader:
             emb = spec.tok_embeddings()
             if emb is not None:
                 emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-                root.create_child('tok_embeddings', 'LinearWeight', {
+                tok_emb = root.create_child('tok_embeddings', 'LinearWeight', {
                     'input_dim': padded_vocab,
                     'output_dim': hidden // tp,
                     'data_type': dtype,
                     'has_bias': False,
                 })
-                commit_tensor(root.get('tok_embeddings'), emb_padded,
+                commit_tensor(tok_emb, emb_padded,
                                      'weight',
                                      split_side=SplitSide.OUTPUT,
                                      split_num=tp, rank=attn_rank)
@@ -362,21 +358,21 @@ class TextModelLoader:
             # Final norm (broadcast)
             norm = spec.norm_weight()
             if norm is not None:
-                root.create_child('norm', 'NormWeight',
+                norm_mod = root.create_child('norm', 'NormWeight',
                                   {'dim': hidden, 'data_type': dtype})
-                commit_tensor(root.get('norm'), norm, 'weight')
+                commit_tensor(norm_mod, norm, 'weight')
 
             # Output head (column-parallel, transposed)
             output = spec.output_weight()
             if output is not None:
                 output_padded = pad_out_dim(output, padded_vocab, dim=0)
                 output_t = output_padded.t()
-                root.create_child('output', 'LinearWeight', {
+                output_mod = root.create_child('output', 'LinearWeight', {
                     'input_dim': hidden,
                     'output_dim': padded_vocab // tp,
                     'data_type': dtype,
                     'has_bias': False,
                 })
-                commit_tensor(root.get('output'), output_t, 'weight',
+                commit_tensor(output_mod, output_t, 'weight',
                                      split_side=SplitSide.OUTPUT,
                                      split_num=tp, rank=attn_rank)
