@@ -781,7 +781,7 @@ def _fuse_and_commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
         else:
             w1w3 = chunk_linears(w1_shard, w3_shard)
 
-        commit_linear(ffn_mod, w1w3, "w1w3", copy=True,
+        commit_linear(ffn_mod, w1w3, "w1w3",
                            model_dtype=model_dtype)
         ffn_mod.set_fused_silu(fused_silu)
     else:
@@ -917,7 +917,7 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
 def commit_linear(module, linear: Linear, name: str,
                          split_side: SplitSide | None = None,
                          split_num: int = 1, rank: int = 0,
-                         copy: bool = False, model_dtype=None):
+                         model_dtype=None):
     """Commit a ``Linear`` bundle to a C++ ``Module`` handle for a specific TP rank.
 
     Unlike the legacy ``commit_linear`` which drives all GPUs via ``BaseOutputModel``,
@@ -938,8 +938,6 @@ def commit_linear(module, linear: Linear, name: str,
         Number of TP shards.
     rank : int
         Which shard to extract and copy.
-    copy : bool
-        If ``True``, copy the tensor as-is (no split).
     model_dtype : int | None
         The model's configured compute dtype (C++ DataType value).  When set,
         dense (non-quantized) weights use this dtype instead of the weight
@@ -1007,8 +1005,7 @@ def commit_linear(module, linear: Linear, name: str,
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,
                          split_side: SplitSide | None = None,
-                         split_num: int = 1, rank: int = 0,
-                         copy: bool = False):
+                         split_num: int = 1, rank: int = 0):
     """Commit a raw tensor to a C++ ``Module`` handle for a specific TP rank.
 
     Parameters
@@ -1019,7 +1016,7 @@ def commit_tensor(module, tensor: torch.Tensor | None, name: str,
         The tensor data.  ``None`` is a no-op.
     name : str
         Parameter name within *module* (e.g. ``"weight"`` for a norm).
-    split_side, split_num, rank, copy
+    split_side, split_num, rank
         Same semantics as ``commit_linear``.
     """
     if tensor is None:
