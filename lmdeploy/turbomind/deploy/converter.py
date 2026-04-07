@@ -9,7 +9,6 @@ from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
 from .text_model_loader import TextModelLoader
-from .policy import get_input_policy
 from .source_model.base import INPUT_MODELS
 from .target_model.base import OUTPUT_MODELS, BaseOutputModel
 
@@ -182,11 +181,9 @@ def get_tm_model(model_path,
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
     fp8_quant = (engine_config.model_format == 'fp8' and not quant_config)
-    input_policy = get_input_policy(engine_config.model_format)
     _model_cls = INPUT_MODELS.get(input_model_name)
     input_model = _model_cls(model_path=model_path,
                              tokenizer_path=model_path,
-                             input_policy=input_policy,
                              fp8_quant=fp8_quant,
                              model_format=engine_config.model_format)
 

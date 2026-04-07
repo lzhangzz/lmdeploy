@@ -331,7 +331,6 @@ class Qwen3_5InputModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path)
         self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
         self.model_format = kwargs.get('model_format')
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
@@ -363,7 +362,6 @@ class Qwen3_5MoeInputModel(BaseInputModel):
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
         super().__init__(model_path, tokenizer_path)
         self.model_config = load_model_config(model_path)
-        self.policy = kwargs.get('input_policy')
         self.model_format = kwargs.get('model_format')
         self.fp8_quant = kwargs.get('fp8_quant', False)
 
