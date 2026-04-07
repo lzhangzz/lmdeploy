@@ -194,7 +194,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         auto b = all_proj.slice({0, b_offset}, {-1, v_heads_tp});
         auto a = all_proj.slice({0, a_offset}, {-1, v_heads_tp});
 
-        ComputeBetaG_v2(beta, g, b, a, weights.A_log->weight(), weights.dt_bias->weight(), stream);
+        ComputeBetaG_v2(beta, g, b, a, *weights.A_log(), *weights.dt_bias(), stream);
 
         // =================================================================
         // 3. Process all requests at once via batched kernel launches
@@ -211,7 +211,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // in_stride is derived from all_proj.stride(0) inside the launcher.
         invokeFusedConv1dSiLU(conv_out,
                               all_proj,
-                              weights.conv1d->weight(),
+                              *weights.conv1d(),
                               Tensor{},
                               pd.conv_state_ptrs,
                               pd.q_offsets,

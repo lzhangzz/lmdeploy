@@ -28,12 +28,18 @@ public:
 
     void prepare() override;
 
+    const Tensor* conv1d() const { return conv1d_ ? conv1d_.ptr() : nullptr; }
+    const Tensor* A_log() const { return A_log_ ? A_log_.ptr() : nullptr; }
+    const Tensor* dt_bias() const { return dt_bias_ ? dt_bias_.ptr() : nullptr; }
+
+    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
+
     // --- Typed child members ---
     core::Submodule<LinearWeight> in_proj_all{*this, "in_proj_all"};
     core::Submodule<LinearWeight> out_proj{*this, "out_proj"};
-    core::Submodule<NormWeight>   conv1d{*this, "conv1d"};
-    core::Submodule<NormWeight>   A_log{*this, "A_log"};
-    core::Submodule<NormWeight>   dt_bias{*this, "dt_bias"};
+    mutable core::Parameter      conv1d_{*this, "conv1d"};
+    mutable core::Parameter      A_log_{*this, "A_log"};
+    mutable core::Parameter      dt_bias_{*this, "dt_bias"};
     core::Submodule<NormWeight>   norm{*this, "norm"};
 
 private:
