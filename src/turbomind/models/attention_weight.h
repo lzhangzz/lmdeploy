@@ -43,7 +43,7 @@ public:
     core::Submodule<NormWeight>   k_norm_mod        {*this, "k_norm"};
     core::Submodule<NormWeight>   q_a_layernorm_mod {*this, "q_a_layernorm"};
     core::Submodule<NormWeight>   kv_a_layernorm_mod{*this, "kv_a_layernorm"};
-    core::Parameter              sinks_             {*this, "sinks"};
+    mutable core::Parameter      sinks_             {*this, "sinks"};
 
     // Convenience tensor accessors
     Tensor* q_norm() const;

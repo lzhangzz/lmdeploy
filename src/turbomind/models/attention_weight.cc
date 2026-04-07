@@ -62,7 +62,7 @@ Tensor* AttentionWeight::kv_a_layernorm() const
 }
 Tensor* AttentionWeight::sinks() const
 {
-    return sinks_ ? const_cast<Tensor*>(sinks_.ptr()) : nullptr;
+    return sinks_ ? sinks_.ptr() : nullptr;
 }
 
 Tensor AttentionWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
