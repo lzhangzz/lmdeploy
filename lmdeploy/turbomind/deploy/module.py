@@ -861,6 +861,59 @@ def _infer_compute_dtype(linear: Linear):
     return None
 
 
+def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
+                    split_side: SplitSide | None, split_num: int, rank: int):
+    """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
+
+    Handles packing, TP sharding, allocation, dtype casting, and padding.
+    This is the shared tensor-commit loop used by both ``commit_linear`` and
+    ``LoadContext.load_linear``.
+    """
+    split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+
+    packer = linear.weight_format.packer if linear.weight_format else None
+
+    def _kind_order(item):
+        k, _ = item
+        if k in ("weight", "qweight"):
+            return (0, k)
+        return (1, k)
+
+    for kind, tensor in sorted(linear.tensors.items(), key=_kind_order):
+        if packer is not None:
+            tensor = packer(tensor, kind)
+
+        tensor_split_dim = split_dim
+        if kind == "bias" and split_side == SplitSide.INPUT:
+            tensor_split_dim = None
+
+        if tensor_split_dim is not None and split_num > 1:
+            split_size = tensor.shape[tensor_split_dim] // split_num
+            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
+        else:
+            shard = tensor
+
+        shard = shard.cuda().contiguous()
+
+        dst = handle.alloc(kind, cpp_dtype, group_size)
+        if dst:
+            shard = _cast_shard_for_tm(shard, dst)
+            if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
+                pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
+                if pad_dim < 0:
+                    pad_dim = shard.dim() + pad_dim
+                outer = shard.numel() // shard.shape[pad_dim]
+                extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
+                new_shape = list(shard.shape)
+                new_shape[pad_dim] += extra
+                padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
+                idx = [slice(None)] * shard.dim()
+                idx[pad_dim] = slice(0, shard.shape[pad_dim])
+                padded[tuple(idx)].copy_(shard)
+                shard = padded
+            dst.copy_from(shard)
+
+
 def commit_linear(module, linear: Linear, name: str,
                          split_side: SplitSide | None = None,
                          split_num: int = 1, rank: int = 0,
@@ -936,8 +989,6 @@ def commit_linear(module, linear: Linear, name: str,
             'has_bias': 1 if 'bias' in linear.tensors else 0,
         })
 
-    split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
-
     # Block-scale TP split validation
     if split_side == SplitSide.OUTPUT and split_num > 1:
         wfmt = linear.weight_format
@@ -950,62 +1001,8 @@ def commit_linear(module, linear: Linear, name: str,
                         f"scale blocks (block_out={wfmt.block_out}), not "
                         f"divisible by split_num={split_num}.")
 
-    packer = linear.weight_format.packer if linear.weight_format else None
-
-    # Process "weight"/"qweight" first so that LinearWeight::alloc() triggers
-    # do_allocate() before we encounter "scales"/"zeros"/"bias".  Without this,
-    # lazy allocation returns an empty tensor for scales if it is iterated first.
-    def _kind_order(item):
-        k, _ = item
-        if k in ("weight", "qweight"):
-            return (0, k)
-        return (1, k)
-
-    for kind, tensor in sorted(linear.tensors.items(), key=_kind_order):
-        if packer is not None:
-            tensor = packer(tensor, kind)
-
-        # Bias is NOT split for row-parallel (INPUT-split) linears — it is
-        # replicated across all TP ranks and added after the all-reduce.
-        tensor_split_dim = split_dim
-        if kind == "bias" and split_side == SplitSide.INPUT:
-            tensor_split_dim = None
-
-        # Extract the shard for this rank
-        if tensor_split_dim is not None and split_num > 1:
-            split_size = tensor.shape[tensor_split_dim] // split_num
-            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
-        elif copy:
-            shard = tensor
-        else:
-            shard = tensor
-
-        shard = shard.cuda().contiguous()
-
-        # Allocate (first call triggers full allocation) and copy
-        dst = linear_mod.alloc(kind, cpp_dtype, group_size)
-        if dst:
-            shard = _cast_shard_for_tm(shard, dst)
-            # Pad shard with zeros when C++ allocation is larger (e.g. due to
-            # _pad_inter_size ensuring group_size alignment for TP splitting).
-            # Compare byte sizes since Python packed dtype (int32) may differ
-            # from C++ allocation dtype (e2m1, etc.) while having matching
-            # byte size when dimensions align.
-            if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
-                pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
-                if pad_dim < 0:
-                    pad_dim = shard.dim() + pad_dim
-                # Number of elements on the non-padded dimensions
-                outer = shard.numel() // shard.shape[pad_dim]
-                extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
-                new_shape = list(shard.shape)
-                new_shape[pad_dim] += extra
-                padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
-                idx = [slice(None)] * shard.dim()
-                idx[pad_dim] = slice(0, shard.shape[pad_dim])
-                padded[tuple(idx)].copy_(shard)
-                shard = padded
-            dst.copy_from(shard)
+    _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
+                    split_side, split_num, rank)
 
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,
