@@ -51,7 +51,7 @@ Tensor DeltaNetWeight::alloc(const std::string& param_name, const core::WeightSp
 
     if (param_name == "conv1d" && !conv1d_) {
         int conv_dim = (num_k_heads_ * key_head_dim_ * 2 + num_v_heads_ * value_head_dim_) / tp_size_;
-        *conv1d_ = Tensor{{d_conv_, conv_dim}, spec.dtype, kDEVICE};
+        *conv1d_ = Tensor{{d_conv_, conv_dim}, data_type_, kDEVICE};
     }
     if (param_name == "conv1d") return *conv1d_;
 
