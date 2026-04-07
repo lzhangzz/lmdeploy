@@ -168,7 +168,7 @@ class TextModelSpec(ABC):
         Probes all known suffixes and auto-detects the format via
         ``WeightFormat.accepts``.  Override for model-specific logic.
         """
-        from .parameter import build_linear
+        from .kind_map import build_linear
         return build_linear(self.params, prefix)
 
     _FFN_MAP = [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")]

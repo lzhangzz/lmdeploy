@@ -301,7 +301,6 @@ def get_normalizer(model_format: str | None) -> Callable[[Tensor, str], Tensor]:
 def _pack_u4_qweight(tensor: Tensor, kind: str) -> Tensor:
     """Pack uint8 4-bit values into int32 rows; applied to ``qweight``."""
     if kind == "qweight" and tensor.dtype == torch.uint8:
-        from .parameter import pack_u4_row
         return pack_u4_row(tensor)
     return tensor
 
@@ -309,7 +308,6 @@ def _pack_u4_qweight(tensor: Tensor, kind: str) -> Tensor:
 def _pack_mxfp4_weight(tensor: Tensor, kind: str) -> Tensor:
     """Pack uint8 4-bit values into int32 rows; applied to mxfp4 ``weight``."""
     if kind == "weight" and tensor.dtype == torch.uint8:
-        from .parameter import pack_u4_row
         return pack_u4_row(tensor)
     return tensor
 
@@ -534,3 +532,60 @@ FORMAT_PRIORITY: list[WeightFormat] = [
 
 #: Union of all checkpoint suffixes across every known format.
 ALL_SUFFIXES: frozenset[str] = frozenset(s for fmt in FORMAT_PRIORITY for s in fmt.suffix_map)
+
+
+# ---------------------------------------------------------------------------
+# build_linear — produces Linear bundles from checkpoint keys
+# ---------------------------------------------------------------------------
+
+
+def build_linear(
+    params: dict[str, torch.Tensor],
+    prefix: str,
+    index: int | None = None,
+) -> Linear | None:
+    """Build a ``Linear`` bundle from checkpoint tensors at *prefix*.
+
+    Probes every known checkpoint suffix (union of all format suffix maps),
+    classifies the format by running each ``WeightFormat.accepts`` predicate
+    in ``FORMAT_PRIORITY`` order, then normalises the collected tensors with
+    the winning format's normalizer.
+
+    When *index* is given, each collected tensor is sliced by ``[index]``
+    before classification and normalisation (used for packed expert tensors
+    where the expert dimension is the leading axis).
+
+    The returned ``Linear`` is in TM layout ``[in, out]`` and carries the
+    detected ``WeightFormat`` for downstream use in ``commit_linear``.
+    Returns ``None`` if no tensors are found at *prefix*.
+    """
+    available: dict[str, torch.Tensor] = {
+        s: params[prefix + s] for s in ALL_SUFFIXES if (prefix + s) in params
+    }
+    if index is not None:
+        available = {s: t[index] for s, t in available.items()}
+
+    fmt = next((f for f in FORMAT_PRIORITY if f.accepts(available)), None)
+    if fmt is None:
+        return None
+
+    tensors: dict[str, torch.Tensor] = {
+        kind: fmt.normalizer(available[s], kind)
+        for s, kind in fmt.suffix_map.items()
+        if s in available
+    }
+    if not tensors:
+        return None
+
+    fmt.complete_tensors(tensors)
+    data_format = fmt.to_data_format(0, group_size=0)
+    return Linear(tensors=tensors, weight_format=fmt, data_format=data_format)
+
+
+def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
+    assert x.dtype == torch.uint8, f'x.dtype: {x.dtype}'
+    xs = x.view(*x.shape[:-1], -1, 8).split(1, dim=-1)
+    a = torch.zeros(xs[0].shape, dtype=torch.int32, device=x.device)
+    for t in reversed(xs):
+        a = (a << 4) | t
+    return a.squeeze(dim=-1)
