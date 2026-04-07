@@ -167,7 +167,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    where the split dims are: conv_dim_, value_dim_, v_heads_tp_, v_heads_tp_
         // =================================================================
         const int v_heads_tp = num_v_heads_;  // already TP-sharded
-        Tensor    all_proj   = linear_.Forward(p.input, *weights.in_proj_all());
+        Tensor    all_proj   = linear_.Forward(p.input, *weights.in_proj_all);
         sync_check_cuda_error();
 
         // Column offsets per token (all_proj is token-major, row-major):
@@ -194,7 +194,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         auto b = all_proj.slice({0, b_offset}, {-1, v_heads_tp});
         auto a = all_proj.slice({0, a_offset}, {-1, v_heads_tp});
 
-        ComputeBetaG_v2(beta, g, b, a, weights.A_log()->weight(), weights.dt_bias()->weight(), stream);
+        ComputeBetaG_v2(beta, g, b, a, weights.A_log->weight(), weights.dt_bias->weight(), stream);
 
         // =================================================================
         // 3. Process all requests at once via batched kernel launches
@@ -211,7 +211,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // in_stride is derived from all_proj.stride(0) inside the launcher.
         invokeFusedConv1dSiLU(conv_out,
                               all_proj,
-                              weights.conv1d()->weight(),
+                              weights.conv1d->weight(),
                               Tensor{},
                               pd.conv_state_ptrs,
                               pd.q_offsets,
@@ -322,13 +322,13 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col.
         Tensor gate        = all_proj.slice({0, conv_dim_}, {-1, value_dim_});
         Tensor hidden_view = attn_out.view({token_num * num_v_heads_, value_head_dim_});
-        invokeRMSNormGated(hidden_view, gate, weights.norm()->weight(), norm_eps_, stream);
+        invokeRMSNormGated(hidden_view, gate, weights.norm->weight(), norm_eps_, stream);
         sync_check_cuda_error();
 
         // =================================================================
         // 4. Output projection (all tokens at once)
         // =================================================================
-        (void)linear_.Forward(attn_out, *weights.out_proj(), p.output);
+        (void)linear_.Forward(attn_out, *weights.out_proj, p.output);
         sync_check_cuda_error();
     };
 

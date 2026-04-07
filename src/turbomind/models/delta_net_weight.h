@@ -29,21 +29,12 @@ public:
     void prepare() override;
 
     // --- Typed child members ---
-    LinearWeight* in_proj_all_ = nullptr;
-    LinearWeight* out_proj_    = nullptr;
-    NormWeight*   conv1d_      = nullptr;
-    NormWeight*   A_log_       = nullptr;
-    NormWeight*   dt_bias_     = nullptr;
-    NormWeight*   norm_        = nullptr;
-
-
-    // --- Typed accessors ---
-    LinearWeight* in_proj_all() const { return in_proj_all_; }
-    LinearWeight* out_proj() const { return out_proj_; }
-    NormWeight*   conv1d() const { return conv1d_; }
-    NormWeight*   A_log() const { return A_log_; }
-    NormWeight*   dt_bias() const { return dt_bias_; }
-    NormWeight*   norm() const { return norm_; }
+    core::Submodule<LinearWeight> in_proj_all{*this, "in_proj_all"};
+    core::Submodule<LinearWeight> out_proj{*this, "out_proj"};
+    core::Submodule<NormWeight>   conv1d{*this, "conv1d"};
+    core::Submodule<NormWeight>   A_log{*this, "A_log"};
+    core::Submodule<NormWeight>   dt_bias{*this, "dt_bias"};
+    core::Submodule<NormWeight>   norm{*this, "norm"};
 
 private:
     int      hidden_dim_{};
