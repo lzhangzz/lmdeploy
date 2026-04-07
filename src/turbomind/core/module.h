@@ -31,7 +31,12 @@ struct WeightSpec {
 ///     a handle for data copying.
 ///   - ``prepare()`` runs post-load processing (format conversion, fusion).
 ///   - ``verify()`` walks the tree and collects uninitialized params/modules.
+template<class T>
+struct Submodule;
+
 class Module {
+    template<class T>
+    friend struct Submodule;
 public:
     virtual ~Module();
 

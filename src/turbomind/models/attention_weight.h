@@ -32,31 +32,17 @@ public:
     void prepare() override;
 
     // --- Typed child members ---
-    LinearWeight* w_qkv_              = nullptr;
-    LinearWeight* wo_                 = nullptr;
-    LinearWeight* q_proj_             = nullptr;
-    LinearWeight* q_a_proj_           = nullptr;
-    LinearWeight* q_b_proj_           = nullptr;
-    LinearWeight* kv_a_proj_          = nullptr;
-    NormWeight*   q_norm_mod_         = nullptr;
-    NormWeight*   k_norm_mod_         = nullptr;
-    NormWeight*   q_a_layernorm_mod_  = nullptr;
-    NormWeight*   kv_a_layernorm_mod_ = nullptr;
-    NormWeight*   sinks_mod_          = nullptr;
-
-
-    // --- Typed accessors ---
-    LinearWeight* w_qkv() const { return w_qkv_; }
-    LinearWeight* wo() const { return wo_; }
-    LinearWeight* q_proj() const { return q_proj_; }
-    LinearWeight* q_a_proj() const { return q_a_proj_; }
-    LinearWeight* q_b_proj() const { return q_b_proj_; }
-    LinearWeight* kv_a_proj() const { return kv_a_proj_; }
-    NormWeight*   q_norm_mod() const { return q_norm_mod_; }
-    NormWeight*   k_norm_mod() const { return k_norm_mod_; }
-    NormWeight*   q_a_layernorm_mod() const { return q_a_layernorm_mod_; }
-    NormWeight*   kv_a_layernorm_mod() const { return kv_a_layernorm_mod_; }
-    NormWeight*   sinks_mod() const { return sinks_mod_; }
+    core::Submodule<LinearWeight> w_qkv             {*this, "w_qkv"};
+    core::Submodule<LinearWeight> wo                {*this, "wo"};
+    core::Submodule<LinearWeight> q_proj            {*this, "q_proj"};
+    core::Submodule<LinearWeight> q_a_proj          {*this, "q_a_proj"};
+    core::Submodule<LinearWeight> q_b_proj          {*this, "q_b_proj"};
+    core::Submodule<LinearWeight> kv_a_proj         {*this, "kv_a_proj"};
+    core::Submodule<NormWeight>   q_norm_mod        {*this, "q_norm"};
+    core::Submodule<NormWeight>   k_norm_mod        {*this, "k_norm"};
+    core::Submodule<NormWeight>   q_a_layernorm_mod {*this, "q_a_layernorm"};
+    core::Submodule<NormWeight>   kv_a_layernorm_mod{*this, "kv_a_layernorm"};
+    core::Submodule<NormWeight>   sinks_mod         {*this, "sinks"};
 
     // Convenience tensor accessors
     Tensor* q_norm() const;

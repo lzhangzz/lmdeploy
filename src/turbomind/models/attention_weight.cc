@@ -46,23 +46,23 @@ void AttentionWeight::prepare()
 // Convenience tensor accessors
 Tensor* AttentionWeight::q_norm() const
 {
-    return q_norm_mod_ ? &q_norm_mod_->weight() : nullptr;
+    return q_norm_mod ? &q_norm_mod->weight() : nullptr;
 }
 Tensor* AttentionWeight::k_norm() const
 {
-    return k_norm_mod_ ? &k_norm_mod_->weight() : nullptr;
+    return k_norm_mod ? &k_norm_mod->weight() : nullptr;
 }
 Tensor* AttentionWeight::q_a_layernorm() const
 {
-    return q_a_layernorm_mod_ ? &q_a_layernorm_mod_->weight() : nullptr;
+    return q_a_layernorm_mod ? &q_a_layernorm_mod->weight() : nullptr;
 }
 Tensor* AttentionWeight::kv_a_layernorm() const
 {
-    return kv_a_layernorm_mod_ ? &kv_a_layernorm_mod_->weight() : nullptr;
+    return kv_a_layernorm_mod ? &kv_a_layernorm_mod->weight() : nullptr;
 }
 Tensor* AttentionWeight::sinks() const
 {
-    return sinks_mod_ ? &sinks_mod_->weight() : nullptr;
+    return sinks_mod ? &sinks_mod->weight() : nullptr;
 }
 
 namespace {

@@ -225,7 +225,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             out_bias = weights.at(layer)->linear_attn()->out_proj()->bias;
         }
         else {
-            out_bias = weights.at(layer)->attention()->wo()->bias;
+            out_bias = weights.at(layer)->attention()->wo->bias;
         }
 
         AllreduceResidualRMSnorm(global_hidden_states,
