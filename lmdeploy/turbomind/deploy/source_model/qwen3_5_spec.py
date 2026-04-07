@@ -240,7 +240,7 @@ class Qwen3_5Spec(TextModelSpec):
             for key in ["A_log", "dt_bias"]:
                 t = self._get(f"{pfx}.{key}")
                 if t is not None:
-                    tensors.append((f"linear_attn.{key}.weight", t, SplitSide.OUTPUT))
+                    tensors.append((f"linear_attn.{key}", t, SplitSide.OUTPUT))
             conv1d = self._get(f"{pfx}.conv1d.weight")
             if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
                 conv1d = conv1d.squeeze(1)
@@ -259,7 +259,7 @@ class Qwen3_5Spec(TextModelSpec):
                         k_part.reshape(d_conv, tp, k_dim // tp),
                         v_part.reshape(d_conv, tp, v_dim // tp),
                     ], dim=2).reshape(d_conv, -1).contiguous()
-                tensors.append(("linear_attn.conv1d.weight", conv1d, SplitSide.OUTPUT))
+                tensors.append(("linear_attn.conv1d", conv1d, SplitSide.OUTPUT))
             norm = self._get(f"{pfx}.norm.weight")
             if norm is not None:
                 tensors.append(("linear_attn.norm.weight", norm, None))

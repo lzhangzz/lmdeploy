@@ -133,7 +133,7 @@ class GptOssSpec(TextModelSpec):
             tensors.append(("moe_ffn.gate.bias", gate_bias, None))
         sinks = self._get(f"{self._layer_prefix}.{layer}.self_attn.sinks")
         if sinks is not None:
-            tensors.append(("attention.sinks.weight", sinks, SplitSide.OUTPUT))
+            tensors.append(("attention.sinks", sinks, SplitSide.OUTPUT))
         return tensors
 
     def tok_embeddings(self) -> torch.Tensor | None:
