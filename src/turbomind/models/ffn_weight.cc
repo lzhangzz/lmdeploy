@@ -26,7 +26,8 @@ void FfnWeight::prepare()
 {
     // Set epilogue on existing w1w3 child if fused silu is active.
     // The w1/w3 fusion (interleave/chunk) is now done on the Python side.
-    if (auto* fused = w1w3()) {
+    if (w1w3) {
+        auto* fused = static_cast<LinearWeight*>(w1w3);
         if (is_fused_silu_) {
             fused->epilogue = gemm::Epilogue::kGatedSilu;
         }

@@ -20,17 +20,10 @@ public:
     void prepare() override;
 
     // --- Typed child members ---
-    mutable LinearWeight* w1_   = nullptr;
-    mutable LinearWeight* w3_   = nullptr;
-    mutable LinearWeight* w2_   = nullptr;
-    mutable LinearWeight* w1w3_ = nullptr;
-
-
-    // --- Typed accessors (now return cached pointers) ---
-    LinearWeight* w1()   const { return w1_; }
-    LinearWeight* w3()   const { return w3_; }
-    LinearWeight* w2()   const { return w2_; }
-    LinearWeight* w1w3() const { return w1w3_; }
+    core::Submodule<LinearWeight> w1   {*this, "w1"};
+    core::Submodule<LinearWeight> w3   {*this, "w3"};
+    core::Submodule<LinearWeight> w2   {*this, "w2"};
+    core::Submodule<LinearWeight> w1w3 {*this, "w1w3"};
 
     int            inter_size() const { return inter_size_; }
     ActivationType act_type() const { return act_type_; }
