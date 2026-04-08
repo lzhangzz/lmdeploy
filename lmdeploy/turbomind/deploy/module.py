@@ -9,6 +9,26 @@ New code should import directly from the specific layer:
 """
 from __future__ import annotations
 
+# Suppress basedpyright "not accessed" warnings for intentional re-exports.
+# fmt: off
+__all__ = [
+    # spec.py — Read & Assemble
+    "SplitSide", "TextModelSpec",
+    "_GDN_IN_PROJ_KEYS", "_block_ops_need_dequant", "_dequant_linear",
+    "_ensure_compatible_formats", "_tp_interleave_tensor",
+    "fuse_gdn_in_proj", "merge_qkvg_v2", "merge_qkv_linear",
+    "merge_qkv_v2", "permute_v2", "permute_v2_partial",
+    # transforms.py — Transform
+    "_can_fuse_w1w3", "_shard_linear_for_tp", "_should_fuse_silu",
+    "fuse_ffn_linears",
+    # commit.py — Shard & Commit
+    "_ATTN_TP_RULES", "_FFN_TP_RULES", "_LINEAR_ATTN_TP_RULES",
+    "_SPLIT_SIDE_TO_DIM", "_commit_tensors", "_fuse_and_commit_ffn",
+    "_cast_shard_for_tm", "_infer_compute_dtype", "_infer_cpp_linear_dtype",
+    "_torch_dtype_to_cpp", "commit_ffn", "commit_linear", "commit_tensor",
+]
+# fmt: on
+
 # Read & Assemble layer
 from .spec import (
     SplitSide,
@@ -35,7 +55,7 @@ from .transforms import (
 )
 
 # Shard & Commit layer
-from .commit import (
+from .load_context import (
     _ATTN_TP_RULES,
     _FFN_TP_RULES,
     _LINEAR_ATTN_TP_RULES,
