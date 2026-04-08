@@ -28,6 +28,8 @@
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -512,6 +514,17 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::DeltaNetConfig(c);
         });
 
+    py::class_<turbomind::core::ModuleListConfig>(m, "ModuleListConfig")
+        .def(py::init<>());
+
+    py::class_<turbomind::core::NormConfig>(m, "NormConfig")
+        .def(py::init<>())
+        .def_readwrite("dim", &turbomind::core::NormConfig::dim)
+        .def_readwrite("data_type", &turbomind::core::NormConfig::data_type);
+
+    py::class_<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig")
+        .def(py::init<>());
+
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
         .def_property_readonly("where", [](const Tensor& t) { return t.device().type; })
@@ -725,6 +738,30 @@ PYBIND11_MODULE(_turbomind, m)
                     try {
                         auto cfg = config_obj.cast<turbomind::core::LinearConfig>();
                         auto child = std::make_unique<turbomind::LinearWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::ModuleListConfig>();
+                        auto child = std::make_unique<turbomind::core::ModuleList>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::NormConfig>();
+                        auto child = std::make_unique<turbomind::NormWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::DecoderLayerConfig>();
+                        auto child = std::make_unique<turbomind::DecoderLayerWeight>(cfg);
                         auto* raw = child.get();
                         m.add_child(name, std::move(child));
                         return raw;
