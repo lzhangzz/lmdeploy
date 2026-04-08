@@ -80,4 +80,13 @@ struct DeltaNetConfig {
     DataType data_type{};
 };
 
+struct ModuleListConfig {};
+
+struct NormConfig {
+    int      dim{};
+    DataType data_type{};
+};
+
+struct DecoderLayerConfig {};
+
 }  // namespace turbomind::core
