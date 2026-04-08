@@ -31,9 +31,9 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     tp_rank_ = cfg.tp_rank;
     act_type_ = static_cast<ActivationType>(cfg.act_type);
     fuse_silu_act_ = cfg.fuse_silu;
-    if ((int)moe_param_.expert_num.size() > layer_id_) {
-        expert_num_ = moe_param_.expert_num[layer_id_];
-    }
+    // The expert_num vector always has 1 element for per-layer instances,
+    // so always use index 0 regardless of layer_id.
+    expert_num_ = cfg.expert_num;
 }
 
 MoeWeight::MoeWeight(int              layer_id,
