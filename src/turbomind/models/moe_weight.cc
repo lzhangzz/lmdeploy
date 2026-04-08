@@ -19,9 +19,9 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     moe_param_.routed_scale = static_cast<float>(cfg.routed_scale);
     moe_param_.router_bias = cfg.router_bias;
     moe_param_.topk_group = cfg.topk_group;
-    moe_param_.topk_method = std::to_string(cfg.topk_method);
+    moe_param_.topk_method = cfg.topk_method;
     moe_param_.n_group = cfg.n_group;
-    moe_param_.scoring_func = std::to_string(cfg.scoring_func);
+    moe_param_.scoring_func = cfg.scoring_func;
     moe_param_.router_n_groups = cfg.router_n_groups;
     moe_param_.expert_num.assign(1, cfg.expert_num);
     hidden_dim_ = cfg.hidden_dim;

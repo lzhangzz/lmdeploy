@@ -155,9 +155,9 @@ class MoeConfig:
     routed_scale: float = 1.0
     router_bias: bool = False
     topk_group: int = 0
-    topk_method: int = 0
+    topk_method: str = ''
     n_group: int = 0
-    scoring_func: int = 0
+    scoring_func: str = ''
     router_n_groups: int = 0
     expert_num: int = 0
     hidden_dim: int = 0

@@ -53,9 +53,9 @@ struct MoeConfig {
     double   routed_scale{};
     bool     router_bias{};
     int      topk_group{};
-    int      topk_method{};
+    std::string topk_method{};
     int      n_group{};
-    int      scoring_func{};
+    std::string scoring_func{};
     int      router_n_groups{};
     int      expert_num{};
     int      hidden_dim{};
