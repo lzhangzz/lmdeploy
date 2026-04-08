@@ -21,12 +21,13 @@ Each `_load_*` method calls spec methods like `spec.attn_linears(layer)` interna
 ## Design Decisions
 
 1. **Component-major structure** -- Each `_process_*` method owns the full read → transform → commit lifecycle for one component. No separate pipeline stages. The GPU loop is hidden inside the writer.
-2. **`LayerWriter` abstraction** -- Commit-phase tool that wraps all GPU handles for one logical layer. `create_child` creates modules on all GPUs, `commit_linear`/`commit_tensor` shard and distribute. The `_process_*` methods see no GPU loop.
+2. **`LayerWriter` abstraction** -- Wraps all GPU handles for one logical layer. `create_child` creates modules on all GPUs, `commit_linear`/`commit_tensor` shard and distribute. The `_process_*` methods see no GPU loop.
 3. **Bound `(tp, ranks)` at `create_child`** -- `create_child` binds `tp` (TP size) and `ranks` (per-GPU rank list). Child writers inherit bound values. `commit_linear`/`commit_tensor` use them when `split_side` is given. No string-based dispatch.
 4. **GPU-0 processing** -- Weights move to GPU 0 once, transforms/fuses happen there, shards are sent to target GPUs via the C++ `copy_from` cross-device path.
 5. **Rename `_load_*` to `_process_*`** -- Each method reads from spec, transforms, and commits. `_process_*` reflects the full lifecycle.
 6. **Per-expert MoE iteration** -- MoE reads and distributes one expert at a time within `_process_moe`, keeping GPU 0 memory bounded.
 7. **Single `create_child` path** -- Add trivial typed configs for structural modules (`ModuleListConfig`, `NormConfig`, `DecoderLayerConfig`) so all module creation goes through `create_child(name, config)`. No `create_child_raw` / dict-based path on the writer.
+8. **Refactor FFN fusion to full-tensor** -- `fuse_ffn_linears` drops `tp`/`rank` params and works on full (unsharded) tensors. The writer's normal `commit_linear` with `split_side` handles TP sharding after fusion. No per-rank escape hatch needed.
 
 ## `LayerWriter` API
 
@@ -148,7 +149,7 @@ def _load_layer(self, layer, spec):
         permute_qk=getattr(self.model, 'permute_qk', True),
         repeat_kv=getattr(self.model, 'repeat_kv', 0),
         head_dim=mc.size_per_head,
-        rope_dim=...,
+        rope_dim=rope_param.dim if rope_param else mc.size_per_head,
         output_gate=getattr(mc, 'attn_output_gate', False),
         kv_head_num=mc.kv_head_num,
     ))
@@ -238,35 +239,39 @@ def _process_ffn(self, writer, spec, layer):
     ffn_linears = spec.ffn_linears(layer)
     if not ffn_linears:
         return
-
-    # --- TRANSFORM ---
-    # Fuse w1+w3 into interleaved or chunked layout (on GPU 0)
     w1 = ffn_linears.get('w1')
     w3 = ffn_linears.get('w3')
     w2 = ffn_linears.get('w2')
-    fused, w1_shard, w3_shard, fused_silu = (None, None, None, False)
+
+    # --- TRANSFORM ---
+    # Fuse w1+w3 on full (unsharded) tensors; writer handles TP sharding
+    fused, fused_silu = (None, False)
     if w1 is not None and w3 is not None:
-        fused, w1_shard, w3_shard, fused_silu = fuse_ffn_linears(
-            w1, w3, self.mlp_tp, 0, mc.activation_type, is_moe=False)
+        fused, fused_silu = fuse_ffn_linears(
+            w1, w3, mc.activation_type, is_moe=False)
 
     # --- COMMIT ---
     ffn_cfg = FfnConfig.from_model_config(
         mc, tp_size=self.mlp_tp, tp_rank=0, dtype=dtype,
-        act_type=_act_type_id(mc.activation_type), fuse_silu=True,
+        act_type=_act_type_id(mc.activation_type), fuse_silu=fused_silu,
         inter_size=...)
     ffn = writer.create_child('feed_forward', ffn_cfg,
                               tp=self.mlp_tp, ranks=self._mlp_ranks)
 
     if fused is not None:
-        ffn.commit_linear('w1w3', fused, model_dtype=dtype)
-        # TODO: ffn.set_fused_silu(fused_silu) across all GPUs
+        ffn.commit_linear('w1w3', fused,
+                          split_side=SplitSide.OUTPUT, model_dtype=dtype)
     else:
-        for name, shard in (('w1', w1_shard), ('w3', w3_shard)):
-            ffn.commit_linear(name, shard, model_dtype=dtype)
+        if w1 is not None:
+            ffn.commit_linear('w1', w1,
+                              split_side=SplitSide.OUTPUT, model_dtype=dtype)
+        if w3 is not None:
+            ffn.commit_linear('w3', w3,
+                              split_side=SplitSide.OUTPUT, model_dtype=dtype)
 
     if w2 is not None:
-        rule = _FFN_TP_RULES.get('w2', {})
-        ffn.commit_linear('w2', w2, model_dtype=dtype, **rule)
+        ffn.commit_linear('w2', w2,
+                          split_side=SplitSide.INPUT, model_dtype=dtype)
 ```
 
 ### `_process_moe` (per-expert iteration)
@@ -310,24 +315,47 @@ def _process_moe(self, writer, spec, layer):
         w3 = expert_linears.get('w3')
         w2 = expert_linears.get('w2')
 
-        # TRANSFORM + COMMIT
+        # TRANSFORM
+        fused, fused_silu = (None, False)
         if w1 is not None and w3 is not None:
-            fused, w1_s, w3_s, fused_silu = fuse_ffn_linears(
-                w1, w3, self.mlp_tp, 0, mc.activation_type, is_moe=True)
-            if fused is not None:
-                expert.commit_linear('w1w3', fused, model_dtype=dtype)
-            else:
-                for name, shard in (('w1', w1_s), ('w3', w3_s)):
-                    expert.commit_linear(name, shard, model_dtype=dtype)
+            fused, fused_silu = fuse_ffn_linears(
+                w1, w3, mc.activation_type, is_moe=True)
+
+        # COMMIT
+        if fused is not None:
+            expert.commit_linear('w1w3', fused,
+                                 split_side=SplitSide.OUTPUT, model_dtype=dtype)
         else:
             for name, lin in expert_linears.items():
                 rule = _FFN_TP_RULES.get(name, {})
                 expert.commit_linear(name, lin, model_dtype=dtype, **rule)
 
         if w2 is not None:
-            rule = _FFN_TP_RULES.get('w2', {})
-            expert.commit_linear('w2', w2, model_dtype=dtype, **rule)
+            expert.commit_linear('w2', w2,
+                                 split_side=SplitSide.INPUT, model_dtype=dtype)
 ```
+
+## `fuse_ffn_linears` refactor
+
+`fuse_ffn_linears` in `transforms.py` currently takes `tp` and `rank` params, shards w1/w3 internally, then fuses the shards. Refactor to work on full (unsharded) tensors:
+
+```python
+# Before:
+def fuse_ffn_linears(w1, w3, tp, rank, act_type, is_moe):
+    w1 = _shard_linear_for_tp(w1, tp, rank)
+    w3 = _shard_linear_for_tp(w3, tp, rank)
+    fused = interleave_linears(w1, w3, ...) or chunk_linears(w1, w3, ...)
+    return fused, w1, w3, fused_silu
+
+# After:
+def fuse_ffn_linears(w1, w3, act_type, is_moe):
+    fused = interleave_linears(w1, w3, ...) or chunk_linears(w1, w3, ...)
+    return fused, fused_silu
+```
+
+No TP sharding inside the function. The writer's `commit_linear` with `split_side=SplitSide.OUTPUT` handles sharding after fusion.
+
+For **chunked** layout, the commit path must shard correctly: split each chunk's output dim equally rather than taking a contiguous slice. This can be done by reshaping `[hidden, 2*inter_size]` → `[hidden, 2, inter_size]`, sharding the last dim, and reshaping back. The sharding logic in `_commit_tensors` or `commit_linear` handles this based on the `Linear`'s data format.
 
 ## `_commit_tensors` adjustment
 
@@ -354,15 +382,16 @@ The C++ `copy_from` handles the cross-GPU transfer when the shard is on GPU 0 an
 
 ## Unchanged
 
-- `spec.py`, `transforms.py`, `linear.py` -- no changes
+- `spec.py`, `linear.py` -- no changes
 - All source model specs -- no changes
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `text_model_loader.py` | Add `LayerWriter`, restructure `_load_layer`, rename `_load_*` to `_process_*`, inline FFN fusion from `commit_ffn`, precompute rank lists |
-| `load_context.py` | Adjust `_commit_tensors` for GPU-resident tensors; `commit_ffn` can be removed (fusion inlined into `_process_ffn`/`_process_moe`) |
+| `text_model_loader.py` | Add `LayerWriter`, restructure `_load_layer`, rename `_load_*` to `_process_*`, inline FFN read/transform/commit, precompute rank lists |
+| `load_context.py` | Adjust `_commit_tensors` for GPU-resident tensors; `commit_ffn` removed (inlined into `_process_ffn`/`_process_moe`) |
+| `transforms.py` | Refactor `fuse_ffn_linears` to drop `tp`/`rank` params, work on full tensors |
 | `configs.py` | Add `ModuleListConfig`, `NormConfig`, `DecoderLayerConfig` |
 | `src/turbomind/core/module_config.h` | Add trivial C++ config structs for ModuleList, NormWeight, DecoderLayerWeight |
 | `src/turbomind/python/bind.cpp` | Bind trivial config structs, add `create_child` overloads |
