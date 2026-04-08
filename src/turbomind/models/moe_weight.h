@@ -56,7 +56,7 @@ private:
     int            expert_num_{};
 
     mutable std::unique_ptr<FfnWeight> block_;
-    Tensor score_correction_bias_;
+    mutable core::Parameter score_correction_bias_{*this, "score_correction_bias"};
 };
 
 }  // namespace turbomind

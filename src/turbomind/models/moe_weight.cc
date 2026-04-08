@@ -64,10 +64,9 @@ Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& s
 {
     if (param_name == "score_correction_bias" && expert_num_ > 0) {
         if (!score_correction_bias_) {
-            score_correction_bias_ = Tensor{{expert_num_}, spec.dtype, kDEVICE};
-            add_param("score_correction_bias", score_correction_bias_);
+            *score_correction_bias_ = Tensor{{expert_num_}, spec.dtype, kDEVICE};
         }
-        return score_correction_bias_;
+        return *score_correction_bias_;
     }
     return Module::alloc(param_name, spec);
 }

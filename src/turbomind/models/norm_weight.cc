@@ -9,24 +9,16 @@ namespace turbomind {
 NormWeight::NormWeight(int dim, DataType dtype, DeviceType device)
     : shape_{dim}, dtype_{dtype}
 {
-    if (device == kDEVICE) {
-        add_param("weight", weight_);
-    }
-    else {
-        weight_ = Tensor{shape_, dtype, device};
-        add_param("weight", weight_);
+    if (device != kDEVICE) {
+        *weight_ = Tensor{shape_, dtype_, device};
     }
 }
 
 NormWeight::NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType device)
     : shape_{std::move(shape)}, dtype_{dtype}
 {
-    if (device == kDEVICE) {
-        add_param("weight", weight_);
-    }
-    else {
-        weight_ = Tensor{shape_, dtype, device};
-        add_param("weight", weight_);
+    if (device != kDEVICE) {
+        *weight_ = Tensor{shape_, dtype_, device};
     }
 }
 
@@ -50,11 +42,10 @@ Tensor NormWeight::alloc(const std::string& param_name, const core::WeightSpec& 
         // The rms_norm kernel requires w.dtype() == x.dtype().
         // The Python side (_cast_shard_for_tm) handles casting from source
         // dtype to the model's compute dtype during weight loading.
-        weight_ = Tensor{shape_, dtype_, kDEVICE};
-        add_param("weight", weight_);
+        *weight_ = Tensor{shape_, dtype_, kDEVICE};
     }
     if (param_name == "weight") {
-        return weight_;
+        return *weight_;
     }
     return Module::alloc(param_name, spec);
 }

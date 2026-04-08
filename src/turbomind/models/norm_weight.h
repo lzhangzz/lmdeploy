@@ -26,13 +26,13 @@ public:
     /// Allocate the weight tensor on first call, then return it.
     Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 
-    Tensor& weight() { return weight_; }
-    const Tensor& weight() const { return weight_; }
+    Tensor&       weight()       { return *weight_; }
+    const Tensor& weight() const { return *weight_; }
 
 private:
     std::vector<ssize_t> shape_;
     DataType              dtype_{};
-    Tensor                weight_;
+    mutable core::Parameter weight_{*this, "weight"};
 };
 
 }  // namespace turbomind
