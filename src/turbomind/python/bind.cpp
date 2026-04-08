@@ -17,7 +17,12 @@
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
+#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
@@ -411,6 +416,97 @@ PYBIND11_MODULE(_turbomind, m)
     m.def("MakeLinearWeightFormat", &turbomind::MakeLinearWeightFormat,
           py::arg("data_type"), py::arg("weight_format"), py::arg("group_size"));
 
+    // --- Config struct bindings ---
+    py::class_<turbomind::core::LinearConfig>(m, "LinearConfig")
+        .def(py::init<>())
+        .def_readwrite("input_dim", &turbomind::core::LinearConfig::input_dim)
+        .def_readwrite("output_dim", &turbomind::core::LinearConfig::output_dim)
+        .def_readwrite("data_type", &turbomind::core::LinearConfig::data_type)
+        .def_readwrite("has_bias", &turbomind::core::LinearConfig::has_bias)
+        .def("clone", [](const turbomind::core::LinearConfig& c) {
+            return turbomind::core::LinearConfig(c);
+        });
+
+    py::class_<turbomind::core::AttentionConfig>(m, "AttentionConfig")
+        .def(py::init<>())
+        .def_readwrite("hidden_dim", &turbomind::core::AttentionConfig::hidden_dim)
+        .def_readwrite("head_dim", &turbomind::core::AttentionConfig::head_dim)
+        .def_readwrite("head_num", &turbomind::core::AttentionConfig::head_num)
+        .def_readwrite("kv_head_num", &turbomind::core::AttentionConfig::kv_head_num)
+        .def_readwrite("kv_lora_rank", &turbomind::core::AttentionConfig::kv_lora_rank)
+        .def_readwrite("q_lora_rank", &turbomind::core::AttentionConfig::q_lora_rank)
+        .def_readwrite("qk_rope_dim", &turbomind::core::AttentionConfig::qk_rope_dim)
+        .def_readwrite("v_head_dim", &turbomind::core::AttentionConfig::v_head_dim)
+        .def_readwrite("has_bias", &turbomind::core::AttentionConfig::has_bias)
+        .def_readwrite("qk_norm", &turbomind::core::AttentionConfig::qk_norm)
+        .def_readwrite("tp_size", &turbomind::core::AttentionConfig::tp_size)
+        .def_readwrite("tp_rank", &turbomind::core::AttentionConfig::tp_rank)
+        .def_readwrite("data_type", &turbomind::core::AttentionConfig::data_type)
+        .def_readwrite("window_size", &turbomind::core::AttentionConfig::window_size)
+        .def_readwrite("attn_sink", &turbomind::core::AttentionConfig::attn_sink)
+        .def_readwrite("attn_output_gate", &turbomind::core::AttentionConfig::attn_output_gate)
+        .def("clone", [](const turbomind::core::AttentionConfig& c) {
+            return turbomind::core::AttentionConfig(c);
+        });
+
+    py::class_<turbomind::core::FfnConfig>(m, "FfnConfig")
+        .def(py::init<>())
+        .def_readwrite("hidden_dim", &turbomind::core::FfnConfig::hidden_dim)
+        .def_readwrite("inter_size", &turbomind::core::FfnConfig::inter_size)
+        .def_readwrite("has_bias", &turbomind::core::FfnConfig::has_bias)
+        .def_readwrite("tp_size", &turbomind::core::FfnConfig::tp_size)
+        .def_readwrite("tp_rank", &turbomind::core::FfnConfig::tp_rank)
+        .def_readwrite("data_type", &turbomind::core::FfnConfig::data_type)
+        .def_readwrite("act_type", &turbomind::core::FfnConfig::act_type)
+        .def_readwrite("fuse_silu", &turbomind::core::FfnConfig::fuse_silu)
+        .def_readwrite("fused_moe", &turbomind::core::FfnConfig::fused_moe)
+        .def("clone", [](const turbomind::core::FfnConfig& c) {
+            return turbomind::core::FfnConfig(c);
+        });
+
+    py::class_<turbomind::core::MoeConfig>(m, "MoeConfig")
+        .def(py::init<>())
+        .def_readwrite("layer_id", &turbomind::core::MoeConfig::layer_id)
+        .def_readwrite("method", &turbomind::core::MoeConfig::method)
+        .def_readwrite("experts_per_token", &turbomind::core::MoeConfig::experts_per_token)
+        .def_readwrite("inter_size", &turbomind::core::MoeConfig::inter_size)
+        .def_readwrite("norm_topk_prob", &turbomind::core::MoeConfig::norm_topk_prob)
+        .def_readwrite("shared_gate", &turbomind::core::MoeConfig::shared_gate)
+        .def_readwrite("routed_scale", &turbomind::core::MoeConfig::routed_scale)
+        .def_readwrite("router_bias", &turbomind::core::MoeConfig::router_bias)
+        .def_readwrite("topk_group", &turbomind::core::MoeConfig::topk_group)
+        .def_readwrite("topk_method", &turbomind::core::MoeConfig::topk_method)
+        .def_readwrite("n_group", &turbomind::core::MoeConfig::n_group)
+        .def_readwrite("scoring_func", &turbomind::core::MoeConfig::scoring_func)
+        .def_readwrite("router_n_groups", &turbomind::core::MoeConfig::router_n_groups)
+        .def_readwrite("expert_num", &turbomind::core::MoeConfig::expert_num)
+        .def_readwrite("hidden_dim", &turbomind::core::MoeConfig::hidden_dim)
+        .def_readwrite("mlp_bias", &turbomind::core::MoeConfig::mlp_bias)
+        .def_readwrite("data_type", &turbomind::core::MoeConfig::data_type)
+        .def_readwrite("tp_size", &turbomind::core::MoeConfig::tp_size)
+        .def_readwrite("tp_rank", &turbomind::core::MoeConfig::tp_rank)
+        .def_readwrite("act_type", &turbomind::core::MoeConfig::act_type)
+        .def_readwrite("fuse_silu", &turbomind::core::MoeConfig::fuse_silu)
+        .def("clone", [](const turbomind::core::MoeConfig& c) {
+            return turbomind::core::MoeConfig(c);
+        });
+
+    py::class_<turbomind::core::DeltaNetConfig>(m, "DeltaNetConfig")
+        .def(py::init<>())
+        .def_readwrite("hidden_dim", &turbomind::core::DeltaNetConfig::hidden_dim)
+        .def_readwrite("num_k_heads", &turbomind::core::DeltaNetConfig::num_k_heads)
+        .def_readwrite("num_v_heads", &turbomind::core::DeltaNetConfig::num_v_heads)
+        .def_readwrite("key_head_dim", &turbomind::core::DeltaNetConfig::key_head_dim)
+        .def_readwrite("value_head_dim", &turbomind::core::DeltaNetConfig::value_head_dim)
+        .def_readwrite("d_conv", &turbomind::core::DeltaNetConfig::d_conv)
+        .def_readwrite("has_bias", &turbomind::core::DeltaNetConfig::has_bias)
+        .def_readwrite("tp_size", &turbomind::core::DeltaNetConfig::tp_size)
+        .def_readwrite("tp_rank", &turbomind::core::DeltaNetConfig::tp_rank)
+        .def_readwrite("data_type", &turbomind::core::DeltaNetConfig::data_type)
+        .def("clone", [](const turbomind::core::DeltaNetConfig& c) {
+            return turbomind::core::DeltaNetConfig(c);
+        });
+
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
         .def_property_readonly("where", [](const Tensor& t) { return t.device().type; })
@@ -583,6 +679,58 @@ PYBIND11_MODULE(_turbomind, m)
              [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
              py::return_value_policy::reference,
              "name"_a)
+        // Config-based create_child: accepts a typed config struct object
+        .def("create_child",
+            [with_context](ft::core::Module& m, const std::string& name,
+                           const py::object& config_obj) -> ft::core::Module* {
+                return with_context(m, [&]() -> ft::core::Module* {
+                    // Try each config type via py::cast
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::AttentionConfig>();
+                        auto child = std::make_unique<turbomind::AttentionWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::FfnConfig>();
+                        auto child = std::make_unique<turbomind::FfnWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::MoeConfig>();
+                        auto child = std::make_unique<turbomind::MoeWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::DeltaNetConfig>();
+                        auto child = std::make_unique<turbomind::DeltaNetWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    try {
+                        auto cfg = config_obj.cast<turbomind::core::LinearConfig>();
+                        auto child = std::make_unique<turbomind::LinearWeight>(cfg);
+                        auto* raw = child.get();
+                        m.add_child(name, std::move(child));
+                        return raw;
+                    } catch (py::cast_error&) {}
+
+                    throw std::runtime_error("Unknown config type passed to create_child(name, config)");
+                });
+            },
+            py::return_value_policy::reference,
+            "name"_a, "config"_a)
+        // Dict-based create_child: legacy overload
         .def("create_child",
              [with_context](ft::core::Module& m, const std::string& name,
                 const std::string& type_name,
