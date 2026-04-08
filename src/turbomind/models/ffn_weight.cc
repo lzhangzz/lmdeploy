@@ -11,6 +11,9 @@ FfnWeight::FfnWeight(const core::FfnConfig& cfg)
     : FfnWeight(cfg.hidden_dim, cfg.inter_size, cfg.has_bias, cfg.tp_size, cfg.tp_rank,
                 cfg.data_type, static_cast<ActivationType>(cfg.act_type), cfg.fuse_silu)
 {
+    if (cfg.fused_moe) {
+        set_fused_moe(true);
+    }
 }
 
 FfnWeight::FfnWeight(int hidden_dim, int inter_size, bool bias, int tp_size, int tp_rank,
