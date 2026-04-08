@@ -249,8 +249,8 @@ def chunk_linears(w1: Linear, w3: Linear, tp: int = 1) -> Linear:
     for kind in w1.tensors:
         t1 = w1.tensors[kind]
         t3 = w3.tensors[kind]
-        if tp <= 1 or not _has_input_dim(t1):
-            # No TP or 1-D (bias): simple concatenation
+        if tp <= 1:
+            # No TP: simple concatenation
             dim = -1 if _has_input_dim(t1) else 0
             fused[kind] = torch.cat([t1, t3], dim=dim)
         else:
