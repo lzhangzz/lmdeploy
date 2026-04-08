@@ -179,29 +179,35 @@ class Glm4MoeLiteSpec(TextModelSpec):
     def ffn_norm(self, layer: int) -> torch.Tensor | None:
         return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def raw_layer_tensors(self, layer: int):
-        tensors = []
-        # MLA layernorms (broadcast)
-        q_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
-        kv_a = self._get(f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
+    def attn_params(self, layer):
+        params = {}
+        q_a = self._get(
+            f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
+        kv_a = self._get(
+            f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
         if q_a is not None:
-            tensors.append(("attention.q_a_layernorm.weight", q_a, None))
+            params["q_a_layernorm.weight"] = (q_a, None)
         if kv_a is not None:
-            tensors.append(("attention.kv_a_layernorm.weight", kv_a, None))
-        # MoE gate, bias, and correction bias (broadcast)
+            params["kv_a_layernorm.weight"] = (kv_a, None)
+        return params
+
+    def moe_params(self, layer):
+        params = {}
         if self.num_experts(layer) > 0:
-            gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
+            gate = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                tensors.append(("moe_ffn.gate.weight", gate, None))
-            gate_bias = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.bias")
+                params["gate.weight"] = (gate, None)
+            gate_bias = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.gate.bias")
             if gate_bias is not None:
-                tensors.append(("moe_ffn.gate.bias", gate_bias, None))
+                params["gate.bias"] = (gate_bias, None)
             correction = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.e_score_correction_bias")
             if correction is not None:
-                tensors.append(("moe_ffn.score_correction_bias", correction, None))
-        return tensors
+                params["score_correction_bias"] = (correction, None)
+        return params
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")
