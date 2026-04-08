@@ -20,11 +20,11 @@ Each `_load_*` method calls spec methods like `spec.attn_linears(layer)` interna
 
 ## Design Decisions
 
-1. **Component-major structure** -- Invert the loop: for each component, read once, then distribute to all GPUs. The GPU loop moves inside a writer abstraction.
-2. **`LayerWriter` abstraction** -- Wraps all GPU handles for one logical layer. Operations (`create_child`, `commit_linear`, `commit_tensor`) iterate over GPUs internally. The `_process_*` methods see no GPU loop.
+1. **Component-major structure** -- Each `_process_*` method owns the full read → transform → commit lifecycle for one component. No separate pipeline stages. The GPU loop is hidden inside the writer.
+2. **`LayerWriter` abstraction** -- Commit-phase tool that wraps all GPU handles for one logical layer. `create_child` creates modules on all GPUs, `commit_linear`/`commit_tensor` shard and distribute. The `_process_*` methods see no GPU loop.
 3. **Bound `(tp, ranks)` at `create_child`** -- `create_child` binds `tp` (TP size) and `ranks` (per-GPU rank list). Child writers inherit bound values. `commit_linear`/`commit_tensor` use them when `split_side` is given. No string-based dispatch.
 4. **GPU-0 processing** -- Weights move to GPU 0 once, transforms/fuses happen there, shards are sent to target GPUs via the C++ `copy_from` cross-device path.
-5. **Rename `_load_*` to `_process_*`** -- The methods no longer read from spec (reads are hoisted). They transform, shard, and commit. `_process_*` reflects this.
+5. **Rename `_load_*` to `_process_*`** -- Each method reads from spec, transforms, and commits. `_process_*` reflects the full lifecycle.
 6. **Per-expert MoE iteration** -- MoE reads and distributes one expert at a time within `_process_moe`, keeping GPU 0 memory bounded.
 7. **Single `create_child` path** -- Add trivial typed configs for structural modules (`ModuleListConfig`, `NormConfig`, `DecoderLayerConfig`) so all module creation goes through `create_child(name, config)`. No `create_child_raw` / dict-based path on the writer.
 
@@ -191,17 +191,26 @@ self._mlp_ranks  = [self.model.tp_ranks(gpu)[1]
                     for gpu in range(self.model.gpu_count)]
 ```
 
-## Example: `_process_attention`
+## `_process_*` method structure
+
+Each method follows the same pattern — read, transform, commit — all in one place for its component. The writer handles GPU distribution; the method handles everything else.
+
+### `_process_attention`
 
 ```python
 def _process_attention(self, writer, spec, layer):
     mc = self.model.model_config
     dtype = _cpp_dtype(mc.data_type)
 
-    attn_linears = spec.attn_linears(layer)      # read once
+    # --- READ ---
+    attn_linears = spec.attn_linears(layer)
     if not attn_linears:
         return
 
+    # --- TRANSFORM ---
+    # (attention has no fusion; QKV merge already happened inside spec)
+
+    # --- COMMIT ---
     window_size = 0
     ws_list = mc.window_size
     if ws_list and layer < len(ws_list):
@@ -218,12 +227,49 @@ def _process_attention(self, writer, spec, layer):
         attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 ```
 
-Key points:
-- `spec.attn_linears(layer)` called once (not N times).
-- `create_child` binds `tp=self.attn_tp, ranks=self._attn_ranks`.
-- `commit_linear` uses bound tp/ranks when `split_side` is in `rule`; broadcasts otherwise.
+### `_process_ffn`
 
-## Example: `_process_moe` (per-expert iteration)
+```python
+def _process_ffn(self, writer, spec, layer):
+    mc = self.model.model_config
+    dtype = _cpp_dtype(mc.data_type)
+
+    # --- READ ---
+    ffn_linears = spec.ffn_linears(layer)
+    if not ffn_linears:
+        return
+
+    # --- TRANSFORM ---
+    # Fuse w1+w3 into interleaved or chunked layout (on GPU 0)
+    w1 = ffn_linears.get('w1')
+    w3 = ffn_linears.get('w3')
+    w2 = ffn_linears.get('w2')
+    fused, w1_shard, w3_shard, fused_silu = (None, None, None, False)
+    if w1 is not None and w3 is not None:
+        fused, w1_shard, w3_shard, fused_silu = fuse_ffn_linears(
+            w1, w3, self.mlp_tp, 0, mc.activation_type, is_moe=False)
+
+    # --- COMMIT ---
+    ffn_cfg = FfnConfig.from_model_config(
+        mc, tp_size=self.mlp_tp, tp_rank=0, dtype=dtype,
+        act_type=_act_type_id(mc.activation_type), fuse_silu=True,
+        inter_size=...)
+    ffn = writer.create_child('feed_forward', ffn_cfg,
+                              tp=self.mlp_tp, ranks=self._mlp_ranks)
+
+    if fused is not None:
+        ffn.commit_linear('w1w3', fused, model_dtype=dtype)
+        # TODO: ffn.set_fused_silu(fused_silu) across all GPUs
+    else:
+        for name, shard in (('w1', w1_shard), ('w3', w3_shard)):
+            ffn.commit_linear(name, shard, model_dtype=dtype)
+
+    if w2 is not None:
+        rule = _FFN_TP_RULES.get('w2', {})
+        ffn.commit_linear('w2', w2, model_dtype=dtype, **rule)
+```
+
+### `_process_moe` (per-expert iteration)
 
 ```python
 def _process_moe(self, writer, spec, layer):
@@ -232,62 +278,56 @@ def _process_moe(self, writer, spec, layer):
     mc = self.model.model_config
     dtype = _cpp_dtype(mc.data_type)
 
-    # Read gate/shared_gate once
-    gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
-    shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
-
     moe_cfg = MoeConfig.from_model_config(mc, layer_id=layer, ...)
     moe = writer.create_child('moe_ffn', moe_cfg,
                               tp=self.mlp_tp, ranks=self._mlp_ranks)
 
-    # Gate (broadcast, no split)
+    # --- READ + COMMIT gate (no transform, broadcast) ---
+    gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
     if gate_linear is not None:
         moe.commit_linear('gate', gate_linear, model_dtype=dtype)
     else:
         gate_cfg = LinearConfig(input_dim=..., output_dim=spec.num_experts(layer), ...)
         moe.create_child('gate', gate_cfg)
 
-    # Shared gate
+    # --- READ + COMMIT shared_gate (no transform, broadcast) ---
+    shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
     if shared_gate_linear is not None:
         moe.commit_linear('shared_gate', shared_gate_linear, model_dtype=dtype)
     elif mc.moe_shared_gate:
         shared_gate_cfg = LinearConfig(input_dim=..., output_dim=1, ...)
         moe.create_child('shared_gate', shared_gate_cfg)
 
-    # Experts: one at a time to bound GPU 0 memory
+    # --- Per-expert: READ → TRANSFORM → COMMIT, one at a time ---
     experts = moe.create_child('experts', ModuleListConfig())
     for e in range(spec.num_experts(layer)):
         expert_cfg = FfnConfig.from_model_config(mc, ...)
         expert = experts.create_child(str(e), expert_cfg)
 
-        expert_linears = spec.moe_ffn_linears(layer, e)  # read one expert
+        # READ
+        expert_linears = spec.moe_ffn_linears(layer, e)
         w1 = expert_linears.get('w1')
         w3 = expert_linears.get('w3')
         w2 = expert_linears.get('w2')
+
+        # TRANSFORM + COMMIT
         if w1 is not None and w3 is not None:
-            # Fuse and commit (transform on GPU 0, distribute)
-            _fuse_and_commit_ffn(expert, w1, w3, w2, ...)
+            fused, w1_s, w3_s, fused_silu = fuse_ffn_linears(
+                w1, w3, self.mlp_tp, 0, mc.activation_type, is_moe=True)
+            if fused is not None:
+                expert.commit_linear('w1w3', fused, model_dtype=dtype)
+            else:
+                for name, shard in (('w1', w1_s), ('w3', w3_s)):
+                    expert.commit_linear(name, shard, model_dtype=dtype)
         else:
             for name, lin in expert_linears.items():
                 rule = _FFN_TP_RULES.get(name, {})
                 expert.commit_linear(name, lin, model_dtype=dtype, **rule)
+
+        if w2 is not None:
+            rule = _FFN_TP_RULES.get('w2', {})
+            expert.commit_linear('w2', w2, model_dtype=dtype, **rule)
 ```
-
-## `commit_ffn` adaptation
-
-`commit_ffn` (aliased as `_fuse_and_commit_ffn`) in `load_context.py` currently takes a single C++ module handle and calls `commit_linear` on it. With the writer pattern, it receives a `LayerWriter` instead. The function signature changes from:
-
-```python
-def commit_ffn(ffn_mod, w1, w3, w2, tp, rank, act_type, is_moe, model_dtype):
-```
-
-to:
-
-```python
-def commit_ffn(writer, w1, w3, w2, act_type, is_moe, model_dtype):
-```
-
-The `tp` and `rank` parameters are dropped -- the writer already has them bound. Internally, `commit_ffn` calls `writer.commit_linear(...)` instead of `commit_linear(ffn_mod, ...)`.
 
 ## `_commit_tensors` adjustment
 
@@ -321,8 +361,8 @@ The C++ `copy_from` handles the cross-GPU transfer when the shard is on GPU 0 an
 
 | File | Change |
 |------|--------|
-| `text_model_loader.py` | Add `LayerWriter`, restructure `_load_layer`, rename `_load_*` to `_process_*`, precompute rank lists |
-| `load_context.py` | Adjust `_commit_tensors` for GPU-resident tensors; adapt `commit_ffn` to accept `LayerWriter` |
+| `text_model_loader.py` | Add `LayerWriter`, restructure `_load_layer`, rename `_load_*` to `_process_*`, inline FFN fusion from `commit_ffn`, precompute rank lists |
+| `load_context.py` | Adjust `_commit_tensors` for GPU-resident tensors; `commit_ffn` can be removed (fusion inlined into `_process_ffn`/`_process_moe`) |
 | `configs.py` | Add `ModuleListConfig`, `NormConfig`, `DecoderLayerConfig` |
 | `src/turbomind/core/module_config.h` | Add trivial C++ config structs for ModuleList, NormWeight, DecoderLayerWeight |
 | `src/turbomind/python/bind.cpp` | Bind trivial config structs, add `create_child` overloads |
