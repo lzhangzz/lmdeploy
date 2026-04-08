@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .configs import AttentionConfig, FfnConfig, MoeConfig, DeltaNetConfig, LinearConfig
 from .load_context import LoadContext, _act_type_id
 
 if TYPE_CHECKING:
@@ -112,24 +113,10 @@ class TextModelLoader:
                 if ws_list and layer < len(ws_list):
                     window_size = ws_list[layer]
 
-                attn_mod = handle.create_child('attention', 'AttentionWeight', {
-                    'hidden_dim': hidden,
-                    'head_dim': mc.size_per_head,
-                    'head_num': mc.head_num,
-                    'kv_head_num': mc.kv_head_num,
-                    'kv_lora_rank': mc.kv_lora_rank or 0,
-                    'q_lora_rank': mc.q_lora_rank or 0,
-                    'qk_rope_dim': mc.qk_rope_dim or 0,
-                    'v_head_dim': mc.v_head_dim or 0,
-                    'has_bias': mc.attn_bias,
-                    'qk_norm': mc.qk_norm,
-                    'tp_size': self.attn_tp,
-                    'tp_rank': attn_rank,
-                    'data_type': dtype,
-                    'window_size': window_size,
-                    'attn_sink': mc.attn_sink,
-                    'attn_output_gate': mc.attn_output_gate,
-                })
+                attn_cfg = AttentionConfig.from_model_config(
+                    mc, tp_size=self.attn_tp, tp_rank=attn_rank,
+                    dtype=dtype, window_size=window_size)
+                attn_mod = handle.create_child('attention', attn_cfg.to_cpp())
                 for name, lin in attn_linears.items():
                     rule = _ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
@@ -145,16 +132,11 @@ class TextModelLoader:
                 if is_list and layer < len(is_list):
                     inter_size = is_list[layer]
 
-                ffn_mod = handle.create_child('feed_forward', 'FfnWeight', {
-                    'hidden_dim': hidden,
-                    'inter_size': inter_size,
-                    'has_bias': mc.mlp_bias,
-                    'tp_size': self.mlp_tp,
-                    'tp_rank': mlp_rank,
-                    'data_type': dtype,
-                    'act_type': _act_type_id(mc.activation_type),
-                    'fuse_silu_act': True,
-                })
+                ffn_cfg = FfnConfig.from_model_config(
+                    mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+                    dtype=dtype, act_type=_act_type_id(mc.activation_type),
+                    fuse_silu=True, inter_size=inter_size)
+                ffn_mod = handle.create_child('feed_forward', ffn_cfg.to_cpp())
                 w1 = ffn_linears.get('w1')
                 w3 = ffn_linears.get('w3')
                 w2 = ffn_linears.get('w2')
@@ -178,29 +160,11 @@ class TextModelLoader:
                 if en_list and layer < len(en_list):
                     expert_num = en_list[layer]
 
-                moe_mod = handle.create_child('moe_ffn', 'MoeWeight', {
-                    'layer_id': layer,
-                    'method': 1,  # kFused
-                    'experts_per_token': mc.experts_per_token,
-                    'inter_size': mc.expert_inter_size or 0,
-                    'norm_topk_prob': mc.norm_topk_prob,
-                    'shared_gate': mc.moe_shared_gate,
-                    'routed_scale': float(mc.routed_scale),
-                    'router_bias': getattr(mc, 'expert_router_bias', False),
-                    'topk_group': mc.topk_group,
-                    'topk_method': mc.topk_method,
-                    'n_group': mc.moe_group_num,
-                    'scoring_func': mc.scoring_func,
-                    'router_n_groups': max(0, getattr(mc, 'router_n_groups', -1)),
-                    'expert_num': expert_num,
-                    'hidden_dim': hidden,
-                    'mlp_bias': mc.mlp_bias,
-                    'data_type': dtype,
-                    'tp_size': self.mlp_tp,
-                    'tp_rank': mlp_rank,
-                    'act_type': _act_type_id(mc.activation_type),
-                    'fuse_silu_act': True,
-                })
+                moe_cfg = MoeConfig.from_model_config(
+                    mc, layer_id=layer, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+                    dtype=dtype, act_type=_act_type_id(mc.activation_type),
+                    fuse_silu=True, expert_num=expert_num)
+                moe_mod = handle.create_child('moe_ffn', moe_cfg.to_cpp())
 
                 # Create gate LinearWeight for router
                 gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
@@ -210,12 +174,12 @@ class TextModelLoader:
                 else:
                     # Spec handles gate via raw_layer_tensors; create the
                     # LinearWeight child so the tensor is stored correctly.
-                    moe_mod.create_child('gate', 'LinearWeight', {
-                        'input_dim': hidden,
-                        'output_dim': spec.num_experts(layer),
-                        'data_type': dtype,
-                        'has_bias': getattr(mc, 'expert_router_bias', False),
-                    })
+                    gate_cfg = LinearConfig(
+                        input_dim=hidden,
+                        output_dim=spec.num_experts(layer),
+                        data_type=dtype,
+                        has_bias=getattr(mc, 'expert_router_bias', False))
+                    moe_mod.create_child('gate', gate_cfg.to_cpp())
 
                 # Create shared_gate if needed
                 shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
@@ -223,29 +187,23 @@ class TextModelLoader:
                     commit_linear(moe_mod, shared_gate_linear, 'shared_gate',
                                        model_dtype=dtype)
                 elif mc.moe_shared_gate:
-                    moe_mod.create_child('shared_gate', 'LinearWeight', {
-                        'input_dim': hidden,
-                        'output_dim': 1,
-                        'data_type': dtype,
-                        'has_bias': False,
-                    })
+                    shared_gate_cfg = LinearConfig(
+                        input_dim=hidden,
+                        output_dim=1,
+                        data_type=dtype,
+                        has_bias=False)
+                    moe_mod.create_child('shared_gate', shared_gate_cfg.to_cpp())
 
                 # Create experts ModuleList and expert children
                 experts_list = moe_mod.create_child('experts', 'ModuleList', {})
                 expert_inter = mc.expert_inter_size or 0
                 for e in range(spec.num_experts(layer)):
                     expert_name = str(e)
-                    experts_list.create_child(expert_name, 'FfnWeight', {
-                        'hidden_dim': hidden,
-                        'inter_size': expert_inter,
-                        'has_bias': mc.mlp_bias,
-                        'tp_size': self.mlp_tp,
-                        'tp_rank': mlp_rank,
-                        'data_type': dtype,
-                        'act_type': _act_type_id(mc.activation_type),
-                        'fuse_silu_act': True,
-                        'fused_moe': True,
-                    })
+                    expert_cfg = FfnConfig.from_model_config(
+                        mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+                        dtype=dtype, act_type=_act_type_id(mc.activation_type),
+                        fuse_silu=True, inter_size=expert_inter, fused_moe=True)
+                    experts_list.create_child(expert_name, expert_cfg.to_cpp())
 
                 for e in range(spec.num_experts(layer)):
                     expert_linears = spec.moe_ffn_linears(layer, e)
@@ -269,18 +227,9 @@ class TextModelLoader:
             # --- Linear attention (GDN) ---
             la_linears = spec.linear_attn_linears(layer)
             if la_linears:
-                linear_attn_mod = handle.create_child('linear_attn', 'DeltaNetWeight', {
-                    'hidden_dim': hidden,
-                    'num_k_heads': mc.linear_num_key_heads,
-                    'num_v_heads': mc.linear_num_value_heads,
-                    'key_head_dim': mc.linear_key_head_dim,
-                    'value_head_dim': mc.linear_value_head_dim,
-                    'd_conv': mc.linear_conv_kernel_dim,
-                    'bias': 0,
-                    'tp_size': self.attn_tp,
-                    'tp_rank': attn_rank,
-                    'data_type': dtype,
-                })
+                dn_cfg = DeltaNetConfig.from_model_config(
+                    mc, tp_size=self.attn_tp, tp_rank=attn_rank, dtype=dtype)
+                linear_attn_mod = handle.create_child('linear_attn', dn_cfg.to_cpp())
                 for name, lin in la_linears.items():
                     rule = _LINEAR_ATTN_TP_RULES.get(name, {})
                     tp = self.attn_tp if 'split_side' in rule else 1
@@ -344,12 +293,11 @@ class TextModelLoader:
             emb = spec.tok_embeddings()
             if emb is not None:
                 emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-                tok_emb = root.create_child('tok_embeddings', 'LinearWeight', {
-                    'input_dim': padded_vocab,
-                    'output_dim': hidden // tp,
-                    'data_type': dtype,
-                    'has_bias': False,
-                })
+                tok_cfg = LinearConfig(
+                    input_dim=padded_vocab,
+                    output_dim=hidden // tp,
+                    data_type=dtype)
+                tok_emb = root.create_child('tok_embeddings', tok_cfg.to_cpp())
                 commit_tensor(tok_emb, emb_padded,
                                      'weight',
                                      split_side=SplitSide.OUTPUT,
@@ -367,12 +315,11 @@ class TextModelLoader:
             if output is not None:
                 output_padded = pad_out_dim(output, padded_vocab, dim=0)
                 output_t = output_padded.t()
-                output_mod = root.create_child('output', 'LinearWeight', {
-                    'input_dim': hidden,
-                    'output_dim': padded_vocab // tp,
-                    'data_type': dtype,
-                    'has_bias': False,
-                })
+                out_cfg = LinearConfig(
+                    input_dim=hidden,
+                    output_dim=padded_vocab // tp,
+                    data_type=dtype)
+                output_mod = root.create_child('output', out_cfg.to_cpp())
                 commit_tensor(output_mod, output_t, 'weight',
                                      split_side=SplitSide.OUTPUT,
                                      split_num=tp, rank=attn_rank)
