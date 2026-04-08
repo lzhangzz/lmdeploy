@@ -25,7 +25,7 @@ class LinearConfig:
         cfg = _tm.LinearConfig()
         cfg.input_dim = self.input_dim
         cfg.output_dim = self.output_dim
-        cfg.data_type = self.data_type
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
         cfg.has_bias = self.has_bias
         return cfg
 
@@ -91,7 +91,7 @@ class AttentionConfig:
         cfg.qk_norm = self.qk_norm
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = self.data_type
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
         cfg.window_size = self.window_size
         cfg.attn_sink = self.attn_sink
         cfg.attn_output_gate = self.attn_output_gate
@@ -137,7 +137,7 @@ class FfnConfig:
         cfg.has_bias = self.has_bias
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = self.data_type
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
         cfg.act_type = self.act_type
         cfg.fuse_silu = self.fuse_silu
         cfg.fused_moe = self.fused_moe
@@ -218,7 +218,7 @@ class MoeConfig:
         cfg.expert_num = self.expert_num
         cfg.hidden_dim = self.hidden_dim
         cfg.mlp_bias = self.mlp_bias
-        cfg.data_type = self.data_type
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
         cfg.act_type = self.act_type
@@ -270,7 +270,7 @@ class DeltaNetConfig:
         cfg.has_bias = self.has_bias
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = self.data_type
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
         return cfg
 
 
