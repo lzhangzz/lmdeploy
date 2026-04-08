@@ -68,22 +68,27 @@ class Qwen3TextSpec(TextModelSpec):
     def ffn_norm(self, layer: int) -> torch.Tensor | None:
         return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def raw_layer_tensors(self, layer: int):
-        tensors = []
+    def attn_params(self, layer):
+        params = {}
         q = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_norm.weight")
         k = self._get(f"{self._layer_prefix}.{layer}.self_attn.k_norm.weight")
         if q is not None and k is not None:
             q, k = self._permute_qk_tensors(q, k)
         if q is not None:
-            tensors.append(("attention.q_norm.weight", q, None))
+            params["q_norm.weight"] = (q, None)
         if k is not None:
-            tensors.append(("attention.k_norm.weight", k, None))
+            params["k_norm.weight"] = (k, None)
+        return params
+
+    def moe_params(self, layer):
+        params = {}
         if self._n_experts > 0:
-            gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
+            gate = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                tensors.append(("moe_ffn.gate.weight", gate, None))
-        return tensors
+                params["gate.weight"] = (gate, None)
+        return params
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")
