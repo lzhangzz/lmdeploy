@@ -129,7 +129,7 @@ def fuse_ffn_linears(
         if fused_silu:
             w1w3 = interleave_linears(w1, w3)
         else:
-            w1w3 = chunk_linears(w1, w3)
+            w1w3 = chunk_linears(w1, w3, tp)
         return (w1w3, fused_silu)
     else:
         return (None, fused_silu)

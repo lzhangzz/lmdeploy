@@ -238,17 +238,33 @@ def interleave_linears(w1: Linear, w3: Linear) -> Linear:
                   data_format=w1.data_format)
 
 
-def chunk_linears(w1: Linear, w3: Linear) -> Linear:
-    """Concatenate w1 and w3 along the output dim (chunk layout: ``[w1 | w3]``)."""
+def chunk_linears(w1: Linear, w3: Linear, tp: int = 1) -> Linear:
+    """Concatenate w1 and w3 along the output dim (chunk layout).
+
+    When ``tp > 1``, the result is TP-interleaved so that a naive
+    output-dim split gives each rank ``[w1_shard | w3_shard]``.
+    This matches the pattern used by ``merge_qkv_v2`` and
+    ``fuse_gdn_in_proj``.
+    """
     fused: dict[str, Tensor] = {}
     for kind in w1.tensors:
         t1 = w1.tensors[kind]
         t3 = w3.tensors[kind]
-        if _has_input_dim(t1):
-            fused[kind] = torch.cat([t1, t3], dim=-1)
+        if tp <= 1 or not _has_input_dim(t1):
+            # No TP or 1-D (bias): simple concatenation
+            dim = -1 if _has_input_dim(t1) else 0
+            fused[kind] = torch.cat([t1, t3], dim=dim)
         else:
-            fused[kind] = torch.cat([t1, t3])
+            # TP-aware: reshape [K, N] -> [K, tp, N/tp], cat on inner dim,
+            # then flatten back to [K, 2*N].
+            d = t1.dim() - 1  # output dim (last)
+            shape = list(t1.shape)
+            r1 = t1.reshape(shape[:d] + [tp, shape[d] // tp])
+            r3 = t3.reshape(shape[:d] + [tp, shape[d] // tp])
+            combined = torch.cat([r1, r3], dim=d + 1)
+            c_shape = list(combined.shape)
+            fused[kind] = combined.reshape(
+                c_shape[:d] + [c_shape[d] * c_shape[d + 1]])
     return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
                   weight_format=w1.weight_format,
-                  data_format=w1.data_format,
-                  fused_count=2)
+                  data_format=w1.data_format)
