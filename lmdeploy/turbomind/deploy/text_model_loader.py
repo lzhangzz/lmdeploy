@@ -91,10 +91,16 @@ class TextModelLoader:
         self.model = model
         self.attn_tp = model.attn_tp_size
         self.mlp_tp = model.mlp_tp_size
-        self._attn_ranks = [model.tp_ranks(gpu)[0]
-                            for gpu in range(model.gpu_count)]
-        self._mlp_ranks = [model.tp_ranks(gpu)[1]
-                           for gpu in range(model.gpu_count)]
+        self._attn_ranks = None
+        self._mlp_ranks = None
+
+    def _ensure_ranks(self):
+        """Compute per-GPU rank lists lazily (gpu_count may be 0 at __init__ time)."""
+        if self._attn_ranks is None:
+            self._attn_ranks = [self.model.tp_ranks(gpu)[0]
+                                for gpu in range(self.model.gpu_count)]
+            self._mlp_ranks = [self.model.tp_ranks(gpu)[1]
+                               for gpu in range(self.model.gpu_count)]
 
     def _layer_writer(self, layer: int) -> LayerWriter:
         """Create a LayerWriter for the given layer across all GPUs."""
@@ -356,6 +362,7 @@ class TextModelLoader:
     # ------------------------------------------------------------------
 
     def _load_layer(self, layer: int, spec: 'TextModelSpec'):
+        self._ensure_ranks()
         mc = self.model.model_config
         rope_param = self.model.attention_config.rope_param
         spec.configure(SpecAttnConfig(

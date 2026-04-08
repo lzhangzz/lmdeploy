@@ -163,7 +163,8 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             tensor_split_dim = None
 
         if tensor_split_dim is not None and split_num > 1:
-            if fused_count > 1 and tensor_split_dim == (tensor.dim() - 1):
+            pos_split_dim = tensor_split_dim if tensor_split_dim >= 0 else tensor.dim() + tensor_split_dim
+            if fused_count > 1 and pos_split_dim == (tensor.dim() - 1):
                 # Chunked fused layout: split each chunk's output dim equally.
                 # [*, 2*N] -> reshape [*, 2, N] -> shard N -> [*, 2, N/tp] -> reshape [*, 2*N/tp]
                 orig_shape = tensor.shape
@@ -247,7 +248,8 @@ def commit_linear(module, linear: Linear, name: str,
                         weight_format=linear.weight_format,
                         data_format=linear.weight_format.to_data_format(
                             cpp_dtype.value if cpp_dtype else 0,
-                            group_size))
+                            group_size),
+                        fused_count=linear.fused_count)
 
     # Ensure the LinearWeight child exists
     linear_mod = module.child(name)
