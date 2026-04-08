@@ -122,19 +122,26 @@ class GptOssSpec(TextModelSpec):
         return self._get(
             f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
-    def raw_layer_tensors(self, layer: int):
-        tensors = []
-        gate = self._get(f"{self._layer_prefix}.{layer}.mlp.router.weight")
+    def attn_params(self, layer):
+        params = {}
+        sinks = self._get(
+            f"{self._layer_prefix}.{layer}.self_attn.sinks")
+        if sinks is not None:
+            params["sinks"] = (sinks, SplitSide.OUTPUT)
+        return params
+
+    def moe_params(self, layer):
+        params = {}
+        gate = self._get(
+            f"{self._layer_prefix}.{layer}.mlp.router.weight")
         if gate is not None:
             gate = gate.t() if gate.dim() > 1 else gate
-            tensors.append(("moe_ffn.gate.weight", gate, None))
-        gate_bias = self._get(f"{self._layer_prefix}.{layer}.mlp.router.bias")
+            params["gate.weight"] = (gate, None)
+        gate_bias = self._get(
+            f"{self._layer_prefix}.{layer}.mlp.router.bias")
         if gate_bias is not None:
-            tensors.append(("moe_ffn.gate.bias", gate_bias, None))
-        sinks = self._get(f"{self._layer_prefix}.{layer}.self_attn.sinks")
-        if sinks is not None:
-            tensors.append(("attention.sinks", sinks, SplitSide.OUTPUT))
-        return tensors
+            params["gate.bias"] = (gate_bias, None)
+        return params
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")
