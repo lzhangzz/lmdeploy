@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import torch
 from .kind_map import DENSE_FORMAT
 from .linear import Linear
+from .configs import SpecAttnConfig
 if TYPE_CHECKING:
     from .target_model.base import BaseOutputModel
 
@@ -127,28 +128,22 @@ class TextModelSpec(ABC):
 
     # -- Configuration (called by TextModelLoader before processing) --
 
-    def configure(
-        self,
-        attn_tp: int = 1,
-        permute_qk: bool = True,
-        repeat_kv: int = 0,
-        head_dim: int = 0,
-        rope_dim: int = 0,
-        attn_output_gate: bool = False,
-        kv_head_num: int = 0,
-    ):
+    def configure(self, cfg: SpecAttnConfig):
         """Set TP and model parameters needed for QKV merge and GDN fusion.
+
+        Args:
+            cfg: SpecAttnConfig with tp, permute_qk, repeat_kv, etc.
 
         Called by ``TextModelLoader`` before processing each layer batch.
         Idempotent — safe to call repeatedly with the same values.
         """
-        self._attn_tp = attn_tp
-        self._permute_qk = permute_qk
-        self._repeat_kv = repeat_kv
-        self._head_dim = head_dim
-        self._rope_dim = rope_dim if rope_dim else head_dim
-        self._attn_output_gate = attn_output_gate
-        self._kv_head_num = kv_head_num
+        self._attn_tp = cfg.tp
+        self._permute_qk = cfg.permute_qk
+        self._repeat_kv = cfg.repeat_kv
+        self._head_dim = cfg.head_dim
+        self._rope_dim = cfg.rope_dim if cfg.rope_dim else cfg.head_dim
+        self._attn_output_gate = cfg.output_gate
+        self._kv_head_num = cfg.kv_head_num
 
     # -- Common helpers (subclasses may override) --
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .configs import AttentionConfig, FfnConfig, MoeConfig, DeltaNetConfig, LinearConfig
+from .configs import AttentionConfig, FfnConfig, MoeConfig, DeltaNetConfig, LinearConfig, SpecAttnConfig
 from .load_context import LoadContext, _act_type_id
 
 if TYPE_CHECKING:
@@ -82,15 +82,15 @@ class TextModelLoader:
             ctx = LoadContext(layer_mod, tp_config, mc)
 
             # Configure TP params for merge/fusion (idempotent)
-            spec.configure(
-                attn_tp=ctx.tp_size,
+            spec.configure(SpecAttnConfig(
+                tp=ctx.tp_size,
                 permute_qk=ctx._tp_config.get('permute_qk', True),
                 repeat_kv=ctx.repeat_kv,
                 head_dim=ctx.head_dim,
                 rope_dim=ctx.rope_dim,
-                attn_output_gate=ctx.attn_output_gate,
+                output_gate=ctx.attn_output_gate,
                 kv_head_num=ctx.kv_head_num,
-            )
+            ))
 
             handle = layer_mod
             hidden = mc.hidden_units
