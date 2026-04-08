@@ -72,6 +72,22 @@ void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, 
     has_bias_         = has_bias;
 }
 
+void LinearWeight::copy_metadata_to(LinearWeight& dst) const
+{
+    dst.input_dim     = input_dim;
+    dst.output_dim    = output_dim;
+    dst.group_size    = group_size;
+    dst.data_type     = data_type;
+    dst.weight_format = weight_format;
+    dst.format_       = format_;
+    dst.policy_       = policy_;
+    dst.epilogue      = epilogue;
+    dst.has_bias_     = has_bias_;
+    dst.is_grouped_   = is_grouped_;
+    dst.k_desc        = k_desc;
+    dst.q_desc        = q_desc;
+}
+
 // ======================================================================
 // do_allocate
 // ======================================================================

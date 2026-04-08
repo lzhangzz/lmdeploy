@@ -76,16 +76,7 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 {
     const auto& e0 = *experts(0);
 
-    d.input_dim    = e0.input_dim;
-    d.output_dim   = e0.output_dim;
-    d.group_size   = e0.group_size;
-    d.data_type    = e0.data_type;
-    d.weight_format = e0.weight_format;
-    d.format_       = e0.format_;
-    d.policy_       = e0.policy_;
-    d.k_desc       = e0.k_desc;
-    d.q_desc       = e0.q_desc;
-    d.epilogue     = e0.epilogue;
+    e0.copy_metadata_to(d);
 
     d.k_desc.num = d.q_desc.num = n;
 

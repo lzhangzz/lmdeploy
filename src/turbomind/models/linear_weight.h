@@ -47,6 +47,9 @@ public:
     /// Set grouped-GEMM mode (for MoE expert weights that need row-major layout).
     void set_grouped(bool grouped) { is_grouped_ = grouped; }
 
+    /// Copy metadata fields to another LinearWeight (for MoE block view).
+    void copy_metadata_to(LinearWeight& dst) const;
+
     explicit operator bool() const noexcept { return static_cast<bool>(*weight_); }
 
     // Accessors for execution layers (LlamaLinear, etc.)
