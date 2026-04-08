@@ -123,7 +123,30 @@ class MoeConfig:
     data_type: int = 0
     act_type: int = 0
     fuse_silu: bool = False
-    # MoE method params as needed
+    # MoE routing method: 0=topk, 1=shared, 2=topk_group
+    method: int = 0
+    # Number of shared experts (0 if none)
+    num_shared_experts: int = 0
+    # Whether to use grouped GEMM for MoE
+    grouped_gemm: bool = False
+
+    @classmethod
+    def from_model_config(cls, mc, *, layer_id, tp_size, tp_rank, dtype, act_type, fuse_silu):
+        return cls(
+            layer_id=layer_id,
+            num_experts=mc.num_experts,
+            top_k=mc.moe_top_k,
+            hidden_dim=mc.hidden_size,
+            has_bias=mc.mlp_bias,
+            tp_size=tp_size,
+            tp_rank=tp_rank,
+            data_type=dtype,
+            act_type=act_type,
+            fuse_silu=fuse_silu,
+            method=mc.moe_method,
+            num_shared_experts=mc.num_shared_experts or 0,
+            grouped_gemm=mc.moe_grouped_gemm,
+        )
 
 @dataclass
 class DeltaNetConfig:
@@ -137,6 +160,21 @@ class DeltaNetConfig:
     tp_size: int = 1
     tp_rank: int = 0
     data_type: int = 0
+
+    @classmethod
+    def from_model_config(cls, mc, *, tp_size, tp_rank, dtype):
+        return cls(
+            hidden_dim=mc.hidden_size,
+            num_k_heads=mc.num_k_heads,
+            num_v_heads=mc.num_v_heads,
+            key_head_dim=mc.key_head_dim,
+            value_head_dim=mc.value_head_dim,
+            d_conv=mc.d_conv or 4,
+            has_bias=mc.attn_bias,
+            tp_size=tp_size,
+            tp_rank=tp_rank,
+            data_type=dtype,
+        )
 ```
 
 ### C++ Config Structs
@@ -260,7 +298,28 @@ attn_cfg = AttentionConfig.from_model_config(mc, tp_size=self.attn_tp, tp_rank=a
 attn_mod = handle.create_child('attention', attn_cfg)
 ```
 
-`create_child` detects whether it received a config object (typed path) or a string type name (legacy path). Typed path: extract the C++ type name and config from the Python config object. Legacy path: existing dict-based behavior for backward compatibility during migration.
+`create_child` is overloaded in the Python binding to accept either a typed config object or the legacy `(name, type_name, config_dict)` triple:
+
+```cpp
+// In bind.cpp — new overload
+.def("create_child",
+    [](Module& m, const std::string& name, py::object config_obj) -> Module* {
+        // Each config type is bound with a static kTypeName field
+        // and a C++ factory that accepts the config struct
+        std::string type_name = config_obj.attr("k_type_name").cast<std::string>();
+        auto cfg = config_to_cpp(config_obj);  // per-type conversion
+        return m.create_child(name, type_name, cfg);
+    })
+
+// Existing overload stays for backward compatibility during migration
+.def("create_child",
+    [](Module& m, const std::string& name, const std::string& type_name,
+       const std::map<std::string, py::object>& config) -> Module* {
+        // ... existing dict-based path
+    })
+```
+
+Python config dataclasses have a `k_type_name` class attribute (e.g., `"AttentionWeight"`) that maps to the C++ registry type. During migration, both paths coexist; the legacy dict path is removed once all callers are migrated.
 
 ### TextModelSpec.configure simplification
 
@@ -351,16 +410,29 @@ class Module {
             child->persist(op);
         }
         if (op == PersistOp::Sleep) {
-            for (auto& [name, tensor] : params_) {
-                *tensor = Tensor{};  // Reset
+            // Move tensors to CPU (cheap), free GPU memory
+            for (auto& [name, ptr] : params_) {
+                if (ptr && ptr->where() == kDEVICE) {
+                    Tensor cpu = Tensor{ptr->shape(), ptr->type(), kCPU};
+                    cpu.copy_from(*ptr);
+                    *ptr = std::move(cpu);
+                }
+            }
+        } else {  // WakeUp
+            // Move tensors back to GPU
+            for (auto& [name, ptr] : params_) {
+                if (ptr && ptr->where() == kCPU) {
+                    Tensor gpu = Tensor{ptr->shape(), ptr->type(), kDEVICE};
+                    gpu.copy_from(*ptr);
+                    *ptr = std::move(gpu);
+                }
             }
         }
-        // WakeUp: handled by re-loading weights via Python
     }
 };
 ```
 
-Remove `release()` and `to_device()` virtual methods. `persist(Sleep)` replaces `release()`. `persist(WakeUp)` replaces `to_device(kGPU)`.
+Remove `release()` and `to_device()` virtual methods. `persist(Sleep)` replaces `release()` (but preserves CPU copies for fast WakeUp). `persist(WakeUp)` replaces `to_device(kGPU)` (copies CPU→GPU).
 
 ### Reduce MoE boilerplate
 
@@ -368,13 +440,17 @@ The `LinkLinearExperts` function in `moe_weight.cc` manually copies all `LinearW
 
 ```cpp
 // Add to LinearWeight
-void copy_to(LinearWeight& dst) const {
+void copy_metadata_to(LinearWeight& dst) const {
     dst.input_dim_ = input_dim_;
     dst.output_dim_ = output_dim_;
     dst.group_size_ = group_size_;
     dst.data_type_ = data_type_;
     dst.weight_format_ = weight_format_;
-    // ... all metadata fields
+    dst.format_ = format_;
+    dst.policy_ = policy_;
+    dst.epilogue_ = epilogue_;
+    dst.has_bias_ = has_bias_;
+    dst.is_grouped_ = is_grouped_;
 }
 ```
 
