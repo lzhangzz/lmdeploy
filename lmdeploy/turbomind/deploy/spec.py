@@ -249,20 +249,39 @@ class TextModelSpec(ABC):
     def norm_weight(self) -> torch.Tensor | None:
         return None
 
-    def raw_layer_tensors(
+    def attn_params(
         self, layer: int
-    ) -> list[tuple[str, torch.Tensor | None, SplitSide | None]]:
-        """Return raw per-layer tensors for ``TextModelLoader`` to commit.
+    ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
+        """Return non-linear attention parameters.
 
-        Each entry is ``(tm_path, tensor, split_side)`` where *tm_path* is
-        the suffix after ``layers.{layer}.``.  ``split_side`` follows the
-        same convention as ``commit_tensor``:
-
-        - ``None``                — broadcast to all TP ranks (no split).
-        - ``SplitSide.OUTPUT``    — split along the last axis (dim -1).
-        - ``SplitSide.INPUT``     — split along the first axis (dim 0).
+        Each entry is ``{param_name: (tensor, split_side)}``.
+        ``param_name`` is the leaf name within the attention subtree
+        (e.g. ``"q_norm.weight"``, ``"sinks"``).
+        ``split_side`` is ``None`` for broadcast, or a ``SplitSide`` value.
         """
-        return []
+        return {}
+
+    def moe_params(
+        self, layer: int
+    ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
+        """Return non-expert MoE parameters.
+
+        Each entry is ``{param_name: (tensor, split_side)}``.
+        ``param_name`` is the leaf name within the moe_ffn subtree
+        (e.g. ``"gate.weight"``, ``"score_correction_bias"``).
+        """
+        return {}
+
+    def linear_attn_params(
+        self, layer: int
+    ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
+        """Return non-linear linear-attention (GDN) parameters.
+
+        Each entry is ``{param_name: (tensor, split_side)}``.
+        ``param_name`` is the leaf name within the linear_attn subtree
+        (e.g. ``"A_log"``, ``"dt_bias"``, ``"conv1d"``, ``"norm.weight"``).
+        """
+        return {}
 
     def _permute_qk_tensors(
         self,
