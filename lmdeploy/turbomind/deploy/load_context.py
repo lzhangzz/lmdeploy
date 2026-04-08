@@ -136,8 +136,7 @@ def _infer_compute_dtype(linear: Linear):
 
 
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
-                    split_side: SplitSide | None, split_num: int, rank: int,
-                    fused_count: int = 1):
+                    split_side: SplitSide | None, split_num: int, rank: int):
     """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
 
     Handles packing, TP sharding, allocation, dtype casting, and padding.
@@ -163,22 +162,8 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             tensor_split_dim = None
 
         if tensor_split_dim is not None and split_num > 1:
-            pos_split_dim = tensor_split_dim if tensor_split_dim >= 0 else tensor.dim() + tensor_split_dim
-            if fused_count > 1 and pos_split_dim == (tensor.dim() - 1):
-                # Chunked fused layout: split each chunk's output dim equally.
-                # [*, 2*N] -> reshape [*, 2, N] -> shard N -> [*, 2, N/tp] -> reshape [*, 2*N/tp]
-                orig_shape = tensor.shape
-                n_chunks = fused_count
-                chunk_size = orig_shape[tensor_split_dim] // n_chunks
-                new_shape = orig_shape[:tensor_split_dim] + (n_chunks, chunk_size)
-                tensor_3d = tensor.reshape(new_shape)
-                shard_size = chunk_size // split_num
-                shard_3d = tensor_3d[..., rank * shard_size:(rank + 1) * shard_size]
-                final_shape = orig_shape[:tensor_split_dim] + (n_chunks * shard_size,)
-                shard = shard_3d.reshape(final_shape)
-            else:
-                split_size = tensor.shape[tensor_split_dim] // split_num
-                shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
+            split_size = tensor.shape[tensor_split_dim] // split_num
+            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
         else:
             shard = tensor
 
@@ -248,8 +233,7 @@ def commit_linear(module, linear: Linear, name: str,
                         weight_format=linear.weight_format,
                         data_format=linear.weight_format.to_data_format(
                             cpp_dtype.value if cpp_dtype else 0,
-                            group_size),
-                        fused_count=linear.fused_count)
+                            group_size))
 
     # Ensure the LinearWeight child exists
     linear_mod = module.child(name)
@@ -293,8 +277,7 @@ def commit_linear(module, linear: Linear, name: str,
                         f"divisible by split_num={split_num}.")
 
     _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
-                    split_side, split_num, rank,
-                    fused_count=linear.fused_count)
+                    split_side, split_num, rank)
 
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,

@@ -139,7 +139,6 @@ class Linear:
     tensors: dict[str, Tensor]
     weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
     data_format: DataFormat | None = field(default=None, compare=False, repr=False)
-    fused_count: int = field(default=1, compare=False, repr=False)
 
     def split_out_dim(self, num: int) -> list[Linear]:
         """Split along output dim into *num* equal parts."""
