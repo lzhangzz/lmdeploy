@@ -5,10 +5,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .configs import AttentionConfig, FfnConfig, MoeConfig, DeltaNetConfig, LinearConfig, SpecAttnConfig
-from .load_context import LoadContext, _act_type_id
+from .load_context import (
+    LoadContext, _act_type_id,
+    commit_linear, commit_tensor,
+    _ATTN_TP_RULES, _FFN_TP_RULES, _LINEAR_ATTN_TP_RULES,
+    _fuse_and_commit_ffn,
+)
+from .spec import SplitSide
 
 if TYPE_CHECKING:
-    from .module import TextModelSpec
+    from .spec import TextModelSpec
     from .target_model.base import BaseOutputModel
 
 
@@ -48,19 +54,210 @@ class TextModelLoader:
             'kv_head_num': cfg.kv_head_num,
         }
 
-    def _load_layer(self, layer: int, spec: 'TextModelSpec'):
-        from .module import (
-            SplitSide,
-            commit_linear,
-            commit_tensor,
-            _ATTN_TP_RULES,
-            _FFN_TP_RULES,
-            _LINEAR_ATTN_TP_RULES,
-            _fuse_and_commit_ffn,
-        )
+    # ------------------------------------------------------------------
+    # Per-component loading methods
+    # ------------------------------------------------------------------
 
+    def _load_norms(self, handle, spec: 'TextModelSpec', layer: int,
+                    hidden: int, dtype):
+        """Load attn_norm and ffn_norm weight tensors."""
+        norm_cfg = {'dim': hidden, 'data_type': dtype}
+        attention_norm = handle.create_child('attention_norm', 'NormWeight', norm_cfg)
+        ffn_norm = handle.create_child('ffn_norm', 'NormWeight', norm_cfg)
+        commit_tensor(attention_norm, spec.attn_norm(layer), 'weight')
+        commit_tensor(ffn_norm, spec.ffn_norm(layer), 'weight')
+
+    def _load_attention(self, handle, spec: 'TextModelSpec', layer: int,
+                        mc, dtype, attn_rank: int):
+        """Load attention weights (QKV, output projection, etc.)."""
+        attn_linears = spec.attn_linears(layer)
+        if not attn_linears:
+            return
+
+        window_size = 0
+        ws_list = mc.window_size
+        if ws_list and layer < len(ws_list):
+            window_size = ws_list[layer]
+
+        attn_cfg = AttentionConfig.from_model_config(
+            mc, tp_size=self.attn_tp, tp_rank=attn_rank,
+            dtype=dtype, window_size=window_size)
+        attn_mod = handle.create_child('attention', attn_cfg.to_cpp())
+        for name, lin in attn_linears.items():
+            rule = _ATTN_TP_RULES.get(name, {})
+            tp = self.attn_tp if 'split_side' in rule else 1
+            commit_linear(attn_mod, lin, name,
+                                split_num=tp, rank=attn_rank,
+                                model_dtype=dtype, **rule)
+
+    def _load_ffn(self, handle, spec: 'TextModelSpec', layer: int,
+                  mc, dtype, mlp_rank: int):
+        """Load dense FFN weights (gate, up, down projections)."""
+        ffn_linears = spec.ffn_linears(layer)
+        if not ffn_linears:
+            return
+
+        inter_size = 0
+        is_list = mc.inter_size
+        if is_list and layer < len(is_list):
+            inter_size = is_list[layer]
+
+        ffn_cfg = FfnConfig.from_model_config(
+            mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+            dtype=dtype, act_type=_act_type_id(mc.activation_type),
+            fuse_silu=True, inter_size=inter_size)
+        ffn_mod = handle.create_child('feed_forward', ffn_cfg.to_cpp())
+        w1 = ffn_linears.get('w1')
+        w3 = ffn_linears.get('w3')
+        w2 = ffn_linears.get('w2')
+        if w1 is not None and w3 is not None:
+            _fuse_and_commit_ffn(ffn_mod, w1, w3, w2,
+                                 self.mlp_tp, mlp_rank,
+                                 mc.activation_type, is_moe=False,
+                                 model_dtype=dtype)
+        else:
+            for name, lin in ffn_linears.items():
+                rule = _FFN_TP_RULES.get(name, {})
+                tp = self.mlp_tp if 'split_side' in rule else 1
+                commit_linear(ffn_mod, lin, name,
+                                     split_num=tp, rank=mlp_rank,
+                                     model_dtype=dtype, **rule)
+
+    def _load_moe(self, handle, spec: 'TextModelSpec', layer: int,
+                  mc, dtype, mlp_rank: int):
+        """Load MoE weights (router, shared gate, expert FFNs)."""
+        if spec.num_experts(layer) <= 0:
+            return
+
+        hidden = mc.hidden_units
+        expert_num = 0
+        en_list = mc.expert_num
+        if en_list and layer < len(en_list):
+            expert_num = en_list[layer]
+
+        moe_cfg = MoeConfig.from_model_config(
+            mc, layer_id=layer, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+            dtype=dtype, act_type=_act_type_id(mc.activation_type),
+            fuse_silu=True, expert_num=expert_num)
+        moe_mod = handle.create_child('moe_ffn', moe_cfg.to_cpp())
+
+        # Create gate LinearWeight for router
+        gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
+        if gate_linear is not None:
+            commit_linear(moe_mod, gate_linear, 'gate',
+                               model_dtype=dtype)
+        else:
+            # Spec handles gate via raw_layer_tensors; create the
+            # LinearWeight child so the tensor is stored correctly.
+            gate_cfg = LinearConfig(
+                input_dim=hidden,
+                output_dim=spec.num_experts(layer),
+                data_type=dtype,
+                has_bias=getattr(mc, 'expert_router_bias', False))
+            moe_mod.create_child('gate', gate_cfg.to_cpp())
+
+        # Create shared_gate if needed
+        shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
+        if shared_gate_linear is not None:
+            commit_linear(moe_mod, shared_gate_linear, 'shared_gate',
+                               model_dtype=dtype)
+        elif mc.moe_shared_gate:
+            shared_gate_cfg = LinearConfig(
+                input_dim=hidden,
+                output_dim=1,
+                data_type=dtype,
+                has_bias=False)
+            moe_mod.create_child('shared_gate', shared_gate_cfg.to_cpp())
+
+        # Create experts ModuleList and expert children
+        experts_list = moe_mod.create_child('experts', 'ModuleList', {})
+        expert_inter = mc.expert_inter_size or 0
+        for e in range(spec.num_experts(layer)):
+            expert_name = str(e)
+            expert_cfg = FfnConfig.from_model_config(
+                mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
+                dtype=dtype, act_type=_act_type_id(mc.activation_type),
+                fuse_silu=True, inter_size=expert_inter, fused_moe=True)
+            experts_list.create_child(expert_name, expert_cfg.to_cpp())
+
+        for e in range(spec.num_experts(layer)):
+            expert_linears = spec.moe_ffn_linears(layer, e)
+            expert_mod = moe_mod.child('experts').child(str(e))
+            w1 = expert_linears.get('w1')
+            w3 = expert_linears.get('w3')
+            w2 = expert_linears.get('w2')
+            if w1 is not None and w3 is not None:
+                _fuse_and_commit_ffn(expert_mod, w1, w3, w2,
+                                     self.mlp_tp, mlp_rank,
+                                     mc.activation_type, is_moe=True,
+                                     model_dtype=dtype)
+            else:
+                for name, lin in expert_linears.items():
+                    rule = _FFN_TP_RULES.get(name, {})
+                    tp = self.mlp_tp if 'split_side' in rule else 1
+                    commit_linear(expert_mod, lin, name,
+                                         split_num=tp, rank=mlp_rank,
+                                         model_dtype=dtype, **rule)
+
+    def _load_linear_attn(self, handle, spec: 'TextModelSpec', layer: int,
+                          mc, dtype, attn_rank: int):
+        """Load linear-attention (DeltaNet / GDN) weights."""
+        la_linears = spec.linear_attn_linears(layer)
+        if not la_linears:
+            return
+
+        dn_cfg = DeltaNetConfig.from_model_config(
+            mc, tp_size=self.attn_tp, tp_rank=attn_rank, dtype=dtype)
+        linear_attn_mod = handle.create_child('linear_attn', dn_cfg.to_cpp())
+        for name, lin in la_linears.items():
+            rule = _LINEAR_ATTN_TP_RULES.get(name, {})
+            tp = self.attn_tp if 'split_side' in rule else 1
+            commit_linear(linear_attn_mod, lin, name,
+                                split_num=tp, rank=attn_rank,
+                                model_dtype=dtype, **rule)
+
+    def _load_raw_tensors(self, handle, spec: 'TextModelSpec', layer: int,
+                          dtype, attn_rank: int):
+        """Load raw per-layer tensors (embeddings, biases, etc.)."""
+        for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
+            tp = self.attn_tp if split_side is not None else 1
+            rank = attn_rank
+            parts = tm_path.split('.')
+            mod = handle
+            for seg in parts[:-1]:
+                child = mod.child(seg)
+                if child is None:
+                    # Auto-create missing intermediate modules as
+                    # NormWeight (generic parameter holder).
+                    # Adjust dimensions for TP split so allocation
+                    # matches the per-shard tensor size.
+                    if tensor.dim() > 1:
+                        shape_list = list(tensor.shape)
+                        if split_side is not None and tp > 1:
+                            split_dim_idx = -1 if split_side == SplitSide.OUTPUT else 0
+                            shape_list[split_dim_idx] //= tp
+                        dims_str = ' '.join(str(s) for s in shape_list)
+                        child = mod.create_child(
+                            seg, 'NormWeight',
+                            {'dims': dims_str, 'data_type': dtype})
+                    else:
+                        norm_dim = tensor.shape[-1] if tensor.dim() >= 1 else 0
+                        if split_side is not None and tp > 1:
+                            norm_dim //= tp
+                        child = mod.create_child(
+                            seg, 'NormWeight',
+                            {'dim': norm_dim, 'data_type': dtype})
+                mod = child
+            commit_tensor(mod, tensor, parts[-1],
+                                split_side=split_side,
+                                split_num=tp, rank=rank)
+
+    # ------------------------------------------------------------------
+    # Top-level orchestration
+    # ------------------------------------------------------------------
+
+    def _load_layer(self, layer: int, spec: 'TextModelSpec'):
         mc = self.model.model_config
-        ec = self.model  # BaseOutputModel for engine-level config
 
         for gpu in range(self.model.gpu_count):
             root = self.model.root(gpu)
@@ -96,183 +293,14 @@ class TextModelLoader:
             hidden = mc.hidden_units
             dtype = ctx.cpp_dtype
 
-            # --- Layer norms ---
-            norm_cfg = {'dim': hidden, 'data_type': dtype}
-            attention_norm = handle.create_child('attention_norm', 'NormWeight', norm_cfg)
-            ffn_norm = handle.create_child('ffn_norm', 'NormWeight', norm_cfg)
-            commit_tensor(attention_norm,
-                                spec.attn_norm(layer), 'weight')
-            commit_tensor(ffn_norm,
-                                spec.ffn_norm(layer), 'weight')
-
-            # --- Attention ---
-            attn_linears = spec.attn_linears(layer)
-            if attn_linears:
-                window_size = 0
-                ws_list = mc.window_size
-                if ws_list and layer < len(ws_list):
-                    window_size = ws_list[layer]
-
-                attn_cfg = AttentionConfig.from_model_config(
-                    mc, tp_size=self.attn_tp, tp_rank=attn_rank,
-                    dtype=dtype, window_size=window_size)
-                attn_mod = handle.create_child('attention', attn_cfg.to_cpp())
-                for name, lin in attn_linears.items():
-                    rule = _ATTN_TP_RULES.get(name, {})
-                    tp = self.attn_tp if 'split_side' in rule else 1
-                    commit_linear(attn_mod, lin, name,
-                                         split_num=tp, rank=attn_rank,
-                                         model_dtype=dtype, **rule)
-
-            # --- Dense FFN ---
-            ffn_linears = spec.ffn_linears(layer)
-            if ffn_linears:
-                inter_size = 0
-                is_list = mc.inter_size
-                if is_list and layer < len(is_list):
-                    inter_size = is_list[layer]
-
-                ffn_cfg = FfnConfig.from_model_config(
-                    mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
-                    dtype=dtype, act_type=_act_type_id(mc.activation_type),
-                    fuse_silu=True, inter_size=inter_size)
-                ffn_mod = handle.create_child('feed_forward', ffn_cfg.to_cpp())
-                w1 = ffn_linears.get('w1')
-                w3 = ffn_linears.get('w3')
-                w2 = ffn_linears.get('w2')
-                if w1 is not None and w3 is not None:
-                    _fuse_and_commit_ffn(ffn_mod, w1, w3, w2,
-                                         self.mlp_tp, mlp_rank,
-                                         mc.activation_type, is_moe=False,
-                                         model_dtype=dtype)
-                else:
-                    for name, lin in ffn_linears.items():
-                        rule = _FFN_TP_RULES.get(name, {})
-                        tp = self.mlp_tp if 'split_side' in rule else 1
-                        commit_linear(ffn_mod, lin, name,
-                                             split_num=tp, rank=mlp_rank,
-                                             model_dtype=dtype, **rule)
-
-            # --- MoE ---
-            if spec.num_experts(layer) > 0:
-                expert_num = 0
-                en_list = mc.expert_num
-                if en_list and layer < len(en_list):
-                    expert_num = en_list[layer]
-
-                moe_cfg = MoeConfig.from_model_config(
-                    mc, layer_id=layer, tp_size=self.mlp_tp, tp_rank=mlp_rank,
-                    dtype=dtype, act_type=_act_type_id(mc.activation_type),
-                    fuse_silu=True, expert_num=expert_num)
-                moe_mod = handle.create_child('moe_ffn', moe_cfg.to_cpp())
-
-                # Create gate LinearWeight for router
-                gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
-                if gate_linear is not None:
-                    commit_linear(moe_mod, gate_linear, 'gate',
-                                       model_dtype=dtype)
-                else:
-                    # Spec handles gate via raw_layer_tensors; create the
-                    # LinearWeight child so the tensor is stored correctly.
-                    gate_cfg = LinearConfig(
-                        input_dim=hidden,
-                        output_dim=spec.num_experts(layer),
-                        data_type=dtype,
-                        has_bias=getattr(mc, 'expert_router_bias', False))
-                    moe_mod.create_child('gate', gate_cfg.to_cpp())
-
-                # Create shared_gate if needed
-                shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
-                if shared_gate_linear is not None:
-                    commit_linear(moe_mod, shared_gate_linear, 'shared_gate',
-                                       model_dtype=dtype)
-                elif mc.moe_shared_gate:
-                    shared_gate_cfg = LinearConfig(
-                        input_dim=hidden,
-                        output_dim=1,
-                        data_type=dtype,
-                        has_bias=False)
-                    moe_mod.create_child('shared_gate', shared_gate_cfg.to_cpp())
-
-                # Create experts ModuleList and expert children
-                experts_list = moe_mod.create_child('experts', 'ModuleList', {})
-                expert_inter = mc.expert_inter_size or 0
-                for e in range(spec.num_experts(layer)):
-                    expert_name = str(e)
-                    expert_cfg = FfnConfig.from_model_config(
-                        mc, tp_size=self.mlp_tp, tp_rank=mlp_rank,
-                        dtype=dtype, act_type=_act_type_id(mc.activation_type),
-                        fuse_silu=True, inter_size=expert_inter, fused_moe=True)
-                    experts_list.create_child(expert_name, expert_cfg.to_cpp())
-
-                for e in range(spec.num_experts(layer)):
-                    expert_linears = spec.moe_ffn_linears(layer, e)
-                    expert_mod = moe_mod.child('experts').child(str(e))
-                    w1 = expert_linears.get('w1')
-                    w3 = expert_linears.get('w3')
-                    w2 = expert_linears.get('w2')
-                    if w1 is not None and w3 is not None:
-                        _fuse_and_commit_ffn(expert_mod, w1, w3, w2,
-                                             self.mlp_tp, mlp_rank,
-                                             mc.activation_type, is_moe=True,
-                                             model_dtype=dtype)
-                    else:
-                        for name, lin in expert_linears.items():
-                            rule = _FFN_TP_RULES.get(name, {})
-                            tp = self.mlp_tp if 'split_side' in rule else 1
-                            commit_linear(expert_mod, lin, name,
-                                                 split_num=tp, rank=mlp_rank,
-                                                 model_dtype=dtype, **rule)
-
-            # --- Linear attention (GDN) ---
-            la_linears = spec.linear_attn_linears(layer)
-            if la_linears:
-                dn_cfg = DeltaNetConfig.from_model_config(
-                    mc, tp_size=self.attn_tp, tp_rank=attn_rank, dtype=dtype)
-                linear_attn_mod = handle.create_child('linear_attn', dn_cfg.to_cpp())
-                for name, lin in la_linears.items():
-                    rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-                    tp = self.attn_tp if 'split_side' in rule else 1
-                    commit_linear(linear_attn_mod, lin, name,
-                                         split_num=tp, rank=attn_rank,
-                                         model_dtype=dtype, **rule)
-
-            # --- Raw per-layer tensors ---
-            for tm_path, tensor, split_side in spec.raw_layer_tensors(layer):
-                tp = self.attn_tp if split_side is not None else 1
-                rank = attn_rank
-                parts = tm_path.split('.')
-                mod = handle
-                for seg in parts[:-1]:
-                    child = mod.child(seg)
-                    if child is None:
-                        # Auto-create missing intermediate modules as
-                        # NormWeight (generic parameter holder).
-                        # Adjust dimensions for TP split so allocation
-                        # matches the per-shard tensor size.
-                        if tensor.dim() > 1:
-                            shape_list = list(tensor.shape)
-                            if split_side is not None and tp > 1:
-                                split_dim_idx = -1 if split_side == SplitSide.OUTPUT else 0
-                                shape_list[split_dim_idx] //= tp
-                            dims_str = ' '.join(str(s) for s in shape_list)
-                            child = mod.create_child(
-                                seg, 'NormWeight',
-                                {'dims': dims_str, 'data_type': dtype})
-                        else:
-                            norm_dim = tensor.shape[-1] if tensor.dim() >= 1 else 0
-                            if split_side is not None and tp > 1:
-                                norm_dim //= tp
-                            child = mod.create_child(
-                                seg, 'NormWeight',
-                                {'dim': norm_dim, 'data_type': dtype})
-                    mod = child
-                commit_tensor(mod, tensor, parts[-1],
-                                     split_side=split_side,
-                                     split_num=tp, rank=rank)
+            self._load_norms(handle, spec, layer, hidden, dtype)
+            self._load_attention(handle, spec, layer, mc, dtype, attn_rank)
+            self._load_ffn(handle, spec, layer, mc, dtype, mlp_rank)
+            self._load_moe(handle, spec, layer, mc, dtype, mlp_rank)
+            self._load_linear_attn(handle, spec, layer, mc, dtype, attn_rank)
+            self._load_raw_tensors(handle, spec, layer, dtype, attn_rank)
 
     def _load_global(self, spec: 'TextModelSpec'):
-        from .module import SplitSide, commit_tensor
         from .linear import pad_out_dim
 
         mc = self.model.model_config
