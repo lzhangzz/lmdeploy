@@ -3,6 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -13,6 +14,8 @@ public:
     const char* type() const override { return "FfnWeight"; }
 
     FfnWeight() = default;
+
+    FfnWeight(const core::FfnConfig& cfg);
 
     FfnWeight(int hidden_dim, int inter_size, bool bias, int tp_size, int tp_rank,
               DataType data_type, ActivationType act_type, bool fuse_silu_act);

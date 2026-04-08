@@ -3,6 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -13,6 +14,8 @@ public:
     const char* type() const override { return "MoeWeight"; }
 
     MoeWeight() = default;
+
+    MoeWeight(const core::MoeConfig& cfg);
 
     MoeWeight(int              layer_id,
               const MoeParam&  param,

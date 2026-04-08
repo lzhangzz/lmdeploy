@@ -3,6 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/norm_weight.h"
 
@@ -14,6 +15,8 @@ public:
     const char* type() const override { return "DeltaNetWeight"; }
 
     DeltaNetWeight() = default;
+
+    DeltaNetWeight(const core::DeltaNetConfig& cfg);
 
     DeltaNetWeight(int      hidden_dim,
                    int      num_k_heads,

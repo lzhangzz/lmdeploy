@@ -4,6 +4,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind {
@@ -28,6 +29,8 @@ public:
     const char* type() const override { return "LinearWeight"; }
 
     LinearWeight() = default;
+
+    LinearWeight(const core::LinearConfig& cfg);
 
     void configure(int input_dim, int output_dim, DataType data_type, bool has_bias = false);
 

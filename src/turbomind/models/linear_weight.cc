@@ -14,6 +14,11 @@
 
 namespace turbomind {
 
+LinearWeight::LinearWeight(const core::LinearConfig& cfg)
+{
+    configure(cfg.input_dim, cfg.output_dim, cfg.data_type, cfg.has_bias);
+}
+
 static bool IsDenseFloatType(DataType t)
 {
     return t == kFloat || t == kHalf || t == kBfloat16;

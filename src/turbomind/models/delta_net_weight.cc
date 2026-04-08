@@ -7,6 +7,13 @@
 
 namespace turbomind {
 
+DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg)
+    : DeltaNetWeight(cfg.hidden_dim, cfg.num_k_heads, cfg.num_v_heads,
+                     cfg.key_head_dim, cfg.value_head_dim, cfg.d_conv,
+                     cfg.has_bias, cfg.tp_size, cfg.tp_rank, cfg.data_type)
+{
+}
+
 DeltaNetWeight::DeltaNetWeight(int      hidden_dim,
                                int      num_k_heads,
                                int      num_v_heads,

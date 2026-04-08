@@ -8,6 +8,34 @@
 
 namespace turbomind {
 
+MoeWeight::MoeWeight(const core::MoeConfig& cfg)
+{
+    layer_id_ = cfg.layer_id;
+    moe_param_.method = static_cast<MoeParam::Method>(cfg.method);
+    moe_param_.experts_per_token = cfg.experts_per_token;
+    moe_param_.inter_size = cfg.inter_size;
+    moe_param_.norm_topk_prob = cfg.norm_topk_prob;
+    moe_param_.shared_gate = cfg.shared_gate;
+    moe_param_.routed_scale = static_cast<float>(cfg.routed_scale);
+    moe_param_.router_bias = cfg.router_bias;
+    moe_param_.topk_group = cfg.topk_group;
+    moe_param_.topk_method = std::to_string(cfg.topk_method);
+    moe_param_.n_group = cfg.n_group;
+    moe_param_.scoring_func = std::to_string(cfg.scoring_func);
+    moe_param_.router_n_groups = cfg.router_n_groups;
+    moe_param_.expert_num.assign(1, cfg.expert_num);
+    hidden_dim_ = cfg.hidden_dim;
+    mlp_bias_ = cfg.mlp_bias;
+    data_type_ = cfg.data_type;
+    tp_size_ = cfg.tp_size;
+    tp_rank_ = cfg.tp_rank;
+    act_type_ = static_cast<ActivationType>(cfg.act_type);
+    fuse_silu_act_ = cfg.fuse_silu;
+    if ((int)moe_param_.expert_num.size() > layer_id_) {
+        expert_num_ = moe_param_.expert_num[layer_id_];
+    }
+}
+
 MoeWeight::MoeWeight(int              layer_id,
                      const MoeParam&  param,
                      int              hidden_dim,
