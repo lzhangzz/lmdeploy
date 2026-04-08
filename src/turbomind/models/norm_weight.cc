@@ -2,6 +2,7 @@
 
 #include "src/turbomind/models/norm_weight.h"
 
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/core/registry.h"
 
 namespace turbomind {
@@ -20,6 +21,11 @@ NormWeight::NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType de
     if (device != kDEVICE) {
         *weight_ = Tensor{shape_, dtype_, device};
     }
+}
+
+NormWeight::NormWeight(const core::NormConfig& cfg)
+{
+    configure(cfg.dim, cfg.data_type);
 }
 
 void NormWeight::configure(int dim, DataType dtype)

@@ -12,6 +12,7 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/tensor.h"
 
@@ -243,6 +244,8 @@ public:
     }
 
     ModuleList() = default;
+
+    explicit ModuleList(const core::ModuleListConfig&) {}  // empty config, no-op
 
     /// Override to also track the child in the indexed_ vector.
     Module* add_child(std::string name, std::unique_ptr<Module> child) override;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 
 namespace turbomind {
 
@@ -17,6 +18,8 @@ public:
     const char* type() const override { return "DecoderLayerWeight"; }
 
     DecoderLayerWeight() = default;
+
+    explicit DecoderLayerWeight(const core::DecoderLayerConfig&) {}  // no-op
 
     bool verify(std::vector<std::string>& missing) override;
 

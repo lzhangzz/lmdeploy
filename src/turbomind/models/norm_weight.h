@@ -3,6 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/core/module_config.h"
 
 namespace turbomind {
 
@@ -11,6 +12,8 @@ public:
     const char* type() const override { return "NormWeight"; }
 
     NormWeight() = default;
+
+    explicit NormWeight(const core::NormConfig& cfg);
 
     NormWeight(int dim, DataType dtype, DeviceType device = kDEVICE);
 
