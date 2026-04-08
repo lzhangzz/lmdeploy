@@ -210,9 +210,8 @@ class Qwen3_5Spec(TextModelSpec):
     def norm_weight(self) -> torch.Tensor | None:
         return self._zero_centered(self._get(self._norm_key))
 
-    def raw_layer_tensors(self, layer: int):
-        tensors = []
-        # QK norm (zero-centered, permuted for RoPE layout)
+    def attn_params(self, layer):
+        params = {}
         if not self._is_linear_attn(layer):
             q = self._zero_centered(
                 self._get(f"{self._layer_prefix}.{layer}.self_attn.q_norm.weight"))
@@ -221,49 +220,58 @@ class Qwen3_5Spec(TextModelSpec):
             if q is not None and k is not None:
                 q, k = self._permute_qk_tensors(q, k)
             if q is not None:
-                tensors.append(("attention.q_norm.weight", q, None))
+                params["q_norm.weight"] = (q, None)
             if k is not None:
-                tensors.append(("attention.k_norm.weight", k, None))
-        # MoE gate and shared gate (transposed, broadcast)
+                params["k_norm.weight"] = (k, None)
+        return params
+
+    def moe_params(self, layer):
+        params = {}
         if self._n_experts > 0:
-            gate = self._get(f"{self._layer_prefix}.{layer}.mlp.gate.weight")
+            gate = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                tensors.append(("moe_ffn.gate.weight", gate, None))
-            sg = self._get(f"{self._layer_prefix}.{layer}.mlp.shared_expert_gate.weight")
+                params["gate.weight"] = (gate, None)
+            sg = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.shared_expert_gate.weight")
             if sg is not None:
                 sg = sg.t() if sg.dim() > 1 else sg
-                tensors.append(("moe_ffn.shared_gate.weight", sg, None))
-        # GDN (linear attention) raw tensors
-        if self._is_linear_attn(layer):
-            pfx = f"{self._layer_prefix}.{layer}.linear_attn"
-            for key in ["A_log", "dt_bias"]:
-                t = self._get(f"{pfx}.{key}")
-                if t is not None:
-                    tensors.append((f"linear_attn.{key}", t, SplitSide.OUTPUT))
-            conv1d = self._get(f"{pfx}.conv1d.weight")
-            if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
-                conv1d = conv1d.squeeze(1)
-            # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
-            if conv1d is not None:
-                conv1d = conv1d.t().contiguous()
-                if self._attn_tp > 1 and self._linear_qkv_split is not None:
-                    q_dim, k_dim, v_dim = self._linear_qkv_split
-                    d_conv = conv1d.shape[0]
-                    tp = self._attn_tp
-                    q_part = conv1d[:, :q_dim]
-                    k_part = conv1d[:, q_dim:q_dim + k_dim]
-                    v_part = conv1d[:, q_dim + k_dim:]
-                    conv1d = torch.cat([
-                        q_part.reshape(d_conv, tp, q_dim // tp),
-                        k_part.reshape(d_conv, tp, k_dim // tp),
-                        v_part.reshape(d_conv, tp, v_dim // tp),
-                    ], dim=2).reshape(d_conv, -1).contiguous()
-                tensors.append(("linear_attn.conv1d", conv1d, SplitSide.OUTPUT))
-            norm = self._get(f"{pfx}.norm.weight")
-            if norm is not None:
-                tensors.append(("linear_attn.norm.weight", norm, None))
-        return tensors
+                params["shared_gate.weight"] = (sg, None)
+        return params
+
+    def linear_attn_params(self, layer):
+        params = {}
+        if not self._is_linear_attn(layer):
+            return params
+        pfx = f"{self._layer_prefix}.{layer}.linear_attn"
+        for key in ["A_log", "dt_bias"]:
+            t = self._get(f"{pfx}.{key}")
+            if t is not None:
+                params[key] = (t, SplitSide.OUTPUT)
+        conv1d = self._get(f"{pfx}.conv1d.weight")
+        if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
+            conv1d = conv1d.squeeze(1)
+        # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
+        if conv1d is not None:
+            conv1d = conv1d.t().contiguous()
+            if self._attn_tp > 1 and self._linear_qkv_split is not None:
+                q_dim, k_dim, v_dim = self._linear_qkv_split
+                d_conv = conv1d.shape[0]
+                tp = self._attn_tp
+                q_part = conv1d[:, :q_dim]
+                k_part = conv1d[:, q_dim:q_dim + k_dim]
+                v_part = conv1d[:, q_dim + k_dim:]
+                conv1d = torch.cat([
+                    q_part.reshape(d_conv, tp, q_dim // tp),
+                    k_part.reshape(d_conv, tp, k_dim // tp),
+                    v_part.reshape(d_conv, tp, v_dim // tp),
+                ], dim=2).reshape(d_conv, -1).contiguous()
+            params["conv1d"] = (conv1d, SplitSide.OUTPUT)
+        norm = self._get(f"{pfx}.norm.weight")
+        if norm is not None:
+            params["norm.weight"] = (norm, None)
+        return params
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get(self._embed_key)
