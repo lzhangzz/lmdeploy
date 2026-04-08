@@ -138,6 +138,29 @@ void Module::to_device(DeviceType dev)
     }
 }
 
+void Module::persist(PersistOp op)
+{
+    for (auto& [name, child] : children_) {
+        child->persist(op);
+    }
+    for (auto& [name, ptr] : params_) {
+        if (!ptr || !*ptr) {
+            continue;
+        }
+
+        if (op == PersistOp::Sleep && ptr->device().type == kDEVICE) {
+            Tensor cpu{ptr->layout(), ptr->dtype(), Device{kCPU, ptr->device().id}};
+            Copy(*ptr, cpu);
+            *ptr = std::move(cpu);
+        }
+        else if (op == PersistOp::WakeUp && ptr->device().type == kCPU) {
+            Tensor gpu{ptr->layout(), ptr->dtype(), Device{kDEVICE, ptr->device().id}};
+            Copy(*ptr, gpu);
+            *ptr = std::move(gpu);
+        }
+    }
+}
+
 // ----- Registry-driven child creation -----
 
 Module* Module::create_child(const std::string& name,

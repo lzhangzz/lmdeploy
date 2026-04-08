@@ -397,6 +397,11 @@ PYBIND11_MODULE(_turbomind, m)
             .value("MEMORY_CPU", ft::DeviceType::kCPU)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
+
+        // power management
+        py::enum_<ft::core::PersistOp>(m, "PersistOp")
+            .value("Sleep", ft::core::PersistOp::Sleep)
+            .value("WakeUp", ft::core::PersistOp::WakeUp);
     }
 
     // DataFormat descriptors
@@ -784,7 +789,13 @@ PYBIND11_MODULE(_turbomind, m)
                      ffn->set_fused_silu(val);
                  }
              },
-             "val"_a);
+             "val"_a)
+        .def("persist",
+             [with_context](ft::core::Module& m, ft::core::PersistOp op) {
+                 with_context(m, [&] { m.persist(op); });
+             },
+             py::call_guard<py::gil_scoped_release>(),
+             "op"_a);
 
     // transformer model
     using ft::TurboMind;

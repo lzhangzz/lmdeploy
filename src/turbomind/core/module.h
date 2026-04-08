@@ -17,6 +17,9 @@
 
 namespace turbomind::core {
 
+/// Power-management operation for persist().
+enum class PersistOp { Sleep, WakeUp };
+
 /// Quantization metadata passed to ``Module::alloc``.
 struct WeightSpec {
     DataType dtype{};        // storage dtype of the weight (e.g., kUint4, kFloat8_e4m3, kFloat16)
@@ -91,6 +94,10 @@ public:
     /// Move tensors between CPU and GPU (for Sleep level 1 / WakeUp).
     /// Default recurses into children and moves registered parameters.
     virtual void to_device(DeviceType dev);
+
+    /// Move tensors between CPU/GPU for power management.
+    /// Sleep: move to CPU (free GPU memory). WakeUp: move back to GPU.
+    virtual void persist(PersistOp op);
 
     // ----- Registry-driven child creation -----
 
