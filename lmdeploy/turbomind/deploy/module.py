@@ -19,13 +19,13 @@ __all__ = [
     "fuse_gdn_in_proj", "merge_qkvg_v2", "merge_qkv_linear",
     "merge_qkv_v2", "permute_v2", "permute_v2_partial",
     # transforms.py — Transform
-    "_can_fuse_w1w3", "_shard_linear_for_tp", "_should_fuse_silu",
+    "_can_fuse_w1w3", "_should_fuse_silu",
     "fuse_ffn_linears",
     # commit.py — Shard & Commit
     "_ATTN_TP_RULES", "_FFN_TP_RULES", "_LINEAR_ATTN_TP_RULES",
-    "_SPLIT_SIDE_TO_DIM", "_commit_tensors", "_fuse_and_commit_ffn",
+    "_SPLIT_SIDE_TO_DIM", "_commit_tensors",
     "_cast_shard_for_tm", "_infer_compute_dtype", "_infer_cpp_linear_dtype",
-    "_torch_dtype_to_cpp", "commit_ffn", "commit_linear", "commit_tensor",
+    "_torch_dtype_to_cpp", "commit_linear", "commit_tensor",
 ]
 # fmt: on
 
@@ -49,7 +49,6 @@ from .spec import (
 # Transform layer
 from .transforms import (
     _can_fuse_w1w3,
-    _shard_linear_for_tp,
     _should_fuse_silu,
     fuse_ffn_linears,
 )
@@ -61,12 +60,10 @@ from .load_context import (
     _LINEAR_ATTN_TP_RULES,
     _SPLIT_SIDE_TO_DIM,
     _commit_tensors,
-    _fuse_and_commit_ffn,
     _cast_shard_for_tm,
     _infer_compute_dtype,
     _infer_cpp_linear_dtype,
     _torch_dtype_to_cpp,
-    commit_ffn,
     commit_linear,
     commit_tensor,
 )
