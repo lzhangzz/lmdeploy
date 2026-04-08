@@ -264,27 +264,28 @@ class TextModelLoader:
                 input_dim=hidden, output_dim=1, data_type=dtype, has_bias=False)
             moe.create_child('shared_gate', shared_gate_cfg)
 
-        # --- experts: per-expert READ -> TRANSFORM -> COMMIT ---
+        # --- experts: per-expert READ -> TRANSFORM -> CREATE -> COMMIT ---
         expert_inter = mc.expert_inter_size or 0
         experts = moe.create_child('experts', ModuleListConfig())
         for e in range(spec.num_experts(layer)):
-            expert_cfg = FfnConfig.from_model_config(
-                mc, tp_size=self.mlp_tp, tp_rank=0, dtype=dtype,
-                act_type=_act_type_id(mc.activation_type),
-                fuse_silu=True, inter_size=expert_inter, fused_moe=True)
-            expert = experts.create_child(str(e), expert_cfg)
-
             # READ
             expert_linears = spec.moe_ffn_linears(layer, e)
             w1 = expert_linears.get('w1')
             w3 = expert_linears.get('w3')
             w2 = expert_linears.get('w2')
 
-            # TRANSFORM
+            # TRANSFORM (must happen before CREATE so fused_silu is known)
             fused, fused_silu = (None, False)
             if w1 is not None and w3 is not None:
                 fused, fused_silu = fuse_ffn_linears(
                     w1, w3, self.mlp_tp, mc.activation_type, is_moe=True)
+
+            # CREATE with the correct fuse_silu flag
+            expert_cfg = FfnConfig.from_model_config(
+                mc, tp_size=self.mlp_tp, tp_rank=0, dtype=dtype,
+                act_type=_act_type_id(mc.activation_type),
+                fuse_silu=fused_silu, inter_size=expert_inter, fused_moe=True)
+            expert = experts.create_child(str(e), expert_cfg)
 
             # COMMIT
             if fused is not None:
@@ -323,6 +324,16 @@ class TextModelLoader:
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
             linear_attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 
+    # TP config for each top-level decoder-layer submodule.
+    # Used by _process_raw_tensors to restore the correct tp/ranks when
+    # navigating into a submodule that was created by another _process_* method.
+    _MOD_TP_ATTR = {
+        'attention':    ('attn_tp', '_attn_ranks'),
+        'linear_attn':  ('attn_tp', '_attn_ranks'),
+        'feed_forward': ('mlp_tp',  '_mlp_ranks'),
+        'moe_ffn':      ('mlp_tp',  '_mlp_ranks'),
+    }
+
     def _process_raw_tensors(self, writer: LayerWriter, spec: 'TextModelSpec',
                              layer: int):
         """Read and commit raw per-layer tensors."""
@@ -343,9 +354,14 @@ class TextModelLoader:
                 # Try to navigate to existing child on first GPU handle
                 first_child = mod._handles[0].child(seg) if mod._handles else None
                 if first_child is not None:
-                    # Child exists on first GPU — wrap all existing children
+                    # Child exists — wrap it.  Look up the correct tp/ranks
+                    # for known top-level submodules; inherit from parent otherwise.
                     children = [h.child(seg) for h in mod._handles]
-                    mod = LayerWriter(children, tp=mod._tp, ranks=mod._ranks)
+                    tp_attr, ranks_attr = self._MOD_TP_ATTR.get(
+                        seg, (None, None))
+                    seg_tp = getattr(self, tp_attr) if tp_attr else mod._tp
+                    seg_ranks = getattr(self, ranks_attr) if ranks_attr else mod._ranks
+                    mod = LayerWriter(children, tp=seg_tp, ranks=seg_ranks)
                 else:
                     # Auto-create as NormWeight on all GPUs
                     if tensor.dim() > 1:

@@ -21,6 +21,9 @@ class LinearConfig:
 
     k_type_name: str = 'LinearWeight'
 
+    def for_rank(self, rank: int) -> LinearConfig:
+        return self
+
     def to_cpp(self) -> _tm.LinearConfig:
         cfg = _tm.LinearConfig()
         cfg.input_dim = self.input_dim
