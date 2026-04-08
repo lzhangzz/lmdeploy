@@ -174,6 +174,16 @@ class TextModelLoader:
             rule = _ATTN_TP_RULES.get(name, {})
             attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 
+        # --- Parameters (q_norm, k_norm, sinks, etc.) ---
+        for name, (tensor, split_side) in spec.attn_params(layer).items():
+            parts = name.split('.')
+            parent = attn
+            for seg in parts[:-1]:
+                parent = parent.create_child(seg, NormConfig(
+                    dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
+                    data_type=dtype))
+            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
+
     def _process_ffn(self, writer: LayerWriter, spec: 'TextModelSpec',
                      layer: int):
         """Read, transform (fuse w1+w3), commit FFN weights."""
@@ -243,26 +253,33 @@ class TextModelLoader:
         moe = writer.create_child('moe_ffn', moe_cfg,
                                   tp=self.mlp_tp, ranks=self._mlp_ranks)
 
-        # --- gate (broadcast) ---
-        gate_linear = getattr(spec, 'moe_gate_linear', lambda l: None)(layer)
-        if gate_linear is not None:
-            moe.commit_linear('gate', gate_linear, model_dtype=dtype)
-        else:
-            gate_cfg = LinearConfig(
-                input_dim=hidden,
-                output_dim=spec.num_experts(layer),
-                data_type=dtype,
-                has_bias=getattr(mc, 'expert_router_bias', False))
-            moe.create_child('gate', gate_cfg)
+        # --- gate + shared_gate modules (created first, params committed from spec) ---
+        gate_cfg = LinearConfig(
+            input_dim=hidden,
+            output_dim=spec.num_experts(layer),
+            data_type=dtype,
+            has_bias=getattr(mc, 'expert_router_bias', False))
+        moe.create_child('gate', gate_cfg)
 
-        # --- shared_gate (broadcast) ---
-        shared_gate_linear = getattr(spec, 'moe_shared_gate_linear', lambda l: None)(layer)
-        if shared_gate_linear is not None:
-            moe.commit_linear('shared_gate', shared_gate_linear, model_dtype=dtype)
-        elif mc.moe_shared_gate:
+        if mc.moe_shared_gate:
             shared_gate_cfg = LinearConfig(
                 input_dim=hidden, output_dim=1, data_type=dtype, has_bias=False)
             moe.create_child('shared_gate', shared_gate_cfg)
+
+        # --- Non-expert MoE parameters (gate/shared_gate weights, score_correction_bias) ---
+        for name, (tensor, split_side) in spec.moe_params(layer).items():
+            parts = name.split('.')
+            parent = moe
+            for seg in parts[:-1]:
+                existing = parent._handles[0].child(seg) if parent._handles else None
+                if existing is not None:
+                    children = [h.child(seg) for h in parent._handles]
+                    parent = LayerWriter(children)
+                else:
+                    parent = parent.create_child(seg, NormConfig(
+                        dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
+                        data_type=dtype))
+            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
 
         # --- experts: per-expert READ -> TRANSFORM -> CREATE -> COMMIT ---
         expert_inter = mc.expert_inter_size or 0
@@ -324,54 +341,15 @@ class TextModelLoader:
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
             linear_attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 
-    # TP config for each top-level decoder-layer submodule.
-    # Used by _process_raw_tensors to restore the correct tp/ranks when
-    # navigating into a submodule that was created by another _process_* method.
-    _MOD_TP_ATTR = {
-        'attention':    ('attn_tp', '_attn_ranks'),
-        'linear_attn':  ('attn_tp', '_attn_ranks'),
-        'feed_forward': ('mlp_tp',  '_mlp_ranks'),
-        'moe_ffn':      ('mlp_tp',  '_mlp_ranks'),
-    }
-
-    def _process_raw_tensors(self, writer: LayerWriter, spec: 'TextModelSpec',
-                             layer: int):
-        """Read and commit raw per-layer tensors."""
-        mc = self.model.model_config
-        dtype = _cpp_dtype(mc.data_type)
-
-        # --- READ ---
-        raw_items = list(spec.raw_layer_tensors(layer))
-        if not raw_items:
-            return
-
-        # --- COMMIT ---
-        for tm_path, tensor, split_side in raw_items:
-            parts = tm_path.split('.')
-            # Navigate / auto-create intermediate modules on all GPUs
-            mod = writer
+        # --- Parameters (A_log, dt_bias, conv1d, norm.weight) ---
+        for name, (tensor, split_side) in spec.linear_attn_params(layer).items():
+            parts = name.split('.')
+            parent = linear_attn
             for seg in parts[:-1]:
-                # Try to navigate to existing child on first GPU handle
-                first_child = mod._handles[0].child(seg) if mod._handles else None
-                if first_child is not None:
-                    # Child exists — wrap it.  Look up the correct tp/ranks
-                    # for known top-level submodules; inherit from parent otherwise.
-                    children = [h.child(seg) for h in mod._handles]
-                    tp_attr, ranks_attr = self._MOD_TP_ATTR.get(
-                        seg, (None, None))
-                    seg_tp = getattr(self, tp_attr) if tp_attr else mod._tp
-                    seg_ranks = getattr(self, ranks_attr) if ranks_attr else mod._ranks
-                    mod = LayerWriter(children, tp=seg_tp, ranks=seg_ranks)
-                else:
-                    # Auto-create as NormWeight on all GPUs
-                    if tensor.dim() > 1:
-                        norm_dim = tensor.shape[-1]
-                    else:
-                        norm_dim = tensor.shape[-1] if tensor.dim() >= 1 else 0
-                    cfg = NormConfig(dim=norm_dim, data_type=dtype)
-                    mod = mod.create_child(seg, cfg)
-
-            mod.commit_tensor(parts[-1], tensor, split_side=split_side)
+                parent = parent.create_child(seg, NormConfig(
+                    dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
+                    data_type=dtype))
+            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
 
     # ------------------------------------------------------------------
     # Top-level orchestration
@@ -398,7 +376,6 @@ class TextModelLoader:
         self._process_ffn(writer, spec, layer)
         self._process_moe(writer, spec, layer)
         self._process_linear_attn(writer, spec, layer)
-        self._process_raw_tensors(writer, spec, layer)
 
     def _load_global(self, spec: 'TextModelSpec'):
         from .linear import pad_out_dim
