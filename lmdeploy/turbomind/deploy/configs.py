@@ -288,3 +288,35 @@ class SpecAttnConfig:
     rope_dim: int = 0
     output_gate: bool = False
     kv_head_num: int = 0
+
+
+@dataclass
+class ModuleListConfig:
+    """Config for ModuleList (pure container, no parameters)."""
+    def for_rank(self, rank: int) -> ModuleListConfig:
+        return self
+    def to_cpp(self) -> _tm.ModuleListConfig:
+        return _tm.ModuleListConfig()
+
+
+@dataclass
+class NormConfig:
+    """Config for NormWeight."""
+    dim: int = 0
+    data_type: int = 0
+    def for_rank(self, rank: int) -> NormConfig:
+        return self
+    def to_cpp(self) -> _tm.NormConfig:
+        cfg = _tm.NormConfig()
+        cfg.dim = self.dim
+        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        return cfg
+
+
+@dataclass
+class DecoderLayerConfig:
+    """Config for DecoderLayerWeight (pure container)."""
+    def for_rank(self, rank: int) -> DecoderLayerConfig:
+        return self
+    def to_cpp(self) -> _tm.DecoderLayerConfig:
+        return _tm.DecoderLayerConfig()
