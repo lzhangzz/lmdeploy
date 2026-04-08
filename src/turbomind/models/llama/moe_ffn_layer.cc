@@ -53,12 +53,12 @@ MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const E
 
 Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
 {
-    auto& weight = gate.weight;
+    auto& weight = gate.weight();
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
     linear_.Forward(input, gate, logits);
     sync_check_cuda_error();
-    ApplyBias(logits, gate.bias, core::Context::stream().handle());
+    ApplyBias(logits, gate.bias(), core::Context::stream().handle());
     sync_check_cuda_error();
     return logits;
 }
@@ -180,13 +180,13 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
-        if (block->w1w3 && block->w1w3->weight) {
+        if (block->w1w3 && block->w1w3->weight()) {
             // Fused w1w3 path
             Tensor inter = linear_.Forward(p.input, *block->w1w3, indices, offsets_);
             sync_check_cuda_error();
 
             if (!block->is_fused_silu()) {
-                Activation(inter, block->w1w3->bias, f2E_, block->act_type(), st);
+                Activation(inter, block->w1w3->bias(), f2E_, block->act_type(), st);
                 sync_check_cuda_error();
             }
 
@@ -209,7 +209,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         }
     }
 
-    if (moe.shared_gate && moe.shared_gate->weight) {
+    if (moe.shared_gate && moe.shared_gate->weight()) {
         shared_scales_ = Gate(p.input, *moe.shared_gate.get());
     }
 }
@@ -218,7 +218,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
 {
     auto& moe = *p.weights;
 
-    const Tensor& block_bias = moe.block() && moe.block()->w2 ? moe.block()->w2->bias : Tensor{};
+    const Tensor& block_bias = moe.block() && moe.block()->w2 ? moe.block()->w2->bias() : Tensor{};
 
     invokeMoeCombine(p.output,
                      temp_,

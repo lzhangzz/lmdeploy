@@ -94,8 +94,8 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
 
     d.k_desc.num = d.q_desc.num = n;
 
-    if (e0.bias) {
-        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
+    if (e0.bias()) {
+        d.bias() = Tensor{{n, e0.output_dim}, e0.bias().dtype(), kDEVICE};
     }
 
     std::vector<std::pair<void*, int>> weights;
@@ -103,12 +103,12 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
 
     for (int i = 0; i < n; ++i) {
         auto& e = *experts(i);
-        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
-        if (e.scales) {
-            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        weights.emplace_back(e.weight().raw_data(), e.k_desc.ld);
+        if (e.scales()) {
+            scales.emplace_back(e.scales().raw_data(), e.q_desc.ld);
         }
-        if (e.bias) {
-            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        if (e.bias()) {
+            Copy(e.bias(), d.bias().slice(i, 1).squeeze(0));
         }
     }
 
@@ -118,17 +118,17 @@ static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWe
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
-        d.scales = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.weight() = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
+        d.scales() = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         d.k_desc.offsets = d.q_desc.offsets = (int*)1;
     }
     else {
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
-        if (e0.scales) {
-            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
+        if (e0.scales()) {
+            d.scales() = Tensor{make_strided_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         }
         d.k_desc.ld = d.q_desc.ld = 0;
     }
@@ -298,7 +298,7 @@ struct Testbed_v3: Parameter {
     {
         original.configure(input_dim, output_dim, data_type, false);
         original.alloc("weight", core::WeightSpec{data_type, group_size});
-        rng_.NormalFloat(original.weight, 1., .1);
+        rng_.NormalFloat(original.weight(), 1., .1);
 
         quant.configure(input_dim, output_dim, data_type, false);
         quant.alloc("weight", core::WeightSpec{weight_type, group_size});
@@ -306,35 +306,35 @@ struct Testbed_v3: Parameter {
         dequant.alloc("weight", core::WeightSpec{data_type, group_size});
 
         Buffer_<unsigned> rbits;
-        // rbits = {original.weight.size(), kDEVICE};
+        // rbits = {original.weight().size(), kDEVICE};
         // rng_.RandomBytes(Tensor{rbits});
 
         /// Weights are allocated in MN-major, but some quantization requires K-major tensor
 
         if (weight_type == data_type) {
-            Copy(original.weight, quant.weight);
-            Copy(original.weight, dequant.weight);
+            Copy(original.weight(), quant.weight());
+            Copy(original.weight(), dequant.weight());
         }
         else if (weight_type == kFloat8_e4m3) {
-            QuantizeSymmBlock(quant.weight, quant.scales, original.weight, stream_);
-            DequantizeSymmBlock(dequant.weight, quant.weight, quant.scales, stream_);
+            QuantizeSymmBlock(quant.weight(), quant.scales(), original.weight(), stream_);
+            DequantizeSymmBlock(dequant.weight(), quant.weight(), quant.scales(), stream_);
         }
         else if (weight_type == kUint4) {
             /// Weights are allocated in (M,N), quantization needs K-major tensor
-            QuantizeGroupwise(quant.weight.t(),
-                              quant.scales.t(),
-                              quant.zeros.t(),
-                              dequant.weight.t(),
-                              original.weight.t(),
+            QuantizeGroupwise(quant.weight().t(),
+                              quant.scales().t(),
+                              quant.zeros().t(),
+                              dequant.weight().t(),
+                              original.weight().t(),
                               {},
                               group_size);
         }
         else if (weight_type == kFloat4_e2m1) {
-            QuantizeGroupwise(quant.weight.t(),  //
-                              quant.scales.t(),
+            QuantizeGroupwise(quant.weight().t(),  //
+                              quant.scales().t(),
                               {},
-                              dequant.weight.t(),
-                              original.weight.t(),
+                              dequant.weight().t(),
+                              original.weight().t(),
                               rbits,
                               group_size);
         }
@@ -368,7 +368,7 @@ struct Testbed_v3: Parameter {
         /// TODO: refactor reference API
         const MatrixLayout desc_A{x.dtype(), kRowMajor, (int)x.shape(0), (int)x.shape(1), (int)x.stride(0)};  // m,k
         const MatrixLayout desc_D{d.dtype(), kRowMajor, (int)d.shape(0), (int)d.shape(1), (int)d.stride(0)};  // m,n
-        ref_.gemm(x.raw_data(), desc_A, dense->weight.raw_data(), dense->k_desc, d.raw_data(), desc_D);
+        ref_.gemm(x.raw_data(), desc_A, dense->weight().raw_data(), dense->k_desc, d.raw_data(), desc_D);
     }
 
     void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d_)
@@ -450,7 +450,7 @@ struct Testbed_v3: Parameter {
         // clang-format off
         printf("%20s", ""); FC_Header();
         if (!expert_num) {
-            printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
+            printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight(), w_original_->weight(), stream_));
         }
         printf("%20s", "quant   vs  dequant"); FC_Print(FastCompare(d_quant_, d_dequant_, stream_));
         printf("%20s", "quant   vs original"); FC_Print(FastCompare(d_quant_, d_original_, stream_));

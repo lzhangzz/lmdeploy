@@ -83,45 +83,41 @@ void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_siz
     format_       = MakeLinearWeightFormat(data_type, actual_weight_type, actual_group_size);
     policy_       = ResolveLinearPolicy(format_, data_type, getSMVersion());
 
-    weight = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
-    add_param("weight", weight);
+    *weight_ = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
 
     if (has_bias_) {
-        bias = Tensor{{output_dim}, data_type, kDEVICE};
-        add_param("bias", bias);
+        *bias_ = Tensor{{output_dim}, data_type, kDEVICE};
     }
 
-    scales = {};
-    zeros  = {};
+    *scales_ = {};
+    *zeros_  = {};
 
     if (format_.scales.present()) {
         if (actual_weight_type == kFloat8_e4m3) {
-            scales = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
+            *scales_ = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
                             format_.scales.dtype, kDEVICE};
         }
         else if (actual_weight_type == kFloat4_e2m1) {
-            scales = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
+            *scales_ = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
                             format_.scales.dtype, kDEVICE};
         }
         else {
             TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-            scales = Tensor{{input_dim / actual_group_size, output_dim},
+            *scales_ = Tensor{{input_dim / actual_group_size, output_dim},
                             format_.scales.dtype, kDEVICE};
         }
-        add_param("scales", scales);
     }
 
     if (format_.zeros.present()) {
         TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-        zeros = Tensor{{input_dim / actual_group_size, output_dim},
+        *zeros_ = Tensor{{input_dim / actual_group_size, output_dim},
                         format_.zeros.dtype, kDEVICE};
-        add_param("zeros", zeros);
     }
 
     k_desc = {};
     q_desc = {};
 
-    k_desc.type  = weight.dtype();
+    k_desc.type  = weight().dtype();
     k_desc.order = gemm::kRowMajor;
     k_desc.rows  = input_dim;
     k_desc.cols  = output_dim;
@@ -144,7 +140,7 @@ void LinearWeight::allocate(DataType actual_weight_type, int actual_group_size)
 Tensor LinearWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     // Trigger full allocation on first call (when weight is still empty).
-    if (!weight) {
+    if (!weight()) {
         if (param_name == "weight" || param_name == "qweight") {
             // For dense floating-point weights, use the model's compute dtype
             // (data_type) to avoid unsupported dtype combinations in
@@ -163,16 +159,16 @@ Tensor LinearWeight::alloc(const std::string& param_name, const core::WeightSpec
     }
 
     if (param_name == "weight" || param_name == "qweight") {
-        return weight;
+        return weight();
     }
     if (param_name == "bias") {
-        return bias;
+        return bias();
     }
     if (param_name == "scales") {
-        return scales;
+        return scales();
     }
     if (param_name == "zeros") {
-        return zeros;
+        return zeros();
     }
 
     return Module::alloc(param_name, spec);
@@ -193,7 +189,7 @@ void LinearWeight::preprocess()
 
 void LinearWeight::prepare()
 {
-    if (!weight) {
+    if (!weight()) {
         return;
     }
 
@@ -209,11 +205,11 @@ void LinearWeight::prepare()
             d = MatrixLayout{x.dtype(), gemm::kColMajor, (int)x.shape(1), (int)x.shape(0), (int)x.stride(0)};
         };
 
-        TM_CHECK_EQ(weight.dtype(), kFloat8_e4m3);
-        process(weight, k_desc, uint8_t{});
+        TM_CHECK_EQ(weight().dtype(), kFloat8_e4m3);
+        process(weight(), k_desc, uint8_t{});
 
-        TM_CHECK_EQ(scales.dtype(), kFloat);
-        process(scales, q_desc, float{});
+        TM_CHECK_EQ(scales().dtype(), kFloat);
+        process(scales(), q_desc, float{});
     }
     else if (weight_format == kFloat8_e4m3) {
         // FP8 non-native path (non-SM90)
@@ -235,16 +231,16 @@ void LinearWeight::prepare()
             Tensor_<uint16_t> tmp{{input_dim, output_dim}, kDEVICE};
 
             if (bits == 4) {
-                extend_to_u16(tmp.data(), (const uint4_t*)weight.raw_data(), tmp.size(), stream);
+                extend_to_u16(tmp.data(), (const uint4_t*)weight().raw_data(), tmp.size(), stream);
                 sync_check_cuda_error();
             }
             else if (bits == 8) {
-                extend_to_u16(tmp.data(), (const uint8_t*)weight.raw_data(), tmp.size(), stream);
+                extend_to_u16(tmp.data(), (const uint8_t*)weight().raw_data(), tmp.size(), stream);
                 sync_check_cuda_error();
             }
             else if (bits == 16) {
                 check_cuda_error(
-                    cudaMemcpyAsync(tmp.raw_data(), weight.raw_data(), tmp.byte_size(), cudaMemcpyDefault, stream));
+                    cudaMemcpyAsync(tmp.raw_data(), weight().raw_data(), weight().byte_size(), cudaMemcpyDefault, stream));
             }
 
             if (order_w == kRowMajor) {
@@ -276,8 +272,8 @@ void LinearWeight::prepare()
             }
             kd.pack = conv_w->pack;
 
-            check_cuda_error(cudaMemsetAsync(weight.raw_data(), 0, weight.byte_size(), stream));
-            TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight.raw_data(), kd, stream) == 0);
+            check_cuda_error(cudaMemsetAsync(weight().raw_data(), 0, weight().byte_size(), stream));
+            TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight().raw_data(), kd, stream) == 0);
             sync_check_cuda_error();
 
             kd.type = weight_format;
@@ -295,22 +291,22 @@ void LinearWeight::prepare()
             Tensor   tmp_q;
             DataType scale_type;
 
-            if (zeros) {
-                tmp_q = {{scales.size(), 2}, kHalf, kDEVICE};
+            if (zeros()) {
+                tmp_q = {{scales().size(), 2}, kHalf, kDEVICE};
                 fuse_scales_and_zeros(
-                    tmp_q.data<half>(), scales.data<half>(), zeros.data<half>(), scales.size(), stream);
+                    tmp_q.data<half>(), scales().data<half>(), zeros().data<half>(), scales().size(), stream);
                 scale_type = kUint32;
-                zeros     = {};
-                scales    = empty_like(tmp_q);
+                zeros()    = {};
+                scales()   = empty_like(tmp_q);
             }
             else if (weight_format == kFloat8_e4m3) {
-                tmp_q = empty_like(scales);
-                Copy(scales, tmp_q);
+                tmp_q = empty_like(scales());
+                Copy(scales(), tmp_q);
                 scale_type = kUint16;
             }
             else {
-                tmp_q = empty_like(scales);
-                Copy(scales, tmp_q);
+                tmp_q = empty_like(scales());
+                Copy(scales(), tmp_q);
                 scale_type = kUint8;
             }
 
@@ -335,7 +331,7 @@ void LinearWeight::prepare()
             MatrixLayout qd = s_desc;
             qd.pack         = pack_s;
 
-            TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, scales.raw_data(), qd, stream) == 0);
+            TM_CHECK(conv_s->Convert(tmp_q.raw_data(), s_desc, scales().raw_data(), qd, stream) == 0);
             sync_check_cuda_error();
 
             if (is_A) {

@@ -47,13 +47,17 @@ public:
     /// Set grouped-GEMM mode (for MoE expert weights that need row-major layout).
     void set_grouped(bool grouped) { is_grouped_ = grouped; }
 
-    explicit operator bool() const noexcept { return static_cast<bool>(weight); }
+    explicit operator bool() const noexcept { return static_cast<bool>(*weight_); }
 
-    // Public data fields consumed by execution layers (LlamaLinear, etc.)
-    Tensor weight;
-    Tensor bias;
-    Tensor scales;
-    Tensor zeros;
+    // Accessors for execution layers (LlamaLinear, etc.)
+    Tensor&       weight()       { return *weight_; }
+    Tensor&       bias()         { return *bias_; }
+    Tensor&       scales()       { return *scales_; }
+    Tensor&       zeros()        { return *zeros_; }
+    const Tensor& weight() const { return *weight_; }
+    const Tensor& bias()   const { return *bias_; }
+    const Tensor& scales() const { return *scales_; }
+    const Tensor& zeros()  const { return *zeros_; }
 
     int  input_dim  = 0;
     int  output_dim = 0;
@@ -77,6 +81,11 @@ public:
 
 private:
     void do_allocate(DataType actual_weight_type, int actual_group_size);
+
+    mutable core::Parameter weight_{*this, "weight"};
+    mutable core::Parameter bias_{*this, "bias"};
+    mutable core::Parameter scales_{*this, "scales"};
+    mutable core::Parameter zeros_{*this, "zeros"};
 
     bool has_bias_   = false;
     bool is_grouped_ = false;

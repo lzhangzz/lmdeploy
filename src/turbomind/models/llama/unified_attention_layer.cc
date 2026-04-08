@@ -431,8 +431,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             }
         }
 
-        if (!is_mla && weights.w_qkv && weights.w_qkv->bias) {
-            params.q_bias = (T*)weights.w_qkv->bias.data_or<T>(nullptr);
+        if (!is_mla && weights.w_qkv && weights.w_qkv->bias()) {
+            params.q_bias = (T*)weights.w_qkv->bias().data_or<T>(nullptr);
             params.k_bias = params.q_bias + local_head_num_ * size_per_head_;
             params.v_bias = params.k_bias + local_kv_head_num_ * size_per_head_;
         }
@@ -607,7 +607,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
 
     const auto stream = core::Context::stream().handle();
 
-    if (w.q_proj && w.q_proj->weight) {
+    if (w.q_proj && w.q_proj->weight()) {
         q = linear_.Forward(hidden_state, *w.q_proj);
         sync_check_cuda_error();
     }

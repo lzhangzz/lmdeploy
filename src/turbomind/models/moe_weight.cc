@@ -90,8 +90,8 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     d.k_desc.num = d.q_desc.num = n;
 
-    if (e0.bias) {
-        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
+    if (e0.bias()) {
+        d.bias() = Tensor{{n, e0.output_dim}, e0.bias().dtype(), kDEVICE};
     }
 
     std::vector<std::pair<void*, int>> weights;
@@ -99,12 +99,12 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     for (int i = 0; i < n; ++i) {
         auto& e = *experts(i);
-        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
-        if (e.scales) {
-            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
+        weights.emplace_back(e.weight().raw_data(), e.k_desc.ld);
+        if (e.scales()) {
+            scales.emplace_back(e.scales().raw_data(), e.q_desc.ld);
         }
-        if (e.bias) {
-            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
+        if (e.bias()) {
+            Copy(e.bias(), d.bias().slice(i, 1).squeeze(0));
         }
     }
 
@@ -114,17 +114,17 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
-        d.scales = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.weight() = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
+        d.scales() = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         d.k_desc.offsets = d.q_desc.offsets = (int*)1;
     }
     else {
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
-        if (e0.scales) {
-            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
+        if (e0.scales()) {
+            d.scales() = Tensor{make_strided_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         }
         d.k_desc.ld = d.q_desc.ld = 0;
     }
