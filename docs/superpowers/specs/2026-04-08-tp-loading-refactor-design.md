@@ -26,6 +26,7 @@ Each `_load_*` method calls spec methods like `spec.attn_linears(layer)` interna
 4. **GPU-0 processing** -- Weights move to GPU 0 once, transforms/fuses happen there, shards are sent to target GPUs via the C++ `copy_from` cross-device path.
 5. **Rename `_load_*` to `_process_*`** -- The methods no longer read from spec (reads are hoisted). They transform, shard, and commit. `_process_*` reflects this.
 6. **Per-expert MoE iteration** -- MoE reads and distributes one expert at a time within `_process_moe`, keeping GPU 0 memory bounded.
+7. **Single `create_child` path** -- Add trivial typed configs for structural modules (`ModuleListConfig`, `NormConfig`, `DecoderLayerConfig`) so all module creation goes through `create_child(name, config)`. No `create_child_raw` / dict-based path on the writer.
 
 ## `LayerWriter` API
 
@@ -75,18 +76,6 @@ class LayerWriter:
             children.append(child)
         return LayerWriter(children, tp=new_tp, ranks=new_ranks)
 
-    def create_child_raw(self, name, type_name, config_dict):
-        """Create a dict-based module child on ALL GPUs.
-
-        For module types without typed configs (NormWeight, ModuleList,
-        DecoderLayerWeight).  Inherits current tp/ranks.
-        """
-        children = []
-        for handle in self._handles:
-            child = handle.create_child(name, type_name, config_dict)
-            children.append(child)
-        return LayerWriter(children, tp=self._tp, ranks=self._ranks)
-
     # -- Weight commit ----------------------------------------------------
 
     def commit_linear(self, name, linear, split_side=None, model_dtype=None):
@@ -114,6 +103,40 @@ class LayerWriter:
                           split_side=split_side, split_num=tp,
                           rank=rank)
 ```
+
+## Trivial typed configs for structural modules
+
+Structural modules (ModuleList, NormWeight, DecoderLayerWeight) get trivial typed configs so all creation goes through the single `create_child(name, config)` path. Each config implements `for_rank(rank)` (returns `self` — no rank-dependent fields) and `to_cpp()`.
+
+```python
+@dataclass
+class ModuleListConfig:
+    """Config for ModuleList (pure container, no parameters)."""
+    def for_rank(self, rank): return self
+    def to_cpp(self):
+        return _tm.ModuleListConfig()
+
+@dataclass
+class NormConfig:
+    """Config for NormWeight."""
+    dim: int = 0
+    data_type: int = 0
+    def for_rank(self, rank): return self
+    def to_cpp(self):
+        cfg = _tm.NormConfig()
+        cfg.dim = self.dim
+        cfg.data_type = self.data_type
+        return cfg
+
+@dataclass
+class DecoderLayerConfig:
+    """Config for DecoderLayerWeight (pure container)."""
+    def for_rank(self, rank): return self
+    def to_cpp(self):
+        return _tm.DecoderLayerConfig()
+```
+
+C++ side: add corresponding empty/trivial config structs in `module_config.h`, config-based constructors, and pybind11 bindings. The constructors just delegate to the existing default/dict-based constructors.
 
 ## Restructured `_load_layer`
 
@@ -151,9 +174,9 @@ def _layer_writer(self, layer):
         if root is None:
             break
         layers = root.child('layers') or \
-            root.create_child('layers', 'ModuleList', {})
+            root.create_child('layers', ModuleListConfig().to_cpp())
         layer_mod = layers.child(str(layer)) or \
-            layers.create_child(str(layer), 'DecoderLayerWeight', {})
+            layers.create_child(str(layer), DecoderLayerConfig().to_cpp())
         handles.append(layer_mod)
     return LayerWriter(handles)
 ```
@@ -232,7 +255,7 @@ def _process_moe(self, writer, spec, layer):
         moe.create_child('shared_gate', shared_gate_cfg)
 
     # Experts: one at a time to bound GPU 0 memory
-    experts = moe.create_child_raw('experts', 'ModuleList', {})
+    experts = moe.create_child('experts', ModuleListConfig())
     for e in range(spec.num_experts(layer)):
         expert_cfg = FfnConfig.from_model_config(mc, ...)
         expert = experts.create_child(str(e), expert_cfg)
@@ -289,15 +312,17 @@ The C++ `copy_from` handles the cross-GPU transfer when the shard is on GPU 0 an
 
 `_load_global` reads only 3 tensors from spec (`tok_embeddings`, `norm_weight`, `output_weight`). Apply the same pattern for consistency: read once, use a writer to distribute. Low-priority since the payoff is small.
 
+## Unchanged
+
+- `spec.py`, `transforms.py`, `linear.py` -- no changes
+- All source model specs -- no changes
+
 ## Files Changed
 
 | File | Change |
 |------|--------|
 | `text_model_loader.py` | Add `LayerWriter`, restructure `_load_layer`, rename `_load_*` to `_process_*`, precompute rank lists |
 | `load_context.py` | Adjust `_commit_tensors` for GPU-resident tensors; adapt `commit_ffn` to accept `LayerWriter` |
-
-## Unchanged
-
-- `spec.py`, `configs.py`, `transforms.py`, `linear.py` -- no changes
-- All C++ code -- no changes
-- All source model specs -- no changes
+| `configs.py` | Add `ModuleListConfig`, `NormConfig`, `DecoderLayerConfig` |
+| `src/turbomind/core/module_config.h` | Add trivial C++ config structs for ModuleList, NormWeight, DecoderLayerWeight |
+| `src/turbomind/python/bind.cpp` | Bind trivial config structs, add `create_child` overloads |
