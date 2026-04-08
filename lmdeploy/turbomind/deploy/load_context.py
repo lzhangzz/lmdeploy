@@ -181,7 +181,10 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
         else:
             shard = tensor
 
-        shard = shard.cuda().contiguous()
+        if not shard.is_cuda:
+            shard = shard.cuda(0).contiguous()
+        elif not shard.is_contiguous():
+            shard = shard.contiguous()
 
         dst = handle.alloc(kind, cpp_dtype, group_size)
         if dst:
@@ -319,7 +322,10 @@ def commit_tensor(module, tensor: torch.Tensor | None, name: str,
     else:
         shard = tensor
 
-    shard = shard.cuda().contiguous()
+    if not shard.is_cuda:
+        shard = shard.cuda(0).contiguous()
+    elif not shard.is_contiguous():
+        shard = shard.contiguous()
     cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
     if cpp_dtype is None:
         return
@@ -363,10 +369,7 @@ _LINEAR_ATTN_TP_RULES: dict[str, dict] = {
 def commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
                tp: int, rank: int, act_type: str, is_moe: bool = False,
                model_dtype=None):
-    """Preprocess, fuse (interleave or chunk) and commit FFN weights.
-
-    DEPRECATED: Will be removed once text_model_loader uses LayerWriter.
-    """
+    """DEPRECATED: Use LayerWriter + fuse_ffn_linears directly."""
     from .transforms import fuse_ffn_linears
 
     fused, fused_silu = fuse_ffn_linears(w1, w3, tp, act_type, is_moe)
