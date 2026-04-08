@@ -139,6 +139,7 @@ class Linear:
     tensors: dict[str, Tensor]
     weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
     data_format: DataFormat | None = field(default=None, compare=False, repr=False)
+    fused_count: int = field(default=1, compare=False, repr=False)
 
     def split_out_dim(self, num: int) -> list[Linear]:
         """Split along output dim into *num* equal parts."""
@@ -249,4 +250,5 @@ def chunk_linears(w1: Linear, w3: Linear) -> Linear:
             fused[kind] = torch.cat([t1, t3])
     return Linear(tensors={k: v.contiguous() for k, v in fused.items()},
                   weight_format=w1.weight_format,
-                  data_format=w1.data_format)
+                  data_format=w1.data_format,
+                  fused_count=2)

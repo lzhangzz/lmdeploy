@@ -136,7 +136,8 @@ def _infer_compute_dtype(linear: Linear):
 
 
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
-                    split_side: SplitSide | None, split_num: int, rank: int):
+                    split_side: SplitSide | None, split_num: int, rank: int,
+                    fused_count: int = 1):
     """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
 
     Handles packing, TP sharding, allocation, dtype casting, and padding.
@@ -162,8 +163,21 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             tensor_split_dim = None
 
         if tensor_split_dim is not None and split_num > 1:
-            split_size = tensor.shape[tensor_split_dim] // split_num
-            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
+            if fused_count > 1 and tensor_split_dim == (tensor.dim() - 1):
+                # Chunked fused layout: split each chunk's output dim equally.
+                # [*, 2*N] -> reshape [*, 2, N] -> shard N -> [*, 2, N/tp] -> reshape [*, 2*N/tp]
+                orig_shape = tensor.shape
+                n_chunks = fused_count
+                chunk_size = orig_shape[tensor_split_dim] // n_chunks
+                new_shape = orig_shape[:tensor_split_dim] + (n_chunks, chunk_size)
+                tensor_3d = tensor.reshape(new_shape)
+                shard_size = chunk_size // split_num
+                shard_3d = tensor_3d[..., rank * shard_size:(rank + 1) * shard_size]
+                final_shape = orig_shape[:tensor_split_dim] + (n_chunks * shard_size,)
+                shard = shard_3d.reshape(final_shape)
+            else:
+                split_size = tensor.shape[tensor_split_dim] // split_num
+                shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
         else:
             shard = tensor
 
@@ -274,7 +288,8 @@ def commit_linear(module, linear: Linear, name: str,
                         f"divisible by split_num={split_num}.")
 
     _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
-                    split_side, split_num, rank)
+                    split_side, split_num, rank,
+                    fused_count=linear.fused_count)
 
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,
@@ -348,29 +363,31 @@ _LINEAR_ATTN_TP_RULES: dict[str, dict] = {
 def commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
                tp: int, rank: int, act_type: str, is_moe: bool = False,
                model_dtype=None):
-    """Preprocess, split, fuse (interleave or chunk) and commit FFN weights."""
+    """Preprocess, fuse (interleave or chunk) and commit FFN weights.
+
+    DEPRECATED: Will be removed once text_model_loader uses LayerWriter.
+    """
     from .transforms import fuse_ffn_linears
 
-    fused, w1_shard, w3_shard, fused_silu = fuse_ffn_linears(
-        w1, w3, tp, rank, act_type, is_moe)
+    fused, fused_silu = fuse_ffn_linears(w1, w3, tp, act_type, is_moe)
 
     if fused is not None:
         commit_linear(ffn_mod, fused, "w1w3",
-                           model_dtype=model_dtype)
+                           split_side=SplitSide.OUTPUT, split_num=tp,
+                           rank=rank, model_dtype=model_dtype)
         ffn_mod.set_fused_silu(fused_silu)
     else:
-        for name, shard in (("w1", w1_shard), ("w3", w3_shard)):
-            rule = _FFN_TP_RULES.get(name, {})
-            commit_linear(ffn_mod, shard, name,
-                                 split_num=1, rank=0, model_dtype=model_dtype,
-                                 **rule)
+        commit_linear(ffn_mod, w1, "w1",
+                           split_side=SplitSide.OUTPUT, split_num=tp,
+                           rank=rank, model_dtype=model_dtype)
+        commit_linear(ffn_mod, w3, "w3",
+                           split_side=SplitSide.OUTPUT, split_num=tp,
+                           rank=rank, model_dtype=model_dtype)
 
     if w2 is not None:
-        rule = _FFN_TP_RULES.get("w2", {})
-        tp2 = tp if "split_side" in rule else 1
         commit_linear(ffn_mod, w2, "w2",
-                             split_num=tp2, rank=rank, model_dtype=model_dtype,
-                             **rule)
+                           split_side=SplitSide.INPUT, split_num=tp,
+                           rank=rank, model_dtype=model_dtype)
 
 
 # Backward-compatible alias

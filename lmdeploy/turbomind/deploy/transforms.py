@@ -109,32 +109,27 @@ def fuse_ffn_linears(
     w1: Linear,
     w3: Linear,
     tp: int,
-    rank: int,
     act_type: str,
     is_moe: bool = False,
-) -> tuple[Linear | None, Linear | None, Linear | None, bool]:
-    """TP-shard and optionally fuse w1/w3 for FFN.
+) -> tuple[Linear | None, bool]:
+    """Optionally fuse w1/w3 on full (unsharded) tensors for FFN.
 
-    Returns (fused_w1w3_or_none, w1_shard_or_none, w3_shard_or_none, fused_silu).
-    When fusion is possible, fused_w1w3 is set and shards are None.
-    When block-scale boundaries prevent fusion, shards are set individually.
+    Returns (fused_w1w3_or_none, fused_silu).
+    When fusion is possible, fused_w1w3 is set.
+    When block-scale boundaries prevent fusion, returns (None, fused_silu).
+
+    TP sharding is NOT done here — the caller's commit path handles it
+    via split_side=SplitSide.OUTPUT.  ``tp`` is only used for the
+    block-scale alignment check in ``_can_fuse_w1w3``.
     """
     fused_silu = _should_fuse_silu(w1, act_type, is_moe)
     can_fuse = _can_fuse_w1w3(w1, tp)
 
-    # Split by TP rank
-    if tp > 1:
-        w1_shard = _shard_linear_for_tp(w1, tp, rank)
-        w3_shard = _shard_linear_for_tp(w3, tp, rank)
-    else:
-        w1_shard = w1
-        w3_shard = w3
-
     if can_fuse:
         if fused_silu:
-            w1w3 = interleave_linears(w1_shard, w3_shard)
+            w1w3 = interleave_linears(w1, w3)
         else:
-            w1w3 = chunk_linears(w1_shard, w3_shard)
-        return (w1w3, None, None, fused_silu)
+            w1w3 = chunk_linears(w1, w3)
+        return (w1w3, fused_silu)
     else:
-        return (None, w1_shard, w3_shard, fused_silu)
+        return (None, fused_silu)
