@@ -25,7 +25,7 @@ namespace turbomind::core {
 // ======================================================================
 
 struct ModuleConfig {
-    std::string_view module_type;
+    std::string module_type;
 };
 
 // ======================================================================

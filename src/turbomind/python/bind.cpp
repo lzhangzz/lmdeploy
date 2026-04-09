@@ -437,9 +437,7 @@ PYBIND11_MODULE(_turbomind, m)
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
-        .def_property("module_type",
-            [](const turbomind::core::ModuleConfig& c) -> std::string { return std::string(c.module_type); },
-            [](turbomind::core::ModuleConfig& c, const std::string& v) { c.module_type = v; });
+        .def_readwrite("module_type", &turbomind::core::ModuleConfig::module_type);
 
     bind_config<turbomind::core::LinearConfig>(m, "LinearConfig");
     bind_config<turbomind::core::AttentionConfig>(m, "AttentionConfig");
@@ -627,7 +625,7 @@ PYBIND11_MODULE(_turbomind, m)
             [with_context](ft::core::Module& m, const std::string& name,
                            turbomind::core::ModuleConfig& config) -> ft::core::Module* {
                 return with_context(m, [&]() -> ft::core::Module* {
-                    return m.create_child(name, std::string(config.module_type), config);
+                    return m.create_child(name, config.module_type, config);
                 });
             },
             py::return_value_policy::reference,
