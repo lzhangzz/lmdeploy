@@ -52,38 +52,6 @@ class TextModelLoader:
         self._root = Distributor(handles)
         self._layers = self._root.create_child('layers', ModuleListConfig())
 
-    def _ensure_ranks(self):
-        """Compute per-GPU rank lists lazily (gpu_count may be 0 at __init__ time)."""
-        if self._attn_ranks is None:
-            self._attn_ranks = [self.model.tp_ranks(gpu)[0]
-                                for gpu in range(self.model.gpu_count)]
-            self._mlp_ranks = [self.model.tp_ranks(gpu)[1]
-                               for gpu in range(self.model.gpu_count)]
-
-    def _layer_writer(self, layer: int) -> Distributor:
-        """Create a Distributor for the given layer across all GPUs."""
-        handles = []
-        for gpu in range(self.model.gpu_count):
-            root = self.model.root(gpu)
-            if root is None:
-                break
-            layers = root.child('layers') or \
-                root.create_child('layers', ModuleListConfig().to_cpp())
-            layer_mod = layers.child(str(layer)) or \
-                layers.create_child(str(layer), DecoderLayerConfig().to_cpp())
-            handles.append(layer_mod)
-        return Distributor(handles)
-
-    def _root_distributor(self) -> Distributor:
-        """Create a Distributor wrapping the root handles from all GPUs."""
-        handles = []
-        for gpu in range(self.model.gpu_count):
-            root = self.model.root(gpu)
-            if root is None:
-                break
-            handles.append(root)
-        return Distributor(handles)
-
     def __call__(self, layer: int, spec: 'TextModelSpec'):
         if layer < 0:
             self._load_global(spec)
@@ -324,7 +292,6 @@ class TextModelLoader:
     # ------------------------------------------------------------------
 
     def _load_layer(self, layer: int, spec: 'TextModelSpec'):
-        self._ensure_ranks()
         mc = self.model.model_config
         rope_param = self.model.attention_config.rope_param
         spec.configure(SpecAttnConfig(
@@ -337,7 +304,7 @@ class TextModelLoader:
             kv_head_num=mc.kv_head_num,
         ))
 
-        writer = self._layer_writer(layer)
+        writer = self._layers.create_child(str(layer), DecoderLayerConfig())
 
         self._process_norms(writer, spec, layer)
         self._process_attention(writer, spec, layer)
@@ -354,8 +321,7 @@ class TextModelLoader:
         dtype = _cpp_dtype(mc.data_type)
         hidden = mc.hidden_units
 
-        self._ensure_ranks()
-        root = self._root_distributor()
+        root = self._root
 
         # Token embeddings (column-parallel)
         emb = spec.tok_embeddings()

@@ -245,6 +245,7 @@ class TurboMind:
         self._tm_model = tm_model
         tm_model.model_comm = model_comm
         tm_model.gpu_count = self.gpu_count
+        tm_model.model.prepare()
         return model_comm
 
     def sleep(self, level: int = 1):
