@@ -11,12 +11,12 @@ namespace turbomind {
 MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 {
     layer_id_ = cfg.layer_id;
-    moe_param_.method = static_cast<MoeParam::Method>(cfg.method);
+    moe_param_.method = static_cast<MoeParam::Method>(static_cast<const int&>(cfg.method));
     moe_param_.experts_per_token = cfg.experts_per_token;
     moe_param_.inter_size = cfg.inter_size;
     moe_param_.norm_topk_prob = cfg.norm_topk_prob;
     moe_param_.shared_gate = cfg.shared_gate;
-    moe_param_.routed_scale = static_cast<float>(cfg.routed_scale);
+    moe_param_.routed_scale = static_cast<float>(static_cast<const double&>(cfg.routed_scale));
     moe_param_.router_bias = cfg.router_bias;
     moe_param_.topk_group = cfg.topk_group;
     moe_param_.topk_method = cfg.topk_method;
@@ -29,7 +29,7 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     data_type_ = cfg.data_type;
     tp_size_ = cfg.tp_size;
     tp_rank_ = cfg.tp_rank;
-    act_type_ = static_cast<ActivationType>(cfg.act_type);
+    act_type_ = static_cast<ActivationType>(static_cast<const int&>(cfg.act_type));
     fuse_silu_act_ = cfg.fuse_silu;
     // The expert_num vector always has 1 element for per-layer instances,
     // so always use index 0 regardless of layer_id.
