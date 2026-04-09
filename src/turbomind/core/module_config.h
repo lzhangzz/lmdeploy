@@ -1,9 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
-#include <map>
 #include <string>
-#include <variant>
 
 #include "src/turbomind/core/data_type.h"
 
@@ -14,12 +12,6 @@ namespace turbomind::core {
 struct ModuleConfig {
     std::string module_type;
 };
-
-/// Legacy dict-based config (used during migration, removed after all callers
-/// are converted to typed configs).
-using DictConfigValue = std::variant<int64_t, std::string, double>;
-using DictConfig      = std::map<std::string, DictConfigValue>;
-
 struct LinearConfig: ModuleConfig {
     LinearConfig(): ModuleConfig{"LinearWeight"} {}
     int      input_dim{};

@@ -710,31 +710,6 @@ PYBIND11_MODULE(_turbomind, m)
             },
             py::return_value_policy::reference,
             "name"_a, "config"_a)
-        // Dict-based create_child: legacy overload (converts dict to typed config)
-        .def("create_child",
-             [with_context](ft::core::Module& m, const std::string& name,
-                const std::string& type_name,
-                const py::dict& config) -> ft::core::Module* {
-                 return with_context(m, [&]() -> ft::core::Module* {
-                     if (type_name == "LinearWeight") {
-                         turbomind::core::LinearConfig cfg;
-                         if (config.contains("input_dim"))  cfg.input_dim  = py::cast<int>(config["input_dim"]);
-                         if (config.contains("output_dim")) cfg.output_dim = py::cast<int>(config["output_dim"]);
-                         if (config.contains("data_type"))  cfg.data_type  = static_cast<turbomind::DataType>(py::cast<int64_t>(config["data_type"]));
-                         if (config.contains("has_bias"))   cfg.has_bias   = py::cast<int64_t>(config["has_bias"]) != 0;
-                         return m.create_child(name, cfg.module_type, cfg);
-                     }
-                     if (type_name == "NormWeight") {
-                         turbomind::core::NormConfig cfg;
-                         if (config.contains("dim"))       cfg.dim       = py::cast<int>(config["dim"]);
-                         if (config.contains("data_type")) cfg.data_type = static_cast<turbomind::DataType>(py::cast<int64_t>(config["data_type"]));
-                         return m.create_child(name, cfg.module_type, cfg);
-                     }
-                     throw std::runtime_error("Dict-based create_child not supported for type '" + type_name + "'");
-                 });
-             },
-             py::return_value_policy::reference,
-             "name"_a, "type_name"_a, "config"_a)
         .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
         .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
         .def("__getitem__",
