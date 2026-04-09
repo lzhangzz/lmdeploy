@@ -34,6 +34,23 @@ class TextModelLoader:
         self.mlp_tp = model.mlp_tp_size
         self._attn_ranks = None
         self._mlp_ranks = None
+        self._root = None
+        self._layers = None
+
+    def prepare(self):
+        """Eagerly initialize distributors. Called after model_comm is set."""
+        self._attn_ranks = [self.model.tp_ranks(gpu)[0]
+                            for gpu in range(self.model.gpu_count)]
+        self._mlp_ranks = [self.model.tp_ranks(gpu)[1]
+                           for gpu in range(self.model.gpu_count)]
+        handles = []
+        for gpu in range(self.model.gpu_count):
+            root = self.model.root(gpu)
+            if root is None:
+                break
+            handles.append(root)
+        self._root = Distributor(handles)
+        self._layers = self._root.create_child('layers', ModuleListConfig())
 
     def _ensure_ranks(self):
         """Compute per-GPU rank lists lazily (gpu_count may be 0 at __init__ time)."""
