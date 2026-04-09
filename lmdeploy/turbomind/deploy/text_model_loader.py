@@ -409,8 +409,11 @@ class TextModelLoader:
             # Final norm (broadcast)
             norm = spec.norm_weight()
             if norm is not None:
-                norm_mod = root.create_child('norm', 'NormWeight',
-                                  {'dim': hidden, 'data_type': dtype})
+                import _turbomind as _tm
+                norm_cfg = _tm.NormConfig()
+                norm_cfg.dim = hidden
+                norm_cfg.data_type = _tm.DataType(dtype) if isinstance(dtype, int) else dtype
+                norm_mod = root.create_child('norm', norm_cfg)
                 commit_tensor(norm_mod, norm, 'weight')
 
             # Output head (column-parallel, transposed)

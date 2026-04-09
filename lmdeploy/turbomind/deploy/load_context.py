@@ -238,6 +238,7 @@ def commit_linear(module, linear: Linear, name: str,
     # Ensure the LinearWeight child exists
     linear_mod = module.child(name)
     if linear_mod is None:
+        import _turbomind as _tm
         w = linear.tensors.get('weight')
         if w is None:
             w = linear.tensors.get('qweight')
@@ -254,15 +255,14 @@ def commit_linear(module, linear: Linear, name: str,
         if model_dtype is not None and compute_dtype is not None:
             fmt = linear.weight_format
             if fmt is None or fmt.name == 'dense':
-                import _turbomind as _tm
                 model_dt = _tm.DataType(model_dtype) if isinstance(model_dtype, int) else model_dtype
                 compute_dtype = model_dt
-        linear_mod = module.create_child(name, 'LinearWeight', {
-            'input_dim': in_dim,
-            'output_dim': out_dim,
-            'data_type': compute_dtype.value if compute_dtype else 0,
-            'has_bias': 1 if 'bias' in linear.tensors else 0,
-        })
+        lin_cfg = _tm.LinearConfig()
+        lin_cfg.input_dim = in_dim
+        lin_cfg.output_dim = out_dim
+        lin_cfg.data_type = compute_dtype if compute_dtype else _tm.DataType(0)
+        lin_cfg.has_bias = 'bias' in linear.tensors
+        linear_mod = module.create_child(name, lin_cfg)
 
     # Block-scale TP split validation
     if split_side == SplitSide.OUTPUT and split_num > 1:
@@ -467,6 +467,7 @@ class LoadContext:
         The child is created via create_child, then weights are committed
         using the shared _commit_tensors function.
         """
+        import _turbomind as _tm
         tp_side = SplitSide[tp_rule] if tp_rule else None
         split_num = self.tp_size if tp_side else 1
 
@@ -478,13 +479,12 @@ class LoadContext:
         input_dim = weight.shape[0] if weight is not None else 0
         output_dim = weight.shape[-1] if weight is not None else 0
 
-        child_handle = self._handle.create_child(
-            name, 'LinearWeight', {
-                'input_dim': input_dim,
-                'output_dim': output_dim,
-                'data_type': cpp_dtype,
-                'has_bias': 'bias' in linear.tensors,
-            })
+        lin_cfg = _tm.LinearConfig()
+        lin_cfg.input_dim = input_dim
+        lin_cfg.output_dim = output_dim
+        lin_cfg.data_type = cpp_dtype
+        lin_cfg.has_bias = 'bias' in linear.tensors
+        child_handle = self._handle.create_child(name, lin_cfg)
 
         _commit_tensors(child_handle, linear, cpp_dtype, group_size,
                         tp_side, split_num, self.rank)
