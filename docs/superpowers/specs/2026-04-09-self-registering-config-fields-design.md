@@ -171,39 +171,40 @@ Existing usage like `config.hidden_dim = 42` and `int x = config.hidden_dim` com
 ### bind.cpp — generic bind_config<T>()
 
 ```cpp
+template<typename Config, typename T>
+void bind_field(py::class_<Config, ModuleConfig>& cls, const std::string& name, size_t index) {
+    cls.def_property(name.c_str(),
+        [index](const Config& c) -> T {
+            return static_cast<const ConfigField<T>&>(*c.fields()[index]);
+        },
+        [index](Config& c, const T& v) {
+            static_cast<ConfigField<T>&>(*c.fields()[index]) = v;
+        });
+}
+
 template<typename Config>
 void bind_config(py::module_& m, const char* name) {
     py::class_<Config, ModuleConfig> cls(m, name);
     cls.def(py::init<>());
 
     Config tmp;  // construct to discover registered fields (names + types)
-    for (auto* desc : tmp.fields()) {
+    for (size_t i = 0; i < tmp.fields().size(); ++i) {
+        auto* desc = tmp.fields()[i];
         std::string fname(desc->name);
         switch (desc->type_tag) {
-        case FieldType::Int:      bind_field<Config, int>(cls, fname);         break;
-        case FieldType::Bool:     bind_field<Config, bool>(cls, fname);        break;
-        case FieldType::Double:   bind_field<Config, double>(cls, fname);      break;
-        case FieldType::String:   bind_field<Config, std::string>(cls, fname); break;
-        case FieldType::DataType: bind_field<Config, DataType>(cls, fname);    break;
+        case FieldType::Int:      bind_field<Config, int>(cls, fname, i);         break;
+        case FieldType::Bool:     bind_field<Config, bool>(cls, fname, i);        break;
+        case FieldType::Double:   bind_field<Config, double>(cls, fname, i);      break;
+        case FieldType::String:   bind_field<Config, std::string>(cls, fname, i); break;
+        case FieldType::DataType: bind_field<Config, DataType>(cls, fname, i);    break;
         }
     }
 
     cls.def("clone", [](const Config& c) { return Config(c); });
 }
-
-template<typename Config, typename T>
-void bind_field(py::class_<Config, ModuleConfig>& cls, const std::string& name) {
-    cls.def_property(name.c_str(),
-        [name](const Config& c) -> T {
-            return static_cast<const ConfigField<T>&>(*c.field(name.c_str()));
-        },
-        [name](Config& c, const T& v) {
-            static_cast<ConfigField<T>&>(*c.field(name.c_str())) = v;
-        });
-}
 ```
 
-The temporary config is used only for field discovery (names and types). The getter/setter lambdas access the target instance's own `fields_` via name lookup — pointers are always valid for that instance.
+The temporary config discovers fields (names, types, indices). The getter/setter lambdas capture the field index and access the target instance's `fields_` directly by index — O(1) per access, no name lookup needed.
 
 bind.cpp reduces to:
 ```cpp

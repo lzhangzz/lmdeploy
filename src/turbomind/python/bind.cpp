@@ -306,15 +306,16 @@ struct ScopedGIL {
 // --- Generic config binding helpers ---
 
 template<typename Config, typename T>
-void bind_field(py::class_<Config, turbomind::core::ModuleConfig>& cls, const std::string& name)
+void bind_field(py::class_<Config, turbomind::core::ModuleConfig>& cls,
+                const std::string& name, size_t index)
 {
     using namespace turbomind::core;
     cls.def_property(name.c_str(),
-        [name](const Config& c) -> T {
-            return static_cast<const ConfigField<T>&>(*c.field(name.c_str()));
+        [index](const Config& c) -> T {
+            return static_cast<const ConfigField<T>&>(*c.fields()[index]);
         },
-        [name](Config& c, const T& v) {
-            static_cast<ConfigField<T>&>(*c.field(name.c_str())) = v;
+        [index](Config& c, const T& v) {
+            static_cast<ConfigField<T>&>(*c.fields()[index]) = v;
         });
 }
 
@@ -326,14 +327,15 @@ void bind_config(py::module_& m, const char* name)
     cls.def(py::init<>());
 
     Config tmp;  // construct to discover registered fields
-    for (auto* desc : tmp.fields()) {
+    for (size_t i = 0; i < tmp.fields().size(); ++i) {
+        auto* desc = tmp.fields()[i];
         std::string fname(desc->name);
         switch (desc->type_tag) {
-        case FieldType::Int:      bind_field<Config, int>(cls, fname);         break;
-        case FieldType::Bool:     bind_field<Config, bool>(cls, fname);        break;
-        case FieldType::Double:   bind_field<Config, double>(cls, fname);      break;
-        case FieldType::String:   bind_field<Config, std::string>(cls, fname); break;
-        case FieldType::DataType: bind_field<Config, turbomind::DataType>(cls, fname); break;
+        case FieldType::Int:      bind_field<Config, int>(cls, fname, i);         break;
+        case FieldType::Bool:     bind_field<Config, bool>(cls, fname, i);        break;
+        case FieldType::Double:   bind_field<Config, double>(cls, fname, i);      break;
+        case FieldType::String:   bind_field<Config, std::string>(cls, fname, i); break;
+        case FieldType::DataType: bind_field<Config, turbomind::DataType>(cls, fname, i); break;
         }
     }
 
