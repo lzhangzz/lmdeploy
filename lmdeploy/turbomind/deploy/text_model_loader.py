@@ -57,6 +57,16 @@ class TextModelLoader:
             handles.append(layer_mod)
         return Distributor(handles)
 
+    def _root_distributor(self) -> Distributor:
+        """Create a Distributor wrapping the root handles from all GPUs."""
+        handles = []
+        for gpu in range(self.model.gpu_count):
+            root = self.model.root(gpu)
+            if root is None:
+                break
+            handles.append(root)
+        return Distributor(handles)
+
     def __call__(self, layer: int, spec: 'TextModelSpec'):
         if layer < 0:
             self._load_global(spec)
@@ -324,49 +334,42 @@ class TextModelLoader:
         mc = self.model.model_config
         tp = self.attn_tp * self.model.attn_cp_size
         padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
+        dtype = _cpp_dtype(mc.data_type)
+        hidden = mc.hidden_units
 
-        for gpu in range(self.model.gpu_count):
-            root = self.model.root(gpu)
-            if root is None:
-                break
-            attn_rank, _ = self.model.tp_ranks(gpu)
-            dtype = _cpp_dtype(mc.data_type)
-            hidden = mc.hidden_units
+        self._ensure_ranks()
+        root = self._root_distributor()
 
-            # Token embeddings (column-parallel)
-            emb = spec.tok_embeddings()
-            if emb is not None:
-                emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-                tok_cfg = LinearConfig(
-                    input_dim=padded_vocab,
-                    output_dim=hidden // tp,
-                    data_type=dtype)
-                tok_emb = root.create_child('tok_embeddings', tok_cfg.to_cpp())
-                commit_tensor(tok_emb, emb_padded,
-                                     'weight',
-                                     split_side=SplitSide.OUTPUT,
-                                     split_num=tp, rank=attn_rank)
+        # Token embeddings (column-parallel)
+        emb = spec.tok_embeddings()
+        if emb is not None:
+            emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
+            tok_cfg = LinearConfig(
+                input_dim=padded_vocab,
+                output_dim=hidden // tp,
+                data_type=dtype)
+            tok_emb = root.create_child('tok_embeddings', tok_cfg,
+                                        tp=tp, ranks=self._attn_ranks)
+            tok_emb.commit_tensor('weight', emb_padded,
+                                  split_side=SplitSide.OUTPUT)
 
-            # Final norm (broadcast)
-            norm = spec.norm_weight()
-            if norm is not None:
-                import _turbomind as _tm
-                norm_cfg = _tm.NormConfig()
-                norm_cfg.dim = hidden
-                norm_cfg.data_type = _tm.DataType(dtype) if isinstance(dtype, int) else dtype
-                norm_mod = root.create_child('norm', norm_cfg)
-                commit_tensor(norm_mod, norm, 'weight')
+        # Final norm (broadcast)
+        norm = spec.norm_weight()
+        if norm is not None:
+            norm_cfg = NormConfig(dim=hidden, data_type=dtype)
+            norm_mod = root.create_child('norm', norm_cfg)
+            norm_mod.commit_tensor('weight', norm)
 
-            # Output head (column-parallel, transposed)
-            output = spec.output_weight()
-            if output is not None:
-                output_padded = pad_out_dim(output, padded_vocab, dim=0)
-                output_t = output_padded.t()
-                out_cfg = LinearConfig(
-                    input_dim=hidden,
-                    output_dim=padded_vocab // tp,
-                    data_type=dtype)
-                output_mod = root.create_child('output', out_cfg.to_cpp())
-                commit_tensor(output_mod, output_t, 'weight',
-                                     split_side=SplitSide.OUTPUT,
-                                     split_num=tp, rank=attn_rank)
+        # Output head (column-parallel, transposed)
+        output = spec.output_weight()
+        if output is not None:
+            output_padded = pad_out_dim(output, padded_vocab, dim=0)
+            output_t = output_padded.t()
+            out_cfg = LinearConfig(
+                input_dim=hidden,
+                output_dim=padded_vocab // tp,
+                data_type=dtype)
+            output_mod = root.create_child('output', out_cfg,
+                                           tp=tp, ranks=self._attn_ranks)
+            output_mod.commit_tensor('weight', output_t,
+                                     split_side=SplitSide.OUTPUT)
