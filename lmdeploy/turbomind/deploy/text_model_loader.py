@@ -10,74 +10,15 @@ from .configs import (
 )
 from .load_context import (
     _cpp_dtype, _act_type_id,
-    commit_linear, commit_tensor,
     _ATTN_TP_RULES, _FFN_TP_RULES, _LINEAR_ATTN_TP_RULES,
 )
 from .spec import SplitSide
 from .transforms import fuse_ffn_linears
+from .distributor import Distributor
 
 if TYPE_CHECKING:
     from .spec import TextModelSpec
     from .target_model.base import BaseOutputModel
-
-
-class LayerWriter:
-    """Wraps all GPU handles for one logical layer.
-
-    The GPU loop is internal.  Outside callers see single-layer semantics.
-    """
-
-    def __init__(self, handles, tp=1, ranks=None):
-        self._handles = handles
-        self._tp = tp
-        self._ranks = ranks
-
-    @property
-    def tp_size(self):
-        return self._tp
-
-    def _rank_for(self, gpu_idx):
-        if self._ranks and self._tp > 1:
-            return self._ranks[gpu_idx]
-        return 0
-
-    def create_child(self, name, config, tp=None, ranks=None):
-        """Create a typed module child on ALL GPUs.
-
-        Calls ``config.for_rank(rank).to_cpp()`` per GPU.
-        Returns a new LayerWriter scoped to the created children,
-        with tp/ranks rebound if provided (otherwise inherited).
-        """
-        new_tp = tp if tp is not None else self._tp
-        new_ranks = ranks if ranks is not None else self._ranks
-        children = []
-        for i, handle in enumerate(self._handles):
-            rank = new_ranks[i] if new_ranks and new_tp > 1 else 0
-            child = handle.create_child(name, config.for_rank(rank).to_cpp())
-            children.append(child)
-        return LayerWriter(children, tp=new_tp, ranks=new_ranks)
-
-    def commit_linear(self, name, linear, split_side=None, model_dtype=None):
-        """Commit a Linear bundle to all GPUs.
-
-        If split_side is given, uses bound tp/ranks for sharding.
-        If split_side is None, broadcasts (tp=1).
-        """
-        tp = self._tp if split_side else 1
-        for i, handle in enumerate(self._handles):
-            rank = self._rank_for(i) if tp > 1 else 0
-            commit_linear(handle, linear, name,
-                          split_side=split_side, split_num=tp,
-                          rank=rank, model_dtype=model_dtype)
-
-    def commit_tensor(self, name, tensor, split_side=None):
-        """Commit a raw tensor to all GPUs."""
-        tp = self._tp if split_side else 1
-        for i, handle in enumerate(self._handles):
-            rank = self._rank_for(i) if tp > 1 else 0
-            commit_tensor(handle, tensor, name,
-                          split_side=split_side, split_num=tp,
-                          rank=rank)
 
 
 class TextModelLoader:
@@ -102,8 +43,8 @@ class TextModelLoader:
             self._mlp_ranks = [self.model.tp_ranks(gpu)[1]
                                for gpu in range(self.model.gpu_count)]
 
-    def _layer_writer(self, layer: int) -> LayerWriter:
-        """Create a LayerWriter for the given layer across all GPUs."""
+    def _layer_writer(self, layer: int) -> Distributor:
+        """Create a Distributor for the given layer across all GPUs."""
         handles = []
         for gpu in range(self.model.gpu_count):
             root = self.model.root(gpu)
@@ -114,7 +55,7 @@ class TextModelLoader:
             layer_mod = layers.child(str(layer)) or \
                 layers.create_child(str(layer), DecoderLayerConfig().to_cpp())
             handles.append(layer_mod)
-        return LayerWriter(handles)
+        return Distributor(handles)
 
     def __call__(self, layer: int, spec: 'TextModelSpec'):
         if layer < 0:
@@ -129,7 +70,7 @@ class TextModelLoader:
     # Per-component processing methods (read -> transform -> commit)
     # ------------------------------------------------------------------
 
-    def _process_norms(self, writer: LayerWriter, spec: 'TextModelSpec',
+    def _process_norms(self, writer: Distributor, spec: 'TextModelSpec',
                        layer: int):
         """Read, transform, commit norm weights."""
         mc = self.model.model_config
@@ -147,7 +88,7 @@ class TextModelLoader:
         attention_norm.commit_tensor('weight', attn_norm)
         ffn_norm_w.commit_tensor('weight', ffn_norm)
 
-    def _process_attention(self, writer: LayerWriter, spec: 'TextModelSpec',
+    def _process_attention(self, writer: Distributor, spec: 'TextModelSpec',
                            layer: int):
         """Read, transform, commit attention weights."""
         mc = self.model.model_config
@@ -184,7 +125,7 @@ class TextModelLoader:
                     data_type=dtype))
             parent.commit_tensor(parts[-1], tensor, split_side=split_side)
 
-    def _process_ffn(self, writer: LayerWriter, spec: 'TextModelSpec',
+    def _process_ffn(self, writer: Distributor, spec: 'TextModelSpec',
                      layer: int):
         """Read, transform (fuse w1+w3), commit FFN weights."""
         mc = self.model.model_config
@@ -232,7 +173,7 @@ class TextModelLoader:
             ffn.commit_linear('w2', w2,
                               split_side=SplitSide.INPUT, model_dtype=dtype)
 
-    def _process_moe(self, writer: LayerWriter, spec: 'TextModelSpec',
+    def _process_moe(self, writer: Distributor, spec: 'TextModelSpec',
                      layer: int):
         """Read, transform, commit MoE weights (per-expert iteration)."""
         if spec.num_experts(layer) <= 0:
@@ -274,7 +215,7 @@ class TextModelLoader:
                 existing = parent._handles[0].child(seg) if parent._handles else None
                 if existing is not None:
                     children = [h.child(seg) for h in parent._handles]
-                    parent = LayerWriter(children)
+                    parent = Distributor(children)
                 else:
                     parent = parent.create_child(seg, NormConfig(
                         dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
@@ -320,7 +261,7 @@ class TextModelLoader:
                 expert.commit_linear('w2', w2,
                                      split_side=SplitSide.INPUT, model_dtype=dtype)
 
-    def _process_linear_attn(self, writer: LayerWriter, spec: 'TextModelSpec',
+    def _process_linear_attn(self, writer: Distributor, spec: 'TextModelSpec',
                              layer: int):
         """Read, transform, commit linear-attention (DeltaNet) weights."""
         mc = self.model.model_config
