@@ -354,7 +354,7 @@ _LINEAR_ATTN_TP_RULES: dict[str, dict] = {
 def commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
                tp: int, rank: int, act_type: str, is_moe: bool = False,
                model_dtype=None):
-    """DEPRECATED: Use LayerWriter + fuse_ffn_linears directly."""
+    """DEPRECATED: Use Distributor + fuse_ffn_linears directly."""
     from .transforms import fuse_ffn_linears
 
     fused, fused_silu = fuse_ffn_linears(w1, w3, tp, act_type, is_moe)
