@@ -8,9 +8,8 @@ from lmdeploy.utils import get_logger
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
-from .text_model_loader import TextModelLoader
 from .source_model.base import INPUT_MODELS
-from .target_model.base import OUTPUT_MODELS, BaseOutputModel
+from .target_model.base import BaseOutputModel
 
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
@@ -118,13 +117,12 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
     return register_name, config
 
 
-def get_tm_model(model_path,
-                 model_name,
-                 chat_template_name,
-                 engine_config: TurbomindEngineConfig,
-                 group_size: int = None,
-                 out_dir: str = None) -> BaseOutputModel:
-    """Create turbomind model.
+def get_tm_config(model_path,
+                  model_name,
+                  chat_template_name,
+                  engine_config: TurbomindEngineConfig,
+                  group_size: int = None):
+    """Compute finalized TurbomindModelConfig.
 
     Args:
         model_path (str): the path of the input model, which is supposed
@@ -136,8 +134,9 @@ def get_tm_model(model_path,
         engine_config(TurbomindEngineConfig): user input engine config
         group_size(int): refers to the group_size if the input model
             is a grouped quantized model
-        out_dir(str): the output directory where to save to turbomind model.
-            If it is None, the turbomind model won't be saved
+
+    Returns:
+        tuple: (input_model, tm_cfg, repeat_kv)
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
@@ -202,9 +201,6 @@ def get_tm_model(model_path,
     if engine_config.mlp_tp_size is not None:
         tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
-    output_model = OUTPUT_MODELS.get(output_model_name)(input_model=input_model,
-                                                        cfg=tm_cfg,
-                                                        model_cls=TextModelLoader,
-                                                        out_dir=out_dir)
+    repeat_kv = BaseOutputModel.finalize_config(input_model, tm_cfg)
 
-    return output_model
+    return input_model, tm_cfg, repeat_kv

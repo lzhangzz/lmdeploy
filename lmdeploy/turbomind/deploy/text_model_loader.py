@@ -32,20 +32,15 @@ class TextModelLoader:
         self.model = model
         self.attn_tp = model.attn_tp_size
         self.mlp_tp = model.mlp_tp_size
-        self._attn_ranks = None
-        self._mlp_ranks = None
-        self._root = None
-        self._layers = None
 
-    def prepare(self):
-        """Eagerly initialize distributors. Called after model_comm is set."""
-        self._attn_ranks = [self.model.tp_ranks(gpu)[0]
-                            for gpu in range(self.model.gpu_count)]
-        self._mlp_ranks = [self.model.tp_ranks(gpu)[1]
-                           for gpu in range(self.model.gpu_count)]
+        # Eagerly initialize distributors
+        self._attn_ranks = [model.tp_ranks(gpu)[0]
+                            for gpu in range(model.gpu_count)]
+        self._mlp_ranks = [model.tp_ranks(gpu)[1]
+                           for gpu in range(model.gpu_count)]
         handles = []
-        for gpu in range(self.model.gpu_count):
-            root = self.model.root(gpu)
+        for gpu in range(model.gpu_count):
+            root = model.root(gpu)
             if root is None:
                 break
             handles.append(root)
@@ -296,8 +291,7 @@ class TextModelLoader:
         rope_param = self.model.attention_config.rope_param
         spec.configure(SpecAttnConfig(
             tp=self.attn_tp,
-            permute_qk=getattr(self.model, 'permute_qk', True),
-            repeat_kv=getattr(self.model, 'repeat_kv', 0),
+            repeat_kv=self.model.repeat_kv,
             head_dim=mc.size_per_head,
             rope_dim=rope_param.dim if rope_param else mc.size_per_head,
             output_gate=getattr(mc, 'attn_output_gate', False),

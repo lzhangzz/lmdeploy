@@ -230,22 +230,26 @@ class TurboMind:
         assert is_supported(model_path), (f'turbomind does not support {model_path}. '
                                           'Plz try pytorch engine instead.')
 
-        # convert transformers model into turbomind model
-        from .deploy.converter import get_tm_model
-        tm_model = get_tm_model(model_path, self.model_name, self.chat_template_name, engine_config)
+        from .deploy.converter import get_tm_config
+        from .deploy.text_model_loader import TextModelLoader
+        from .deploy.target_model.base import OUTPUT_MODELS
 
-        self._postprocess_config(tm_model.tm_config, engine_config)
+        input_model, tm_cfg, repeat_kv = get_tm_config(
+            model_path, self.model_name, self.chat_template_name, engine_config)
+
+        self._postprocess_config(tm_cfg, engine_config)
 
         model_comm = _tm.TurboMind.create(model_dir='',
                                           config=yaml.safe_dump(self.config_dict))
-
-        # create empty weight
         self._create_weight(model_comm)
-        # output model -- give it access to model_comm for deferred allocation
-        self._tm_model = tm_model
-        tm_model.model_comm = model_comm
-        tm_model.gpu_count = self.gpu_count
-        tm_model.model.prepare()
+
+        self._tm_model = OUTPUT_MODELS.get('tm')(
+            input_model=input_model,
+            cfg=tm_cfg,
+            model_cls=TextModelLoader,
+            model_comm=model_comm,
+            gpu_count=self.gpu_count,
+            repeat_kv=repeat_kv)
         return model_comm
 
     def sleep(self, level: int = 1):
