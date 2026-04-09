@@ -424,7 +424,10 @@ PYBIND11_MODULE(_turbomind, m)
           py::arg("data_type"), py::arg("weight_format"), py::arg("group_size"));
 
     // --- Config struct bindings ---
-    py::class_<turbomind::core::LinearConfig>(m, "LinearConfig")
+    py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
+        .def_readwrite("module_type", &turbomind::core::ModuleConfig::module_type);
+
+    py::class_<turbomind::core::LinearConfig, turbomind::core::ModuleConfig>(m, "LinearConfig")
         .def(py::init<>())
         .def_readwrite("input_dim", &turbomind::core::LinearConfig::input_dim)
         .def_readwrite("output_dim", &turbomind::core::LinearConfig::output_dim)
@@ -434,7 +437,7 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::LinearConfig(c);
         });
 
-    py::class_<turbomind::core::AttentionConfig>(m, "AttentionConfig")
+    py::class_<turbomind::core::AttentionConfig, turbomind::core::ModuleConfig>(m, "AttentionConfig")
         .def(py::init<>())
         .def_readwrite("hidden_dim", &turbomind::core::AttentionConfig::hidden_dim)
         .def_readwrite("head_dim", &turbomind::core::AttentionConfig::head_dim)
@@ -456,7 +459,7 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::AttentionConfig(c);
         });
 
-    py::class_<turbomind::core::FfnConfig>(m, "FfnConfig")
+    py::class_<turbomind::core::FfnConfig, turbomind::core::ModuleConfig>(m, "FfnConfig")
         .def(py::init<>())
         .def_readwrite("hidden_dim", &turbomind::core::FfnConfig::hidden_dim)
         .def_readwrite("inter_size", &turbomind::core::FfnConfig::inter_size)
@@ -471,7 +474,7 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::FfnConfig(c);
         });
 
-    py::class_<turbomind::core::MoeConfig>(m, "MoeConfig")
+    py::class_<turbomind::core::MoeConfig, turbomind::core::ModuleConfig>(m, "MoeConfig")
         .def(py::init<>())
         .def_readwrite("layer_id", &turbomind::core::MoeConfig::layer_id)
         .def_readwrite("method", &turbomind::core::MoeConfig::method)
@@ -498,7 +501,7 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::MoeConfig(c);
         });
 
-    py::class_<turbomind::core::DeltaNetConfig>(m, "DeltaNetConfig")
+    py::class_<turbomind::core::DeltaNetConfig, turbomind::core::ModuleConfig>(m, "DeltaNetConfig")
         .def(py::init<>())
         .def_readwrite("hidden_dim", &turbomind::core::DeltaNetConfig::hidden_dim)
         .def_readwrite("num_k_heads", &turbomind::core::DeltaNetConfig::num_k_heads)
@@ -514,15 +517,15 @@ PYBIND11_MODULE(_turbomind, m)
             return turbomind::core::DeltaNetConfig(c);
         });
 
-    py::class_<turbomind::core::ModuleListConfig>(m, "ModuleListConfig")
+    py::class_<turbomind::core::ModuleListConfig, turbomind::core::ModuleConfig>(m, "ModuleListConfig")
         .def(py::init<>());
 
-    py::class_<turbomind::core::NormConfig>(m, "NormConfig")
+    py::class_<turbomind::core::NormConfig, turbomind::core::ModuleConfig>(m, "NormConfig")
         .def(py::init<>())
         .def_readwrite("dim", &turbomind::core::NormConfig::dim)
         .def_readwrite("data_type", &turbomind::core::NormConfig::data_type);
 
-    py::class_<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig")
+    py::class_<turbomind::core::DecoderLayerConfig, turbomind::core::ModuleConfig>(m, "DecoderLayerConfig")
         .def(py::init<>());
 
     // tensor
@@ -697,113 +700,37 @@ PYBIND11_MODULE(_turbomind, m)
              [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
              py::return_value_policy::reference,
              "name"_a)
-        // Config-based create_child: accepts a typed config struct object
+        // Config-based create_child: accepts any ModuleConfig subclass
         .def("create_child",
             [with_context](ft::core::Module& m, const std::string& name,
-                           const py::object& config_obj) -> ft::core::Module* {
+                           turbomind::core::ModuleConfig& config) -> ft::core::Module* {
                 return with_context(m, [&]() -> ft::core::Module* {
-                    // Try each config type via py::cast
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::AttentionConfig>();
-                        auto child = std::make_unique<turbomind::AttentionWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::FfnConfig>();
-                        auto child = std::make_unique<turbomind::FfnWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::MoeConfig>();
-                        auto child = std::make_unique<turbomind::MoeWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::DeltaNetConfig>();
-                        auto child = std::make_unique<turbomind::DeltaNetWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::LinearConfig>();
-                        auto child = std::make_unique<turbomind::LinearWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::ModuleListConfig>();
-                        auto child = std::make_unique<turbomind::core::ModuleList>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::NormConfig>();
-                        auto child = std::make_unique<turbomind::NormWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    try {
-                        auto cfg = config_obj.cast<turbomind::core::DecoderLayerConfig>();
-                        auto child = std::make_unique<turbomind::DecoderLayerWeight>(cfg);
-                        auto* raw = child.get();
-                        m.add_child(name, std::move(child));
-                        return raw;
-                    } catch (py::cast_error&) {}
-
-                    throw std::runtime_error("Unknown config type passed to create_child(name, config)");
+                    return m.create_child(name, config.module_type, config);
                 });
             },
             py::return_value_policy::reference,
             "name"_a, "config"_a)
-        // Dict-based create_child: legacy overload
+        // Dict-based create_child: legacy overload (converts dict to typed config)
         .def("create_child",
              [with_context](ft::core::Module& m, const std::string& name,
                 const std::string& type_name,
                 const py::dict& config) -> ft::core::Module* {
                  return with_context(m, [&]() -> ft::core::Module* {
-                     // Convert py::dict to ModuleConfig
-                     turbomind::core::ModuleConfig cfg;
-                     for (auto& [key, val] : config) {
-                         try {
-                             cfg[py::cast<std::string>(key)] = py::cast<int64_t>(val);
-                         } catch (py::cast_error&) {
-                             // Fallback: try PyNumber_Index for pybind11 enum types
-                             PyObject* idx = PyNumber_Index(val.ptr());
-                             if (idx) {
-                                 cfg[py::cast<std::string>(key)] = PyLong_AsLongLong(idx);
-                                 Py_DECREF(idx);
-                             } else {
-                                 PyErr_Clear();
-                                 try {
-                                     cfg[py::cast<std::string>(key)] = py::cast<double>(val);
-                                 } catch (py::cast_error&) {
-                                     cfg[py::cast<std::string>(key)] = py::cast<std::string>(val);
-                                 }
-                             }
-                         }
+                     if (type_name == "LinearWeight") {
+                         turbomind::core::LinearConfig cfg;
+                         if (config.contains("input_dim"))  cfg.input_dim  = py::cast<int>(config["input_dim"]);
+                         if (config.contains("output_dim")) cfg.output_dim = py::cast<int>(config["output_dim"]);
+                         if (config.contains("data_type"))  cfg.data_type  = static_cast<turbomind::DataType>(py::cast<int64_t>(config["data_type"]));
+                         if (config.contains("has_bias"))   cfg.has_bias   = py::cast<int64_t>(config["has_bias"]) != 0;
+                         return m.create_child(name, cfg.module_type, cfg);
                      }
-                     auto* child = m.create_child(name, type_name, cfg);
-                     if (!child) {
-                         throw std::runtime_error("Failed to create module type '" + type_name + "'");
+                     if (type_name == "NormWeight") {
+                         turbomind::core::NormConfig cfg;
+                         if (config.contains("dim"))       cfg.dim       = py::cast<int>(config["dim"]);
+                         if (config.contains("data_type")) cfg.data_type = static_cast<turbomind::DataType>(py::cast<int64_t>(config["data_type"]));
+                         return m.create_child(name, cfg.module_type, cfg);
                      }
-                     return child;
+                     throw std::runtime_error("Dict-based create_child not supported for type '" + type_name + "'");
                  });
              },
              py::return_value_policy::reference,

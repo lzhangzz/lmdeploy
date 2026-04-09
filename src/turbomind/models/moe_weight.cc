@@ -36,30 +36,6 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     expert_num_ = cfg.expert_num;
 }
 
-MoeWeight::MoeWeight(int              layer_id,
-                     const MoeParam&  param,
-                     int              hidden_dim,
-                     bool             mlp_bias,
-                     DataType         data_type,
-                     int              tp_size,
-                     int              tp_rank,
-                     ActivationType   act_type,
-                     bool             fuse_silu_act)
-    : layer_id_(layer_id)
-    , moe_param_(param)
-    , hidden_dim_(hidden_dim)
-    , mlp_bias_(mlp_bias)
-    , data_type_(data_type)
-    , tp_size_(tp_size)
-    , tp_rank_(tp_rank)
-    , act_type_(act_type)
-    , fuse_silu_act_(fuse_silu_act)
-{
-    if ((int)moe_param_.expert_num.size() > layer_id_) {
-        expert_num_ = moe_param_.expert_num[layer_id_];
-    }
-}
-
 Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     if (param_name == "score_correction_bias" && expert_num_ > 0) {
@@ -137,14 +113,16 @@ void MoeWeight::prepare()
 
     // Create batched block view for fused MoE path
     if (expert_num_ > 0 && method() == MoeParam::kFused) {
-        block_ = std::make_unique<FfnWeight>(hidden_dim_,
-                                              moe_param_.inter_size,
-                                              mlp_bias_,
-                                              tp_size_,
-                                              tp_rank_,
-                                              data_type_,
-                                              act_type_,
-                                              fuse_silu_act_);
+        core::FfnConfig block_cfg;
+        block_cfg.hidden_dim = hidden_dim_;
+        block_cfg.inter_size = moe_param_.inter_size;
+        block_cfg.has_bias   = mlp_bias_;
+        block_cfg.tp_size    = tp_size_;
+        block_cfg.tp_rank    = tp_rank_;
+        block_cfg.data_type  = data_type_;
+        block_cfg.act_type   = static_cast<int>(act_type_);
+        block_cfg.fuse_silu  = fuse_silu_act_;
+        block_ = std::make_unique<FfnWeight>(block_cfg);
 
         // Link each linear in the block to the corresponding expert linears
         auto get_expert_w1w3 = [this](int i) -> LinearWeight* {
@@ -197,53 +175,13 @@ void MoeWeight::prepare()
 }
 
 namespace {
-static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
-{
-    auto it = cfg.find(key);
-    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
-}
-
-static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
-{
-    auto it = cfg.find(key);
-    return it != cfg.end() && std::get<int64_t>(it->second);
-}
-
 struct MoeWeightRegistrar {
     MoeWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "MoeWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                MoeParam moe_param;
-                moe_param.method           = static_cast<MoeParam::Method>(cfg_get(cfg, "method"));
-                moe_param.experts_per_token = cfg_get(cfg, "experts_per_token");
-                moe_param.inter_size       = cfg_get(cfg, "inter_size");
-                moe_param.norm_topk_prob   = cfg_bool(cfg, "norm_topk_prob");
-                moe_param.shared_gate      = cfg_bool(cfg, "shared_gate");
-                moe_param.routed_scale     = cfg.count("routed_scale")
-                    ? static_cast<float>(std::get<double>(cfg.at("routed_scale"))) : 1.0f;
-                moe_param.router_bias      = cfg_bool(cfg, "router_bias");
-                moe_param.topk_group      = cfg_get(cfg, "topk_group");
-                moe_param.topk_method     = cfg.count("topk_method")
-                    ? std::get<std::string>(cfg.at("topk_method")) : "greedy";
-                moe_param.n_group         = cfg_get(cfg, "n_group");
-                moe_param.scoring_func    = cfg.count("scoring_func")
-                    ? std::get<std::string>(cfg.at("scoring_func")) : "softmax";
-                moe_param.router_n_groups = cfg_get(cfg, "router_n_groups");
-                int expert_num = cfg_get(cfg, "expert_num");
-                moe_param.expert_num.assign(1, expert_num);
-                // Pass layer_id=0 so the constructor indexes into expert_num[0]
-                // (the vector has a single element for this per-layer instance).
+            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
                 return std::make_unique<MoeWeight>(
-                    0,
-                    moe_param,
-                    cfg_get(cfg, "hidden_dim"),
-                    cfg_bool(cfg, "mlp_bias"),
-                    static_cast<DataType>(cfg_get(cfg, "data_type")),
-                    cfg_get(cfg, "tp_size"),
-                    cfg_get(cfg, "tp_rank"),
-                    static_cast<ActivationType>(cfg_get(cfg, "act_type")),
-                    cfg_bool(cfg, "fuse_silu_act"));
+                    static_cast<const core::MoeConfig&>(base_cfg));
             });
     }
 };

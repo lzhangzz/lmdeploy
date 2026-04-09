@@ -61,22 +61,9 @@ struct NormWeightRegistrar {
     NormWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "NormWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                auto dtype = static_cast<DataType>(std::get<int64_t>(cfg.at("data_type")));
-                // Check for multi-dimensional "dims" string (e.g. "4 10240")
-                if (auto it = cfg.find("dims"); it != cfg.end()) {
-                    const auto& dims_str = std::get<std::string>(it->second);
-                    std::vector<ssize_t> shape;
-                    std::istringstream iss(dims_str);
-                    ssize_t d;
-                    while (iss >> d) {
-                        shape.push_back(d);
-                    }
-                    return std::make_unique<NormWeight>(std::move(shape), dtype);
-                }
+            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
                 return std::make_unique<NormWeight>(
-                    std::get<int64_t>(cfg.at("dim")),
-                    dtype);
+                    static_cast<const core::NormConfig&>(base_cfg));
             });
     }
 };

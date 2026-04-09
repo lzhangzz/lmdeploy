@@ -18,20 +18,6 @@ public:
 
     AttentionWeight(const core::AttentionConfig& cfg);
 
-    AttentionWeight(int          hidden_dim,
-                    int          head_dim,
-                    int          head_num,
-                    int          kv_head_num,
-                    MLAParam     mla,
-                    bool         bias,
-                    bool         qk_norm,
-                    int          tp_size,
-                    int          tp_rank,
-                    DataType     data_type,
-                    int          window_size,
-                    bool         sink,
-                    bool         attn_output_gate);
-
     void prepare() override;
     Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 

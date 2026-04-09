@@ -17,16 +17,6 @@ public:
 
     MoeWeight(const core::MoeConfig& cfg);
 
-    MoeWeight(int              layer_id,
-              const MoeParam&  param,
-              int              hidden_dim,
-              bool             mlp_bias,
-              DataType         data_type,
-              int              tp_size,
-              int              tp_rank,
-              ActivationType   act_type,
-              bool             fuse_silu_act);
-
     Tensor  alloc(const std::string& param_name, const core::WeightSpec& spec) override;
     void prepare() override;
     int num_experts() const { return expert_num_; }

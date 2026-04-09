@@ -363,14 +363,9 @@ struct LinearWeightRegistrar {
     LinearWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "LinearWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                auto m = std::make_unique<LinearWeight>();
-                m->configure(
-                    std::get<int64_t>(cfg.at("input_dim")),
-                    std::get<int64_t>(cfg.at("output_dim")),
-                    static_cast<DataType>(std::get<int64_t>(cfg.at("data_type"))),
-                    cfg.count("has_bias") && std::get<int64_t>(cfg.at("has_bias")));
-                return m;
+            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<LinearWeight>(
+                    static_cast<const core::LinearConfig&>(base_cfg));
             });
     }
 };

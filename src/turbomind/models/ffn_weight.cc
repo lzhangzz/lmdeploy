@@ -8,24 +8,15 @@
 namespace turbomind {
 
 FfnWeight::FfnWeight(const core::FfnConfig& cfg)
-    : FfnWeight(cfg.hidden_dim, cfg.inter_size, cfg.has_bias, cfg.tp_size, cfg.tp_rank,
-                cfg.data_type, static_cast<ActivationType>(cfg.act_type), cfg.fuse_silu)
-{
-    if (cfg.fused_moe) {
-        set_fused_moe(true);
-    }
-}
-
-FfnWeight::FfnWeight(int hidden_dim, int inter_size, bool bias, int tp_size, int tp_rank,
-                     DataType data_type, ActivationType act_type, bool fuse_silu_act)
-    : hidden_dim_(hidden_dim)
-    , inter_size_(inter_size)
-    , bias_(bias)
-    , tp_size_(tp_size)
-    , tp_rank_(tp_rank)
-    , data_type_(data_type)
-    , act_type_(act_type)
-    , is_fused_silu_(fuse_silu_act && act_type == ActivationType::kSilu)
+    : hidden_dim_{cfg.hidden_dim}
+    , inter_size_{cfg.inter_size}
+    , bias_{cfg.has_bias}
+    , tp_size_{cfg.tp_size}
+    , tp_rank_{cfg.tp_rank}
+    , data_type_{cfg.data_type}
+    , act_type_{static_cast<ActivationType>(cfg.act_type)}
+    , is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(cfg.act_type) == ActivationType::kSilu}
+    , is_fused_moe_{cfg.fused_moe}
 {
     TM_CHECK(inter_size_ % tp_size_ == 0) << inter_size_ << " " << tp_size_;
     inter_size_ /= tp_size_;
@@ -55,36 +46,13 @@ void FfnWeight::prepare()
 }
 
 namespace {
-static int64_t cfg_get(const core::ModuleConfig& cfg, const std::string& key, int64_t def = 0)
-{
-    auto it = cfg.find(key);
-    return it != cfg.end() ? std::get<int64_t>(it->second) : def;
-}
-
-static bool cfg_bool(const core::ModuleConfig& cfg, const std::string& key)
-{
-    auto it = cfg.find(key);
-    return it != cfg.end() && std::get<int64_t>(it->second);
-}
-
 struct FfnWeightRegistrar {
     FfnWeightRegistrar() {
         core::ModuleRegistry::instance().register_type(
             "FfnWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                auto ffn = std::make_unique<FfnWeight>(
-                    cfg_get(cfg, "hidden_dim"),
-                    cfg_get(cfg, "inter_size"),
-                    cfg_bool(cfg, "has_bias"),
-                    cfg_get(cfg, "tp_size"),
-                    cfg_get(cfg, "tp_rank"),
-                    static_cast<DataType>(cfg_get(cfg, "data_type")),
-                    static_cast<ActivationType>(cfg_get(cfg, "act_type")),
-                    cfg_bool(cfg, "fuse_silu_act"));
-                if (cfg_bool(cfg, "fused_moe")) {
-                    ffn->set_fused_moe(true);
-                }
-                return ffn;
+            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<FfnWeight>(
+                    static_cast<const core::FfnConfig&>(base_cfg));
             });
     }
 };

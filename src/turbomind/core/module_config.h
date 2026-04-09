@@ -1,18 +1,35 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include <map>
+#include <string>
+#include <variant>
+
 #include "src/turbomind/core/data_type.h"
 
 namespace turbomind::core {
 
-struct LinearConfig {
+/// Base class for all module config structs. Carries the module type name
+/// used by the registry for dispatch.
+struct ModuleConfig {
+    std::string module_type;
+};
+
+/// Legacy dict-based config (used during migration, removed after all callers
+/// are converted to typed configs).
+using DictConfigValue = std::variant<int64_t, std::string, double>;
+using DictConfig      = std::map<std::string, DictConfigValue>;
+
+struct LinearConfig: ModuleConfig {
+    LinearConfig(): ModuleConfig{"LinearWeight"} {}
     int      input_dim{};
     int      output_dim{};
     DataType data_type{};
     bool     has_bias{};
 };
 
-struct AttentionConfig {
+struct AttentionConfig: ModuleConfig {
+    AttentionConfig(): ModuleConfig{"AttentionWeight"} {}
     int      hidden_dim{};
     int      head_dim{};
     int      head_num{};
@@ -31,7 +48,8 @@ struct AttentionConfig {
     bool     attn_output_gate{};
 };
 
-struct FfnConfig {
+struct FfnConfig: ModuleConfig {
+    FfnConfig(): ModuleConfig{"FfnWeight"} {}
     int      hidden_dim{};
     int      inter_size{};
     bool     has_bias{};
@@ -43,31 +61,33 @@ struct FfnConfig {
     bool     fused_moe{};
 };
 
-struct MoeConfig {
-    int      layer_id{};
-    int      method{};
-    int      experts_per_token{};
-    int      inter_size{};
-    bool     norm_topk_prob{};
-    bool     shared_gate{};
-    double   routed_scale{};
-    bool     router_bias{};
-    int      topk_group{};
-    std::string topk_method{};
-    int      n_group{};
-    std::string scoring_func{};
-    int      router_n_groups{};
-    int      expert_num{};
-    int      hidden_dim{};
-    bool     mlp_bias{};
-    DataType data_type{};
-    int      tp_size{};
-    int      tp_rank{};
-    int      act_type{};
-    bool     fuse_silu{};
+struct MoeConfig: ModuleConfig {
+    MoeConfig(): ModuleConfig{"MoeWeight"} {}
+    int            layer_id{};
+    int            method{};
+    int            experts_per_token{};
+    int            inter_size{};
+    bool           norm_topk_prob{};
+    bool           shared_gate{};
+    double         routed_scale{};
+    bool           router_bias{};
+    int            topk_group{};
+    std::string    topk_method{};
+    int            n_group{};
+    std::string    scoring_func{};
+    int            router_n_groups{};
+    int            expert_num{};
+    int            hidden_dim{};
+    bool           mlp_bias{};
+    DataType       data_type{};
+    int            tp_size{};
+    int            tp_rank{};
+    int            act_type{};
+    bool           fuse_silu{};
 };
 
-struct DeltaNetConfig {
+struct DeltaNetConfig: ModuleConfig {
+    DeltaNetConfig(): ModuleConfig{"DeltaNetWeight"} {}
     int      hidden_dim{};
     int      num_k_heads{};
     int      num_v_heads{};
@@ -80,13 +100,18 @@ struct DeltaNetConfig {
     DataType data_type{};
 };
 
-struct ModuleListConfig {};
+struct ModuleListConfig: ModuleConfig {
+    ModuleListConfig(): ModuleConfig{"ModuleList"} {}
+};
 
-struct NormConfig {
+struct NormConfig: ModuleConfig {
+    NormConfig(): ModuleConfig{"NormWeight"} {}
     int      dim{};
     DataType data_type{};
 };
 
-struct DecoderLayerConfig {};
+struct DecoderLayerConfig: ModuleConfig {
+    DecoderLayerConfig(): ModuleConfig{"DecoderLayerWeight"} {}
+};
 
 }  // namespace turbomind::core

@@ -18,17 +18,6 @@ public:
 
     DeltaNetWeight(const core::DeltaNetConfig& cfg);
 
-    DeltaNetWeight(int      hidden_dim,
-                   int      num_k_heads,
-                   int      num_v_heads,
-                   int      key_head_dim,
-                   int      value_head_dim,
-                   int      d_conv,
-                   bool     bias,
-                   int      tp_size,
-                   int      tp_rank,
-                   DataType data_type);
-
     void prepare() override;
 
     const Tensor* conv1d() const { return conv1d_ ? conv1d_.ptr() : nullptr; }
