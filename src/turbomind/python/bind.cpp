@@ -303,42 +303,15 @@ struct ScopedGIL {
 
 }  // namespace
 
-// --- Generic config binding helpers ---
-
-template<typename Config, typename T>
-void bind_field(py::class_<Config, turbomind::core::ModuleConfig>& cls,
-                const std::string& name, size_t index)
-{
-    using namespace turbomind::core;
-    cls.def_property(name.c_str(),
-        [index](const Config& c) -> T {
-            return static_cast<const ConfigField<T>&>(*c.fields()[index]);
-        },
-        [index](Config& c, const T& v) {
-            static_cast<ConfigField<T>&>(*c.fields()[index]) = v;
-        });
-}
+// --- Generic config binding helper ---
 
 template<typename Config>
-void bind_config(py::module_& m, const char* name)
-{
-    using namespace turbomind::core;
-    py::class_<Config, ModuleConfig> cls(m, name);
+void bind_config(py::module_& m, const char* name) {
+    py::class_<Config, turbomind::core::ModuleConfig> cls(m, name);
     cls.def(py::init<>());
-
-    Config tmp;  // construct to discover registered fields
-    for (size_t i = 0; i < tmp.fields().size(); ++i) {
-        auto* desc = tmp.fields()[i];
-        std::string fname(desc->name);
-        switch (desc->type_tag) {
-        case FieldType::Int:      bind_field<Config, int>(cls, fname, i);         break;
-        case FieldType::Bool:     bind_field<Config, bool>(cls, fname, i);        break;
-        case FieldType::Double:   bind_field<Config, double>(cls, fname, i);      break;
-        case FieldType::String:   bind_field<Config, std::string>(cls, fname, i); break;
-        case FieldType::DataType: bind_field<Config, turbomind::DataType>(cls, fname, i); break;
-        }
-    }
-
+    Config::for_each([&](const char* fname, auto member_ptr) {
+        cls.def_readwrite(fname, member_ptr);
+    });
     cls.def("clone", [](const Config& c) { return Config(c); });
 }
 
@@ -464,7 +437,9 @@ PYBIND11_MODULE(_turbomind, m)
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
-        .def_readwrite("module_type", &turbomind::core::ModuleConfig::module_type);
+        .def_property("module_type",
+            [](const turbomind::core::ModuleConfig& c) -> std::string { return std::string(c.module_type); },
+            [](turbomind::core::ModuleConfig& c, const std::string& v) { c.module_type = v; });
 
     bind_config<turbomind::core::LinearConfig>(m, "LinearConfig");
     bind_config<turbomind::core::AttentionConfig>(m, "AttentionConfig");
@@ -652,7 +627,7 @@ PYBIND11_MODULE(_turbomind, m)
             [with_context](ft::core::Module& m, const std::string& name,
                            turbomind::core::ModuleConfig& config) -> ft::core::Module* {
                 return with_context(m, [&]() -> ft::core::Module* {
-                    return m.create_child(name, config.module_type, config);
+                    return m.create_child(name, std::string(config.module_type), config);
                 });
             },
             py::return_value_policy::reference,

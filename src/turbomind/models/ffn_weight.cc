@@ -14,8 +14,8 @@ FfnWeight::FfnWeight(const core::FfnConfig& cfg)
     , tp_size_{cfg.tp_size}
     , tp_rank_{cfg.tp_rank}
     , data_type_{cfg.data_type}
-    , act_type_{static_cast<ActivationType>(static_cast<const int&>(cfg.act_type))}
-    , is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(static_cast<const int&>(cfg.act_type)) == ActivationType::kSilu}
+    , act_type_{static_cast<ActivationType>(cfg.act_type)}
+    , is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(cfg.act_type) == ActivationType::kSilu}
     , is_fused_moe_{cfg.fused_moe}
 {
     TM_CHECK(inter_size_ % tp_size_ == 0) << inter_size_ << " " << tp_size_;
