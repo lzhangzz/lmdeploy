@@ -20,19 +20,28 @@ public:
 
     void prepare() override;
 
-    const Tensor* conv1d() const { return conv1d_ ? conv1d_.ptr() : nullptr; }
-    const Tensor* A_log() const { return A_log_ ? A_log_.ptr() : nullptr; }
-    const Tensor* dt_bias() const { return dt_bias_ ? dt_bias_.ptr() : nullptr; }
-
     Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 
-    // --- Typed child members ---
-    core::Submodule<LinearWeight> in_proj_all{*this, "in_proj_all"};
-    core::Submodule<LinearWeight> out_proj{*this, "out_proj"};
-    mutable core::Parameter      conv1d_{*this, "conv1d"};
-    mutable core::Parameter      A_log_{*this, "A_log"};
-    mutable core::Parameter      dt_bias_{*this, "dt_bias"};
-    core::Submodule<NormWeight>   norm{*this, "norm"};
+    // --- X-macro field lists ---
+#define DELTA_NET_WEIGHT_CHILDREN(X) \
+    X(LinearWeight, in_proj_all) \
+    X(LinearWeight, out_proj)    \
+    X(NormWeight,   norm)
+
+#define DELTA_NET_WEIGHT_PARAMS(X) \
+    X(conv1d_) \
+    X(A_log_)  \
+    X(dt_bias_)
+
+    DELTA_NET_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+    DELTA_NET_WEIGHT_PARAMS(TM_PARAM_MEMBER)
+
+    // Generated overrides
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+    Module* child(const std::string& name) const override;
+    Tensor* param(const std::string& name) const override;
+    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+    void    for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
 
 private:
     int      hidden_dim_{};
