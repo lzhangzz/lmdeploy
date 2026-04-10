@@ -18,67 +18,67 @@ The `with_context` lambda in `src/turbomind/python/bind.cpp` (lines 568-579) wra
 
 Move context management to the Python `Distributor` level. The `Distributor`
 stores context managers obtained from `TurboMind` and wraps commit sessions
-with them. Module and ModelWeight C++ code stay unchanged.
+with them. Module and ModelWeight C++ code stay unchanged. No changes to
+`ContextGuard` -- it stays non-copyable, non-movable.
 
 ## Design
 
-### 1. ContextGuard move semantics (prerequisite)
+### 1. PyContextGuard -- Python context manager wrapper
 
-`ContextGuard` (`src/turbomind/core/context.h`) has no move constructor. Returning
-it from functions would use copy (causing double-pop on destruction). Add move
-semantics:
+`ContextGuard` manages a thread-local LIFO stack by count. It cannot safely be
+moved: if nested guards exist, moving an outer guard would pop the wrong items
+from the top of the stack. It must stay non-copyable and non-movable.
+
+Instead, create a Python-specific wrapper that:
+
+- Stores copies of the `Stream` and `Allocator` (obtained from TurboMind)
+- Constructs the `ContextGuard` in-place on `__enter__` via `std::optional`
+- Destroys it on `__exit__` via `std::optional::reset`
+
+This gives deterministic push/pop aligned with Python's `with` block, without
+needing `ContextGuard` move semantics.
 
 ```cpp
-class ContextGuard {
-public:
-    ContextGuard(const ContextGuard&) = delete;
-    ContextGuard& operator=(const ContextGuard&) = delete;
+// In bind.cpp
+struct PyContextGuard {
+    ft::core::Stream    stream_;
+    ft::core::Allocator alloc_;
+    std::optional<ft::core::ContextGuard> guard_;
 
-    ContextGuard(ContextGuard&& other) noexcept : n_(other.n_) { other.n_ = 0; }
+    PyContextGuard(ft::core::Stream s, ft::core::Allocator a)
+        : stream_(std::move(s)), alloc_(std::move(a)) {}
 
-    ContextGuard& operator=(ContextGuard&& other) noexcept
-    {
-        if (this != &other) {
-            for (int i = 0; i < n_; ++i) {
-                Context::pop();
-            }
-            n_ = other.n_;
-            other.n_ = 0;
-        }
-        return *this;
-    }
-
-    // existing constructor and destructor unchanged
+    void enter() { guard_.emplace(stream_, alloc_); }
+    void exit()  { guard_.reset(); }
 };
+```
+
+Bind as a Python context manager:
+
+```cpp
+py::class_<PyContextGuard>(m, "ContextGuard")
+    .def("__enter__", [](PyContextGuard& g) -> PyContextGuard& { g.enter(); return g; })
+    .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); });
 ```
 
 ### 2. TurboMind binding exposes `context(index)`
 
-Add a `context(index)` method to the TurboMind binding that returns a
-`ContextGuard` for the specified device. The guard is wrapped as a Python
-context manager (supports `with` statement).
-
-In `bind.cpp`, bind `ContextGuard` as a Python context manager:
-
-```cpp
-py::class_<ft::core::ContextGuard>(m, "ContextGuard")
-    .def("__enter__", [](ft::core::ContextGuard& g) -> ft::core::ContextGuard& { return g; })
-    .def("__exit__", [](ft::core::ContextGuard& g, py::object, py::object, py::object) {});
-```
-
-Add `context(index)` to the TurboMind binding:
+Add `context(index)` to the TurboMind binding. It creates a `PyContextGuard`
+from the per-device ModelWeight's stream and allocator:
 
 ```cpp
 .def("context",
-     [](ft::TurboMind* model, int index) -> ft::core::ContextGuard {
-         return model->weights_[index]->context();
+     [](ft::TurboMind* model, int index) -> std::unique_ptr<PyContextGuard> {
+         auto [stream, alloc] = model->weight_context(index);
+         return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
      },
      "index"_a)
 ```
 
-This requires a public accessor on TurboMind for the per-device
-ModelWeight's context. Add a method like `model->weight_context(index)`
-that returns `weights_[index]->context()`.
+This requires TurboMind to expose the per-device stream and allocator (or the
+ModelWeight's context components). Add a public method like
+`TurboMind::weight_context(int index)` that returns the Stream and Allocator
+for the specified device.
 
 ### 3. Distributor stores and uses context managers
 
@@ -220,18 +220,18 @@ class LoadContext:
 
 ## What stays unchanged
 
-- **Module C++ code:** no provider_, no context() method, no new members
-- **ModelWeight C++ code:** keeps stream_, alloca_, context() as-is
-- **All derived weight classes:** LinearWeight, NormWeight, AttentionWeight, etc.
-- **C++ inference path:** already manages context externally
+- **`ContextGuard`**: stays non-copyable, non-movable. No changes to `context.h`.
+- **Module C++ code**: no provider_, no context() method, no new members.
+- **ModelWeight C++ code**: keeps stream_, alloca_, context() as-is.
+- **All derived weight classes**: LinearWeight, NormWeight, AttentionWeight, etc.
+- **C++ inference path**: already manages context externally.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/turbomind/core/context.h` | Add move semantics to ContextGuard |
-| `src/turbomind/python/bind.cpp` | Remove `with_context`, add ContextGuard binding, add `TurboMind::context(index)` |
-| `src/turbomind/turbomind.h` | Expose accessor for weights_[index] context (if needed) |
+| `src/turbomind/python/bind.cpp` | Remove `with_context`, add `PyContextGuard`, add `TurboMind::context(index)` |
+| `src/turbomind/turbomind.h` | Expose accessor for per-device stream/allocator |
 | `lmdeploy/turbomind/deploy/distributor.py` | Store and use context managers |
 | `lmdeploy/turbomind/deploy/load_context.py` | Store and use context manager |
 | Model loading code (where Distributor is constructed) | Pass context managers to Distributor |
@@ -239,7 +239,7 @@ class LoadContext:
 ## Multi-GPU behavior
 
 Each device has its own `ModelWeight` with its own stream/allocator.
-`TurboMind::context(index)` returns the guard for device `index`. The
+`TurboMind::context(index)` creates a `PyContextGuard` for device `index`. The
 Distributor stores one guard per device and uses the correct one for each
 handle. No cross-device interference.
 
