@@ -32,12 +32,9 @@ public:
     X(NormWeight,      attention_norm) \
     X(NormWeight,      ffn_norm)
 
-    DECODER_LAYER_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+#define DECODER_LAYER_WEIGHT_PARAMS(X)
 
-    // Generated overrides
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+    TM_MODULE_DECLARE(DecoderLayerWeight, DECODER_LAYER_WEIGHT_CHILDREN, DECODER_LAYER_WEIGHT_PARAMS)
 };
 
 }  // namespace turbomind
