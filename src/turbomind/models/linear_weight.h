@@ -50,17 +50,17 @@ public:
     /// Copy metadata fields to another LinearWeight (for MoE block view).
     void copy_metadata_to(LinearWeight& dst) const;
 
-    explicit operator bool() const noexcept { return static_cast<bool>(*weight_); }
+    explicit operator bool() const noexcept { return static_cast<bool>(weight_); }
 
     // Accessors for execution layers (LlamaLinear, etc.)
-    Tensor&       weight()       { return *weight_; }
-    Tensor&       bias()         { return *bias_; }
-    Tensor&       scales()       { return *scales_; }
-    Tensor&       zeros()        { return *zeros_; }
-    const Tensor& weight() const { return *weight_; }
-    const Tensor& bias()   const { return *bias_; }
-    const Tensor& scales() const { return *scales_; }
-    const Tensor& zeros()  const { return *zeros_; }
+    Tensor&       weight()       { return weight_; }
+    Tensor&       bias()         { return bias_; }
+    Tensor&       scales()       { return scales_; }
+    Tensor&       zeros()        { return zeros_; }
+    const Tensor& weight() const { return weight_; }
+    const Tensor& bias()   const { return bias_; }
+    const Tensor& scales() const { return scales_; }
+    const Tensor& zeros()  const { return zeros_; }
 
     int  input_dim  = 0;
     int  output_dim = 0;
@@ -83,12 +83,19 @@ public:
     MatrixLayout q_desc{};
 
 private:
-    void do_allocate(DataType actual_weight_type, int actual_group_size);
+#define LINEAR_WEIGHT_PARAMS(X) \
+    X(weight_) \
+    X(bias_)   \
+    X(scales_) \
+    X(zeros_)
 
-    mutable core::Parameter weight_{*this, "weight"};
-    mutable core::Parameter bias_{*this, "bias"};
-    mutable core::Parameter scales_{*this, "scales"};
-    mutable core::Parameter zeros_{*this, "zeros"};
+    LINEAR_WEIGHT_PARAMS(TM_PARAM_MEMBER)
+
+    // Generated overrides
+    Tensor* param(const std::string& name_str) const override;
+    void    for_each_param(std::function<void(const char*, Tensor&)>) const override;
+
+    void do_allocate(DataType actual_weight_type, int actual_group_size);
 
     bool has_bias_   = false;
     bool is_grouped_ = false;

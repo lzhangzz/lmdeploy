@@ -99,34 +99,34 @@ void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_siz
     format_       = MakeLinearWeightFormat(data_type, actual_weight_type, actual_group_size);
     policy_       = ResolveLinearPolicy(format_, data_type, getSMVersion());
 
-    *weight_ = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
+    weight_ = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
 
     if (has_bias_) {
-        *bias_ = Tensor{{output_dim}, data_type, kDEVICE};
+        bias_ = Tensor{{output_dim}, data_type, kDEVICE};
     }
 
-    *scales_ = {};
-    *zeros_  = {};
+    scales_ = {};
+    zeros_  = {};
 
     if (format_.scales.present()) {
         if (actual_weight_type == kFloat8_e4m3) {
-            *scales_ = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
+            scales_ = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
                             format_.scales.dtype, kDEVICE};
         }
         else if (actual_weight_type == kFloat4_e2m1) {
-            *scales_ = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
+            scales_ = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
                             format_.scales.dtype, kDEVICE};
         }
         else {
             TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-            *scales_ = Tensor{{input_dim / actual_group_size, output_dim},
+            scales_ = Tensor{{input_dim / actual_group_size, output_dim},
                             format_.scales.dtype, kDEVICE};
         }
     }
 
     if (format_.zeros.present()) {
         TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-        *zeros_ = Tensor{{input_dim / actual_group_size, output_dim},
+        zeros_ = Tensor{{input_dim / actual_group_size, output_dim},
                         format_.zeros.dtype, kDEVICE};
     }
 
@@ -371,5 +371,20 @@ struct LinearWeightRegistrar {
 };
 static LinearWeightRegistrar _linear_weight_reg;
 }  // anonymous namespace
+
+// ======================================================================
+// X-macro generated param lookup
+// ======================================================================
+
+Tensor* LinearWeight::param(const std::string& name_str) const
+{
+    LINEAR_WEIGHT_PARAMS(TM_PARAM_CASE)
+    return nullptr;
+}
+
+void LinearWeight::for_each_param(std::function<void(const char*, Tensor&)> visitor) const
+{
+    LINEAR_WEIGHT_PARAMS(TM_VISIT_PARAM)
+}
 
 }  // namespace turbomind
