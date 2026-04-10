@@ -39,12 +39,14 @@ class TextModelLoader:
         self._mlp_ranks = [model.tp_ranks(gpu)[1]
                            for gpu in range(model.gpu_count)]
         handles = []
+        contexts = []
         for gpu in range(model.gpu_count):
             root = model.root(gpu)
             if root is None:
                 break
             handles.append(root)
-        self._root = Distributor(handles)
+            contexts.append(model.context(gpu))
+        self._root = Distributor(handles, contexts)
         self._layers = self._root.create_child('layers', ModuleListConfig())
 
     def __call__(self, layer: int, spec: 'TextModelSpec'):
@@ -205,7 +207,7 @@ class TextModelLoader:
                 existing = parent._handles[0].child(seg) if parent._handles else None
                 if existing is not None:
                     children = [h.child(seg) for h in parent._handles]
-                    parent = Distributor(children)
+                    parent = Distributor(children, moe._contexts)
                 else:
                     parent = parent.create_child(seg, NormConfig(
                         dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,

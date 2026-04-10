@@ -95,6 +95,10 @@ class BaseOutputModel(ABC):
         """Return the C++ ``Module`` root for GPU *index*."""
         return self.model_comm.root(index)
 
+    def context(self, index: int):
+        """Return a context manager for GPU *index*'s weight loading."""
+        return self.model_comm.context(index)
+
     def tp_ranks(self, index: int):
         """Return ``(attn_tp_rank, mlp_tp_rank)`` for GPU *index*."""
         return (self.model_comm.attn_tp_rank(index),
