@@ -11,7 +11,7 @@ NormWeight::NormWeight(int dim, DataType dtype, DeviceType device)
     : shape_{dim}, dtype_{dtype}
 {
     if (device != kDEVICE) {
-        weight_ = Tensor{shape_, dtype_, device};
+        weight = Tensor{shape_, dtype_, device};
     }
 }
 
@@ -19,7 +19,7 @@ NormWeight::NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType de
     : shape_{std::move(shape)}, dtype_{dtype}
 {
     if (device != kDEVICE) {
-        weight_ = Tensor{shape_, dtype_, device};
+        weight = Tensor{shape_, dtype_, device};
     }
 }
 
@@ -43,15 +43,15 @@ void NormWeight::configure(std::vector<ssize_t> shape, DataType dtype)
 Tensor NormWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     // Allocate on first access
-    if (!weight_ && param_name == "weight") {
+    if (!weight && param_name == "weight") {
         // Always use the model's compute dtype (dtype_) for allocation.
         // The rms_norm kernel requires w.dtype() == x.dtype().
         // The Python side (_cast_shard_for_tm) handles casting from source
         // dtype to the model's compute dtype during weight loading.
-        weight_ = Tensor{shape_, dtype_, kDEVICE};
+        weight = Tensor{shape_, dtype_, kDEVICE};
     }
     if (param_name == "weight") {
-        return weight_;
+        return weight;
     }
     return Module::alloc(param_name, spec);
 }
@@ -70,19 +70,6 @@ struct NormWeightRegistrar {
 static NormWeightRegistrar _norm_weight_reg;
 }  // anonymous namespace
 
-// ======================================================================
-// X-macro generated param lookup
-// ======================================================================
-
-Tensor* NormWeight::param(const std::string& name_str) const
-{
-    NORM_WEIGHT_PARAMS(TM_PARAM_CASE)
-    return nullptr;
-}
-
-void NormWeight::for_each_param(std::function<void(const char*, Tensor&)> visitor) const
-{
-    NORM_WEIGHT_PARAMS(TM_VISIT_PARAM)
-}
+TM_MODULE_METHODS(NormWeight, NORM_WEIGHT_CHILDREN, NORM_WEIGHT_PARAMS)
 
 }  // namespace turbomind
