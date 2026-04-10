@@ -483,7 +483,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
         params.inv_sqrt_dh = scaling * std::log2(std::exp(1.));
 
-        params.sinks       = weights.sinks() ? weights.sinks()->data_or((T*)nullptr) : (T*)nullptr;
+        params.sinks       = weights.sinks_ ? weights.sinks_.data_or((T*)nullptr) : (T*)nullptr;
         params.scale_sinks = scaling;
 
         params.window_size = weights.window_size();
@@ -600,7 +600,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     const auto dtype     = hidden_state.dtype();
 
     const int q_lora_rank  = w.q_a_proj->output_dim;
-    const int kv_lora_rank = w.kv_a_layernorm()->size();
+    const int kv_lora_rank = w.kv_a_layernorm->weight().size();
     const int qk_rope_dim  = w.kv_a_proj->output_dim - kv_lora_rank;
 
     Tensor q;
@@ -615,7 +615,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
         Tensor q_a = linear_.Forward(hidden_state, *w.q_a_proj);
         sync_check_cuda_error();
 
-        invokeRMSNorm(q_a, q_a, *w.q_a_layernorm(), model_param_.norm_eps, stream);
+        invokeRMSNorm(q_a, q_a, w.q_a_layernorm->weight(), model_param_.norm_eps, stream);
         sync_check_cuda_error();
 
         q = linear_.Forward(q_a, *w.q_b_proj);
@@ -626,7 +626,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     sync_check_cuda_error();
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
-    invokeRMSNorm(kv_a, kv_a, *w.kv_a_layernorm(), model_param_.norm_eps, stream);
+    invokeRMSNorm(kv_a, kv_a, w.kv_a_layernorm->weight(), model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
     const int local_q_kv_head_num = local_head_num_ + 1 * local_kv_head_num_;
@@ -660,11 +660,11 @@ void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
     auto qkv3 = qkv.view({token_num, -1, (int)size_per_head_});
 
     auto q = qkv3.slice({0, 0, 0}, {-1, (int)local_head_num_, -1});
-    invokeRMSNormQK(q, *weights.q_norm(), model_param_.norm_eps, stream);
+    invokeRMSNormQK(q, weights.q_norm->weight(), model_param_.norm_eps, stream);
     sync_check_cuda_error();
 
     auto k = qkv3.slice({0, (int)local_head_num_, 0}, {-1, (int)local_kv_head_num_, -1});
-    invokeRMSNormQK(k, *weights.k_norm(), model_param_.norm_eps, aux_stream_);
+    invokeRMSNormQK(k, weights.k_norm->weight(), model_param_.norm_eps, aux_stream_);
     sync_check_cuda_error();
 
     check_cuda_error(cudaEventRecord(aux_event_, aux_stream_));

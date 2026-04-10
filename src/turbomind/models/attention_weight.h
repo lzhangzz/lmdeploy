@@ -21,25 +21,31 @@ public:
     void prepare() override;
     Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 
-    // --- Typed child members ---
-    core::Submodule<LinearWeight> w_qkv             {*this, "w_qkv"};
-    core::Submodule<LinearWeight> wo                {*this, "wo"};
-    core::Submodule<LinearWeight> q_proj            {*this, "q_proj"};
-    core::Submodule<LinearWeight> q_a_proj          {*this, "q_a_proj"};
-    core::Submodule<LinearWeight> q_b_proj          {*this, "q_b_proj"};
-    core::Submodule<LinearWeight> kv_a_proj         {*this, "kv_a_proj"};
-    core::Submodule<NormWeight>   q_norm_mod        {*this, "q_norm"};
-    core::Submodule<NormWeight>   k_norm_mod        {*this, "k_norm"};
-    core::Submodule<NormWeight>   q_a_layernorm_mod {*this, "q_a_layernorm"};
-    core::Submodule<NormWeight>   kv_a_layernorm_mod{*this, "kv_a_layernorm"};
-    mutable core::Parameter      sinks_             {*this, "sinks"};
+    // --- X-macro field lists ---
+#define ATTENTION_WEIGHT_CHILDREN(X) \
+    X(LinearWeight, w_qkv)          \
+    X(LinearWeight, wo)             \
+    X(LinearWeight, q_proj)         \
+    X(LinearWeight, q_a_proj)       \
+    X(LinearWeight, q_b_proj)       \
+    X(LinearWeight, kv_a_proj)      \
+    X(NormWeight,   q_norm)         \
+    X(NormWeight,   k_norm)         \
+    X(NormWeight,   q_a_layernorm)  \
+    X(NormWeight,   kv_a_layernorm)
 
-    // Convenience tensor accessors
-    Tensor* q_norm() const;
-    Tensor* k_norm() const;
-    Tensor* q_a_layernorm() const;
-    Tensor* kv_a_layernorm() const;
-    Tensor* sinks() const;
+#define ATTENTION_WEIGHT_PARAMS(X) \
+    X(sinks_)
+
+    ATTENTION_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+    ATTENTION_WEIGHT_PARAMS(TM_PARAM_MEMBER)
+
+    // Generated overrides
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+    Module* child(const std::string& name) const override;
+    Tensor* param(const std::string& name) const override;
+    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+    void    for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
 
     int  window_size() const { return window_size_; }
     bool is_mla() const { return mla_.kv_lora_rank > 0; }

@@ -26,42 +26,51 @@ AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg)
 
 void AttentionWeight::prepare()
 {
-    for (auto& [name, child] : children_) {
-        child->prepare();
-    }
-}
-
-// Convenience tensor accessors
-Tensor* AttentionWeight::q_norm() const
-{
-    return q_norm_mod ? &q_norm_mod->weight() : nullptr;
-}
-Tensor* AttentionWeight::k_norm() const
-{
-    return k_norm_mod ? &k_norm_mod->weight() : nullptr;
-}
-Tensor* AttentionWeight::q_a_layernorm() const
-{
-    return q_a_layernorm_mod ? &q_a_layernorm_mod->weight() : nullptr;
-}
-Tensor* AttentionWeight::kv_a_layernorm() const
-{
-    return kv_a_layernorm_mod ? &kv_a_layernorm_mod->weight() : nullptr;
-}
-Tensor* AttentionWeight::sinks() const
-{
-    return sinks_ ? sinks_.ptr() : nullptr;
+    Module::prepare();
 }
 
 Tensor AttentionWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     if (param_name == "sinks" && !sinks_) {
-        *sinks_ = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
+        sinks_ = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
     }
     if (param_name == "sinks") {
-        return *sinks_;
+        return sinks_;
     }
     return Module::alloc(param_name, spec);
+}
+
+// --- X-macro generated method bodies ---
+
+core::Module* AttentionWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
+{
+    std::string name_str = std::move(name);
+    ATTENTION_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
+    return nullptr;
+}
+
+core::Module* AttentionWeight::child(const std::string& name_str) const
+{
+    ATTENTION_WEIGHT_CHILDREN(TM_CHILD_CASE)
+    return nullptr;
+}
+
+Tensor* AttentionWeight::param(const std::string& name_str) const
+{
+    ATTENTION_WEIGHT_PARAMS(TM_PARAM_CASE)
+    return nullptr;
+}
+
+void AttentionWeight::for_each_child(
+    std::function<void(const char*, core::Module*)> visitor) const
+{
+    ATTENTION_WEIGHT_CHILDREN(TM_VISIT_CHILD)
+}
+
+void AttentionWeight::for_each_param(
+    std::function<void(const char*, Tensor&)> visitor) const
+{
+    ATTENTION_WEIGHT_PARAMS(TM_VISIT_PARAM)
 }
 
 namespace {
