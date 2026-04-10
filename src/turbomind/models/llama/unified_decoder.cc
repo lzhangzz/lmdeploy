@@ -184,6 +184,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     const auto stream = core::Context::stream().handle();
 
     invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attn_norm->weight(), rmsnorm_eps_, stream);
+
     sync_check_cuda_error();
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
@@ -208,10 +209,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         /// self-attention or linear-attention
         if (weights.at(layer)->linear_attn) {
             linear_attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn, layer});
+                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn.get(), layer});
         }
         else {
-            auto attn = weights.at(layer)->attention;
+            auto* attn = weights.at(layer)->attention.get();
             attn_layer_->Forward(
                 {phase, local_hidden_states, local_hidden_states, attn, layer});
         }
@@ -248,7 +249,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         if (weights.at(layer)->moe_ffn) {
             moe_fwd_param = MoeFfnLayer::ForwardParam{global_hidden_states,
                                                       global_hidden_states,
-                                                      weights.at(layer)->moe_ffn,
+                                                      weights.at(layer)->moe_ffn.get(),
                                                       ffn_layer_ ? 1.f : 0.f,
                                                       layer};
             moe_ffn_layer_->Forward(*moe_fwd_param);
@@ -256,7 +257,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         if (ffn_layer_ && weights.at(layer)->feed_forward) {
             ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward, (int)layer});
+                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
         }
 
         if (moe_fwd_param) {

@@ -412,10 +412,6 @@ PYBIND11_MODULE(_turbomind, m)
             .value("MEMORY_CPU_PINNED", ft::DeviceType::kCPUpinned)
             .value("MEMORY_GPU", ft::DeviceType::kDEVICE);
 
-        // power management
-        py::enum_<ft::core::PersistOp>(m, "PersistOp")
-            .value("Sleep", ft::core::PersistOp::Sleep)
-            .value("WakeUp", ft::core::PersistOp::WakeUp);
     }
 
     // DataFormat descriptors
@@ -627,7 +623,7 @@ PYBIND11_MODULE(_turbomind, m)
             [with_context](ft::core::Module& m, const std::string& name,
                            turbomind::core::ModuleConfig& config) -> ft::core::Module* {
                 return with_context(m, [&]() -> ft::core::Module* {
-                    return m.create_child(name, std::string(config.module_type), config);
+                    return m.create_child(name, config);
                 });
             },
             py::return_value_policy::reference,
@@ -650,13 +646,7 @@ PYBIND11_MODULE(_turbomind, m)
                      ffn->set_fused_silu(val);
                  }
              },
-             "val"_a)
-        .def("persist",
-             [with_context](ft::core::Module& m, ft::core::PersistOp op) {
-                 with_context(m, [&] { m.persist(op); });
-             },
-             py::call_guard<py::gil_scoped_release>(),
-             "op"_a);
+             "val"_a);
 
     // transformer model
     using ft::TurboMind;
@@ -703,18 +693,6 @@ PYBIND11_MODULE(_turbomind, m)
             [](TurboMind* model, int index) { return model->GetScheduleMetrics(index); },
             py::call_guard<py::gil_scoped_release>(),
             "index"_a)
-        .def(
-            "sleep",
-            [](TurboMind* model, int index, int level) { model->Sleep(index, level); },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "level"_a)
-        .def(
-            "wakeup",
-            [](TurboMind* model, int index, const std::vector<std::string>& tags) { model->WakeUp(index, tags); },
-            py::call_guard<py::gil_scoped_release>(),
-            "index"_a,
-            "tags"_a)
         .def("is_dummy_node", [](TurboMind* model) { return model->is_dummy_node(); })
         .def("attn_tp_rank", &TurboMind::GetAttnTpRank, "index"_a)
         .def("mlp_tp_rank", &TurboMind::GetMlpTpRank, "index"_a);

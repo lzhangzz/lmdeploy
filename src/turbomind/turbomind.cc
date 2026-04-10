@@ -241,49 +241,12 @@ struct TurboMind::Impl {
 
     void Sleep(int index, int level)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-
-        if (level == 2) {
-            // free weights
-            weights_[index]->release();
-        }
-        else {
-            // offload weights to CPU
-            TM_CHECK(moe_param_.experts_per_token == 0) << "level 1 sleep not supported for MoE model";
-            weights_[index]->to_device(kCPU);
-        }
-
-        // free model (kv cache and buffer)
-        if (index == 0) {
-            gateway_->shutdown();
-            gateway_.reset();
-        }
-
-        engines_[index] = {};
-        contexts_[index]->allocator->trim(0);
-
-        trim_default_mempool(engine_param_.devices[index]);
+        // Sleep/wakeup is broken — disabled
     }
 
     void WakeUp(int index, const std::vector<std::string>& tags)
     {
-        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-
-        std::set<std::string> keys(tags.begin(), tags.end());
-
-        auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
-
-        if (keys.find("weights") != keys.end()) {
-            TM_CHECK(weights_[index] != nullptr);
-            weights_[index]->to_device(kDEVICE);
-        }
-
-        if (keys.find("kv_cache") != keys.end()) {
-            if (index == 0) {
-                gateway_ = std::make_shared<Gateway>(n_queues_, ffi_ctx_factory_);
-            }
-            CreateEngine(index);
-        }
+        // Sleep/wakeup is broken — disabled
     }
 
     void HandleMissingParams()
