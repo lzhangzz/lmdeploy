@@ -31,46 +31,13 @@ void AttentionWeight::prepare()
 
 Tensor AttentionWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
-    if (param_name == "sinks" && !sinks_) {
-        sinks_ = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
+    if (param_name == "sinks" && !sinks) {
+        sinks = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
     }
     if (param_name == "sinks") {
-        return sinks_;
+        return sinks;
     }
     return Module::alloc(param_name, spec);
-}
-
-// --- X-macro generated method bodies ---
-
-core::Module* AttentionWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
-{
-    std::string name_str = std::move(name);
-    ATTENTION_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
-    return nullptr;
-}
-
-core::Module* AttentionWeight::child(const std::string& name_str) const
-{
-    ATTENTION_WEIGHT_CHILDREN(TM_CHILD_CASE)
-    return nullptr;
-}
-
-Tensor* AttentionWeight::param(const std::string& name_str) const
-{
-    ATTENTION_WEIGHT_PARAMS(TM_PARAM_CASE)
-    return nullptr;
-}
-
-void AttentionWeight::for_each_child(
-    std::function<void(const char*, core::Module*)> visitor) const
-{
-    ATTENTION_WEIGHT_CHILDREN(TM_VISIT_CHILD)
-}
-
-void AttentionWeight::for_each_param(
-    std::function<void(const char*, Tensor&)> visitor) const
-{
-    ATTENTION_WEIGHT_PARAMS(TM_VISIT_PARAM)
 }
 
 namespace {
@@ -86,5 +53,7 @@ struct AttentionWeightRegistrar {
 };
 static AttentionWeightRegistrar _attention_weight_reg;
 }  // anonymous namespace
+
+TM_MODULE_METHODS(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 
 }  // namespace turbomind

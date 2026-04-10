@@ -35,17 +35,9 @@ public:
     X(NormWeight,   kv_a_layernorm)
 
 #define ATTENTION_WEIGHT_PARAMS(X) \
-    X(sinks_)
+    X(sinks)
 
-    ATTENTION_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
-    ATTENTION_WEIGHT_PARAMS(TM_PARAM_MEMBER)
-
-    // Generated overrides
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    Tensor* param(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
-    void    for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
+    TM_MODULE_DECLARE(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 
     int  window_size() const { return window_size_; }
     bool is_mla() const { return mla_.kv_lora_rank > 0; }
