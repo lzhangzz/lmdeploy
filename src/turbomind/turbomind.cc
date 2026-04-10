@@ -729,6 +729,13 @@ core::Module* TurboMind::root(int index)
     return impl_->weights_[index].get();
 }
 
+std::pair<core::Stream, core::Allocator> TurboMind::weight_context(int index)
+{
+    auto& mw = impl_->weights_.at(index);
+    TM_CHECK(mw != nullptr);
+    return {mw->stream(), mw->allocator()};
+}
+
 void TurboMind::ProcessWeights(int index)
 {
     return impl_->ProcessWeights(index);

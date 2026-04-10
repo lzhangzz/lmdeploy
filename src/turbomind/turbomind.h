@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
@@ -25,6 +26,9 @@ public:
 
     /// Returns the root `Module` for GPU `index`'s weight tree.
     core::Module* root(int index);
+
+    /// Returns the Stream and Allocator for GPU `index`'s weight tree.
+    std::pair<core::Stream, core::Allocator> weight_context(int index);
 
     void ProcessWeights(int index);
 

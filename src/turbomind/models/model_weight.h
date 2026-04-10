@@ -33,6 +33,9 @@ public:
         return core::ContextGuard{stream_, alloca_};
     }
 
+    const core::Stream&    stream() const    { return stream_; }
+    const core::Allocator& allocator() const { return alloca_; }
+
     // --- X-macro field lists ---
 #define MODEL_WEIGHT_CHILDREN(X)         \
     X(LinearWeight,     tok_embeddings)  \
