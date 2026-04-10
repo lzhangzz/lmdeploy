@@ -23,13 +23,21 @@ public:
 
     bool verify(std::vector<std::string>& missing) override;
 
-    // --- Typed child members ---
-    core::Submodule<AttentionWeight> attention    {*this, "attention"};
-    core::Submodule<DeltaNetWeight>  linear_attn  {*this, "linear_attn"};
-    core::Submodule<FfnWeight>       feed_forward {*this, "feed_forward"};
-    core::Submodule<MoeWeight>       moe_ffn      {*this, "moe_ffn"};
-    core::Submodule<NormWeight>      attn_norm    {*this, "attention_norm"};
-    core::Submodule<NormWeight>      ffn_norm     {*this, "ffn_norm"};
+    // --- X-macro field lists ---
+#define DECODER_LAYER_WEIGHT_CHILDREN(X) \
+    X(AttentionWeight, attention)    \
+    X(DeltaNetWeight,  linear_attn)  \
+    X(FfnWeight,       feed_forward) \
+    X(MoeWeight,       moe_ffn)      \
+    X(NormWeight,      attn_norm)    \
+    X(NormWeight,      ffn_norm)
+
+    DECODER_LAYER_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+
+    // Generated overrides
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+    Module* child(const std::string& name) const override;
+    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
 };
 
 }  // namespace turbomind

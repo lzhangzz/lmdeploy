@@ -29,6 +29,27 @@ bool DecoderLayerWeight::verify(std::vector<std::string>& missing)
     return missing.empty();
 }
 
+// --- X-macro generated method bodies ---
+
+core::Module* DecoderLayerWeight::add_child(std::string name, std::unique_ptr<Module> child)
+{
+    std::string name_str = std::move(name);
+    DECODER_LAYER_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
+    return nullptr;
+}
+
+core::Module* DecoderLayerWeight::child(const std::string& name_str) const
+{
+    DECODER_LAYER_WEIGHT_CHILDREN(TM_CHILD_CASE)
+    return nullptr;
+}
+
+void DecoderLayerWeight::for_each_child(
+    std::function<void(const char*, Module*)> visitor) const
+{
+    DECODER_LAYER_WEIGHT_CHILDREN(TM_VISIT_CHILD)
+}
+
 namespace {
 struct DecoderLayerWeightRegistrar {
     DecoderLayerWeightRegistrar() {
