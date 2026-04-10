@@ -40,7 +40,7 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor inter;
 
     auto* fused    = mlp.w1w3.get();
-    bool  use_fused = fused && fused->weight();
+    bool  use_fused = fused && fused->weight;
 
     if (use_fused) {
         auto mix = linear_.Forward(param.input, *fused);

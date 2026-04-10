@@ -368,7 +368,7 @@ struct Testbed_v3: Parameter {
         /// TODO: refactor reference API
         const MatrixLayout desc_A{x.dtype(), kRowMajor, (int)x.shape(0), (int)x.shape(1), (int)x.stride(0)};  // m,k
         const MatrixLayout desc_D{d.dtype(), kRowMajor, (int)d.shape(0), (int)d.shape(1), (int)d.stride(0)};  // m,n
-        ref_.gemm(x.raw_data(), desc_A, dense->weight().raw_data(), dense->k_desc, d.raw_data(), desc_D);
+        ref_.gemm(x.raw_data(), desc_A, dense->weight.raw_data(), dense->k_desc, d.raw_data(), desc_D);
     }
 
     void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d_)
@@ -450,7 +450,7 @@ struct Testbed_v3: Parameter {
         // clang-format off
         printf("%20s", ""); FC_Header();
         if (!expert_num) {
-            printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight(), w_original_->weight(), stream_));
+            printf("%20s", "w_dequant v w_origi"); FC_Print(FastCompare(w_dequant_->weight, w_original_->weight, stream_));
         }
         printf("%20s", "quant   vs  dequant"); FC_Print(FastCompare(d_quant_, d_dequant_, stream_));
         printf("%20s", "quant   vs original"); FC_Print(FastCompare(d_quant_, d_original_, stream_));

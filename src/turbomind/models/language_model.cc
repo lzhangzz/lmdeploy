@@ -204,7 +204,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 
     const int hidden_units = param_.hidden_units;
 
-    const auto& embedding_table = weights_.tok_embeddings->weight();
+    const auto& embedding_table = weights_.tok_embeddings->weight;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
@@ -439,7 +439,7 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
         env.produce("symm_buf", symm_buf_);
     }
 
-    env.produce("output_norm_weight", weights_.norm->weight());
+    env.produce("output_norm_weight", weights_.norm->weight);
 
     unified_decoder_->Forward(phase, env, weights_.layers_list());
 

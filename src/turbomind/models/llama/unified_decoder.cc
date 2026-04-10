@@ -183,7 +183,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight(), rmsnorm_eps_, stream);
+    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight, rmsnorm_eps_, stream);
 
     sync_check_cuda_error();
 
@@ -223,16 +223,16 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         // We will just use `output.bias` from either layer.
         Tensor out_bias;
         if (weights.at(layer)->linear_attn) {
-            out_bias = weights.at(layer)->linear_attn->out_proj->bias();
+            out_bias = weights.at(layer)->linear_attn->out_proj->bias;
         }
         else {
-            out_bias = weights.at(layer)->attention->wo->bias();
+            out_bias = weights.at(layer)->attention->wo->bias;
         }
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
                                  out_bias,
-                                 weights.at(layer)->ffn_norm->weight(),
+                                 weights.at(layer)->ffn_norm->weight,
                                  local_token_num,
                                  attn_tp_group_,
                                  0,
@@ -268,7 +268,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         const bool last = layer == layer_num_ - 1;
 
-        auto& scale_weight = !last ? weights.at(layer + 1)->attention_norm->weight() : args.at("output_norm_weight");
+        auto& scale_weight = !last ? weights.at(layer + 1)->attention_norm->weight : args.at("output_norm_weight");
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,
