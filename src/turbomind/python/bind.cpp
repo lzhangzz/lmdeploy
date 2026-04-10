@@ -563,81 +563,79 @@ PYBIND11_MODULE(_turbomind, m)
             py::call_guard<py::gil_scoped_release>(),
             "grammar"_a);
 
-    // Helper: set up the ModelWeight's context (stream + allocator) for any
-    // Python → C++ call that may trigger tensor allocation (get, alloc, prepare).
-    auto with_context = [](ft::core::Module& m, auto&& fn) -> decltype(auto) {
-        ft::core::Module* root = &m;
-        while (root->parent()) {
-            root = root->parent();
+    // Python context manager wrapper for ContextGuard.
+    // Stores copies of Stream + Allocator; constructs the real guard
+    // in-place on __enter__ and destroys it on __exit__.
+    struct PyContextGuard {
+        ft::core::Stream    stream;
+        ft::core::Allocator alloc;
+        std::unique_ptr<ft::core::ContextGuard> guard;
+
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator a)
+            : stream(std::move(s)), alloc(std::move(a)) {}
+
+        void enter() {
+            guard = std::make_unique<ft::core::ContextGuard>(stream, alloc);
         }
-        auto* mw = dynamic_cast<ft::ModelWeight*>(root);
-        if (mw) {
-            auto ctx_guard = mw->context();
-            return fn();
-        }
-        return fn();
+        void exit()  { guard.reset(); }
     };
+
+    py::class_<PyContextGuard>(m, "ContextGuard")
+        .def("__enter__", [](PyContextGuard& g) -> PyContextGuard& { g.enter(); return g; })
+        .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); });
 
     // Module class — navigation and allocation interface
     py::class_<ft::core::Module, std::shared_ptr<ft::core::Module>>(m, "Module")
         .def("get",
-             [with_context](ft::core::Module& m, const std::string& segment) -> ft::core::Module* {
-                 return with_context(m, [&] { return m.get(segment); });
+             [](ft::core::Module& m, const std::string& segment) -> ft::core::Module* {
+                 return m.get(segment);
              },
              py::return_value_policy::reference,
              "segment"_a)
         .def("alloc",
-             [with_context](ft::core::Module& m, const std::string& param_name, ft::DataType dtype, int group_size) {
-                 return with_context(m, [&] {
-                     return std::make_shared<Tensor>(m.alloc(param_name, ft::core::WeightSpec{dtype, group_size}));
-                 });
+             [](ft::core::Module& m, const std::string& param_name, ft::DataType dtype, int group_size) {
+                 return std::make_shared<Tensor>(m.alloc(param_name, ft::core::WeightSpec{dtype, group_size}));
              },
              "param_name"_a,
              "dtype"_a,
              "group_size"_a = 0)
         .def("create_param",
-             [with_context](ft::core::Module& m,
-                            const std::string& name,
-                            std::vector<size_t> shape,
-                            ft::DataType dtype,
-                            int group_size) {
-                 return with_context(m, [&] {
-                     return std::make_shared<Tensor>(
-                         m.create_param(name, shape, dtype, group_size));
-                 });
+             [](ft::core::Module& m,
+                const std::string& name,
+                std::vector<size_t> shape,
+                ft::DataType dtype,
+                int group_size) {
+                 return std::make_shared<Tensor>(
+                     m.create_param(name, shape, dtype, group_size));
              },
              "name"_a,
              "shape"_a,
              "dtype"_a,
              "group_size"_a = 0)
         .def("prepare",
-             [with_context](ft::core::Module& m) {
-                 with_context(m, [&] { m.prepare(); });
-             })
+             [](ft::core::Module& m) { m.prepare(); })
         .def("child",
              [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
              py::return_value_policy::reference,
              "name"_a)
         // Config-based create_child: accepts any ModuleConfig subclass
         .def("create_child",
-            [with_context](ft::core::Module& m, const std::string& name,
-                           turbomind::core::ModuleConfig& config) -> ft::core::Module* {
-                return with_context(m, [&]() -> ft::core::Module* {
-                    return m.create_child(name, config);
-                });
+            [](ft::core::Module& m, const std::string& name,
+               turbomind::core::ModuleConfig& config) -> ft::core::Module* {
+                return m.create_child(name, config);
             },
             py::return_value_policy::reference,
             "name"_a, "config"_a)
         .def("type", [](ft::core::Module& m) -> const char* { return m.type(); })
         .def("full_path", [](ft::core::Module& m) -> std::string { return m.full_path(); })
         .def("__getitem__",
-             [with_context](ft::core::Module& m, const std::string& key) -> ft::core::Module* {
-                 return with_context(m, [&] { return m.get(key); });
+             [](ft::core::Module& m, const std::string& key) -> ft::core::Module* {
+                 return m.get(key);
              },
              py::return_value_policy::reference)
         .def("__getitem__",
-             [with_context](ft::core::Module& m, int idx) -> ft::core::Module* {
-                 return with_context(m, [&] { return m.get(std::to_string(idx)); });
+             [](ft::core::Module& m, int idx) -> ft::core::Module* {
+                 return m.get(std::to_string(idx));
              },
              py::return_value_policy::reference);
 
@@ -671,6 +669,12 @@ PYBIND11_MODULE(_turbomind, m)
             [](TurboMind* model, int index) -> ft::core::Module* { return model->root(index); },
             py::return_value_policy::reference,
             "index"_a)
+        .def("context",
+             [](ft::TurboMind* model, int index) -> std::unique_ptr<PyContextGuard> {
+                 auto [stream, alloc] = model->weight_context(index);
+                 return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
+             },
+             "index"_a)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },
