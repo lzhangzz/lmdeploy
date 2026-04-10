@@ -26,19 +26,13 @@ public:
     X(LinearWeight, w2)        \
     X(LinearWeight, w1w3)
 
-    FFN_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+#define FFN_WEIGHT_PARAMS(X)
 
-    // Generated overrides
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+    TM_MODULE_DECLARE(FfnWeight, FFN_WEIGHT_CHILDREN, FFN_WEIGHT_PARAMS)
 
     int            inter_size() const { return inter_size_; }
     ActivationType act_type() const { return act_type_; }
     bool           is_fused_silu() const { return is_fused_silu_; }
-
-    /// Set grouped-GEMM mode for MoE (affects weight conversion layout).
-    void set_fused_moe(bool fused_moe) { is_fused_moe_ = fused_moe; }
 
     /// Override is_fused_silu_ (used by MoE block view after linking experts).
     void set_fused_silu(bool val) { is_fused_silu_ = val; }

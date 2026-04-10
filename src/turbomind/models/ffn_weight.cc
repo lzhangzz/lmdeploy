@@ -46,26 +46,6 @@ void FfnWeight::prepare()
     Module::prepare();  // recurse into children
 }
 
-// --- X-macro generated method bodies ---
-
-core::Module* FfnWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
-{
-    std::string name_str = std::move(name);
-    FFN_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
-    return nullptr;
-}
-
-core::Module* FfnWeight::child(const std::string& name_str) const
-{
-    FFN_WEIGHT_CHILDREN(TM_CHILD_CASE)
-    return nullptr;
-}
-
-void FfnWeight::for_each_child(std::function<void(const char*, core::Module*)> visitor) const
-{
-    FFN_WEIGHT_CHILDREN(TM_VISIT_CHILD)
-}
-
 namespace {
 struct FfnWeightRegistrar {
     FfnWeightRegistrar() {
@@ -79,5 +59,7 @@ struct FfnWeightRegistrar {
 };
 static FfnWeightRegistrar _ffn_weight_reg;
 }  // anonymous namespace
+
+TM_MODULE_METHODS(FfnWeight, FFN_WEIGHT_CHILDREN, FFN_WEIGHT_PARAMS)
 
 }  // namespace turbomind
