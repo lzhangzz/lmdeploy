@@ -40,11 +40,9 @@ public:
     X(NormWeight,       norm)            \
     X(core::ModuleList, layers)
 
-    MODEL_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+#define MODEL_WEIGHT_PARAMS(X)
 
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+    TM_MODULE_DECLARE(ModelWeight, MODEL_WEIGHT_CHILDREN, MODEL_WEIGHT_PARAMS)
 
     // --- Accessors ---
     DecoderLayerWeight*               layer(int i) const;
