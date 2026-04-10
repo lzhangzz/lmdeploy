@@ -40,9 +40,9 @@ Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& s
 {
     if (param_name == "score_correction_bias" && expert_num_ > 0) {
         if (!score_correction_bias_) {
-            *score_correction_bias_ = Tensor{{expert_num_}, spec.dtype, kDEVICE};
+            score_correction_bias_ = Tensor{{expert_num_}, spec.dtype, kDEVICE};
         }
-        return *score_correction_bias_;
+        return score_correction_bias_;
     }
     return Module::alloc(param_name, spec);
 }
@@ -107,9 +107,7 @@ FfnWeight* MoeWeight::expert(int i) const
 void MoeWeight::prepare()
 {
     // First prepare all children (experts, gate, etc.)
-    for (auto& [name, child] : children()) {
-        child->prepare();
-    }
+    Module::prepare();
 
     // Create batched block view for fused MoE path
     if (expert_num_ > 0 && method() == MoeParam::kFused) {
@@ -187,5 +185,36 @@ struct MoeWeightRegistrar {
 };
 static MoeWeightRegistrar _moe_weight_reg;
 }  // anonymous namespace
+
+// --- X-macro generated method bodies ---
+
+core::Module* MoeWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
+{
+    std::string name_str = std::move(name);
+    MOE_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
+    return nullptr;
+}
+
+core::Module* MoeWeight::child(const std::string& name_str) const
+{
+    MOE_WEIGHT_CHILDREN(TM_CHILD_CASE)
+    return nullptr;
+}
+
+Tensor* MoeWeight::param(const std::string& name_str) const
+{
+    MOE_WEIGHT_PARAMS(TM_PARAM_CASE)
+    return nullptr;
+}
+
+void MoeWeight::for_each_child(std::function<void(const char*, core::Module*)> visitor) const
+{
+    MOE_WEIGHT_CHILDREN(TM_VISIT_CHILD)
+}
+
+void MoeWeight::for_each_param(std::function<void(const char*, Tensor&)> visitor) const
+{
+    MOE_WEIGHT_PARAMS(TM_VISIT_PARAM)
+}
 
 }  // namespace turbomind
