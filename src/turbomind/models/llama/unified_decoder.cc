@@ -183,7 +183,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attn_norm->weight(), rmsnorm_eps_, stream);
+    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight(), rmsnorm_eps_, stream);
 
     sync_check_cuda_error();
 
@@ -268,7 +268,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
         const bool last = layer == layer_num_ - 1;
 
-        auto& scale_weight = !last ? weights.at(layer + 1)->attn_norm->weight() : args.at("output_norm_weight");
+        auto& scale_weight = !last ? weights.at(layer + 1)->attention_norm->weight() : args.at("output_norm_weight");
 
         AllreduceResidualRMSnorm(global_hidden_states,
                                  local_residual,

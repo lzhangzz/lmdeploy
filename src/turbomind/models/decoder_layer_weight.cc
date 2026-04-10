@@ -27,7 +27,7 @@ bool DecoderLayerWeight::verify(std::vector<std::string>& missing)
         missing.push_back(full_path() + ": missing feed_forward or moe_ffn");
     }
     // attention_norm must exist
-    if (!attn_norm) {
+    if (!attention_norm) {
         missing.push_back(full_path() + ": missing attention_norm");
     }
     return missing.empty();

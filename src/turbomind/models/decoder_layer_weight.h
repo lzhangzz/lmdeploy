@@ -25,11 +25,11 @@ public:
 
     // --- X-macro field lists ---
 #define DECODER_LAYER_WEIGHT_CHILDREN(X) \
-    X(AttentionWeight, attention)    \
-    X(DeltaNetWeight,  linear_attn)  \
-    X(FfnWeight,       feed_forward) \
-    X(MoeWeight,       moe_ffn)      \
-    X(NormWeight,      attn_norm)    \
+    X(AttentionWeight, attention)     \
+    X(DeltaNetWeight,  linear_attn)   \
+    X(FfnWeight,       feed_forward)  \
+    X(MoeWeight,       moe_ffn)       \
+    X(NormWeight,      attention_norm) \
     X(NormWeight,      ffn_norm)
 
     DECODER_LAYER_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
