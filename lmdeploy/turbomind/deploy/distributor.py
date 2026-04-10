@@ -5,6 +5,14 @@ from __future__ import annotations
 from .load_context import commit_linear, commit_tensor
 
 
+class _noop:
+    """No-op context manager for when no context guard is available."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+
+
 class Distributor:
     """Wraps N GPU handles for a single logical module.
 
@@ -12,8 +20,9 @@ class Distributor:
     across all GPUs with bound TP configuration.
     """
 
-    def __init__(self, handles, tp=1, ranks=None):
+    def __init__(self, handles, contexts=None, tp=1, ranks=None):
         self._handles = handles
+        self._contexts = contexts or [None] * len(handles)
         self._tp = tp
         self._ranks = ranks
 
@@ -37,10 +46,11 @@ class Distributor:
         new_ranks = ranks if ranks is not None else self._ranks
         children = []
         for i, handle in enumerate(self._handles):
-            rank = new_ranks[i] if new_ranks and new_tp > 1 else 0
-            child = handle.create_child(name, config.for_rank(rank).to_cpp())
-            children.append(child)
-        return Distributor(children, tp=new_tp, ranks=new_ranks)
+            with self._contexts[i] or _noop():
+                rank = new_ranks[i] if new_ranks and new_tp > 1 else 0
+                child = handle.create_child(name, config.for_rank(rank).to_cpp())
+                children.append(child)
+        return Distributor(children, self._contexts, tp=new_tp, ranks=new_ranks)
 
     def commit_linear(self, name, linear, split_side=None, model_dtype=None):
         """Commit a Linear bundle to all GPUs.
@@ -50,16 +60,18 @@ class Distributor:
         """
         tp = self._tp if split_side else 1
         for i, handle in enumerate(self._handles):
-            rank = self._rank_for(i) if tp > 1 else 0
-            commit_linear(handle, linear, name,
-                          split_side=split_side, split_num=tp,
-                          rank=rank, model_dtype=model_dtype)
+            with self._contexts[i] or _noop():
+                rank = self._rank_for(i) if tp > 1 else 0
+                commit_linear(handle, linear, name,
+                              split_side=split_side, split_num=tp,
+                              rank=rank, model_dtype=model_dtype)
 
     def commit_tensor(self, name, tensor, split_side=None):
         """Commit a raw tensor to all GPUs."""
         tp = self._tp if split_side else 1
         for i, handle in enumerate(self._handles):
-            rank = self._rank_for(i) if tp > 1 else 0
-            commit_tensor(handle, tensor, name,
-                          split_side=split_side, split_num=tp,
-                          rank=rank)
+            with self._contexts[i] or _noop():
+                rank = self._rank_for(i) if tp > 1 else 0
+                commit_tensor(handle, tensor, name,
+                              split_side=split_side, split_num=tp,
+                              rank=rank)
