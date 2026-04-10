@@ -27,56 +27,23 @@ void DeltaNetWeight::prepare()
 
 Tensor DeltaNetWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
-    if (param_name == "A_log" && !A_log_) {
-        A_log_ = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
+    if (param_name == "A_log" && !A_log) {
+        A_log = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
     }
-    if (param_name == "A_log") return A_log_;
+    if (param_name == "A_log") return A_log;
 
-    if (param_name == "dt_bias" && !dt_bias_) {
-        dt_bias_ = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
+    if (param_name == "dt_bias" && !dt_bias) {
+        dt_bias = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
     }
-    if (param_name == "dt_bias") return dt_bias_;
+    if (param_name == "dt_bias") return dt_bias;
 
-    if (param_name == "conv1d" && !conv1d_) {
+    if (param_name == "conv1d" && !conv1d) {
         int conv_dim = (num_k_heads_ * key_head_dim_ * 2 + num_v_heads_ * value_head_dim_) / tp_size_;
-        conv1d_ = Tensor{{d_conv_, conv_dim}, data_type_, kDEVICE};
+        conv1d = Tensor{{d_conv_, conv_dim}, data_type_, kDEVICE};
     }
-    if (param_name == "conv1d") return conv1d_;
+    if (param_name == "conv1d") return conv1d;
 
     return Module::alloc(param_name, spec);
-}
-
-// --- X-macro generated method bodies ---
-
-core::Module* DeltaNetWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
-{
-    std::string name_str = std::move(name);
-    DELTA_NET_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
-    return nullptr;
-}
-
-core::Module* DeltaNetWeight::child(const std::string& name_str) const
-{
-    DELTA_NET_WEIGHT_CHILDREN(TM_CHILD_CASE)
-    return nullptr;
-}
-
-Tensor* DeltaNetWeight::param(const std::string& name_str) const
-{
-    DELTA_NET_WEIGHT_PARAMS(TM_PARAM_CASE)
-    return nullptr;
-}
-
-void DeltaNetWeight::for_each_child(
-    std::function<void(const char*, core::Module*)> visitor) const
-{
-    DELTA_NET_WEIGHT_CHILDREN(TM_VISIT_CHILD)
-}
-
-void DeltaNetWeight::for_each_param(
-    std::function<void(const char*, Tensor&)> visitor) const
-{
-    DELTA_NET_WEIGHT_PARAMS(TM_VISIT_PARAM)
 }
 
 namespace {
@@ -92,5 +59,7 @@ struct DeltaNetWeightRegistrar {
 };
 static DeltaNetWeightRegistrar _delta_net_weight_reg;
 }  // anonymous namespace
+
+TM_MODULE_METHODS(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)
 
 }  // namespace turbomind

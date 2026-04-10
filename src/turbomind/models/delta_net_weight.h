@@ -29,19 +29,11 @@ public:
     X(NormWeight,   norm)
 
 #define DELTA_NET_WEIGHT_PARAMS(X) \
-    X(conv1d_) \
-    X(A_log_)  \
-    X(dt_bias_)
+    X(conv1d) \
+    X(A_log)  \
+    X(dt_bias)
 
-    DELTA_NET_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
-    DELTA_NET_WEIGHT_PARAMS(TM_PARAM_MEMBER)
-
-    // Generated overrides
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    Tensor* param(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
-    void    for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
+    TM_MODULE_DECLARE(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)
 
 private:
     int      hidden_dim_{};
