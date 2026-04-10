@@ -135,6 +135,14 @@ def _infer_compute_dtype(linear: Linear):
     return None
 
 
+class _noop:
+    """No-op context manager for when no context guard is available."""
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+
+
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
                     split_side: SplitSide | None, split_num: int, rank: int):
     """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
@@ -394,7 +402,8 @@ class LoadContext:
     """
 
     def __init__(self, handle, tp_config: dict,
-                 model_config: 'ModelConfig | None' = None):
+                 model_config: 'ModelConfig | None' = None,
+                 context=None):
         """
         Args:
             handle: C++ Module handle (pybind11 object).
@@ -402,10 +411,12 @@ class LoadContext:
                        rope_dim, permute_qk, repeat_kv, attn_output_gate,
                        kv_head_num.
             model_config: The Python ``ModelConfig`` for the model being loaded.
+            context: Optional context manager to wrap load operations.
         """
         self._handle = handle
         self._tp_config = tp_config
         self._model_config = model_config
+        self._context = context
 
     @property
     def model_config(self) -> 'ModelConfig':
@@ -466,27 +477,28 @@ class LoadContext:
         The child is created via create_child, then weights are committed
         using the shared _commit_tensors function.
         """
-        import _turbomind as _tm
-        tp_side = SplitSide[tp_rule] if tp_rule else None
-        split_num = self.tp_size if tp_side else 1
+        with self._context or _noop():
+            import _turbomind as _tm
+            tp_side = SplitSide[tp_rule] if tp_rule else None
+            split_num = self.tp_size if tp_side else 1
 
-        cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
-        if group_size == 0:
-            group_size = max(1, 128)
+            cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
+            if group_size == 0:
+                group_size = max(1, 128)
 
-        weight = linear.tensors.get('weight') or linear.tensors.get('qweight')
-        input_dim = weight.shape[0] if weight is not None else 0
-        output_dim = weight.shape[-1] if weight is not None else 0
+            weight = linear.tensors.get('weight') or linear.tensors.get('qweight')
+            input_dim = weight.shape[0] if weight is not None else 0
+            output_dim = weight.shape[-1] if weight is not None else 0
 
-        lin_cfg = _tm.LinearConfig()
-        lin_cfg.input_dim = input_dim
-        lin_cfg.output_dim = output_dim
-        lin_cfg.data_type = cpp_dtype
-        lin_cfg.has_bias = 'bias' in linear.tensors
-        child_handle = self._handle.create_child(name, lin_cfg)
+            lin_cfg = _tm.LinearConfig()
+            lin_cfg.input_dim = input_dim
+            lin_cfg.output_dim = output_dim
+            lin_cfg.data_type = cpp_dtype
+            lin_cfg.has_bias = 'bias' in linear.tensors
+            child_handle = self._handle.create_child(name, lin_cfg)
 
-        _commit_tensors(child_handle, linear, cpp_dtype, group_size,
-                        tp_side, split_num, self.rank)
+            _commit_tensors(child_handle, linear, cpp_dtype, group_size,
+                            tp_side, split_num, self.rank)
 
     def load_tensor(self, name: str, tensor: torch.Tensor,
                     module_type: str = 'NormWeight',
@@ -502,11 +514,12 @@ class LoadContext:
             tp_rule: ``"output"`` or ``"input"`` for TP split, None for
                 broadcast.
         """
-        config = module_config or {}
-        child_handle = self._handle.create_child(name, module_type, config)
+        with self._context or _noop():
+            config = module_config or {}
+            child_handle = self._handle.create_child(name, module_type, config)
 
-        tp_side = SplitSide[tp_rule] if tp_rule else None
-        commit_tensor(child_handle, tensor, 'weight',
-                            split_side=tp_side,
-                            split_num=self.tp_size if tp_side else 1,
-                            rank=self.rank)
+            tp_side = SplitSide[tp_rule] if tp_rule else None
+            commit_tensor(child_handle, tensor, 'weight',
+                                split_side=tp_side,
+                                split_num=self.tp_size if tp_side else 1,
+                                rank=self.rank)
