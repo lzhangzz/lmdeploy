@@ -43,12 +43,12 @@ void Module::for_each_child(std::function<void(const char*, Module*)> /*visitor*
 
 // ----- Parameters (default implementations) -----
 
-Tensor* Module::param(const std::string& /*name*/) const
+Tensor* Module::param(const std::string& /*name*/)
 {
     return nullptr;
 }
 
-void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*/) const
+void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*/)
 {
     // default: no-op
 }

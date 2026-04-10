@@ -39,9 +39,9 @@ namespace turbomind::core {
 //       // Optional: override virtuals using the CASE macros
 //       Module* add_child(std::string name, std::unique_ptr<Module> child) override;
 //       Module* child(const std::string& name) const override;
-//       Tensor* param(const std::string& name) const override;
+//       Tensor* param(const std::string& name) override;
 //       void for_each_child(std::function<void(const char*, Module*)> visitor) const override;
-//       void for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
+//       void for_each_param(std::function<void(const char*, Tensor&)> visitor) override;
 //   };
 //
 //   // In the .cc file:
@@ -55,8 +55,8 @@ namespace turbomind::core {
 /// Declares a unique_ptr<Type> member named `name`.
 #define TM_CHILD_MEMBER(Type, name) std::unique_ptr<Type> name;
 
-/// Declares a mutable Tensor member named `name`.
-#define TM_PARAM_MEMBER(name) mutable Tensor name{};
+/// Declares a Tensor member named `name`.
+#define TM_PARAM_MEMBER(name) Tensor name{};
 
 /// Fragment for add_child() override body: matches name and stores child.
 /// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
@@ -87,6 +87,46 @@ namespace turbomind::core {
 /// Fragment for for_each_param() override body: visits param.
 #define TM_VISIT_PARAM(name)          \
     visitor(#name, name);
+
+/// Declares data members (children + params) and virtual method overrides.
+/// Used in the public section of a derived class.
+#define TM_MODULE_DECLARE(Class, ChildrenX, ParamsX)                         \
+    ChildrenX(TM_CHILD_MEMBER)                                                \
+    ParamsX(TM_PARAM_MEMBER)                                                  \
+    core::Module* add_child(std::string name,                                 \
+                            std::unique_ptr<Module> child) override;          \
+    core::Module* child(const std::string& name) const override;              \
+    Tensor*       param(const std::string& name) override;                    \
+    void          for_each_child(std::function<void(const char*, Module*)>    \
+                                    visitor) const override;                  \
+    void          for_each_param(std::function<void(const char*, Tensor&)>    \
+                                    visitor) override;
+
+/// Defines all X-macro generated method bodies for a derived module class.
+/// Used in the .cc file.  ChildrenX/ParamsX may be empty macros.
+#define TM_MODULE_METHODS(Class, ChildrenX, ParamsX)                          \
+    core::Module* Class::add_child(std::string name,                          \
+                                   std::unique_ptr<core::Module> child) {     \
+        std::string name_str = std::move(name);                                \
+        ChildrenX(TM_ADD_CHILD_CASE)                                            \
+        return nullptr;                                                         \
+    }                                                                           \
+    core::Module* Class::child(const std::string& name_str) const {            \
+        ChildrenX(TM_CHILD_CASE)                                                \
+        return nullptr;                                                         \
+    }                                                                           \
+    Tensor* Class::param(const std::string& name_str) {                        \
+        ParamsX(TM_PARAM_CASE)                                                  \
+        return nullptr;                                                         \
+    }                                                                           \
+    void Class::for_each_child(                                                 \
+        std::function<void(const char*, core::Module*)> visitor) const {       \
+        ChildrenX(TM_VISIT_CHILD)                                               \
+    }                                                                           \
+    void Class::for_each_param(                                                 \
+        std::function<void(const char*, Tensor&)> visitor) {                   \
+        ParamsX(TM_VISIT_PARAM)                                                 \
+    }
 
 // ======================================================================
 // WeightSpec — quantization metadata
@@ -147,10 +187,10 @@ public:
     // ----- Parameters (virtual, overridden by derived classes) -----
 
     /// Find a parameter by name within this module. Default: returns nullptr.
-    virtual Tensor* param(const std::string& name) const;
+    virtual Tensor* param(const std::string& name);
 
     /// Iterate over all parameters. Default: no-op.
-    virtual void for_each_param(std::function<void(const char*, Tensor&)> visitor) const;
+    virtual void for_each_param(std::function<void(const char*, Tensor&)> visitor);
 
     // ----- Lifecycle (virtual, default = recurse / no-op) -----
 
