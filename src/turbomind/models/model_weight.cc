@@ -32,7 +32,7 @@ ModelWeight::ModelWeight(DataType       data_type,
 void ModelWeight::prepare()
 {
     for_each_child([](const char* /*name*/, Module* child) {
-        child->prepare();
+        if (child) child->prepare();
     });
 }
 

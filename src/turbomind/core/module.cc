@@ -79,7 +79,7 @@ Tensor Module::create_param(const std::string& name,
 void Module::prepare()
 {
     for_each_child([](const char* /*name*/, Module* child) {
-        child->prepare();
+        if (child) child->prepare();
     });
 }
 
@@ -110,7 +110,7 @@ bool Module::verify(std::vector<std::string>& missing)
 {
     // Recurse into children
     for_each_child([&](const char* /*name*/, Module* child) {
-        child->verify(missing);
+        if (child) child->verify(missing);
     });
 
     // Check parameters are initialized
