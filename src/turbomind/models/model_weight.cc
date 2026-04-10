@@ -31,9 +31,9 @@ ModelWeight::ModelWeight(DataType       data_type,
 
 void ModelWeight::prepare()
 {
-    for (auto& [name, child] : children_) {
+    for_each_child([](const char* /*name*/, Module* child) {
         child->prepare();
-    }
+    });
 }
 
 DecoderLayerWeight* ModelWeight::layer(int i) const
@@ -69,6 +69,25 @@ bool ModelWeight::verify(std::vector<std::string>& missing)
         missing.push_back(full_path() + ": missing norm");
     }
     return missing.empty();
+}
+
+core::Module* ModelWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
+{
+    std::string name_str = std::move(name);
+    MODEL_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
+    return nullptr;
+}
+
+core::Module* ModelWeight::child(const std::string& name_str) const
+{
+    MODEL_WEIGHT_CHILDREN(TM_CHILD_CASE)
+    return nullptr;
+}
+
+void ModelWeight::for_each_child(
+    std::function<void(const char*, core::Module*)> visitor) const
+{
+    MODEL_WEIGHT_CHILDREN(TM_VISIT_CHILD)
 }
 
 }  // namespace turbomind

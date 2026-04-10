@@ -33,11 +33,18 @@ public:
         return core::ContextGuard{stream_, alloca_};
     }
 
-    // --- Typed child members ---
-    core::Submodule<LinearWeight>     tok_embeddings {*this, "tok_embeddings"};
-    core::Submodule<LinearWeight>     output         {*this, "output"};
-    core::Submodule<NormWeight>       norm           {*this, "norm"};
-    core::Submodule<core::ModuleList> layers         {*this, "layers"};
+    // --- X-macro field lists ---
+#define MODEL_WEIGHT_CHILDREN(X)         \
+    X(LinearWeight,     tok_embeddings)  \
+    X(LinearWeight,     output)          \
+    X(NormWeight,       norm)            \
+    X(core::ModuleList, layers)
+
+    MODEL_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+    Module* child(const std::string& name) const override;
+    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
 
     // --- Accessors ---
     DecoderLayerWeight*               layer(int i) const;
@@ -46,7 +53,6 @@ public:
 
     // --- Lifecycle (same as old LlamaWeight) ---
     bool is_initialized() const { return initialized_; }
-    // release() and to_device() inherited from Module base class
 
     // --- Model config accessors for LanguageModel ---
     int   hidden_units() const { return hidden_units_; }
