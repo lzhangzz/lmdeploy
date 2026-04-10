@@ -59,13 +59,13 @@ namespace turbomind::core {
 #define TM_PARAM_MEMBER(name) mutable Tensor name{};
 
 /// Fragment for add_child() override body: matches name and stores child.
-#define TM_ADD_CHILD_CASE(Type, name)                     \
-    if (name_str == #name) {                              \
-        TM_CHECK_EQ(child->type(), Type().type());        \
-        name##_ = static_cast<Type*>(child.release());    \
-        name##_->parent_ = this;                          \
-        name##_->name_   = std::move(name);               \
-        return name##_;                                   \
+/// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
+#define TM_ADD_CHILD_CASE(Type, name)                        \
+    if (name_str == #name) {                                 \
+        TM_CHECK_EQ(child->type(), Type().type());           \
+        name.reset(static_cast<Type*>(child.release()));     \
+        attach_child_(name.get(), this, std::move(name_str));\
+        return name.get();                                   \
     }
 
 /// Fragment for child() override body: matches name and returns pointer.
@@ -216,6 +216,15 @@ public:
 protected:
     Module*    parent_ = nullptr;
     std::string   name_;
+
+    /// Helper for add_child() overrides: sets parent and name on a child module.
+    /// This is needed because derived classes cannot access protected members
+    /// of other Module instances through the C++ protected access rules.
+    static void attach_child_(Module* child, Module* parent, std::string name)
+    {
+        child->parent_ = parent;
+        child->name_   = std::move(name);
+    }
 };
 
 // ======================================================================

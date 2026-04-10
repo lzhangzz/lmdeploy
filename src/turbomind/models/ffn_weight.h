@@ -19,11 +19,19 @@ public:
 
     void prepare() override;
 
-    // --- Typed child members ---
-    core::Submodule<LinearWeight> w1   {*this, "w1"};
-    core::Submodule<LinearWeight> w3   {*this, "w3"};
-    core::Submodule<LinearWeight> w2   {*this, "w2"};
-    core::Submodule<LinearWeight> w1w3 {*this, "w1w3"};
+    // --- X-macro child members ---
+#define FFN_WEIGHT_CHILDREN(X) \
+    X(LinearWeight, w1)        \
+    X(LinearWeight, w3)        \
+    X(LinearWeight, w2)        \
+    X(LinearWeight, w1w3)
+
+    FFN_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
+
+    // Generated overrides
+    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+    Module* child(const std::string& name) const override;
+    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
 
     int            inter_size() const { return inter_size_; }
     ActivationType act_type() const { return act_type_; }

@@ -27,22 +27,43 @@ void FfnWeight::prepare()
     // Set epilogue on existing w1w3 child if fused silu is active.
     // The w1/w3 fusion (interleave/chunk) is now done on the Python side.
     if (w1w3) {
-        auto* fused = static_cast<LinearWeight*>(w1w3);
+        auto* fused = static_cast<LinearWeight*>(w1w3.get());
         if (is_fused_silu_) {
             fused->epilogue = gemm::Epilogue::kGatedSilu;
         }
     }
 
-    // Prepare (format conversion) for all children
-    for (auto& [name, child] : children_) {
-        // Propagate grouped-GEMM flag for MoE expert weights
-        if (is_fused_moe_) {
-            if (auto* lw = dynamic_cast<LinearWeight*>(child.get())) {
+    // Propagate grouped-GEMM flag for MoE expert weights
+    if (is_fused_moe_) {
+        auto set_grouped = [](const char*, Module* m) {
+            if (auto* lw = dynamic_cast<LinearWeight*>(m)) {
                 lw->set_grouped(true);
             }
-        }
-        child->prepare();
+        };
+        for_each_child(set_grouped);
     }
+
+    Module::prepare();  // recurse into children
+}
+
+// --- X-macro generated method bodies ---
+
+core::Module* FfnWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
+{
+    std::string name_str = std::move(name);
+    FFN_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
+    return nullptr;
+}
+
+core::Module* FfnWeight::child(const std::string& name_str) const
+{
+    FFN_WEIGHT_CHILDREN(TM_CHILD_CASE)
+    return nullptr;
+}
+
+void FfnWeight::for_each_child(std::function<void(const char*, core::Module*)> visitor) const
+{
+    FFN_WEIGHT_CHILDREN(TM_VISIT_CHILD)
 }
 
 namespace {
