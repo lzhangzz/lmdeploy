@@ -639,14 +639,7 @@ PYBIND11_MODULE(_turbomind, m)
              [with_context](ft::core::Module& m, int idx) -> ft::core::Module* {
                  return with_context(m, [&] { return m.get(std::to_string(idx)); });
              },
-             py::return_value_policy::reference)
-        .def("set_fused_silu",
-             [](ft::core::Module& m, bool val) {
-                 if (auto* ffn = dynamic_cast<turbomind::FfnWeight*>(&m)) {
-                     ffn->set_fused_silu(val);
-                 }
-             },
-             "val"_a);
+             py::return_value_policy::reference);
 
     // transformer model
     using ft::TurboMind;

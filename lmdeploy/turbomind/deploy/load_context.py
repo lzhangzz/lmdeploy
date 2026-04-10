@@ -363,7 +363,6 @@ def commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
         commit_linear(ffn_mod, fused, "w1w3",
                            split_side=SplitSide.OUTPUT, split_num=tp,
                            rank=rank, model_dtype=model_dtype)
-        ffn_mod.set_fused_silu(fused_silu)
     else:
         commit_linear(ffn_mod, w1, "w1",
                            split_side=SplitSide.OUTPUT, split_num=tp,
