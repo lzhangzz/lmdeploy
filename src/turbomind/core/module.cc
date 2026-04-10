@@ -17,63 +17,6 @@ Module::Module() = default;
 
 Module::~Module() = default;
 
-// ----- Hierarchy -----
-
-Module* Module::add_child(std::string name, std::unique_ptr<Module> child)
-{
-    TM_CHECK(child != nullptr);
-    TM_CHECK(child->parent_ == nullptr) << "module already has a parent";
-
-    // Wire child's slots against existing children
-    for (auto& [slot_name, pp] : child->slots_) {
-        for (auto& [cname, cptr] : children_) {
-            if (cname == slot_name) {
-                *pp = cptr.get();
-                break;
-            }
-        }
-    }
-
-    child->parent_ = this;
-    child->name_   = name;
-
-    Module* raw = child.get();
-    children_.emplace_back(std::move(name), std::move(child));
-
-    // Wire parent's slots to the new child
-    for (auto& [slot_name, pp] : slots_) {
-        if (*pp == nullptr && children_.back().first == slot_name) {
-            *pp = raw;
-        }
-    }
-
-    // Wire existing siblings' slots to the new child
-    for (auto& [cname, cptr] : children_) {
-        if (cptr.get() == raw) {
-            continue;  // skip the child we just added (already handled above)
-        }
-        for (auto& [slot_name, pp] : cptr->slots_) {
-            if (*pp == nullptr && children_.back().first == slot_name) {
-                *pp = raw;
-            }
-        }
-    }
-
-    return raw;
-}
-
-void Module::add_alias(std::string name, Module& target)
-{
-    aliases_.emplace_back(std::move(name), &target);
-}
-
-// ----- Parameters -----
-
-void Module::add_param(std::string name, Tensor& tensor)
-{
-    params_.emplace_back(std::move(name), &tensor);
-}
-
 // ----- Type info -----
 
 const char* Module::type() const
@@ -81,11 +24,40 @@ const char* Module::type() const
     return "Module";
 }
 
+// ----- Hierarchy (default implementations) -----
+
+Module* Module::add_child(std::string /*name*/, std::unique_ptr<Module> /*child*/)
+{
+    return nullptr;
+}
+
+Module* Module::child(const std::string& /*name*/) const
+{
+    return nullptr;
+}
+
+void Module::for_each_child(std::function<void(const char*, Module*)> /*visitor*/) const
+{
+    // default: no-op
+}
+
+// ----- Parameters (default implementations) -----
+
+Tensor* Module::param(const std::string& /*name*/) const
+{
+    return nullptr;
+}
+
+void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*/) const
+{
+    // default: no-op
+}
+
 // ----- Lifecycle -----
 
-Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
+Tensor Module::alloc(const std::string& param_name, const WeightSpec& /*spec*/)
 {
-    // Default: return pre-existing param tensor if registered.
+    // Default: return pre-existing param tensor if found.
     if (auto* t = param(param_name)) {
         return *t;
     }
@@ -95,79 +67,28 @@ Tensor Module::alloc(const std::string& param_name, const WeightSpec& spec)
 Tensor Module::create_param(const std::string& name,
                             const std::vector<size_t>& shape,
                             DataType dtype,
-                            int group_size)
+                            int /*group_size*/)
 {
+    auto* t = param(name);
+    TM_CHECK(t != nullptr) << "param '" << name << "' not found in " << type();
     auto layout = Layout{std::vector<ssize_t>(shape.begin(), shape.end())};
-    auto tensor = Tensor{std::move(layout), dtype, kDEVICE};
-    add_param(name, tensor);
-    return tensor;
+    *t = Tensor{std::move(layout), dtype, kDEVICE};
+    return *t;
 }
 
 void Module::prepare()
 {
-    for (auto& [name, child] : children_) {
+    for_each_child([](const char* /*name*/, Module* child) {
         child->prepare();
-    }
-}
-
-// ----- Lifecycle: release / to_device -----
-
-void Module::release()
-{
-    for (auto& [name, child] : children_) {
-        child->release();
-    }
-    for (auto& [name, tensor] : params_) {
-        if (tensor && *tensor) {
-            *tensor = Tensor{};
-        }
-    }
-}
-
-void Module::to_device(DeviceType dev)
-{
-    for (auto& [name, child] : children_) {
-        child->to_device(dev);
-    }
-    for (auto& [name, tensor] : params_) {
-        if (tensor && *tensor && tensor->device().type != dev) {
-            Tensor dst{tensor->layout(), tensor->dtype(), Device{dev, tensor->device().id}};
-            Copy(*tensor, dst);
-            *tensor = std::move(dst);
-        }
-    }
-}
-
-void Module::persist(PersistOp op)
-{
-    for (auto& [name, child] : children_) {
-        child->persist(op);
-    }
-    for (auto& [name, ptr] : params_) {
-        if (!ptr || !*ptr) {
-            continue;
-        }
-
-        if (op == PersistOp::Sleep && ptr->device().type == kDEVICE) {
-            Tensor cpu{ptr->layout(), ptr->dtype(), Device{kCPU, ptr->device().id}};
-            Copy(*ptr, cpu);
-            *ptr = std::move(cpu);
-        }
-        else if (op == PersistOp::WakeUp && ptr->device().type == kCPU) {
-            Tensor gpu{ptr->layout(), ptr->dtype(), Device{kDEVICE, ptr->device().id}};
-            Copy(*ptr, gpu);
-            *ptr = std::move(gpu);
-        }
-    }
+    });
 }
 
 // ----- Registry-driven child creation -----
 
 Module* Module::create_child(const std::string& name,
-                              const std::string& type_name,
-                              const ModuleConfig& config)
+                             const ModuleConfig& config)
 {
-    auto mod = ModuleRegistry::instance().create(type_name, config);
+    auto mod = ModuleRegistry::instance().create(std::string(config.module_type), config);
     if (!mod) {
         return nullptr;
     }
@@ -176,21 +97,6 @@ Module* Module::create_child(const std::string& name,
 
 // ----- Lookup -----
 
-Module* Module::child(const std::string& name) const
-{
-    for (auto& [n, c] : children_) {
-        if (n == name) {
-            return c.get();
-        }
-    }
-    for (auto& [n, c] : aliases_) {
-        if (n == name) {
-            return c;
-        }
-    }
-    return nullptr;
-}
-
 Module* Module::get(const std::string& segment)
 {
     auto* c = child(segment);
@@ -198,35 +104,22 @@ Module* Module::get(const std::string& segment)
     return c;
 }
 
-Tensor* Module::param(const std::string& name) const
-{
-    for (auto& [n, p] : params_) {
-        if (n == name) {
-            return p;
-        }
-    }
-    return nullptr;
-}
-
-std::unordered_map<std::string, Tensor*> Module::params() const
-{
-    std::unordered_map<std::string, Tensor*> out;
-    collect_params("", out);
-    return out;
-}
-
 // ----- Verification -----
 
 bool Module::verify(std::vector<std::string>& missing)
 {
-    for (auto& [name, child] : children_) {
+    // Recurse into children
+    for_each_child([&](const char* /*name*/, Module* child) {
         child->verify(missing);
-    }
-    for (auto& [name, tensor] : params_) {
-        if (!tensor || !*tensor) {
+    });
+
+    // Check parameters are initialized
+    for_each_param([&](const char* name, Tensor& tensor) {
+        if (!tensor) {
             missing.push_back(full_path() + "." + name);
         }
-    }
+    });
+
     return missing.empty();
 }
 
@@ -244,25 +137,15 @@ std::string Module::full_path() const
     return pp + "." + name_;
 }
 
-// ---- Private ----
-
-void Module::collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const
-{
-    std::string p = prefix.empty() ? "" : prefix + ".";
-    for (auto& [n, t] : params_) {
-        out.emplace(p + n, t);
-    }
-    for (auto& [n, c] : children_) {
-        c->collect_params(prefix.empty() ? n : prefix + "." + n, out);
-    }
-}
-
 // ======================================================================
 // ModuleList
 // ======================================================================
 
 Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
 {
+    TM_CHECK(child != nullptr);
+    TM_CHECK(child->parent_ == nullptr) << "module already has a parent";
+
     // Parse index before moving name.
     int index = -1;
     {
@@ -272,14 +155,38 @@ Module* ModuleList::add_child(std::string name, std::unique_ptr<Module> child)
             index = -1;
         }
     }
-    auto* raw = Module::add_child(std::move(name), std::move(child));
+
+    child->parent_ = this;
+    child->name_   = name;
+
+    Module* raw = child.get();
+    items_.emplace_back(std::move(name), std::move(child));
+
     if (index >= 0) {
         if (index >= static_cast<int>(indexed_.size())) {
             indexed_.resize(index + 1, nullptr);
         }
         indexed_[index] = raw;
     }
+
     return raw;
+}
+
+Module* ModuleList::child(const std::string& name) const
+{
+    for (auto& [n, c] : items_) {
+        if (n == name) {
+            return c.get();
+        }
+    }
+    return nullptr;
+}
+
+void ModuleList::for_each_child(std::function<void(const char*, Module*)> visitor) const
+{
+    for (auto& [name, c] : items_) {
+        visitor(name.c_str(), c.get());
+    }
 }
 
 int ModuleList::size() const
@@ -292,6 +199,10 @@ int ModuleList::size() const
     }
     return n;
 }
+
+// ======================================================================
+// ModuleList registry
+// ======================================================================
 
 namespace {
 struct ModuleListRegistrar {

@@ -2,10 +2,10 @@
 #ifndef TURBOMIND_CORE_MODULE_H
 #define TURBOMIND_CORE_MODULE_H
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,14 +18,89 @@
 
 namespace turbomind::core {
 
-/// Power-management operation for persist().
-enum class PersistOp { Sleep, WakeUp };
+// ======================================================================
+// X-macro expansion macros for Module-derived classes
+//
+// Usage in a derived class header:
+//
+//   #define MY_CHILDREN(X) \
+//       X(LinearWeight, w1) \
+//       X(NormWeight,   norm)
+//
+//   #define MY_PARAMS(X) \
+//       X(weight) \
+//       X(bias)
+//
+//   class MyWeight: public Module {
+//   public:
+//       MY_CHILDREN(TM_CHILD_MEMBER)
+//       MY_PARAMS(TM_PARAM_MEMBER)
+//
+//       // Optional: override virtuals using the CASE macros
+//       Module* add_child(std::string name, std::unique_ptr<Module> child) override;
+//       Module* child(const std::string& name) const override;
+//       Tensor* param(const std::string& name) const override;
+//       void for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+//       void for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
+//   };
+//
+//   // In the .cc file:
+//   Module* MyWeight::add_child(std::string name, std::unique_ptr<Module> child) {
+//       MY_CHILDREN(TM_ADD_CHILD_CASE)
+//       return nullptr;
+//   }
+//   // ... etc.
+// ======================================================================
+
+/// Declares a unique_ptr<Type> member named `name`.
+#define TM_CHILD_MEMBER(Type, name) std::unique_ptr<Type> name;
+
+/// Declares a mutable Tensor member named `name`.
+#define TM_PARAM_MEMBER(name) mutable Tensor name{};
+
+/// Fragment for add_child() override body: matches name and stores child.
+#define TM_ADD_CHILD_CASE(Type, name)                     \
+    if (name_str == #name) {                              \
+        TM_CHECK_EQ(child->type(), Type().type());        \
+        name##_ = static_cast<Type*>(child.release());    \
+        name##_->parent_ = this;                          \
+        name##_->name_   = std::move(name);               \
+        return name##_;                                   \
+    }
+
+/// Fragment for child() override body: matches name and returns pointer.
+#define TM_CHILD_CASE(Type, name)    \
+    if (name_str == #name) {         \
+        return name.get();           \
+    }
+
+/// Fragment for param() override body: matches name and returns pointer.
+#define TM_PARAM_CASE(name)          \
+    if (name_str == #name) {         \
+        return &name;                \
+    }
+
+/// Fragment for for_each_child() override body: visits child.
+#define TM_VISIT_CHILD(Type, name)    \
+    visitor(#name, name.get());
+
+/// Fragment for for_each_param() override body: visits param.
+#define TM_VISIT_PARAM(name)          \
+    visitor(#name, name);
+
+// ======================================================================
+// WeightSpec — quantization metadata
+// ======================================================================
 
 /// Quantization metadata passed to ``Module::alloc``.
 struct WeightSpec {
     DataType dtype{};        // storage dtype of the weight (e.g., kUint4, kFloat8_e4m3, kFloat16)
     int      group_size = 0; // quantization group size (0 = not quantized)
 };
+
+// ======================================================================
+// Module — type-erased hierarchical module with virtual lifecycle
+// ======================================================================
 
 /// Type-erased hierarchical module with virtual lifecycle.
 ///
@@ -35,12 +110,12 @@ struct WeightSpec {
 ///     a handle for data copying.
 ///   - ``prepare()`` runs post-load processing (format conversion, fusion).
 ///   - ``verify()`` walks the tree and collects uninitialized params/modules.
-template<class T>
-struct Submodule;
-
+///
+/// Derived classes use X-macro hooks (TM_CHILD_MEMBER, TM_PARAM_MEMBER, etc.)
+/// to declare children and parameters as direct members, overriding the
+/// virtual lookup methods to match by name.
 class Module {
-    template<class T>
-    friend struct Submodule;
+    friend class ModuleList;
 public:
     virtual ~Module();
 
@@ -51,24 +126,31 @@ public:
     Module(Module&&)                 = delete;
     Module& operator=(Module&&)      = delete;
 
-    // ----- Hierarchy (type-erased, owning) -----
-
-    /// Owns child; registers it under the given local name.
-    /// Returns raw pointer to the added child.
-    virtual Module* add_child(std::string name, std::unique_ptr<Module> child);
-
-    /// Non-owning alias (for fused refs, views).
-    void add_alias(std::string name, Module& target);
-
-    // ----- Parameters -----
-
-    /// Register a named parameter tensor.
-    void add_param(std::string name, Tensor& tensor);
-
     // ----- Type info -----
 
     /// Returns a static string identifying the module type (e.g., "LinearWeight", "NormWeight").
     virtual const char* type() const;
+
+    // ----- Hierarchy (virtual, overridden by derived classes) -----
+
+    /// Owns child; registers it under the given local name.
+    /// Returns raw pointer to the added child, or nullptr if name not recognized.
+    /// Default: returns nullptr.
+    virtual Module* add_child(std::string name, std::unique_ptr<Module> child);
+
+    /// Find a direct child by name. Default: returns nullptr.
+    virtual Module* child(const std::string& name) const;
+
+    /// Iterate over all children. Default: no-op.
+    virtual void for_each_child(std::function<void(const char*, Module*)> visitor) const;
+
+    // ----- Parameters (virtual, overridden by derived classes) -----
+
+    /// Find a parameter by name within this module. Default: returns nullptr.
+    virtual Tensor* param(const std::string& name) const;
+
+    /// Iterate over all parameters. Default: no-op.
+    virtual void for_each_param(std::function<void(const char*, Tensor&)> visitor) const;
 
     // ----- Lifecycle (virtual, default = recurse / no-op) -----
 
@@ -85,27 +167,15 @@ public:
                         int group_size = 0);
 
     /// Post-load processing: weight format conversion, fusion.
-    /// Default recurses into children.
+    /// Default recurses into children via for_each_child.
     virtual void prepare();
-
-    /// Free all owned tensors (for Sleep level 2).
-    /// Default recurses into children and resets registered parameters.
-    virtual void release();
-
-    /// Move tensors between CPU and GPU (for Sleep level 1 / WakeUp).
-    /// Default recurses into children and moves registered parameters.
-    virtual void to_device(DeviceType dev);
-
-    /// Move tensors between CPU/GPU for power management.
-    /// Sleep: move to CPU (free GPU memory). WakeUp: move back to GPU.
-    virtual void persist(PersistOp op);
 
     // ----- Registry-driven child creation -----
 
     /// Create a child module using the type registry and attach it.
+    /// Uses config.module_type to look up the factory.
     /// Returns pointer to the created child, or nullptr on failure.
     Module* create_child(const std::string& name,
-                         const std::string& type_name,
                          const ModuleConfig& config = {});
 
     /// Typed child accessor. Aborts if child not found.
@@ -116,22 +186,8 @@ public:
         return static_cast<T*>(c);
     }
 
-    /// Expose children for iteration (execution side).
-    const auto& children() const { return children_; }
-
-    // ----- Lookup -----
-
-    /// Find a direct child by name (no creation).
-    Module* child(const std::string& name) const;
-
-    /// Find a child by single segment name.
+    /// Find a child by single segment name. Aborts on null.
     Module* get(const std::string& segment);
-
-    /// Find a parameter by name within this module.
-    Tensor* param(const std::string& name) const;
-
-    /// Collect all parameters in the subtree (fully-qualified names).
-    std::unordered_map<std::string, Tensor*> params() const;
 
     // ----- Verification -----
 
@@ -158,76 +214,8 @@ public:
     }
 
 protected:
-    Module*   parent_ = nullptr;
+    Module*    parent_ = nullptr;
     std::string   name_;
-
-    std::vector<std::pair<std::string, std::unique_ptr<Module>>> children_;
-    std::vector<std::pair<std::string, Module*>>                 aliases_;
-    std::vector<std::pair<std::string, Tensor*>>                 params_;
-
-    std::vector<std::pair<const char*, Module**>> slots_;
-
-    void add_slot(const char* name, Module** pp)
-    {
-        slots_.emplace_back(name, pp);
-    }
-
-private:
-    void collect_params(const std::string& prefix, std::unordered_map<std::string, Tensor*>& out) const;
-};
-
-// ======================================================================
-// Submodule<T> — auto-registering typed child reference
-// ======================================================================
-
-template<class T>
-struct Submodule {
-    const char* name;
-    Module*     pointer = nullptr;
-
-    Submodule(Module& parent, const char* n): name(n)
-    {
-        parent.add_slot(n, &pointer);
-    }
-
-    explicit operator bool() const { return pointer != nullptr; }
-
-    /// Safe accessor returning nullptr if not set (no abort).
-    T* get() const { return static_cast<T*>(pointer); }
-
-    operator T*() const
-    {
-        return static_cast<T*>(TM_CHECK_NOTNULL(pointer));
-    }
-
-    T* operator->() const
-    {
-        return static_cast<T*>(TM_CHECK_NOTNULL(pointer));
-    }
-};
-
-// ======================================================================
-// Parameter — self-registering tensor member (like PyTorch nn.Parameter)
-// ======================================================================
-
-class Parameter {
-    std::string name_;
-    Tensor      tensor_;
-
-public:
-    Parameter(Module& parent, std::string name)
-        : name_(std::move(name))
-    {
-        parent.add_param(name_, tensor_);
-    }
-
-    explicit operator bool() const { return static_cast<bool>(tensor_); }
-
-    Tensor&       operator*()        { return tensor_; }
-    const Tensor& operator*()  const { return tensor_; }
-
-    Tensor*       ptr()              { return &tensor_; }
-    const Tensor* ptr()        const { return &tensor_; }
 };
 
 // ======================================================================
@@ -250,10 +238,17 @@ public:
     /// Override to also track the child in the indexed_ vector.
     Module* add_child(std::string name, std::unique_ptr<Module> child) override;
 
+    /// Find child by name.
+    Module* child(const std::string& name) const override;
+
+    /// Iterate over children.
+    void for_each_child(std::function<void(const char*, Module*)> visitor) const override;
+
     /// Number of children created so far.
     int size() const;
 
 private:
+    std::vector<std::pair<std::string, std::unique_ptr<Module>>> items_;
     std::vector<Module*> indexed_;
 };
 
