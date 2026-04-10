@@ -39,10 +39,10 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
 {
     if (param_name == "score_correction_bias" && expert_num_ > 0) {
-        if (!score_correction_bias_) {
-            score_correction_bias_ = Tensor{{expert_num_}, spec.dtype, kDEVICE};
+        if (!score_correction_bias) {
+            score_correction_bias = Tensor{{expert_num_}, spec.dtype, kDEVICE};
         }
-        return score_correction_bias_;
+        return score_correction_bias;
     }
     return Module::alloc(param_name, spec);
 }
@@ -56,8 +56,8 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     d.k_desc.num = d.q_desc.num = n;
 
-    if (e0.bias()) {
-        d.bias() = Tensor{{n, e0.output_dim}, e0.bias().dtype(), kDEVICE};
+    if (e0.bias) {
+        d.bias = Tensor{{n, e0.output_dim}, e0.bias.dtype(), kDEVICE};
     }
 
     std::vector<std::pair<void*, int>> weights;
@@ -65,12 +65,12 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     for (int i = 0; i < n; ++i) {
         auto& e = *experts(i);
-        weights.emplace_back(e.weight().raw_data(), e.k_desc.ld);
-        if (e.scales()) {
-            scales.emplace_back(e.scales().raw_data(), e.q_desc.ld);
+        weights.emplace_back(e.weight.raw_data(), e.k_desc.ld);
+        if (e.scales) {
+            scales.emplace_back(e.scales.raw_data(), e.q_desc.ld);
         }
-        if (e.bias()) {
-            Copy(e.bias(), d.bias().slice(i, 1).squeeze(0));
+        if (e.bias) {
+            Copy(e.bias, d.bias.slice(i, 1).squeeze(0));
         }
     }
 
@@ -80,17 +80,17 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight() = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
-        d.scales() = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
+        d.weight = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
+        d.scales = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
         d.k_desc.offsets = d.q_desc.offsets = (int*)1;
     }
     else {
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
-        if (e0.scales()) {
-            d.scales() = Tensor{make_strided_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
+        if (e0.scales) {
+            d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
         }
         d.k_desc.ld = d.q_desc.ld = 0;
     }
@@ -186,35 +186,6 @@ struct MoeWeightRegistrar {
 static MoeWeightRegistrar _moe_weight_reg;
 }  // anonymous namespace
 
-// --- X-macro generated method bodies ---
-
-core::Module* MoeWeight::add_child(std::string name, std::unique_ptr<core::Module> child)
-{
-    std::string name_str = std::move(name);
-    MOE_WEIGHT_CHILDREN(TM_ADD_CHILD_CASE)
-    return nullptr;
-}
-
-core::Module* MoeWeight::child(const std::string& name_str) const
-{
-    MOE_WEIGHT_CHILDREN(TM_CHILD_CASE)
-    return nullptr;
-}
-
-Tensor* MoeWeight::param(const std::string& name_str) const
-{
-    MOE_WEIGHT_PARAMS(TM_PARAM_CASE)
-    return nullptr;
-}
-
-void MoeWeight::for_each_child(std::function<void(const char*, core::Module*)> visitor) const
-{
-    MOE_WEIGHT_CHILDREN(TM_VISIT_CHILD)
-}
-
-void MoeWeight::for_each_param(std::function<void(const char*, Tensor&)> visitor) const
-{
-    MOE_WEIGHT_PARAMS(TM_VISIT_PARAM)
-}
+TM_MODULE_METHODS(MoeWeight, MOE_WEIGHT_CHILDREN, MOE_WEIGHT_PARAMS)
 
 }  // namespace turbomind

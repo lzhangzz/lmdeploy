@@ -28,22 +28,13 @@ public:
     X(core::ModuleList, experts)
 
 #define MOE_WEIGHT_PARAMS(X) \
-    X(score_correction_bias_)
+    X(score_correction_bias)
 
-    MOE_WEIGHT_CHILDREN(TM_CHILD_MEMBER)
-    MOE_WEIGHT_PARAMS(TM_PARAM_MEMBER)
-
-    // Generated overrides
-    Module* add_child(std::string name, std::unique_ptr<Module> child) override;
-    Module* child(const std::string& name) const override;
-    Tensor* param(const std::string& name) const override;
-    void    for_each_child(std::function<void(const char*, Module*)> visitor) const override;
-    void    for_each_param(std::function<void(const char*, Tensor&)> visitor) const override;
+    TM_MODULE_DECLARE(MoeWeight, MOE_WEIGHT_CHILDREN, MOE_WEIGHT_PARAMS)
 
     // --- Typed accessors ---
     FfnWeight*    expert(int i) const;
     FfnWeight*    block() const { return block_.get(); }
-    Tensor*       score_correction_bias() const { return score_correction_bias_ ? &score_correction_bias_ : nullptr; }
     MoeParam::Method method() const { return moe_param_.method; }
     const MoeParam& moe_param() const { return moe_param_; }
 
