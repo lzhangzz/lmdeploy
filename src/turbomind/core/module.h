@@ -56,7 +56,7 @@ namespace turbomind::core {
 #define TM_CHILD_MEMBER(Type, name) std::unique_ptr<Type> name;
 
 /// Declares a Tensor member named `name`.
-#define TM_PARAM_MEMBER(name) Tensor name{};
+#define TM_PARAM_MEMBER(name) core::Tensor name{};
 
 /// Fragment for add_child() override body: matches name and stores child.
 /// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
@@ -96,10 +96,10 @@ namespace turbomind::core {
     core::Module* add_child(std::string name,                                 \
                             std::unique_ptr<Module> child) override;          \
     core::Module* child(const std::string& name) const override;              \
-    Tensor*       param(const std::string& name) override;                    \
+    core::Tensor* param(const std::string& name) override;                    \
     void          for_each_child(std::function<void(const char*, Module*)>    \
                                     visitor) const override;                  \
-    void          for_each_param(std::function<void(const char*, Tensor&)>    \
+    void          for_each_param(std::function<void(const char*, core::Tensor&)>    \
                                     visitor) override;
 
 /// Defines all X-macro generated method bodies for a derived module class.
@@ -115,7 +115,7 @@ namespace turbomind::core {
         ChildrenX(TM_CHILD_CASE)                                                \
         return nullptr;                                                         \
     }                                                                           \
-    Tensor* Class::param(const std::string& name_str) {                        \
+    core::Tensor* Class::param(const std::string& name_str) {                  \
         ParamsX(TM_PARAM_CASE)                                                  \
         return nullptr;                                                         \
     }                                                                           \
@@ -124,7 +124,7 @@ namespace turbomind::core {
         ChildrenX(TM_VISIT_CHILD)                                               \
     }                                                                           \
     void Class::for_each_param(                                                 \
-        std::function<void(const char*, Tensor&)> visitor) {                   \
+        std::function<void(const char*, core::Tensor&)> visitor) {             \
         ParamsX(TM_VISIT_PARAM)                                                 \
     }
 
