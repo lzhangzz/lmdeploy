@@ -19,14 +19,15 @@ def make_tensors(torch_tensor):
     """Create (tm_src, tm_dst, golden) from a (possibly non-contiguous) torch tensor.
 
     tm_src: turbomind Tensor with strides preserved from the torch tensor
-    tm_dst: contiguous turbomind Tensor for the output
+    tm_dst: contiguous turbomind Tensor initialized with garbage (to detect copy bugs)
     golden: contiguous torch tensor with the expected result
     """
     tm_src = _tm.from_dlpack_with_strides(torch_tensor)
 
-    # Allocate a contiguous destination tensor with the same shape/dtype
+    # Allocate an uninitialized destination to detect copy failures
     contig = torch_tensor.contiguous()
-    tm_dst = _tm.from_dlpack(contig.clone())
+    dst = torch.empty(contig.shape, dtype=torch_tensor.dtype, device=DEV)
+    tm_dst = _tm.from_dlpack(dst)
 
     golden = contig.clone()
     return tm_src, tm_dst, golden
@@ -162,9 +163,14 @@ def main():
     check("transpose i8", torch.randint(-128, 127, (64, 128), dtype=torch.int8, device=DEV).t())
     check("transpose i32", torch.randint(0, 1000, (64, 128), dtype=torch.int32, device=DEV).t())
 
-    # --- Large tensor (exercises vectorization) ---
-    print("\nLarge tensor:")
-    check("large transpose (1024x1024)", torch.randn(1024, 1024, dtype=torch.float32, device=DEV).t())
+    # --- Throughput sweep (1M to 256M elements) ---
+    print("\nThroughput sweep:")
+    for n in [1024, 2048, 4096, 8192, 16384]:
+        numel = n * n
+        label = f"contig {numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"contig {numel // 1024}K"
+        check(f"{label} ({n}x{n})", torch.randn(n, n, dtype=torch.float32, device=DEV))
+        label = f"trans  {numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"trans  {numel // 1024}K"
+        check(f"{label} ({n}x{n})", torch.randn(n, n, dtype=torch.float32, device=DEV).t())
 
     # --- Negative strides ---
     print("\nNegative strides (flip):")

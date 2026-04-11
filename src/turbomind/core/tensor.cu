@@ -119,7 +119,9 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 
         if (vec_size > 1) {
             shape[0] /= vec_size;
-            for (int i = 0; i < rank; ++i) {
+            // Dim 0 stride stays 1: VecT elements are adjacent in memory.
+            // Only outer dimensions need stride conversion (scalar -> VecT units).
+            for (int i = 1; i < rank; ++i) {
                 stride_a[i] /= vec_size;
                 stride_b[i] /= vec_size;
             }
