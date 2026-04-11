@@ -20,6 +20,8 @@ from typing import Callable
 import torch
 from torch import Tensor
 
+import _turbomind as _tm
+
 # ---------------------------------------------------------------------------
 # WeightFormat descriptor
 # ---------------------------------------------------------------------------
@@ -90,10 +92,6 @@ class WeightFormat:
         Returns None when group_size is needed but not yet known (block_in==0
         and group_size==0), or when the format is dense (block_in is None).
         """
-        try:
-            from _turbomind import MakeLinearWeightFormat
-        except ImportError:
-            return None
         if self.block_in is None:
             return None
         gs = group_size if self.block_in == 0 else self.block_in
@@ -101,13 +99,9 @@ class WeightFormat:
         if gs == 0:
             return None
         if self.cpp_dtype_name is not None:
-            try:
-                import _turbomind as _tm
-            except ImportError:
-                return None
             dt = getattr(_tm.DataType, self.cpp_dtype_name, None)
             if dt is not None:
-                return MakeLinearWeightFormat(dt, dt, gs)
+                return _tm.MakeLinearWeightFormat(dt, dt, gs)
         return None
 
     def complete_tensors(self, tensors: dict[str, Tensor]) -> None:
