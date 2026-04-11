@@ -489,6 +489,12 @@ PYBIND11_MODULE(_turbomind, m)
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst) {
             using ft::core::GenericCopy;
             using ft::core::Context;
+            using ft::core::ContextGuard;
+            using ft::core::Stream;
+
+            // Create a local stream + context so this works without the engine
+            auto stream = Stream::create();
+            ContextGuard guard{stream};
             GenericCopy(*src, *dst, Context::stream());
             Context::stream().Sync();
         },

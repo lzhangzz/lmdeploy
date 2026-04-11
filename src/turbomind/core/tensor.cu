@@ -4,28 +4,10 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 
-#include <cute/layout.hpp>
-#include <cute/tensor.hpp>
-
 #include <numeric>
 #include <utility>
 
 namespace turbomind::core {
-
-// ============================================================================
-// CuTE helper: convert Array<T, N> to cute::tuple via index_sequence
-// ============================================================================
-template<typename T, int N, std::size_t... Is>
-TM_HOST_DEVICE auto to_cute_tuple(const Array<T, N>& arr, std::index_sequence<Is...>)
-{
-    return cute::make_tuple(static_cast<T>(arr[Is])...);
-}
-
-template<typename T, int N>
-TM_HOST_DEVICE auto to_cute_tuple(const Array<T, N>& arr)
-{
-    return to_cute_tuple(arr, std::make_index_sequence<N>{});
-}
 
 // ============================================================================
 // CUDA kernel: GenericCopyKernel
@@ -46,24 +28,19 @@ __global__ void GenericCopyKernel(const VecT* __restrict__ src_ptr,
         return;
     }
 
-    // Build CuTE tensors with dynamic layouts
-    auto src_layout = cute::make_layout(to_cute_tuple(shape), to_cute_tuple(src_strides));
-    auto dst_layout = cute::make_layout(to_cute_tuple(shape), to_cute_tuple(dst_strides));
-
-    auto src_tensor = cute::make_tensor(src_ptr, src_layout);
-    auto dst_tensor = cute::make_tensor(dst_ptr, dst_layout);
-
     // Decompose linear index into multi-dim coordinates
-    Array<int32_t, kRank> coord;
+    int64_t src_offset = 0;
+    int64_t dst_offset = 0;
     int64_t rem = idx;
     PRAGMA_UNROLL
     for (int i = 0; i < kRank; ++i) {
-        coord[i] = static_cast<int32_t>(rem % shape[i]);
+        int32_t c = static_cast<int32_t>(rem % shape[i]);
         rem /= shape[i];
+        src_offset += c * src_strides[i];
+        dst_offset += c * dst_strides[i];
     }
 
-    // Convert coord to cute::tuple for tensor accessor
-    dst_tensor(to_cute_tuple(coord)) = src_tensor(to_cute_tuple(coord));
+    dst_ptr[dst_offset] = src_ptr[src_offset];
 }
 
 }  // namespace kernel
