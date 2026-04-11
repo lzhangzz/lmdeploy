@@ -297,13 +297,16 @@ struct Testbed_v3: Parameter {
     void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
     {
         original.configure(input_dim, output_dim, data_type, false);
-        original.alloc("weight", core::WeightSpec{data_type, group_size});
+        original.set_weight_spec(data_type, group_size);
+        original.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
         rng_.NormalFloat(original.weight(), 1., .1);
 
         quant.configure(input_dim, output_dim, data_type, false);
-        quant.alloc("weight", core::WeightSpec{weight_type, group_size});
+        quant.set_weight_spec(weight_type, group_size);
+        quant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, weight_type);
         dequant.configure(input_dim, output_dim, data_type, false);
-        dequant.alloc("weight", core::WeightSpec{data_type, group_size});
+        dequant.set_weight_spec(data_type, group_size);
+        dequant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
 
         Buffer_<unsigned> rbits;
         // rbits = {original.weight().size(), kDEVICE};
