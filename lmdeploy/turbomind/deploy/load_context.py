@@ -6,21 +6,35 @@ from typing import TYPE_CHECKING
 
 import torch
 
+import _turbomind as _tm
+
 from .linear import Linear
 from .spec import SplitSide
 
 if TYPE_CHECKING:
     from .config import ModelConfig
 
+# Canonical dtype mappings
+_STR_TO_DTYPE: dict[str, _tm.DataType] = {
+    'float32':  _tm.DataType.TYPE_FP32,
+    'float16':  _tm.DataType.TYPE_FP16,
+    'bfloat16': _tm.DataType.TYPE_BF16,
+}
+
+_TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
+    torch.float32:  _tm.DataType.TYPE_FP32,
+    torch.float16:  _tm.DataType.TYPE_FP16,
+    torch.bfloat16: _tm.DataType.TYPE_BF16,
+    torch.int32:    _tm.DataType.TYPE_INT32,
+    torch.int64:    _tm.DataType.TYPE_INT64,
+    torch.int8:     _tm.DataType.TYPE_INT8,
+    torch.uint8:    _tm.DataType.TYPE_UINT8,
+}
+
 
 def _cpp_dtype(dtype_str: str):
     """Convert a model-config data_type string to C++ DataType enum."""
-    import _turbomind as _tm
-    return {
-        'float32':  _tm.DataType.TYPE_FP32,
-        'float16':  _tm.DataType.TYPE_FP16,
-        'bfloat16': _tm.DataType.TYPE_BF16,
-    }[dtype_str]
+    return _STR_TO_DTYPE[dtype_str]
 
 
 def _act_type_id(act_str: str) -> int:
@@ -37,29 +51,11 @@ _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPU
 
 def _torch_dtype_to_cpp(dtype: torch.dtype):
     """Convert a torch dtype to the C++ ``DataType`` enum, or ``None``."""
-    try:
-        import _turbomind as _tm
-    except ImportError:
-        return None
-    _MAP = {
-        torch.float32:  _tm.DataType.TYPE_FP32,
-        torch.float16:  _tm.DataType.TYPE_FP16,
-        torch.bfloat16: _tm.DataType.TYPE_BF16,
-        torch.int32:    _tm.DataType.TYPE_INT32,
-        torch.int64:    _tm.DataType.TYPE_INT64,
-        torch.int8:     _tm.DataType.TYPE_INT8,
-        torch.uint8:    _tm.DataType.TYPE_UINT8,
-    }
-    return _MAP.get(dtype)
+    return _TORCH_TO_CPP.get(dtype)
 
 
 def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
     """Cast *shard* dtype to match *tm_tensor*'s C++ dtype when needed."""
-    try:
-        import _turbomind as _tm
-    except ImportError:
-        return shard
-
     if tm_tensor.type == _tm.DataType.TYPE_FP32 and shard.dtype in (torch.float16, torch.bfloat16):
         return shard.float()
     if tm_tensor.type == _tm.DataType.TYPE_FP16 and shard.dtype != torch.float16:
@@ -71,11 +67,6 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
 
 def _infer_cpp_linear_dtype(linear: Linear):
     """Determine C++ DataType and group_size from ``Linear.weight_format``."""
-    try:
-        import _turbomind as _tm
-    except ImportError:
-        return None, 0
-
     fmt = linear.weight_format
     if fmt is not None and fmt.cpp_dtype_name is not None:
         cpp_dtype = getattr(_tm.DataType, fmt.cpp_dtype_name, None)
@@ -98,18 +89,9 @@ def _infer_compute_dtype(linear: Linear):
     For dense formats the weight itself carries the compute dtype.
     For quantized formats we infer from scales or bias.
     """
-    try:
-        import _turbomind as _tm
-    except ImportError:
-        return None
-    _MAP = {
-        torch.bfloat16: _tm.DataType.TYPE_BF16,
-        torch.float16:  _tm.DataType.TYPE_FP16,
-        torch.float32:  _tm.DataType.TYPE_FP32,
-    }
     w = linear.tensors.get('weight')
     if w is not None:
-        d = _MAP.get(w.dtype)
+        d = _TORCH_TO_CPP.get(w.dtype)
         if d is not None:
             return d
         # FP8 weights: compute dtype is BF16 (or FP16 depending on model),
@@ -125,7 +107,7 @@ def _infer_compute_dtype(linear: Linear):
     for key in ('scales', 'bias'):
         t = linear.tensors.get(key)
         if t is not None:
-            d = _MAP.get(t.dtype)
+            d = _TORCH_TO_CPP.get(t.dtype)
             if d is not None:
                 return d
     return None
@@ -250,8 +232,6 @@ def commit_linear(module, linear: Linear, name: str,
         stores weights in a different precision than the model config (e.g.
         BF16 weights in an FP16 model).
     """
-    import _turbomind as _tm
-
     cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
     if group_size == 0:
         group_size = max(1, 128)  # default; caller should pass correct value
@@ -510,7 +490,6 @@ class LoadContext:
         using the shared _commit_tensors function.
         """
         with self._context or _noop():
-            import _turbomind as _tm
             tp_side = SplitSide[tp_rule] if tp_rule else None
             split_num = self.tp_size if tp_side else 1
 
