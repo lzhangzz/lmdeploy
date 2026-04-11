@@ -227,6 +227,37 @@ std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
     return std::make_shared<Tensor>(ptr, std::move(shape), dtype, where);
 }
 
+std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor* tensor)
+{
+    auto& dl_tensor = tensor->dl_tensor;
+    auto  where     = getMemoryType(dl_tensor.device);
+    auto  dtype     = getDataType(dl_tensor.dtype);
+    assert(dl_tensor.ndim > 0);
+    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
+
+    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
+    std::vector<ft::core::ssize_t> strides;
+    if (dl_tensor.strides) {
+        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+    }
+    else {
+        strides.resize(dl_tensor.ndim, 1);
+        for (int i = dl_tensor.ndim - 2; i >= 0; --i) {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+    }
+
+    ft::core::Layout layout(std::move(shape), std::move(strides));
+
+    std::shared_ptr<void> ptr{dl_tensor.data, [tensor](void* p) {
+                                  if (tensor->deleter) {
+                                      tensor->deleter(tensor);
+                                  }
+                              }};
+
+    return std::make_shared<Tensor>(ptr, std::move(layout), dtype, where);
+}
+
 static void safe_memcpy(void* dst, const void* src, size_t size)
 {
     cudaPointerAttributes dat{};
@@ -436,6 +467,18 @@ PYBIND11_MODULE(_turbomind, m)
             DLManagedTensor* dlmt =
                 static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
             auto ret = DLManagedTensorToTritonTensor(dlmt);
+            // take ownership of capsule's payload
+            cap.set_name("used_dltensor");
+            return ret;
+        },
+        "dl_managed_tensor"_a);
+    m.def(
+        "from_dlpack_with_strides",
+        [](py::object obj) {
+            py::capsule      cap = obj.attr("__dlpack__")();
+            DLManagedTensor* dlmt =
+                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+            auto ret = DLManagedTensorToTritonTensorWithStrides(dlmt);
             // take ownership of capsule's payload
             cap.set_name("used_dltensor");
             return ret;
