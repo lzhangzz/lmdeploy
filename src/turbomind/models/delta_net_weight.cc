@@ -3,6 +3,7 @@
 #include "src/turbomind/models/delta_net_weight.h"
 
 #include "src/turbomind/core/registry.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
@@ -23,6 +24,10 @@ DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg)
 void DeltaNetWeight::prepare()
 {
     Module::prepare();
+
+    EnsureFloatDtype(A_log, data_type_);
+    EnsureFloatDtype(dt_bias, data_type_);
+    EnsureFloatDtype(conv1d, data_type_);
 }
 
 namespace {
