@@ -597,7 +597,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__bool__", [](ft::core::Param& p) { return static_cast<bool>(p); });
 
     // Module class — navigation and allocation interface
-    py::class_<ft::core::Module, std::shared_ptr<ft::core::Module>>(m, "Module")
+    py::class_<ft::core::Module>(m, "Module")
         .def("get",
              [](ft::core::Module& m, const std::string& segment) -> ft::core::Module* {
                  return m.get(segment);
