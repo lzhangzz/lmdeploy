@@ -43,9 +43,9 @@ void Module::for_each_child(std::function<void(const char*, Module*)> /*visitor*
 
 // ----- Parameters (default implementations) -----
 
-Tensor* Module::param(const std::string& /*name*/)
+Param Module::param(const std::string& /*name*/)
 {
-    return nullptr;
+    return {};
 }
 
 void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*/)
@@ -54,27 +54,6 @@ void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*
 }
 
 // ----- Lifecycle -----
-
-Tensor Module::alloc(const std::string& param_name, const WeightSpec& /*spec*/)
-{
-    // Default: return pre-existing param tensor if found.
-    if (auto* t = param(param_name)) {
-        return *t;
-    }
-    return {};
-}
-
-Tensor Module::create_param(const std::string& name,
-                            const std::vector<size_t>& shape,
-                            DataType dtype,
-                            int /*group_size*/)
-{
-    auto* t = param(name);
-    TM_CHECK(t != nullptr) << "param '" << name << "' not found in " << type();
-    auto layout = Layout{std::vector<ssize_t>(shape.begin(), shape.end())};
-    *t = Tensor{std::move(layout), dtype, kDEVICE};
-    return *t;
-}
 
 void Module::prepare()
 {

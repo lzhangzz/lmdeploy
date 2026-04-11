@@ -25,27 +25,6 @@ void DeltaNetWeight::prepare()
     Module::prepare();
 }
 
-Tensor DeltaNetWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
-{
-    if (param_name == "A_log" && !A_log) {
-        A_log = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
-    }
-    if (param_name == "A_log") return A_log;
-
-    if (param_name == "dt_bias" && !dt_bias) {
-        dt_bias = Tensor{{num_v_heads_ / tp_size_}, data_type_, kDEVICE};
-    }
-    if (param_name == "dt_bias") return dt_bias;
-
-    if (param_name == "conv1d" && !conv1d) {
-        int conv_dim = (num_k_heads_ * key_head_dim_ * 2 + num_v_heads_ * value_head_dim_) / tp_size_;
-        conv1d = Tensor{{d_conv_, conv_dim}, data_type_, kDEVICE};
-    }
-    if (param_name == "conv1d") return conv1d;
-
-    return Module::alloc(param_name, spec);
-}
-
 namespace {
 struct DeltaNetWeightRegistrar {
     DeltaNetWeightRegistrar() {

@@ -20,8 +20,6 @@ public:
 
     void prepare() override;
 
-    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
-
     // --- X-macro field lists ---
 #define DELTA_NET_WEIGHT_CHILDREN(X) \
     X(LinearWeight, in_proj_all) \

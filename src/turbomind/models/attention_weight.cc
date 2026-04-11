@@ -29,17 +29,6 @@ void AttentionWeight::prepare()
     Module::prepare();
 }
 
-Tensor AttentionWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
-{
-    if (param_name == "sinks" && !sinks) {
-        sinks = Tensor{{head_num_ / tp_size_}, spec.dtype, kDEVICE};
-    }
-    if (param_name == "sinks") {
-        return sinks;
-    }
-    return Module::alloc(param_name, spec);
-}
-
 namespace {
 struct AttentionWeightRegistrar {
     AttentionWeightRegistrar() {

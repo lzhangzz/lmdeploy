@@ -36,17 +36,6 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     expert_num_ = cfg.expert_num;
 }
 
-Tensor MoeWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
-{
-    if (param_name == "score_correction_bias" && expert_num_ > 0) {
-        if (!score_correction_bias) {
-            score_correction_bias = Tensor{{expert_num_}, spec.dtype, kDEVICE};
-        }
-        return score_correction_bias;
-    }
-    return Module::alloc(param_name, spec);
-}
-
 // Adapted from LinkExperts in LlamaDenseWeight.cc for LinearWeight
 static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
 {

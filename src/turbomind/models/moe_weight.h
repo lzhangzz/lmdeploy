@@ -17,7 +17,6 @@ public:
 
     MoeWeight(const core::MoeConfig& cfg);
 
-    Tensor  alloc(const std::string& param_name, const core::WeightSpec& spec) override;
     void prepare() override;
     int num_experts() const { return expert_num_; }
 

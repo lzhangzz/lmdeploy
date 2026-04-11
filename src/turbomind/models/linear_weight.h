@@ -34,11 +34,10 @@ public:
 
     void configure(int input_dim, int output_dim, DataType data_type, bool has_bias = false);
 
-    /// Allocate weight tensors with explicit format. Public so composite modules
-    /// (e.g. FfnWeight) can create fused weights before prepare().
-    void allocate(DataType actual_weight_type, int actual_group_size);
-
-    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
+    /// Set quantization metadata (weight dtype + group size) before allocation.
+    /// For dense float weights, coerces to model compute dtype to avoid
+    /// unsupported dtype combinations in GetConverters.
+    void set_weight_spec(DataType weight_dtype, int group_size);
 
     /// Pre-process: blockwise-to-groupwise scale conversion (before fusion).
     void preprocess();
@@ -83,8 +82,6 @@ public:
     TM_MODULE_DECLARE(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)
 
 private:
-    void do_allocate(DataType actual_weight_type, int actual_group_size);
-
     bool has_bias_   = false;
     bool is_grouped_ = false;
 };

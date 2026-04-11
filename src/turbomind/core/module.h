@@ -39,7 +39,7 @@ namespace turbomind::core {
 //       // Optional: override virtuals using the CASE macros
 //       Module* add_child(std::string name, std::unique_ptr<Module> child) override;
 //       Module* child(const std::string& name) const override;
-//       Tensor* param(const std::string& name) override;
+//       Param param(const std::string& name) override;
 //       void for_each_child(std::function<void(const char*, Module*)> visitor) const override;
 //       void for_each_param(std::function<void(const char*, Tensor&)> visitor) override;
 //   };
@@ -74,10 +74,10 @@ namespace turbomind::core {
         return name.get();           \
     }
 
-/// Fragment for param() override body: matches name and returns pointer.
+/// Fragment for param() override body: matches name and returns Param handle.
 #define TM_PARAM_CASE(name)          \
     if (name_str == #name) {         \
-        return &name;                \
+        return core::Param{&name};  \
     }
 
 /// Fragment for for_each_child() override body: visits child.
@@ -96,7 +96,7 @@ namespace turbomind::core {
     core::Module* add_child(std::string name,                                 \
                             std::unique_ptr<Module> child) override;          \
     core::Module* child(const std::string& name) const override;              \
-    core::Tensor* param(const std::string& name) override;                    \
+    core::Param param(const std::string& name) override;                       \
     void          for_each_child(std::function<void(const char*, Module*)>    \
                                     visitor) const override;                  \
     void          for_each_param(std::function<void(const char*, core::Tensor&)>    \
@@ -115,9 +115,9 @@ namespace turbomind::core {
         ChildrenX(TM_CHILD_CASE)                                                \
         return nullptr;                                                         \
     }                                                                           \
-    core::Tensor* Class::param(const std::string& name_str) {                  \
+    core::Param Class::param(const std::string& name_str) {                     \
         ParamsX(TM_PARAM_CASE)                                                  \
-        return nullptr;                                                         \
+        return {};                                                              \
     }                                                                           \
     void Class::for_each_child(                                                 \
         std::function<void(const char*, core::Module*)> visitor) const {       \
@@ -129,13 +129,30 @@ namespace turbomind::core {
     }
 
 // ======================================================================
-// WeightSpec — quantization metadata
+// Param — lightweight handle to a Module parameter slot
 // ======================================================================
 
-/// Quantization metadata passed to ``Module::alloc``.
-struct WeightSpec {
-    DataType dtype{};        // storage dtype of the weight (e.g., kUint4, kFloat8_e4m3, kFloat16)
-    int      group_size = 0; // quantization group size (0 = not quantized)
+/// Lightweight handle to a Tensor slot within a Module.
+/// Returned by Module::param(name). Used for per-param allocation.
+class Param {
+    Tensor* slot_;
+
+public:
+    Param(Tensor* slot = nullptr) : slot_(slot) {}
+
+    /// Allocate the tensor with explicit shape/dtype. Returns the tensor for data copy.
+    Tensor alloc(const std::vector<size_t>& shape, DataType dtype)
+    {
+        TM_CHECK(slot_ != nullptr);
+        auto layout = Layout{std::vector<ssize_t>(shape.begin(), shape.end())};
+        *slot_ = Tensor{std::move(layout), dtype, kDEVICE};
+        return *slot_;
+    }
+
+    /// Get current tensor (empty if not yet allocated).
+    Tensor get() const { return slot_ ? *slot_ : Tensor{}; }
+
+    explicit operator bool() const { return slot_ && static_cast<bool>(*slot_); }
 };
 
 // ======================================================================
@@ -146,8 +163,6 @@ struct WeightSpec {
 ///
 /// The module tree is built explicitly via ``create_child()`` from the Python
 /// loading pipeline. Children are looked up by name; no lazy creation.
-///   - ``alloc(param_name, spec)`` allocates tensors on demand and returns
-///     a handle for data copying.
 ///   - ``prepare()`` runs post-load processing (format conversion, fusion).
 ///   - ``verify()`` walks the tree and collects uninitialized params/modules.
 ///
@@ -186,25 +201,13 @@ public:
 
     // ----- Parameters (virtual, overridden by derived classes) -----
 
-    /// Find a parameter by name within this module. Default: returns nullptr.
-    virtual Tensor* param(const std::string& name);
+    /// Find a parameter by name within this module. Default: returns empty Param.
+    virtual Param param(const std::string& name);
 
     /// Iterate over all parameters. Default: no-op.
     virtual void for_each_param(std::function<void(const char*, Tensor&)> visitor);
 
     // ----- Lifecycle (virtual, default = recurse / no-op) -----
-
-    /// Allocate tensors for a named parameter and return for data copy.
-    /// Returns empty Tensor if param_name is not recognized.
-    /// ``spec`` carries quantization metadata — only used by LinearWeight.
-    virtual Tensor alloc(const std::string& param_name, const WeightSpec& spec);
-
-    /// Create and register a named parameter tensor with the given shape/dtype.
-    /// Returns the allocated Tensor for the caller to fill via copy_from().
-    Tensor create_param(const std::string& name,
-                        const std::vector<size_t>& shape,
-                        DataType dtype,
-                        int group_size = 0);
 
     /// Post-load processing: weight format conversion, fusion.
     /// Default recurses into children via for_each_child.

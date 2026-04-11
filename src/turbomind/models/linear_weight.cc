@@ -89,105 +89,19 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 }
 
 // ======================================================================
-// do_allocate
+// set_weight_spec
 // ======================================================================
 
-void LinearWeight::do_allocate(DataType actual_weight_type, int actual_group_size)
+void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
 {
-    weight_format = actual_weight_type;
-    group_size    = actual_group_size;
-    format_       = MakeLinearWeightFormat(data_type, actual_weight_type, actual_group_size);
-    policy_       = ResolveLinearPolicy(format_, data_type, getSMVersion());
-
-    weight = Tensor({input_dim, output_dim}, actual_weight_type, kDEVICE);
-
-    if (has_bias_) {
-        bias = Tensor{{output_dim}, data_type, kDEVICE};
+    // For dense float weights, coerce to model compute dtype
+    if (weight_dtype != data_type && IsDenseFloatType(weight_dtype) && IsDenseFloatType(data_type)) {
+        weight_dtype = data_type;
     }
-
-    scales = {};
-    zeros  = {};
-
-    if (format_.scales.present()) {
-        if (actual_weight_type == kFloat8_e4m3) {
-            scales = Tensor{{cdiv(input_dim, actual_group_size), cdiv(output_dim, actual_group_size)},
-                            format_.scales.dtype, kDEVICE};
-        }
-        else if (actual_weight_type == kFloat4_e2m1) {
-            scales = Tensor{{cdiv(input_dim, actual_group_size), output_dim},
-                            format_.scales.dtype, kDEVICE};
-        }
-        else {
-            TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-            scales = Tensor{{input_dim / actual_group_size, output_dim},
-                            format_.scales.dtype, kDEVICE};
-        }
-    }
-
-    if (format_.zeros.present()) {
-        TM_CHECK(input_dim % actual_group_size == 0) << input_dim << " " << actual_group_size;
-        zeros = Tensor{{input_dim / actual_group_size, output_dim},
-                        format_.zeros.dtype, kDEVICE};
-    }
-
-    k_desc = {};
-    q_desc = {};
-
-    k_desc.type  = weight.dtype();
-    k_desc.order = gemm::kRowMajor;
-    k_desc.rows  = input_dim;
-    k_desc.cols  = output_dim;
-    k_desc.ld    = output_dim;
-}
-
-// ======================================================================
-// allocate (public, for composite modules that create fused weights)
-// ======================================================================
-
-void LinearWeight::allocate(DataType actual_weight_type, int actual_group_size)
-{
-    do_allocate(actual_weight_type, actual_group_size);
-}
-
-// ======================================================================
-// alloc
-// ======================================================================
-
-Tensor LinearWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
-{
-    // Trigger full allocation on first call (when weight is still empty).
-    if (!weight) {
-        if (param_name == "weight" || param_name == "qweight") {
-            // For dense floating-point weights, use the model's compute dtype
-            // (data_type) to avoid unsupported dtype combinations in
-            // GetConverters.  Quantized types (uint4, fp8, etc.) pass through
-            // unchanged.
-            DataType alloc_dtype = spec.dtype;
-            if (alloc_dtype != data_type && IsDenseFloatType(alloc_dtype) && IsDenseFloatType(data_type)) {
-                alloc_dtype = data_type;
-            }
-            do_allocate(alloc_dtype, spec.group_size);
-        }
-        else {
-            // Cannot allocate scales/zeros before weight — caller error.
-            return {};
-        }
-    }
-
-    if (param_name == "weight" || param_name == "qweight") {
-        return weight;
-    }
-    if (param_name == "bias") {
-        return bias;
-    }
-    if (param_name == "scales") {
-        return scales;
-    }
-    if (param_name == "zeros") {
-        return zeros;
-    }
-
-    return Module::alloc(param_name, spec);
+    weight_format = weight_dtype;
+    this->group_size = group_size;
+    format_ = MakeLinearWeightFormat(data_type, weight_format, group_size);
+    policy_ = ResolveLinearPolicy(format_, data_type, getSMVersion());
 }
 
 // ======================================================================
@@ -208,6 +122,13 @@ void LinearWeight::prepare()
     if (!weight) {
         return;
     }
+
+    // Set up GEMM descriptor (was previously in do_allocate)
+    k_desc.type  = weight.dtype();
+    k_desc.order = gemm::kRowMajor;
+    k_desc.rows  = input_dim;
+    k_desc.cols  = output_dim;
+    k_desc.ld    = output_dim;
 
     auto stream = core::Context::stream().handle();
 

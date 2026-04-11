@@ -40,22 +40,6 @@ void NormWeight::configure(std::vector<ssize_t> shape, DataType dtype)
     dtype_ = dtype;
 }
 
-Tensor NormWeight::alloc(const std::string& param_name, const core::WeightSpec& spec)
-{
-    // Allocate on first access
-    if (!weight && param_name == "weight") {
-        // Always use the model's compute dtype (dtype_) for allocation.
-        // The rms_norm kernel requires w.dtype() == x.dtype().
-        // The Python side (_cast_shard_for_tm) handles casting from source
-        // dtype to the model's compute dtype during weight loading.
-        weight = Tensor{shape_, dtype_, kDEVICE};
-    }
-    if (param_name == "weight") {
-        return weight;
-    }
-    return Module::alloc(param_name, spec);
-}
-
 namespace {
 struct NormWeightRegistrar {
     NormWeightRegistrar() {

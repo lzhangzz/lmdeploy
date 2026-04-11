@@ -26,9 +26,6 @@ public:
     /// Configure with arbitrary shape (deferred — no allocation).
     void configure(std::vector<ssize_t> shape, DataType dtype);
 
-    /// Allocate the weight tensor on first call, then return it.
-    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
-
 #define NORM_WEIGHT_CHILDREN(X)
 
 #define NORM_WEIGHT_PARAMS(X) \

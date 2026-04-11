@@ -584,6 +584,18 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__enter__", [](PyContextGuard& g) -> PyContextGuard& { g.enter(); return g; })
         .def("__exit__", [](PyContextGuard& g, py::object, py::object, py::object) { g.exit(); });
 
+    // Param — lightweight handle to a Module parameter slot
+    py::class_<ft::core::Param>(m, "Param")
+        .def("alloc",
+             [](ft::core::Param& p, std::vector<size_t> shape, ft::DataType dtype) {
+                 return std::make_shared<Tensor>(p.alloc(shape, dtype));
+             },
+             "shape"_a,
+             "dtype"_a)
+        .def("get",
+             [](ft::core::Param& p) { return std::make_shared<Tensor>(p.get()); })
+        .def("__bool__", [](ft::core::Param& p) { return static_cast<bool>(p); });
+
     // Module class — navigation and allocation interface
     py::class_<ft::core::Module, std::shared_ptr<ft::core::Module>>(m, "Module")
         .def("get",
@@ -592,26 +604,11 @@ PYBIND11_MODULE(_turbomind, m)
              },
              py::return_value_policy::reference,
              "segment"_a)
-        .def("alloc",
-             [](ft::core::Module& m, const std::string& param_name, ft::DataType dtype, int group_size) {
-                 return std::make_shared<Tensor>(m.alloc(param_name, ft::core::WeightSpec{dtype, group_size}));
+        .def("param",
+             [](ft::core::Module& m, const std::string& name) -> ft::core::Param {
+                 return m.param(name);
              },
-             "param_name"_a,
-             "dtype"_a,
-             "group_size"_a = 0)
-        .def("create_param",
-             [](ft::core::Module& m,
-                const std::string& name,
-                std::vector<size_t> shape,
-                ft::DataType dtype,
-                int group_size) {
-                 return std::make_shared<Tensor>(
-                     m.create_param(name, shape, dtype, group_size));
-             },
-             "name"_a,
-             "shape"_a,
-             "dtype"_a,
-             "group_size"_a = 0)
+             "name"_a)
         .def("prepare",
              [](ft::core::Module& m) { m.prepare(); })
         .def("child",
@@ -638,6 +635,15 @@ PYBIND11_MODULE(_turbomind, m)
                  return m.get(std::to_string(idx));
              },
              py::return_value_policy::reference);
+
+    // LinearWeight — specific interface for weight loading
+    py::class_<turbomind::LinearWeight, ft::core::Module>(m, "LinearWeight")
+        .def("set_weight_spec",
+             [](turbomind::LinearWeight& lw, ft::DataType dtype, int group_size) {
+                 lw.set_weight_spec(dtype, group_size);
+             },
+             "dtype"_a,
+             "group_size"_a);
 
     // transformer model
     using ft::TurboMind;

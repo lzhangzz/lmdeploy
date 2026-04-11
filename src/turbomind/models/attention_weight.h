@@ -19,7 +19,6 @@ public:
     AttentionWeight(const core::AttentionConfig& cfg);
 
     void prepare() override;
-    Tensor alloc(const std::string& param_name, const core::WeightSpec& spec) override;
 
     // --- X-macro field lists ---
 #define ATTENTION_WEIGHT_CHILDREN(X) \
