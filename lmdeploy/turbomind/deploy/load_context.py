@@ -144,12 +144,11 @@ class _noop:
 
 
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
-                    split_side: SplitSide | None, split_num: int, rank: int):
+                    split_side: SplitSide | None, split_num: int, rank: int,
+                    model_dtype=None):
     """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
 
     Handles packing, TP sharding, allocation, dtype casting, and padding.
-    This is the shared tensor-commit loop used by both ``commit_linear`` and
-    ``LoadContext.load_linear``.
     """
     split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
@@ -180,7 +179,15 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
         elif not shard.is_contiguous():
             shard = shard.contiguous()
 
-        dst = handle.alloc(kind, cpp_dtype, group_size)
+        # Resolve allocation dtype: for dense float weight/qweight, use model
+        # compute dtype to match the coercion previously done in C++ alloc.
+        dst_dtype = cpp_dtype
+        if kind in ("weight", "qweight") and model_dtype is not None:
+            fmt = linear.weight_format
+            if fmt is None or fmt.name == 'dense':
+                dst_dtype = model_dtype if isinstance(model_dtype, int) else model_dtype.value
+
+        dst = handle.param(kind).alloc(list(shard.shape), dst_dtype)
         if dst:
             shard = _cast_shard_for_tm(shard, dst)
             if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
@@ -284,8 +291,11 @@ def commit_linear(module, linear: Linear, name: str,
                         f"scale blocks (block_out={wfmt.block_out}), not "
                         f"divisible by split_num={split_num}.")
 
+    # Set weight spec for quantization metadata
+    linear_mod.set_weight_spec(cpp_dtype if cpp_dtype else 0, group_size)
+
     _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
-                    split_side, split_num, rank)
+                    split_side, split_num, rank, model_dtype=model_dtype)
 
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,
@@ -322,7 +332,7 @@ def commit_tensor(module, tensor: torch.Tensor | None, name: str,
     cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
     if cpp_dtype is None:
         return
-    dst = module.alloc(name, cpp_dtype, 0)
+    dst = module.param(name).alloc(list(shard.shape), cpp_dtype)
     if dst:
         shard = _cast_shard_for_tm(shard, dst)
         dst.copy_from(shard)
@@ -497,8 +507,11 @@ class LoadContext:
             lin_cfg.has_bias = 'bias' in linear.tensors
             child_handle = self._handle.create_child(name, lin_cfg)
 
+            child_handle.set_weight_spec(cpp_dtype if cpp_dtype else 0, group_size)
+
             _commit_tensors(child_handle, linear, cpp_dtype, group_size,
-                            tp_side, split_num, self.rank)
+                            tp_side, split_num, self.rank,
+                            model_dtype=self.cpp_dtype)
 
     def load_tensor(self, name: str, tensor: torch.Tensor,
                     module_type: str = 'NormWeight',
