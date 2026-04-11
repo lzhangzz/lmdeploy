@@ -113,13 +113,6 @@ def _infer_compute_dtype(linear: Linear):
     return None
 
 
-class _noop:
-    """No-op context manager for when no context guard is available."""
-    def __enter__(self):
-        return self
-    def __exit__(self, *args):
-        pass
-
 
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
                     split_side: SplitSide | None, split_num: int, rank: int,
@@ -489,7 +482,7 @@ class LoadContext:
         The child is created via create_child, then weights are committed
         using the shared _commit_tensors function.
         """
-        with self._context or _noop():
+        with self._context:
             tp_side = SplitSide[tp_rule] if tp_rule else None
             split_num = self.tp_size if tp_side else 1
 
@@ -537,7 +530,7 @@ class LoadContext:
             tp_rule: ``"output"`` or ``"input"`` for TP split, None for
                 broadcast.
         """
-        with self._context or _noop():
+        with self._context:
             config = module_config or {}
             child_handle = self._handle.create_child(name, module_type, config)
 
