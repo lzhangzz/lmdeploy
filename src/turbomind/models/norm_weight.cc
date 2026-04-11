@@ -4,6 +4,7 @@
 
 #include "src/turbomind/core/module_config.h"
 #include "src/turbomind/core/registry.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
@@ -38,6 +39,11 @@ void NormWeight::configure(std::vector<ssize_t> shape, DataType dtype)
 {
     shape_ = std::move(shape);
     dtype_ = dtype;
+}
+
+void NormWeight::prepare()
+{
+    EnsureFloatDtype(weight, dtype_);
 }
 
 namespace {
