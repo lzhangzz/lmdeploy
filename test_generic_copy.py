@@ -32,6 +32,48 @@ def make_tensors(torch_tensor):
     return tm_src, tm_dst, golden
 
 
+ITERS = 20
+WARMUP = 3
+
+
+def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
+    """Benchmark GenericCopy vs contiguous torch.clone() and print throughput."""
+    numel = torch_tensor.numel()
+    dtype_bytes = torch_tensor.element_size()
+    total_bytes = numel * dtype_bytes
+
+    # --- Benchmark GenericCopy ---
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+
+    for _ in range(WARMUP):
+        _tm.generic_copy(tm_src, tm_dst)
+
+    start.record()
+    for _ in range(ITERS):
+        _tm.generic_copy(tm_src, tm_dst)
+    end.record()
+    torch.cuda.synchronize()
+    gc_ms = start.elapsed_time(end)
+    gc_gbps = total_bytes * ITERS / (gc_ms * 1e6)
+
+    # --- Benchmark contiguous clone (baseline) ---
+    contig = torch.zeros(torch_tensor.shape, dtype=torch_tensor.dtype, device=DEV)
+    for _ in range(WARMUP):
+        contig.clone()
+
+    start.record()
+    for _ in range(ITERS):
+        contig.clone()
+    end.record()
+    torch.cuda.synchronize()
+    bl_ms = start.elapsed_time(end)
+    bl_gbps = total_bytes * ITERS / (bl_ms * 1e6)
+
+    pct = gc_gbps / bl_gbps * 100 if bl_gbps > 0 else 0
+    print(f"         GenericCopy: {gc_gbps:.1f} GB/s | Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}%)")
+
+
 def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
     """Run a single GenericCopy test. Returns True on pass."""
     tm_src, tm_dst, golden = make_tensors(torch_tensor)
@@ -61,6 +103,9 @@ def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
             mismatches = (result != golden).sum().item()
             total = result.numel()
             print(f"         mismatches={mismatches}/{total}")
+
+    if match:
+        benchmark_copy(name, tm_src, tm_dst, torch_tensor)
 
     return match
 
