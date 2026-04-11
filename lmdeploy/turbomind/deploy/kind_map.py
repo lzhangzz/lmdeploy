@@ -132,21 +132,21 @@ DENSE_SUFFIXES: dict[str, str] = {
 }
 
 AWQ_SUFFIXES: dict[str, str] = {
-    ".qweight": "qweight",
+    ".qweight": "weight",
     ".scales": "scales",
     ".qzeros": "zeros",
     ".bias": "bias",
 }
 
 GPTQ_SUFFIXES: dict[str, str] = {
-    ".qweight": "qweight",
+    ".qweight": "weight",
     ".scales": "scales",
     ".qzeros": "zeros",
     ".bias": "bias",
 }
 
 COMPRESSED_TENSOR_SUFFIXES: dict[str, str] = {
-    ".weight_packed": "qweight",
+    ".weight_packed": "weight",
     ".weight_scale": "scales",
     ".weight_zero_point": "zeros",
     ".bias": "bias",
@@ -234,7 +234,7 @@ def _normalize_gptq(x: Tensor, kind: str) -> Tensor:
     x = x.cuda()
     if x.dtype == torch.int32:
         xs = _get_u4_slices(x, torch.uint8)
-        if kind == "qweight":
+        if kind == "weight":
             x = torch.stack(xs, dim=1).view(-1, x.size(-1))
         else:
             x = torch.stack(xs, dim=-1).view(x.size(0), -1) + 1
@@ -266,7 +266,7 @@ def _normalize_compressed_tensor(x: Tensor, kind: str) -> Tensor:
     x = x.cuda()
     if x.dtype == torch.int32:
         xs = _get_u4_slices(x, torch.uint8)
-        if kind == "qweight":
+        if kind == "weight":
             x = torch.stack(xs, dim=-1).view(*x.shape[:-1], -1)
         elif kind == "zeros":
             x = torch.stack(xs, dim=1).view(-1, x.size(-1))
@@ -299,8 +299,8 @@ def get_normalizer(model_format: str | None) -> Callable[[Tensor, str], Tensor]:
 
 
 def _pack_u4_qweight(tensor: Tensor, kind: str) -> Tensor:
-    """Pack uint8 4-bit values into int32 rows; applied to ``qweight``."""
-    if kind == "qweight" and tensor.dtype == torch.uint8:
+    """Pack uint8 4-bit values into int32 rows; applied to quantized ``weight``."""
+    if kind == "weight" and tensor.dtype == torch.uint8:
         return pack_u4_row(tensor)
     return tensor
 
@@ -391,7 +391,7 @@ def _accepts_mxfp4(available: dict[str, "Tensor"]) -> bool:
 def _dequant_awq(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
     from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
 
-    qweight = tensors["qweight"]
+    qweight = tensors["weight"]
     scales = tensors["scales"]
     qzeros = tensors["zeros"]
     group_size = qweight.shape[0] // scales.shape[0]

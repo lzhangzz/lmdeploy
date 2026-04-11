@@ -17,8 +17,6 @@ def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) ->
 
     # Dense bf16/fp16 without MoE -> chunk, not interleave
     weight = w1_linear.tensors.get("weight")
-    if weight is None:
-        weight = w1_linear.tensors.get("qweight")
     is_quantized = weight is not None and weight.element_size() < 2
     if not is_quantized and not is_moe:
         return False
@@ -53,8 +51,6 @@ def _shard_linear_for_tp(linear: Linear, tp: int, rank: int) -> Linear:
 
     # Block-scale tensors can't be evenly split — extract by block boundary.
     weight = linear.tensors.get("weight")
-    if weight is None:
-        weight = linear.tensors.get("qweight")
     if weight is None:
         return linear.split_out_dim(tp)[rank]
 
@@ -98,8 +94,6 @@ def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
     if fmt is None or fmt.block_out is None:
         return True
     w = w1.tensors.get("weight")
-    if w is None:
-        w = w1.tensors.get("qweight")
     if w is None:
         return True
     return (w.size(-1) // tp) % fmt.block_out == 0

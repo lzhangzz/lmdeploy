@@ -13,18 +13,14 @@ if TYPE_CHECKING:
     from .config import ModelConfig
 
 
-def _cpp_dtype(dtype_str: str) -> int:
-    """Convert a model-config data_type string to C++ DataType enum value as int.
-
-    Returns a plain int (not the enum object) so it can be passed in
-    ModuleConfig dicts via pybind11 without requiring enum -> int64_t cast.
-    """
+def _cpp_dtype(dtype_str: str):
+    """Convert a model-config data_type string to C++ DataType enum."""
     import _turbomind as _tm
     return {
         'float32':  _tm.DataType.TYPE_FP32,
         'float16':  _tm.DataType.TYPE_FP16,
         'bfloat16': _tm.DataType.TYPE_BF16,
-    }[dtype_str].value
+    }[dtype_str]
 
 
 def _act_type_id(act_str: str) -> int:
@@ -145,6 +141,7 @@ class _noop:
 
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
                     split_side: SplitSide | None, split_num: int, rank: int,
+                    in_dim: int, out_dim: int,
                     model_dtype=None):
     """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
 
@@ -154,9 +151,15 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
 
     packer = linear.weight_format.packer if linear.weight_format else None
 
+    # Whether the weight format is quantized (packed).  For quantized formats
+    # the weight shard has a different shape/dtype than the allocation, but
+    # byte sizes match due to the packing invariant.
+    fmt = linear.weight_format
+    is_quantized = fmt is not None and fmt.name != 'dense'
+
     def _kind_order(item):
         k, _ = item
-        if k in ("weight", "qweight"):
+        if k == "weight":
             return (0, k)
         return (1, k)
 
@@ -179,15 +182,25 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
         elif not shard.is_contiguous():
             shard = shard.contiguous()
 
-        # Resolve allocation dtype: for dense float weight/qweight, use model
-        # compute dtype to match the coercion previously done in C++ alloc.
-        dst_dtype = cpp_dtype
-        if kind in ("weight", "qweight") and model_dtype is not None:
-            fmt = linear.weight_format
-            if fmt is None or fmt.name == 'dense':
-                dst_dtype = model_dtype if isinstance(model_dtype, int) else model_dtype.value
+        # Determine allocation shape and dtype.
+        if kind == "weight" and is_quantized:
+            # Quantized weight: allocate with model dimensions and weight
+            # format dtype.  Byte sizes match the packed shard due to the
+            # packing invariant (e.g. 8 uint4 values = 1 int32 = 4 bytes).
+            alloc_shape = [in_dim, out_dim]
+            alloc_dtype = cpp_dtype
+        elif kind == "weight" and model_dtype is not None:
+            # Dense weight: use model compute dtype for dtype coercion.
+            alloc_shape = list(shard.shape)
+            alloc_dtype = model_dtype
+        else:
+            # Scales, zeros, bias: use shard's own shape and dtype.
+            alloc_shape = list(shard.shape)
+            alloc_dtype = _torch_dtype_to_cpp(shard.dtype)
+            if alloc_dtype is None:
+                continue
 
-        dst = handle.param(kind).alloc(list(shard.shape), dst_dtype)
+        dst = handle.param(kind).alloc(alloc_shape, alloc_dtype)
         if dst:
             shard = _cast_shard_for_tm(shard, dst)
             if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
@@ -237,6 +250,8 @@ def commit_linear(module, linear: Linear, name: str,
         stores weights in a different precision than the model config (e.g.
         BF16 weights in an FP16 model).
     """
+    import _turbomind as _tm
+
     cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
     if group_size == 0:
         group_size = max(1, 128)  # default; caller should pass correct value
@@ -247,16 +262,15 @@ def commit_linear(module, linear: Linear, name: str,
         linear = Linear(tensors=linear.tensors,
                         weight_format=linear.weight_format,
                         data_format=linear.weight_format.to_data_format(
-                            cpp_dtype.value if cpp_dtype else 0,
+                            cpp_dtype if cpp_dtype else _tm.DataType.TYPE_INVALID,
                             group_size))
 
     # Ensure the LinearWeight child exists
     linear_mod = module.child(name)
     if linear_mod is None:
-        import _turbomind as _tm
         w = linear.tensors.get('weight')
         if w is None:
-            w = linear.tensors.get('qweight')
+            return
         in_dim = w.shape[0]
         out_dim = w.shape[-1]
         if split_side == SplitSide.OUTPUT:
@@ -264,18 +278,16 @@ def commit_linear(module, linear: Linear, name: str,
         elif split_side == SplitSide.INPUT:
             in_dim = in_dim // split_num
         compute_dtype = _infer_compute_dtype(linear)
-        # For dense (non-quantized) weights, prefer the model's configured
-        # compute dtype to avoid dtype mismatches (e.g. BF16 checkpoint
-        # weights in an FP16-configured model).
-        if model_dtype is not None and compute_dtype is not None:
-            fmt = linear.weight_format
-            if fmt is None or fmt.name == 'dense':
-                model_dt = _tm.DataType(model_dtype) if isinstance(model_dtype, int) else model_dtype
-                compute_dtype = model_dt
+        # Always prefer the model's configured compute dtype.  For quantized
+        # formats, the scales/bias dtype may differ from the model's actual
+        # compute dtype (e.g. AWQ scales stored as bf16 in an fp16 model),
+        # which would cause an input_dtype mismatch at GEMM time.
+        if model_dtype is not None:
+            compute_dtype = model_dtype
         lin_cfg = _tm.LinearConfig()
         lin_cfg.input_dim = in_dim
         lin_cfg.output_dim = out_dim
-        lin_cfg.data_type = compute_dtype if compute_dtype else _tm.DataType(0)
+        lin_cfg.data_type = compute_dtype if compute_dtype else _tm.DataType.TYPE_INVALID
         lin_cfg.has_bias = 'bias' in linear.tensors
         linear_mod = module.create_child(name, lin_cfg)
 
@@ -292,10 +304,20 @@ def commit_linear(module, linear: Linear, name: str,
                         f"divisible by split_num={split_num}.")
 
     # Set weight spec for quantization metadata
-    linear_mod.set_weight_spec(cpp_dtype if cpp_dtype else 0, group_size)
+    linear_mod.set_weight_spec(cpp_dtype if cpp_dtype else _tm.DataType.TYPE_INVALID, group_size)
+
+    # Get model dimensions for correct weight allocation shape
+    w = linear.tensors.get('weight')
+    in_dim = w.shape[0] if w is not None else 0
+    out_dim = w.shape[-1] if w is not None else 0
+    if split_side == SplitSide.OUTPUT:
+        out_dim = out_dim // split_num
+    elif split_side == SplitSide.INPUT:
+        in_dim = in_dim // split_num
 
     _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
-                    split_side, split_num, rank, model_dtype=model_dtype)
+                    split_side, split_num, rank, in_dim, out_dim,
+                    model_dtype=model_dtype)
 
 
 def commit_tensor(module, tensor: torch.Tensor | None, name: str,
@@ -496,21 +518,30 @@ class LoadContext:
             if group_size == 0:
                 group_size = max(1, 128)
 
-            weight = linear.tensors.get('weight') or linear.tensors.get('qweight')
+            weight = linear.tensors.get('weight')
             input_dim = weight.shape[0] if weight is not None else 0
             output_dim = weight.shape[-1] if weight is not None else 0
 
             lin_cfg = _tm.LinearConfig()
             lin_cfg.input_dim = input_dim
             lin_cfg.output_dim = output_dim
-            lin_cfg.data_type = cpp_dtype
+            lin_cfg.data_type = self.cpp_dtype
             lin_cfg.has_bias = 'bias' in linear.tensors
             child_handle = self._handle.create_child(name, lin_cfg)
 
-            child_handle.set_weight_spec(cpp_dtype if cpp_dtype else 0, group_size)
+            child_handle.set_weight_spec(cpp_dtype if cpp_dtype else _tm.DataType.TYPE_INVALID, group_size)
+
+            # Compute split dimensions for allocation shape
+            in_dim = input_dim
+            out_dim = output_dim
+            if tp_side == SplitSide.OUTPUT:
+                out_dim = out_dim // split_num
+            elif tp_side == SplitSide.INPUT:
+                in_dim = in_dim // split_num
 
             _commit_tensors(child_handle, linear, cpp_dtype, group_size,
                             tp_side, split_num, self.rank,
+                            in_dim, out_dim,
                             model_dtype=self.cpp_dtype)
 
     def load_tensor(self, name: str, tensor: torch.Tensor,

@@ -24,6 +24,7 @@ Stdout is plain text in short sections, for example:
   --- response end ---
 
 Exit code: 0 only if no uncaught exception (pipeline load + inference complete).
+On failure the full traceback is printed to stderr.
 Output quality is not validated.
 
 Usage (from repo root; see CLAUDE.md for PYTHONPATH):
@@ -41,6 +42,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import traceback
 from typing import NamedTuple
 
 import huggingface_hub.constants as hf_constants
@@ -110,15 +112,11 @@ def run_smoke_infer(
     prompt = 'Write a short paragraph about the importance of reading books.'
 
     t0 = time.perf_counter()
-    pipe_cm = pipeline(model_path, backend_config=engine_config, log_level='WARNING')
-    pipe = pipe_cm.__enter__()
-    create_s = time.perf_counter() - t0
-    try:
+    with pipeline(model_path, backend_config=engine_config, log_level='WARNING') as pipe:
+        create_s = time.perf_counter() - t0
         t1 = time.perf_counter()
         out = pipe([prompt], gen_config=gen_config, do_preprocess=True)
         infer_s = time.perf_counter() - t1
-    finally:
-        pipe_cm.__exit__(None, None, None)
 
     res = out[0]
     text = res.text if hasattr(res, 'text') else str(res)
@@ -169,6 +167,6 @@ def main() -> None:
 if __name__ == '__main__':
     try:
         main()
-    except Exception as e:
-        print(f'{type(e).__name__}: {e}', file=sys.stderr)
+    except Exception:
+        traceback.print_exc()
         sys.exit(1)
