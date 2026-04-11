@@ -1,11 +1,9 @@
-#include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 
 #include <numeric>
-#include <utility>
 
 namespace turbomind::core {
 
@@ -48,7 +46,7 @@ __global__ void GenericCopyKernel(const VecT* __restrict__ src_ptr,
 // ============================================================================
 // Host function: GenericCopy
 // ============================================================================
-void GenericCopy(const Tensor& src, Tensor& dst, const Stream& stream)
+void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 {
     auto a = src.layout();
     auto b = dst.layout();
@@ -108,7 +106,6 @@ void GenericCopy(const Tensor& src, Tensor& dst, const Stream& stream)
 
     auto invoke = [&](auto vec_t, auto index_t, auto d) {
         using VecT    = decltype(vec_t);
-        using IndexT  = decltype(index_t);
         constexpr int kRank = d.value;
 
         Array<int32_t, kRank> shape;
@@ -146,7 +143,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, const Stream& stream)
             }
         }
 
-        func<<<grid_size, block_size, 0, stream.handle()>>>(
+        func<<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const VecT*>(data_a),
             reinterpret_cast<VecT*>(data_b),
             stride_a,

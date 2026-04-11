@@ -42,16 +42,21 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     dtype_bytes = torch_tensor.element_size()
     total_bytes = numel * dtype_bytes
 
+    stream = torch.cuda.current_stream()
+    stream_ptr = stream.cuda_stream
+
     # --- Benchmark GenericCopy ---
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
     for _ in range(WARMUP):
-        _tm.generic_copy(tm_src, tm_dst)
+        _tm.generic_copy_on_stream(tm_src, tm_dst, stream_ptr)
+
+    torch.cuda.synchronize()
 
     start.record()
     for _ in range(ITERS):
-        _tm.generic_copy(tm_src, tm_dst)
+        _tm.generic_copy_on_stream(tm_src, tm_dst, stream_ptr)
     end.record()
     torch.cuda.synchronize()
     gc_ms = start.elapsed_time(end)
@@ -61,6 +66,8 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     contig = torch.zeros(torch_tensor.shape, dtype=torch_tensor.dtype, device=DEV)
     for _ in range(WARMUP):
         contig.clone()
+
+    torch.cuda.synchronize()
 
     start.record()
     for _ in range(ITERS):

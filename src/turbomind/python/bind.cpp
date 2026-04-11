@@ -495,11 +495,21 @@ PYBIND11_MODULE(_turbomind, m)
             // Create a local stream + context so this works without the engine
             auto stream = Stream::create();
             ContextGuard guard{stream};
-            GenericCopy(*src, *dst, Context::stream());
+            GenericCopy(*src, *dst, Context::stream().handle());
             Context::stream().Sync();
         },
         "src"_a,
         "dst"_a);
+
+    m.def(
+        "generic_copy_on_stream",
+        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
+            using ft::core::GenericCopy;
+            GenericCopy(*src, *dst, reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        "src"_a,
+        "dst"_a,
+        "stream_ptr"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
