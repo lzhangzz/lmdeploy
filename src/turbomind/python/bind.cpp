@@ -484,6 +484,16 @@ PYBIND11_MODULE(_turbomind, m)
             return ret;
         },
         "dl_managed_tensor"_a);
+    m.def(
+        "generic_copy",
+        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst) {
+            using ft::core::GenericCopy;
+            using ft::core::Context;
+            GenericCopy(*src, *dst, Context::stream());
+            Context::stream().Sync();
+        },
+        "src"_a,
+        "dst"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
