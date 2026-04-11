@@ -1,61 +1,77 @@
-
-
 #include "src/turbomind/core/buffer.h"
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/core/array.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
 
+#include <cute/layout.hpp>
+#include <cute/tensor.hpp>
+
+#include <numeric>
+#include <utility>
+
 namespace turbomind::core {
 
-#if 0
+// ============================================================================
+// CuTE helper: convert Array<T, N> to cute::tuple via index_sequence
+// ============================================================================
+template<typename T, int N, std::size_t... Is>
+TM_HOST_DEVICE auto to_cute_tuple(const Array<T, N>& arr, std::index_sequence<Is...>)
+{
+    return cute::make_tuple(static_cast<T>(arr[Is])...);
+}
 
+template<typename T, int N>
+TM_HOST_DEVICE auto to_cute_tuple(const Array<T, N>& arr)
+{
+    return to_cute_tuple(arr, std::make_index_sequence<N>{});
+}
+
+// ============================================================================
+// CUDA kernel: GenericCopyKernel
+// ============================================================================
 namespace kernel {
 
-// This is going to be slow for transposing the innermost dim
-template<class T, class Index, int D>
-__global__ void GenericCopy(const T*          a,
-                            T*                b,
-                            Array<int64_t, D> stride_a,
-                            Array<int64_t, D> stride_b,
-                            Array<Index, D>   shape,
-                            int               ndim,
-                            int64_t           size)
+template<typename VecT, int kRank>
+__global__ void GenericCopyKernel(const VecT* __restrict__ src_ptr,
+                                  VecT* __restrict__       dst_ptr,
+                                  Array<int64_t, kRank>    src_strides,
+                                  Array<int64_t, kRank>    dst_strides,
+                                  Array<int32_t, kRank>    shape,
+                                  int64_t                  count)
 {
-    Index idx = threadIdx.x + (Index)blockIdx.x * blockDim.x;
+    const int64_t idx = static_cast<int64_t>(threadIdx.x) + static_cast<int64_t>(blockIdx.x) * blockDim.x;
 
-    if (idx >= size) {
+    if (idx >= count) {
         return;
     }
 
-    Array<int64_t, D> coord;
+    // Build CuTE tensors with dynamic layouts
+    auto src_layout = cute::make_layout(to_cute_tuple(shape), to_cute_tuple(src_strides));
+    auto dst_layout = cute::make_layout(to_cute_tuple(shape), to_cute_tuple(dst_strides));
+
+    auto src_tensor = cute::make_tensor(src_ptr, src_layout);
+    auto dst_tensor = cute::make_tensor(dst_ptr, dst_layout);
+
+    // Decompose linear index into multi-dim coordinates
+    Array<int32_t, kRank> coord;
+    int64_t rem = idx;
     PRAGMA_UNROLL
-    for (int i = 0; i < D; ++i) {
-        if (i < ndim) {
-            auto div = idx / shape[i];
-            auto mod = idx % shape[i];
-            coord[i] = mod;
-            idx      = div;
-        }
+    for (int i = 0; i < kRank; ++i) {
+        coord[i] = static_cast<int32_t>(rem % shape[i]);
+        rem /= shape[i];
     }
 
-    int64_t idx_a = 0;
-    int64_t idx_b = 0;
-
-    PRAGMA_UNROLL
-    for (int i = 0; i < D; ++i) {
-        if (i < ndim) {
-            idx_a += coord[i] * stride_a[i];
-            idx_b += coord[i] * stride_b[i];
-        }
-    }
-
-    b[idx_b] = a[idx_a];
+    // Convert coord to cute::tuple for tensor accessor
+    dst_tensor(to_cute_tuple(coord)) = src_tensor(to_cute_tuple(coord));
 }
 
 }  // namespace kernel
 
-void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
+// ============================================================================
+// Host function: GenericCopy
+// ============================================================================
+void GenericCopy(const Tensor& src, Tensor& dst, const Stream& stream)
 {
     auto a = src.layout();
     auto b = dst.layout();
@@ -79,7 +95,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
         a = a.view(b.shape());
     }
     else if (b.rank() < rank) {
-        b = b.view(b.shape());
+        b = b.view(a.shape());
     }
 
     const DataType dtype = src.dtype();
@@ -89,10 +105,10 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
     auto align = [&](auto v) { alignment = std::gcd(alignment, v); };
 
     if (a.stride(0) > 1 || b.stride(0) > 1) {
-        alignment = get_byte_size(dtype);
+        alignment = byte_size(dtype);
     }
 
-    align(get_byte_size(dtype, a.shape(0)));
+    align(byte_size(dtype, a.shape(0)));
 
     auto data_a = src.raw_data();
     auto data_b = dst.raw_data();
@@ -101,13 +117,12 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
     align(reinterpret_cast<uintptr_t>(data_b));
 
     for (int i = 1; i < rank; ++i) {
-        align(get_byte_size(dtype, a.stride(i)));
-        align(get_byte_size(dtype, b.stride(i)));
+        align(byte_size(dtype, a.stride(i)));
+        align(byte_size(dtype, b.stride(i)));
     }
 
-    const auto vec_size = get_elem_num(alignment, dtype);
-
-    const auto size = a.size() / vec_size;
+    const int64_t vec_size = alignment / std::max<int64_t>(1, byte_size(dtype));
+    const int64_t size     = a.size() / vec_size;
 
     int device{};
     check_cuda_error(cudaGetDevice(&device));
@@ -115,16 +130,16 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
     check_cuda_error(cudaDeviceGetAttribute(&sm_num, cudaDevAttrMultiProcessorCount, device));
 
     auto invoke = [&](auto vec_t, auto index_t, auto d) {
-        using T         = decltype(vec_t);
-        using Index     = decltype(index_t);
-        constexpr int D = d.value;
+        using VecT    = decltype(vec_t);
+        using IndexT  = decltype(index_t);
+        constexpr int kRank = d.value;
 
-        Array<Index, D> shape;
+        Array<int32_t, kRank> shape;
         std::fill(shape.begin() + rank, shape.end(), 1);
         std::copy_n(a.shape().data(), rank, shape.data());
 
-        Array<int64_t, D> stride_a{};
-        Array<int64_t, D> stride_b{};
+        Array<int64_t, kRank> stride_a{};
+        Array<int64_t, kRank> stride_b{};
         std::copy_n(a.stride().data(), rank, stride_a.data());
         std::copy_n(b.stride().data(), rank, stride_b.data());
 
@@ -136,16 +151,16 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
             }
         }
 
-        auto func = kernel::GenericCopy<T, Index, D>;
+        auto func = kernel::GenericCopyKernel<VecT, kRank>;
 
         int min_waves  = INT_MAX;
         int block_size = 0;
         int grid_size  = 0;
 
         for (int threads = 256; threads <= 1024; threads *= 2) {
-            int blocks = cdiv<ssize_t>(size, block_size);
+            int blocks = cdiv<ssize_t>(size, threads);
             int n_active{};
-            check_cuda_error(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_active, func, block_size, 0));
+            check_cuda_error(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&n_active, func, threads, 0));
             int waves = cdiv(blocks, n_active * sm_num);
             if (waves < min_waves) {
                 min_waves  = waves;
@@ -155,7 +170,12 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
         }
 
         func<<<grid_size, block_size, 0, stream.handle()>>>(
-            (const T*)data_a, (T*)data_b, stride_a, stride_b, shape, rank, a.size());
+            reinterpret_cast<const VecT*>(data_a),
+            reinterpret_cast<VecT*>(data_b),
+            stride_a,
+            stride_b,
+            shape,
+            size);
     };
 
     auto invoke_d = [&](auto vec_t, auto idx_t) {
@@ -165,11 +185,11 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
         else if (rank <= 4) {
             invoke(vec_t, idx_t, constant<4>{});
         }
-        else if (rank <= 8) {
-            invoke(vec_t, idx_t, constant<8>{});
+        else if (rank <= 6) {
+            invoke(vec_t, idx_t, constant<6>{});
         }
         else {
-            throw std::runtime_error("not implemented");
+            throw std::runtime_error("GenericCopy: rank > 6 not implemented");
         }
     };
 
@@ -195,7 +215,5 @@ void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream)
             return invoke_i(char{});
     }
 }
-
-#endif
 
 }  // namespace turbomind::core
