@@ -83,7 +83,7 @@ def main():
 
     # --- Contiguous baseline ---
     print("\nContiguous baseline:")
-    check("contiguous f32", torch.ones(64, 128, dtype=torch.float32, device=DEV))
+    check("contiguous f32", torch.randn(64, 128, dtype=torch.float32, device=DEV))
 
     # --- 2D layout transformations ---
     print("\n2D transformations:")
