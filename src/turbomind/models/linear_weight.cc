@@ -11,17 +11,13 @@
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {
 
 LinearWeight::LinearWeight(const core::LinearConfig& cfg)
 {
     configure(cfg.input_dim, cfg.output_dim, cfg.data_type, cfg.has_bias);
-}
-
-static bool IsDenseFloatType(DataType t)
-{
-    return t == kFloat || t == kHalf || t == kBfloat16;
 }
 
 LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, int sm)
@@ -70,6 +66,10 @@ void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, 
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
     has_bias_         = has_bias;
+    // Default policy for dense (non-quantized) weights.
+    // Overridden by ResolveLinearPolicy in set_weight_spec for quantized formats.
+    policy_.input_dtype  = data_type;
+    policy_.output_dtype = data_type;
 }
 
 void LinearWeight::copy_metadata_to(LinearWeight& dst) const
@@ -95,7 +95,8 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
 {
     // For dense float weights, coerce to model compute dtype
-    if (weight_dtype != data_type && IsDenseFloatType(weight_dtype) && IsDenseFloatType(data_type)) {
+    auto is_dense_float = [](DataType t) { return t == kFloat || t == kHalf || t == kBfloat16; };
+    if (weight_dtype != data_type && is_dense_float(weight_dtype) && is_dense_float(data_type)) {
         weight_dtype = data_type;
     }
     weight_format = weight_dtype;
@@ -130,6 +131,16 @@ void LinearWeight::prepare()
     k_desc.cols  = output_dim;
     k_desc.ld    = output_dim;
 
+    // No format conversion needed if weight_spec was never set (dense weights
+    // loaded via commit_tensor, e.g. tok_embeddings, output head).
+    if (weight_format == DataType{}) {
+        EnsureFloatDtype(weight, data_type);
+        if (weight.dtype() == data_type) {
+            k_desc.type = data_type;
+        }
+        return;
+    }
+
     auto stream = core::Context::stream().handle();
 
     if (weight_format == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
@@ -144,6 +155,9 @@ void LinearWeight::prepare()
 
         TM_CHECK_EQ(weight.dtype(), kFloat8_e4m3);
         process(weight, k_desc, uint8_t{});
+
+        // FP8 native path requires f32 scales; cast if loaded as bf16/fp16.
+        EnsureFloatDtype(scales, kFloat);
 
         TM_CHECK_EQ(scales.dtype(), kFloat);
         process(scales, q_desc, float{});
