@@ -230,21 +230,8 @@ void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
 
-#if 0
-
-void Copy(const Tensor& src, Tensor&& dst, Stream& stream);
-
 // Launch a kernel to perform the complicated copying
-void GenericCopy(const Tensor& src, Tensor& dst, Stream& stream);
-
-Tensor Reshape(const Tensor& t, vector<ssize_t> shape);
-
-Tensor Transpoe(const Tensor& t, int dim0, int dim1);
-
-Tensor Permute(const Tensor& t, vector<int> dims);
-
-Tensor Contiguous(const Tensor& t);
-#endif
+void GenericCopy(const Tensor& src, Tensor& dst, const Stream& stream);
 
 template<class T>
 struct Tensor_: public Tensor {
