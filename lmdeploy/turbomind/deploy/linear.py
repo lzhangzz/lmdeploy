@@ -27,10 +27,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
-try:
-    from _turbomind import DataFormat
-except ImportError:
-    DataFormat = None
+import _turbomind as _tm
 
 if TYPE_CHECKING:
     from .kind_map import WeightFormat
@@ -138,7 +135,7 @@ class Linear:
 
     tensors: dict[str, Tensor]
     weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
-    data_format: DataFormat | None = field(default=None, compare=False, repr=False)
+    data_format: _tm.DataFormat | None = field(default=None, compare=False, repr=False)
 
     def split_out_dim(self, num: int) -> list[Linear]:
         """Split along output dim into *num* equal parts."""
