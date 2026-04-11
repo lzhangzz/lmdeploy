@@ -13,11 +13,9 @@ from .load_context import (
     _SPLIT_SIDE_TO_DIM,
     _cast_shard_for_tm,
     _commit_tensors,
-    _fuse_and_commit_ffn,
     _infer_compute_dtype,
     _infer_cpp_linear_dtype,
     _torch_dtype_to_cpp,
-    commit_ffn,
     commit_linear,
     commit_tensor,
 )

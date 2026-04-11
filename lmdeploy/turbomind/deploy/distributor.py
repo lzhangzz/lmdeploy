@@ -5,14 +5,6 @@ from __future__ import annotations
 from .load_context import commit_linear, commit_tensor
 
 
-class _noop:
-    """No-op context manager for when no context guard is available."""
-    def __enter__(self):
-        return self
-    def __exit__(self, *args):
-        pass
-
-
 class Distributor:
     """Wraps N GPU handles for a single logical module.
 
@@ -46,7 +38,7 @@ class Distributor:
         new_ranks = ranks if ranks is not None else self._ranks
         children = []
         for i, handle in enumerate(self._handles):
-            with self._contexts[i] or _noop():
+            with self._contexts[i]:
                 rank = new_ranks[i] if new_ranks and new_tp > 1 else 0
                 child = handle.create_child(name, config.for_rank(rank).to_cpp())
                 children.append(child)
@@ -60,7 +52,7 @@ class Distributor:
         """
         tp = self._tp if split_side else 1
         for i, handle in enumerate(self._handles):
-            with self._contexts[i] or _noop():
+            with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 commit_linear(handle, linear, name,
                               split_side=split_side, split_num=tp,
@@ -70,7 +62,7 @@ class Distributor:
         """Commit a raw tensor to all GPUs."""
         tp = self._tp if split_side else 1
         for i, handle in enumerate(self._handles):
-            with self._contexts[i] or _noop():
+            with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 commit_tensor(handle, tensor, name,
                               split_side=split_side, split_num=tp,

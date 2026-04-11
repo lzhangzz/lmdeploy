@@ -2,13 +2,10 @@
 from __future__ import annotations
 import enum
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 import torch
 from .kind_map import DENSE_FORMAT
 from .linear import Linear
 from .configs import SpecAttnConfig
-if TYPE_CHECKING:
-    from .target_model.base import BaseOutputModel
 
 
 class SplitSide(enum.Enum):

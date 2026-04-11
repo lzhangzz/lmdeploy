@@ -28,7 +28,7 @@ class LinearConfig:
         cfg = _tm.LinearConfig()
         cfg.input_dim = self.input_dim
         cfg.output_dim = self.output_dim
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         cfg.has_bias = self.has_bias
         return cfg
 
@@ -94,7 +94,7 @@ class AttentionConfig:
         cfg.qk_norm = self.qk_norm
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         cfg.window_size = self.window_size
         cfg.attn_sink = self.attn_sink
         cfg.attn_output_gate = self.attn_output_gate
@@ -140,7 +140,7 @@ class FfnConfig:
         cfg.has_bias = self.has_bias
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         cfg.act_type = self.act_type
         cfg.fuse_silu = self.fuse_silu
         cfg.fused_moe = self.fused_moe
@@ -184,12 +184,12 @@ class MoeConfig:
             norm_topk_prob=mc.norm_topk_prob,
             shared_gate=mc.moe_shared_gate,
             routed_scale=float(mc.routed_scale),
-            router_bias=getattr(mc, 'expert_router_bias', False),
+            router_bias=mc.expert_router_bias,
             topk_group=mc.topk_group,
             topk_method=mc.topk_method,
             n_group=mc.moe_group_num,
             scoring_func=mc.scoring_func,
-            router_n_groups=max(0, getattr(mc, 'router_n_groups', -1)),
+            router_n_groups=max(0, mc.router_n_groups),
             expert_num=expert_num,
             hidden_dim=mc.hidden_units,
             mlp_bias=mc.mlp_bias,
@@ -221,7 +221,7 @@ class MoeConfig:
         cfg.expert_num = self.expert_num
         cfg.hidden_dim = self.hidden_dim
         cfg.mlp_bias = self.mlp_bias
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
         cfg.act_type = self.act_type
@@ -273,7 +273,7 @@ class DeltaNetConfig:
         cfg.has_bias = self.has_bias
         cfg.tp_size = self.tp_size
         cfg.tp_rank = self.tp_rank
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         return cfg
 
 
@@ -312,7 +312,7 @@ class NormConfig:
     def to_cpp(self) -> _tm.NormConfig:
         cfg = _tm.NormConfig()
         cfg.dim = self.dim
-        cfg.data_type = _tm.DataType(self.data_type) if self.data_type else _tm.DataType(0)
+        cfg.data_type = _tm.DataType(self.data_type)
         return cfg
 
 

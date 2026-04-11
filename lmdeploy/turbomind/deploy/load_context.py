@@ -31,6 +31,12 @@ _TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
     torch.uint8:    _tm.DataType.TYPE_UINT8,
 }
 
+_FP8_DTYPES: set[torch.dtype] = {torch.uint8}
+for _fp8_attr in ('float8_e4m3fn', 'float8_e5m2fn'):
+    _fp8_dt = getattr(torch, _fp8_attr, None)
+    if _fp8_dt is not None:
+        _FP8_DTYPES.add(_fp8_dt)
+
 
 def _cpp_dtype(dtype_str: str):
     """Convert a model-config data_type string to C++ DataType enum."""
@@ -96,12 +102,7 @@ def _infer_compute_dtype(linear: Linear):
             return d
         # FP8 weights: compute dtype is BF16 (or FP16 depending on model),
         # not FP32.  Fall through to scales/bias only for non-FP8 dtypes.
-        _fp8_dtypes = {torch.uint8}
-        for _attr in ('float8_e4m3fn', 'float8_e5m2fn'):
-            _dt = getattr(torch, _attr, None)
-            if _dt is not None:
-                _fp8_dtypes.add(_dt)
-        if w.dtype in _fp8_dtypes:
+        if w.dtype in _FP8_DTYPES:
             # FP8 stored as uint8 after normalization; prefer BF16.
             return _tm.DataType.TYPE_BF16
     for key in ('scales', 'bias'):
@@ -172,26 +173,23 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             # Scales, zeros, bias: use shard's own shape and dtype.
             alloc_shape = list(shard.shape)
             alloc_dtype = _torch_dtype_to_cpp(shard.dtype)
-            if alloc_dtype is None:
-                continue
 
         dst = handle.param(kind).alloc(alloc_shape, alloc_dtype)
-        if dst:
-            shard = _cast_shard_for_tm(shard, dst)
-            if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
-                pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
-                if pad_dim < 0:
-                    pad_dim = shard.dim() + pad_dim
-                outer = shard.numel() // shard.shape[pad_dim]
-                extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
-                new_shape = list(shard.shape)
-                new_shape[pad_dim] += extra
-                padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
-                idx = [slice(None)] * shard.dim()
-                idx[pad_dim] = slice(0, shard.shape[pad_dim])
-                padded[tuple(idx)].copy_(shard)
-                shard = padded
-            dst.copy_from(shard)
+        shard = _cast_shard_for_tm(shard, dst)
+        if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
+            pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
+            if pad_dim < 0:
+                pad_dim = shard.dim() + pad_dim
+            outer = shard.numel() // shard.shape[pad_dim]
+            extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
+            new_shape = list(shard.shape)
+            new_shape[pad_dim] += extra
+            padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
+            idx = [slice(None)] * shard.dim()
+            idx[pad_dim] = slice(0, shard.shape[pad_dim])
+            padded[tuple(idx)].copy_(shard)
+            shard = padded
+        dst.copy_from(shard)
 
 
 def commit_linear(module, linear: Linear, name: str,
@@ -325,12 +323,9 @@ def commit_tensor(module, tensor: torch.Tensor | None, name: str,
     elif not shard.is_contiguous():
         shard = shard.contiguous()
     cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
-    if cpp_dtype is None:
-        return
     dst = module.param(name).alloc(list(shard.shape), cpp_dtype)
-    if dst:
-        shard = _cast_shard_for_tm(shard, dst)
-        dst.copy_from(shard)
+    shard = _cast_shard_for_tm(shard, dst)
+    dst.copy_from(shard)
 
 
 # -----------------------------------------------------------------------
@@ -362,36 +357,6 @@ _LINEAR_ATTN_TP_RULES: dict[str, dict] = {
     "in_proj_all": dict(split_side=SplitSide.OUTPUT),
     "out_proj":    dict(split_side=SplitSide.INPUT),
 }
-
-
-def commit_ffn(ffn_mod, w1: Linear, w3: Linear, w2: Linear | None,
-               tp: int, rank: int, act_type: str, is_moe: bool = False,
-               model_dtype=None):
-    """DEPRECATED: Use Distributor + fuse_ffn_linears directly."""
-    from .transforms import fuse_ffn_linears
-
-    fused, fused_silu = fuse_ffn_linears(w1, w3, tp, act_type, is_moe)
-
-    if fused is not None:
-        commit_linear(ffn_mod, fused, "w1w3",
-                           split_side=SplitSide.OUTPUT, split_num=tp,
-                           rank=rank, model_dtype=model_dtype)
-    else:
-        commit_linear(ffn_mod, w1, "w1",
-                           split_side=SplitSide.OUTPUT, split_num=tp,
-                           rank=rank, model_dtype=model_dtype)
-        commit_linear(ffn_mod, w3, "w3",
-                           split_side=SplitSide.OUTPUT, split_num=tp,
-                           rank=rank, model_dtype=model_dtype)
-
-    if w2 is not None:
-        commit_linear(ffn_mod, w2, "w2",
-                           split_side=SplitSide.INPUT, split_num=tp,
-                           rank=rank, model_dtype=model_dtype)
-
-
-# Backward-compatible alias
-_fuse_and_commit_ffn = commit_ffn
 
 
 # ======================================================================

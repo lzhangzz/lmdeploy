@@ -29,8 +29,6 @@ def config_from_dict(cls, env):
 
 def config_to_dict(config):
     """Export config to a dict."""
-    if not config:
-        return dict()
     assert isinstance(config, (ModelConfig, AttentionConfig, LoraConfig)), \
         f'A dataclass is expected, but got {type(config)}'
 
@@ -158,7 +156,7 @@ class TurbomindModelConfig:
         if config is None:
             return
         for key, value in asdict(config).items():
-            if not value:
+            if value is None:
                 continue
 
             if hasattr(self.model_config, key):

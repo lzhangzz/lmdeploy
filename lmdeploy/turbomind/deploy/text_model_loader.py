@@ -191,7 +191,7 @@ class TextModelLoader:
             input_dim=hidden,
             output_dim=spec.num_experts(layer),
             data_type=dtype,
-            has_bias=getattr(mc, 'expert_router_bias', False))
+            has_bias=mc.expert_router_bias)
         moe.create_child('gate', gate_cfg)
 
         if mc.moe_shared_gate:
@@ -296,7 +296,7 @@ class TextModelLoader:
             repeat_kv=self.model.repeat_kv,
             head_dim=mc.size_per_head,
             rope_dim=rope_param.dim if rope_param else mc.size_per_head,
-            output_gate=getattr(mc, 'attn_output_gate', False),
+            output_gate=mc.attn_output_gate,
             kv_head_num=mc.kv_head_num,
         ))
 
