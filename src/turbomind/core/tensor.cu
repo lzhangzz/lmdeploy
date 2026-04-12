@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <numeric>
 #include <string>
+#include <utility>
 
 namespace turbomind::core {
 
@@ -19,80 +20,28 @@ using cute::_;
 // ============================================================================
 namespace detail {
 
-template<int kRank>
-auto make_cute_shape(const ssize_t* shape_data)
+template<size_t... Is>
+auto make_cute_shape_impl(const ssize_t* data, std::index_sequence<Is...>)
 {
-    if constexpr (kRank == 1) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]));
-    }
-    else if constexpr (kRank == 2) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]),
-                                static_cast<int32_t>(shape_data[1]));
-    }
-    else if constexpr (kRank == 3) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]),
-                                static_cast<int32_t>(shape_data[1]),
-                                static_cast<int32_t>(shape_data[2]));
-    }
-    else if constexpr (kRank == 4) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]),
-                                static_cast<int32_t>(shape_data[1]),
-                                static_cast<int32_t>(shape_data[2]),
-                                static_cast<int32_t>(shape_data[3]));
-    }
-    else if constexpr (kRank == 5) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]),
-                                static_cast<int32_t>(shape_data[1]),
-                                static_cast<int32_t>(shape_data[2]),
-                                static_cast<int32_t>(shape_data[3]),
-                                static_cast<int32_t>(shape_data[4]));
-    }
-    else if constexpr (kRank == 6) {
-        return cute::make_shape(static_cast<int32_t>(shape_data[0]),
-                                static_cast<int32_t>(shape_data[1]),
-                                static_cast<int32_t>(shape_data[2]),
-                                static_cast<int32_t>(shape_data[3]),
-                                static_cast<int32_t>(shape_data[4]),
-                                static_cast<int32_t>(shape_data[5]));
-    }
+    return cute::make_shape(static_cast<int32_t>(data[Is])...);
 }
 
 template<int kRank>
-auto make_cute_stride(const ssize_t* stride_data)
+auto make_cute_shape(const ssize_t* data)
 {
-    if constexpr (kRank == 1) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]));
-    }
-    else if constexpr (kRank == 2) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]),
-                                 static_cast<int64_t>(stride_data[1]));
-    }
-    else if constexpr (kRank == 3) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]),
-                                 static_cast<int64_t>(stride_data[1]),
-                                 static_cast<int64_t>(stride_data[2]));
-    }
-    else if constexpr (kRank == 4) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]),
-                                 static_cast<int64_t>(stride_data[1]),
-                                 static_cast<int64_t>(stride_data[2]),
-                                 static_cast<int64_t>(stride_data[3]));
-    }
-    else if constexpr (kRank == 5) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]),
-                                 static_cast<int64_t>(stride_data[1]),
-                                 static_cast<int64_t>(stride_data[2]),
-                                 static_cast<int64_t>(stride_data[3]),
-                                 static_cast<int64_t>(stride_data[4]));
-    }
-    else if constexpr (kRank == 6) {
-        return cute::make_stride(static_cast<int64_t>(stride_data[0]),
-                                 static_cast<int64_t>(stride_data[1]),
-                                 static_cast<int64_t>(stride_data[2]),
-                                 static_cast<int64_t>(stride_data[3]),
-                                 static_cast<int64_t>(stride_data[4]),
-                                 static_cast<int64_t>(stride_data[5]));
-    }
+    return make_cute_shape_impl(data, std::make_index_sequence<kRank>{});
+}
+
+template<size_t... Is>
+auto make_cute_stride_impl(const ssize_t* data, std::index_sequence<Is...>)
+{
+    return cute::make_stride(static_cast<int64_t>(data[Is])...);
+}
+
+template<int kRank>
+auto make_cute_stride(const ssize_t* data)
+{
+    return make_cute_stride_impl(data, std::make_index_sequence<kRank>{});
 }
 
 template<int kRank>
@@ -104,69 +53,18 @@ auto make_cute_layout(const ssize_t* shape, const ssize_t* stride)
 
 // Layout with compile-time Int<1> inner stride — needed for CuTe's recast
 // in wide Copy_Atom (vectorized path). Only valid when inner stride == 1.
+template<size_t... Is>
+auto make_unit_inner_stride_impl(const ssize_t* stride, std::index_sequence<Is...>)
+{
+    return cute::make_stride(cute::Int<1>{}, static_cast<int64_t>(stride[Is + 1])...);
+}
+
 template<int kRank>
 auto make_cute_layout_unit_inner(const ssize_t* shape, const ssize_t* stride)
 {
-    if constexpr (kRank == 1) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0])),
-            cute::make_stride(cute::Int<1>{}));
-    }
-    else if constexpr (kRank == 2) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0]),
-                             static_cast<int32_t>(shape[1])),
-            cute::make_stride(cute::Int<1>{},
-                              static_cast<int64_t>(stride[1])));
-    }
-    else if constexpr (kRank == 3) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0]),
-                             static_cast<int32_t>(shape[1]),
-                             static_cast<int32_t>(shape[2])),
-            cute::make_stride(cute::Int<1>{},
-                              static_cast<int64_t>(stride[1]),
-                              static_cast<int64_t>(stride[2])));
-    }
-    else if constexpr (kRank == 4) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0]),
-                             static_cast<int32_t>(shape[1]),
-                             static_cast<int32_t>(shape[2]),
-                             static_cast<int32_t>(shape[3])),
-            cute::make_stride(cute::Int<1>{},
-                              static_cast<int64_t>(stride[1]),
-                              static_cast<int64_t>(stride[2]),
-                              static_cast<int64_t>(stride[3])));
-    }
-    else if constexpr (kRank == 5) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0]),
-                             static_cast<int32_t>(shape[1]),
-                             static_cast<int32_t>(shape[2]),
-                             static_cast<int32_t>(shape[3]),
-                             static_cast<int32_t>(shape[4])),
-            cute::make_stride(cute::Int<1>{},
-                              static_cast<int64_t>(stride[1]),
-                              static_cast<int64_t>(stride[2]),
-                              static_cast<int64_t>(stride[3]),
-                              static_cast<int64_t>(stride[4])));
-    }
-    else if constexpr (kRank == 6) {
-        return cute::make_layout(
-            cute::make_shape(static_cast<int32_t>(shape[0]),
-                             static_cast<int32_t>(shape[1]),
-                             static_cast<int32_t>(shape[2]),
-                             static_cast<int32_t>(shape[3]),
-                             static_cast<int32_t>(shape[4]),
-                             static_cast<int32_t>(shape[5])),
-            cute::make_stride(cute::Int<1>{},
-                              static_cast<int64_t>(stride[1]),
-                              static_cast<int64_t>(stride[2]),
-                              static_cast<int64_t>(stride[3]),
-                              static_cast<int64_t>(stride[4]),
-                              static_cast<int64_t>(stride[5])));
-    }
+    return cute::make_layout(
+        make_cute_shape<kRank>(shape),
+        make_unit_inner_stride_impl(stride, std::make_index_sequence<kRank - 1>{}));
 }
 
 }  // namespace detail
