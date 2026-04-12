@@ -38,7 +38,7 @@ WARMUP = 3
 
 
 def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
-    """Benchmark GenericCopy vs contiguous torch.clone() and print throughput."""
+    """Benchmark GenericCopy vs PyTorch same-transform copy vs contiguous baseline."""
     numel = torch_tensor.numel()
     dtype_bytes = torch_tensor.element_size()
     total_bytes = numel * dtype_bytes
@@ -46,10 +46,10 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     stream = torch.cuda.current_stream()
     stream_ptr = stream.cuda_stream
 
-    # --- Benchmark GenericCopy ---
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
+    # --- Benchmark GenericCopy ---
     for _ in range(WARMUP):
         _tm.generic_copy_on_stream(tm_src, tm_dst, stream_ptr)
 
@@ -63,7 +63,22 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     gc_ms = start.elapsed_time(end)
     gc_gbps = total_bytes * ITERS / (gc_ms * 1e6)
 
-    # --- Benchmark contiguous clone (baseline) ---
+    # --- Benchmark PyTorch same-transform copy (clone on non-contiguous tensor) ---
+    pt_dst = torch.empty(torch_tensor.shape, dtype=torch_tensor.dtype, device=DEV)
+    for _ in range(WARMUP):
+        pt_dst.copy_(torch_tensor)
+
+    torch.cuda.synchronize()
+
+    start.record()
+    for _ in range(ITERS):
+        pt_dst.copy_(torch_tensor)
+    end.record()
+    torch.cuda.synchronize()
+    pt_ms = start.elapsed_time(end)
+    pt_gbps = total_bytes * ITERS / (pt_ms * 1e6)
+
+    # --- Benchmark contiguous clone (peak baseline) ---
     contig = torch.zeros(torch_tensor.shape, dtype=torch_tensor.dtype, device=DEV)
     for _ in range(WARMUP):
         contig.clone()
@@ -78,8 +93,9 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     bl_ms = start.elapsed_time(end)
     bl_gbps = total_bytes * ITERS / (bl_ms * 1e6)
 
-    pct = gc_gbps / bl_gbps * 100 if bl_gbps > 0 else 0
-    print(f"         GenericCopy: {gc_gbps:.1f} GB/s | Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}%)")
+    pct = gc_gbps / pt_gbps * 100 if pt_gbps > 0 else 0
+    print(f"         GenericCopy: {gc_gbps:.1f} GB/s | PyTorch: {pt_gbps:.1f} GB/s | "
+          f"Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}% of PyTorch)")
 
 
 def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
@@ -137,6 +153,12 @@ def main():
     # --- Contiguous baseline ---
     print("\nContiguous baseline:")
     check("contiguous f32", torch.randn(64, 128, dtype=torch.float32, device=DEV))
+
+    # --- Rank-1 (1D contiguous) ---
+    print("\nRank-1:")
+    check("rank-1 f32", torch.randn(8192, dtype=torch.float32, device=DEV))
+    check("rank-1 f16", torch.randn(8192, dtype=torch.float16, device=DEV), atol=1e-3, rtol=1e-3)
+    check("rank-1 i32", torch.randint(0, 1000, (8192,), dtype=torch.int32, device=DEV))
 
     # --- 2D layout transformations ---
     print("\n2D transformations:")
