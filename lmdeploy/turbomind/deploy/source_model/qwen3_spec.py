@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ..module import TextModelSpec
+from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
 

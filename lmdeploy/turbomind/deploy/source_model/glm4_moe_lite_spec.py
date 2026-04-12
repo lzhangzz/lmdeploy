@@ -14,7 +14,7 @@ import os
 import torch
 
 from ..linear import Linear
-from ..module import TextModelSpec
+from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import get_yarn_params, load_model_config, parse_rope_param
 

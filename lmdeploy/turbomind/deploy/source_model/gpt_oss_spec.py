@@ -19,7 +19,7 @@ import re
 import torch
 
 from ..linear import Linear
-from ..module import TextModelSpec, SplitSide
+from ..spec import TextModelSpec, SplitSide
 from ..kind_map import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
