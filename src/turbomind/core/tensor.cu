@@ -313,8 +313,6 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     // but we only launch 256, so the template body must not be instantiated.
     if constexpr (kVec * cute::sizeof_bits_v<T> <= 128 && kVec >= 2)
     {
-    constexpr int kBlockThreads = 256;
-
     // Thread bounds: for kTileDim=32, kVec=4: 8*32=256 (all threads).
     // For kVec=8: 4*32=128 (half threads). Compute min across both phases.
     constexpr int kThrLoad  = (kTileDim / kVec) * kTileDim;
@@ -325,36 +323,36 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     // --- Shared memory with padding for bank conflict avoidance ---
     __shared__ T smem[kTileDim * (kTileDim + 1)];
 
-    // Write view: (kTileDim, kTileDim) stride (1, kTileDim+1) — row-major padded
+    // Single smem view: row-major padded layout.
+    // Phase 1 writes through this view (coalesced along mode 0).
+    // Phase 2 reads through this SAME view (NOT a transposed view — we
+    // want smem(i,j) for both phases, not smem(j,i)).
     auto smem_w = cute::make_tensor(cute::make_smem_ptr(smem),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
                           cute::make_stride(cute::Int<1>{}, cute::Int<kTileDim + 1>{})));
-
-    // Read view: (kTileDim, kTileDim) stride (kTileDim+1, 1) — column-major (transposed)
-    auto smem_r = cute::make_tensor(cute::make_smem_ptr(smem),
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<kTileDim + 1>{}, cute::Int<1>{})));
 
     // --- Tile coordinates ---
     int m0 = blockIdx.y * kTileDim;
     int n0 = blockIdx.x * kTileDim;
 
     // --- Gmem tile tensors with Int<1> on contiguous modes ---
-    // Src tile: shape (kTileDim, kTileDim), strides (Int<1>, src_stride_outer)
+    // Src tile: contiguous along mode 0 (Int<1> stride)
     auto src_tile = cute::make_tensor(cute::make_gmem_ptr(src_ptr + m0 + n0 * src_stride_outer),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
                           cute::make_stride(cute::Int<1>{}, src_stride_outer)));
 
-    // Dst tile: transposed mapping — tile (m,n) of src → tile (n,m) of dst
+    // Dst tile: contiguous along mode 1 (Int<1> stride).
+    // Same logical position (m0,n0): dst[m0+i, n0+j] = dst_ptr + (m0+i)*dst_stride_outer + (n0+j)
     auto dst_tile = cute::make_tensor(cute::make_gmem_ptr(dst_ptr + n0 + m0 * dst_stride_outer),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
                           cute::make_stride(dst_stride_outer, cute::Int<1>{})));
 
     // --- Phase 1: gmem(src) → registers → smem ---
+    // Thread layout: (kTileDim/kVec, kTileDim) — vectorize along mode 0
     auto load_copy = cute::make_tiled_copy(
         cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
         cute::make_layout(cute::make_shape(cute::Int<kTileDim / kVec>{},
-                                           cute::Int<kBlockThreads * kVec / kTileDim>{})),
+                                           cute::Int<kTileDim>{})),
         cute::make_layout(cute::make_shape(cute::Int<kVec>{}, cute::Int<1>{})));
 
     auto thr_load = load_copy.get_slice(threadIdx.x);
@@ -363,23 +361,34 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     auto rmem_ld  = cute::make_fragment_like(thr_smw);
 
     cute::copy(load_copy, thr_src, rmem_ld);    // vectorized gmem → registers
-    cute::copy(rmem_ld, thr_smw);               // registers → smem
+
+    // Manual rmem → smem transfer (avoids CuTe auto-vectorization on smem)
+    CUTE_UNROLL
+    for (int i = 0; i < cute::size(thr_smw); ++i) {
+        thr_smw(i) = rmem_ld(i);
+    }
 
     __syncthreads();
 
     // --- Phase 2: smem → registers → gmem(dst) ---
+    // Thread layout: (kTileDim, kTileDim/kVec) — vectorize along mode 1
     auto store_copy = cute::make_tiled_copy(
         cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kBlockThreads * kVec / kTileDim>{},
+        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{},
                                            cute::Int<kTileDim / kVec>{})),
         cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<kVec>{})));
 
     auto thr_store = store_copy.get_slice(threadIdx.x);
-    auto thr_smr   = thr_store.partition_S(smem_r);
+    auto thr_smw2  = thr_store.partition_S(smem_w);   // same view, NOT transposed
     auto thr_dst   = thr_store.partition_D(dst_tile);
-    auto rmem_st   = cute::make_fragment_like(thr_smr);
+    auto rmem_st   = cute::make_fragment_like(thr_smw2);
 
-    cute::copy(thr_smr, rmem_st);               // smem → registers
+    // Manual smem → rmem transfer (avoids CuTe auto-vectorization on smem)
+    CUTE_UNROLL
+    for (int i = 0; i < cute::size(thr_smw2); ++i) {
+        rmem_st(i) = thr_smw2(i);
+    }
+
     cute::copy(store_copy, rmem_st, thr_dst);    // vectorized registers → gmem
 
     }  // end if constexpr (kVec * sizeof_bits_v<T> <= 128)
