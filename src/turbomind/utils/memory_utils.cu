@@ -15,6 +15,7 @@
  */
 
 #include "src/turbomind/macro.h"
+#include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -108,22 +109,15 @@ void invokeDtypeCast(void* dst, const void* src, size_t count, DataType dst_dtyp
 }
 
 // -----------------------------------------------------------------------
-// EnsureFloatDtype — cast tensor to target dtype if both are dense float
+// EnsureFloatDtype — cast tensor to target dtype if both are trivial float
 // -----------------------------------------------------------------------
-
-namespace {
-bool IsDenseFloatType(DataType t)
-{
-    return t == kFloat || t == kHalf || t == kBfloat16;
-}
-}  // namespace
 
 void EnsureFloatDtype(core::Tensor& tensor, DataType target_dtype)
 {
     if (!tensor || tensor.dtype() == target_dtype) {
         return;
     }
-    if (!IsDenseFloatType(tensor.dtype()) || !IsDenseFloatType(target_dtype)) {
+    if (!IsTrivialFloatType(tensor.dtype()) || !IsTrivialFloatType(target_dtype)) {
         return;
     }
     auto stream = core::Context::stream().handle();

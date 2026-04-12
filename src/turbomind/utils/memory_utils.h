@@ -29,7 +29,7 @@ void invokeInPlaceTranspose102(
 /// Element-wise dtype cast kernel.  Supports fp32 <-> fp16 <-> bf16.
 void invokeDtypeCast(void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream = 0);
 
-/// If *tensor* is a dense float type that differs from *target_dtype*, cast
+/// If *tensor* is a trivial float type that differs from *target_dtype*, cast
 /// it in-place (allocates a temporary, casts, move-assigns).  Uses
 /// Context::stream() internally — no stream parameter needed.
 void EnsureFloatDtype(core::Tensor& tensor, DataType target_dtype);
