@@ -35,7 +35,7 @@ public:
     void configure(int input_dim, int output_dim, DataType data_type, bool has_bias = false);
 
     /// Set quantization metadata (weight dtype + group size) before allocation.
-    /// For dense float weights, coerces to model compute dtype to avoid
+    /// For trivial float weights, coerces to model compute dtype to avoid
     /// unsupported dtype combinations in GetConverters.
     void set_weight_spec(DataType weight_dtype, int group_size);
 

@@ -66,7 +66,7 @@ void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, 
     this->input_dim   = input_dim;
     this->output_dim  = output_dim;
     has_bias_         = has_bias;
-    // Default policy for dense (non-quantized) weights.
+    // Default policy for trivial (non-quantized) weights.
     // Overridden by ResolveLinearPolicy in set_weight_spec for quantized formats.
     policy_.input_dtype  = data_type;
     policy_.output_dtype = data_type;
@@ -94,9 +94,8 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 
 void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
 {
-    // For dense float weights, coerce to model compute dtype
-    auto is_dense_float = [](DataType t) { return t == kFloat || t == kHalf || t == kBfloat16; };
-    if (weight_dtype != data_type && is_dense_float(weight_dtype) && is_dense_float(data_type)) {
+    // For trivial float weights, coerce to model compute dtype
+    if (weight_dtype != data_type && IsTrivialFloatType(weight_dtype) && IsTrivialFloatType(data_type)) {
         weight_dtype = data_type;
     }
     weight_format = weight_dtype;
@@ -131,7 +130,7 @@ void LinearWeight::prepare()
     k_desc.cols  = output_dim;
     k_desc.ld    = output_dim;
 
-    // No format conversion needed if weight_spec was never set (dense weights
+    // No format conversion needed if weight_spec was never set (trivial weights
     // loaded via commit_tensor, e.g. tok_embeddings, output head).
     if (weight_format == DataType{}) {
         EnsureFloatDtype(weight, data_type);
