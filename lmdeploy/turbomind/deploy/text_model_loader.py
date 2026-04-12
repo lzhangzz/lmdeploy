@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .configs import (
+from .module_configs import (
     AttentionConfig, FfnConfig, MoeConfig, DeltaNetConfig, LinearConfig,
     SpecAttnConfig, ModuleListConfig, NormConfig, DecoderLayerConfig,
 )
-from .load_context import (
+from .commit import (
     _cpp_dtype, _act_type_id,
     _ATTN_TP_RULES, _LINEAR_ATTN_TP_RULES,
 )
