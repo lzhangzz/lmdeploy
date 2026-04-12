@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Per-format suffix-to-kind mapping and checkpoint normalization.
 
-Each model format (dense, AWQ, GPTQ, compressed-tensors, FP8, mxfp4) defines
+Each model format (trivial, AWQ, GPTQ, compressed-tensors, FP8, mxfp4) defines
 exactly the checkpoint suffixes it uses.  ``get_suffix_map(model_format)``
 selects the right mapping at init time so that ``read_linear()`` only probes
 relevant suffixes.
@@ -34,7 +34,7 @@ class WeightFormat:
     Fields
     ------
     name : str | None
-        Canonical format name (``None`` for dense/HF).
+        Canonical format name (``None`` for trivial/HF).
     suffix_map : dict[str, str]
         Mapping ``{checkpoint_suffix: tm_kind}``.
     normalizer : Callable[[Tensor, str], Tensor]
@@ -44,10 +44,10 @@ class WeightFormat:
         ``commit_linear`` just before saving.  Receives ``(tensor, kind)``.
     cpp_dtype_name : str | None
         Attribute name on ``_turbomind.DataType`` for the C++ weight dtype,
-        or ``None`` for dense formats whose dtype is inferred from the tensor.
+        or ``None`` for trivial formats whose dtype is inferred from the tensor.
     block_in : int | None
         Grouping of input elements per scale entry along the input dim.
-        ``None`` → no per-element scale (dense).  ``0`` → read from
+        ``None`` → no per-element scale (trivial).  ``0`` → read from
         ``model_config.group_size`` at commit time.
     block_out : int | None
         Grouping of output elements per scale entry along the output dim.
@@ -64,10 +64,10 @@ class WeightFormat:
         checkpoint tensors actually present for a parameter and returns
         ``True`` when the available tensors satisfy this format.  Both key
         presence and tensor dtype are checked so that, e.g., an FP8 layer
-        stored without ``weight_scale_inv`` is correctly classified as dense
+        stored without ``weight_scale_inv`` is correctly classified as trivial
         rather than fp8.
     dequant : Callable[[dict[str, Tensor]], dict[str, Tensor]] | None
-        Optional fusion-time dequantizer: maps TM ``tensors`` to a dense
+        Optional fusion-time dequantizer: maps TM ``tensors`` to a trivial
         ``{weight, bias?}`` dict.  ``None`` means the format is not dequantized
         in Python (e.g. GPTQ / MXFP4 stay as-is for mixed-format fusion).
     """
@@ -90,7 +90,7 @@ class WeightFormat:
         """Construct a C++ DataFormat from this WeightFormat.
 
         Returns None when group_size is needed but not yet known (block_in==0
-        and group_size==0), or when the format is dense (block_in is None).
+        and group_size==0), or when the format is trivial (block_in is None).
         """
         if self.block_in is None:
             return None
@@ -120,7 +120,7 @@ class WeightFormat:
 # Per-format suffix -> TM kind mappings
 # ---------------------------------------------------------------------------
 
-DENSE_SUFFIXES: dict[str, str] = {
+TRIVIAL_SUFFIXES: dict[str, str] = {
     ".weight": "weight",
     ".bias": "bias",
 }
@@ -159,8 +159,8 @@ MXFP4_SUFFIXES: dict[str, str] = {
 }
 
 _FORMAT_MAP: dict[str | None, dict[str, str]] = {
-    None: DENSE_SUFFIXES,
-    "hf": DENSE_SUFFIXES,
+    None: TRIVIAL_SUFFIXES,
+    "hf": TRIVIAL_SUFFIXES,
     "awq": AWQ_SUFFIXES,
     "gptq": GPTQ_SUFFIXES,
     "compressed-tensors": COMPRESSED_TENSOR_SUFFIXES,
@@ -200,7 +200,7 @@ def _unpack_awq_gemm(x: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_dense(x: Tensor, kind: str) -> Tensor:
+def _normalize_trivial(x: Tensor, kind: str) -> Tensor:
     x = x.cuda()
     if x.dim() >= 2:
         x = x.t()
@@ -272,8 +272,8 @@ def _normalize_compressed_tensor(x: Tensor, kind: str) -> Tensor:
 
 
 _NORMALIZER_MAP: dict[str | None, Callable[[Tensor, str], Tensor]] = {
-    None: _normalize_dense,
-    "hf": _normalize_dense,
+    None: _normalize_trivial,
+    "hf": _normalize_trivial,
     "awq": _normalize_awq,
     "gptq": _normalize_gptq,
     "compressed-tensors": _normalize_compressed_tensor,
@@ -325,8 +325,8 @@ def _zeros_int4_symmetric(scales: Tensor) -> Tensor:
 # ---------------------------------------------------------------------------
 
 
-def _accepts_dense(available: dict[str, "Tensor"]) -> bool:
-    """Dense: only .weight and/or .bias present; weight must be floating-point."""
+def _accepts_trivial(available: dict[str, "Tensor"]) -> bool:
+    """Trivial: only .weight and/or .bias present; weight must be floating-point."""
     if not (available.keys() <= {".weight", ".bias"}):
         return False
     w = available.get(".weight")
@@ -378,7 +378,7 @@ def _accepts_mxfp4(available: dict[str, "Tensor"]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Fusion-time dequantizers: TM tensors -> dense {weight, bias?}
+# Fusion-time dequantizers: TM tensors -> trivial {weight, bias?}
 # ---------------------------------------------------------------------------
 
 
@@ -415,16 +415,16 @@ def _dequant_fp8(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
 # WeightFormat singletons
 # ---------------------------------------------------------------------------
 
-DENSE_FORMAT = WeightFormat(
-    name="dense",
-    suffix_map=DENSE_SUFFIXES,
-    normalizer=_normalize_dense,
+TRIVIAL_FORMAT = WeightFormat(
+    name="trivial",
+    suffix_map=TRIVIAL_SUFFIXES,
+    normalizer=_normalize_trivial,
     packer=None,
     cpp_dtype_name=None,
     block_in=None,
     block_out=None,
     zeros_factory=None,
-    accepts=_accepts_dense,
+    accepts=_accepts_trivial,
     dequant=None,
 )
 
@@ -494,8 +494,8 @@ MXFP4_FORMAT = WeightFormat(
 )
 
 _WEIGHT_FORMAT_MAP: dict[str | None, WeightFormat] = {
-    None: DENSE_FORMAT,
-    "hf": DENSE_FORMAT,
+    None: TRIVIAL_FORMAT,
+    "hf": TRIVIAL_FORMAT,
     "awq": AWQ_FORMAT,
     "gptq": GPTQ_FORMAT,
     "compressed-tensors": COMPRESSED_TENSOR_FORMAT,
@@ -514,14 +514,14 @@ def get_weight_format(model_format: str | None) -> WeightFormat:
 # ---------------------------------------------------------------------------
 
 #: Ordered list of all formats used by ``build_linear`` for auto-detection.
-#: Quantized formats are listed first so they win over dense when tensors match.
+#: Quantized formats are listed first so they win over trivial when tensors match.
 FORMAT_PRIORITY: list[WeightFormat] = [
     AWQ_FORMAT,
     GPTQ_FORMAT,
     COMPRESSED_TENSOR_FORMAT,
     FP8_FORMAT,
     MXFP4_FORMAT,
-    DENSE_FORMAT,
+    TRIVIAL_FORMAT,
 ]
 
 #: Union of all checkpoint suffixes across every known format.
