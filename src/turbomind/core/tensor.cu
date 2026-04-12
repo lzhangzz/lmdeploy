@@ -15,9 +15,12 @@ namespace turbomind::core {
 
 using cute::_;
 
-// ============================================================================
-// Helpers: Construct CuTe layouts from runtime shape/stride arrays
-// ============================================================================
+// CuTe's make_shape/make_stride require compile-time variadic template args,
+// but our tensor shapes and strides are runtime values. These helpers bridge
+// that gap via std::index_sequence expansion, producing CuTe Layout objects
+// from runtime shape/stride arrays. Only the innermost stride is promoted to
+// compile-time Int<1> (in make_cute_layout_unit_inner) to enable CuTe's
+// vectorized Copy_Atom recast.
 namespace detail {
 
 template<size_t... Is>
