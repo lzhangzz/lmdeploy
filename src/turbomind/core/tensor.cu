@@ -6,6 +6,7 @@
 #include <cute/tensor.hpp>
 #include <cute/algorithm/copy.hpp>
 
+#include <algorithm>
 #include <numeric>
 
 namespace turbomind::core {
@@ -189,6 +190,8 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     auto a = src.layout();
     auto b = dst.layout();
 
+    TM_CHECK_EQ(a.size(), b.size()) << "GenericCopy: src and dst must have the same number of elements";
+
     vector<int> idxs(a.rank());
     std::iota(idxs.begin(), idxs.end(), 0);
     std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
@@ -269,6 +272,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         auto func = kernel::GenericCopyKernel<VecT, decltype(src_layout), decltype(dst_layout)>;
 
         int grid_size = static_cast<int>(outer_total);
+        TM_CHECK_GE(grid_size, 0) << "GenericCopy: outer dimensions too large for kernel launch";
 
         func<<<grid_size, 256, 0, stream>>>(
             reinterpret_cast<const VecT*>(data_a),
