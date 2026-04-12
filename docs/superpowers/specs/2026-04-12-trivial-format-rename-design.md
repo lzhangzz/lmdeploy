@@ -56,8 +56,8 @@ single shared definition.
 | `utils/memory_utils.cu:126` | `if (!IsDenseFloatType(...))` | `if (!IsTrivialFloatType(...))` |
 | `models/linear_weight.cc:98` | `auto is_dense_float = [...]` | Use `IsTrivialFloatType` from header |
 
-The shared definition goes in a header already included by consumers (e.g.
-`memory_utils.h` or a new small header), as an inline function:
+The shared definition goes in `core/data_format.h`, alongside the existing
+`MakeLinearWeightFormat` factory, as an inline function:
 
 ```cpp
 inline bool IsTrivialFloatType(DataType t) {
