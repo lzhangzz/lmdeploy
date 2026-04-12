@@ -2,7 +2,7 @@
 """Distributor: distributes module creation and weight commits across all GPUs."""
 from __future__ import annotations
 
-from .load_context import commit_linear, commit_tensor
+from .commit import commit_linear, commit_tensor
 
 
 class Distributor:
@@ -43,6 +43,11 @@ class Distributor:
                 child = handle.create_child(name, config.for_rank(rank).to_cpp())
                 children.append(child)
         return Distributor(children, self._contexts, tp=new_tp, ranks=new_ranks)
+
+    def child(self, name):
+        """Return a new Distributor scoped to an existing child on all GPUs."""
+        children = [h.child(name) for h in self._handles]
+        return Distributor(children, self._contexts)
 
     def commit_linear(self, name, linear, split_side=None, model_dtype=None):
         """Commit a Linear bundle to all GPUs.

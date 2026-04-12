@@ -201,7 +201,11 @@ class TextModelLoader:
 
         # --- Non-expert MoE parameters (gate/shared_gate weights, score_correction_bias) ---
         for name, (tensor, split_side) in spec.moe_params(layer).items():
-            moe.commit_tensor(name, tensor, split_side=split_side)
+            parts = name.split('.')
+            target = moe
+            for seg in parts[:-1]:
+                target = target.child(seg)
+            target.commit_tensor(parts[-1], tensor, split_side=split_side)
 
         # --- experts: per-expert READ -> TRANSFORM -> CREATE -> COMMIT ---
         expert_inter = mc.expert_inter_size or 0
