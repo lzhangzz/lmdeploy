@@ -81,6 +81,7 @@ CopyKernel1D(const T* __restrict__ src_ptr,
              SrcLayoutT             src_layout,
              DstLayoutT             dst_layout)
 {
+    static_assert(cute::rank_v<SrcLayoutT> == 1, "CopyKernel1D: layout rank must be 1");
     if constexpr (kVec * cute::sizeof_bits_v<T> <= 128)
     {
     constexpr int kBlockThreads = 256;
@@ -147,6 +148,7 @@ CopyKernelND(const T* __restrict__ src_ptr,
     {
     constexpr int kBlockThreads = 256;
     constexpr int kRank         = cute::rank_v<SrcLayoutT>;
+    static_assert(2 <= kRank && kRank <= 4, "CopyKernelND: rank must be 2..4");
     constexpr int kCopyThreads  = kBlockThreads / kVec;
 
     auto tiled_copy = cute::make_tiled_copy(
@@ -219,6 +221,7 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     // but we only launch 256, so the template body must not be instantiated.
     if constexpr (kVec * cute::sizeof_bits_v<T> <= 128 && kVec >= 2)
     {
+    static_assert(kTileDim % kVec == 0, "TransposeCopyKernel: kTileDim must be divisible by kVec");
     // Thread bounds: for kTileDim=32, kVec=4: 8*32=256 (all threads).
     // For kVec=8: 4*32=128 (half threads). Compute min across both phases.
     constexpr int kThrLoad  = (kTileDim / kVec) * kTileDim;
