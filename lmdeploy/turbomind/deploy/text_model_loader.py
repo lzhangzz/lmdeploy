@@ -172,7 +172,6 @@ class TextModelLoader:
             return
         mc = self.model.model_config
         dtype = _cpp_dtype(mc.data_type)
-        hidden = mc.hidden_units
 
         expert_num = 0
         en_list = mc.expert_num
@@ -186,26 +185,13 @@ class TextModelLoader:
         moe = writer.create_child('moe_ffn', moe_cfg,
                                   tp=self.mlp_tp, ranks=self._mlp_ranks)
 
-        # --- gate + shared_gate modules (created first, params committed from spec) ---
-        gate_cfg = LinearConfig(
-            input_dim=hidden,
-            output_dim=spec.num_experts(layer),
-            data_type=dtype,
-            has_bias=mc.expert_router_bias)
-        moe.create_child('gate', gate_cfg)
+        # --- gate linears ---
+        for name, linear in spec.moe_gate(layer).items():
+            moe.commit_linear(name, linear, model_dtype=dtype)
 
-        if mc.moe_shared_gate:
-            shared_gate_cfg = LinearConfig(
-                input_dim=hidden, output_dim=1, data_type=dtype, has_bias=False)
-            moe.create_child('shared_gate', shared_gate_cfg)
-
-        # --- Non-expert MoE parameters (gate/shared_gate weights, score_correction_bias) ---
+        # --- non-expert MoE parameters (score_correction_bias, etc.) ---
         for name, (tensor, split_side) in spec.moe_params(layer).items():
-            parts = name.split('.')
-            target = moe
-            for seg in parts[:-1]:
-                target = target.child(seg)
-            target.commit_tensor(parts[-1], tensor, split_side=split_side)
+            moe.commit_tensor(name, tensor, split_side=split_side)
 
         # --- experts: per-expert READ -> TRANSFORM -> CREATE -> COMMIT ---
         expert_inter = mc.expert_inter_size or 0
