@@ -99,7 +99,10 @@ CopyKernelND(const T* __restrict__ src_ptr,
 
     auto thr_copy = tiled_copy.get_slice(threadIdx.x);
 
-    // Bounds check on outer dimension
+    // Bounds check on outer dimension.
+    // Note: group<1,kRank> is recomputed inside the rowSrc/rowDst lambdas below.
+    // This is intentional — group is a pure compile-time operation with zero
+    // runtime cost. The compiler eliminates the redundancy via CSE.
     if constexpr (kRank > 1) {
         auto src_layout_g = cute::group<1, kRank>(src_layout);
         if (blockIdx.y >= cute::size(cute::get<1>(src_layout_g))) return;
