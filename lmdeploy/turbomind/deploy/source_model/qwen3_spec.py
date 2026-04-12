@@ -80,15 +80,18 @@ class Qwen3TextSpec(TextModelSpec):
             params["k_norm.weight"] = (k, None)
         return params
 
-    def moe_params(self, layer):
-        params = {}
+    def moe_gate(self, layer):
+        gates = {}
         if self._n_experts > 0:
             gate = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                params["gate.weight"] = (gate, None)
-        return params
+                gates["gate"] = Linear({"weight": gate})
+        return gates
+
+    def moe_params(self, layer):
+        return {}
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")

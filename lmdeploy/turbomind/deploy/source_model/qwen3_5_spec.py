@@ -225,20 +225,23 @@ class Qwen3_5Spec(TextModelSpec):
                 params["k_norm.weight"] = (k, None)
         return params
 
-    def moe_params(self, layer):
-        params = {}
+    def moe_gate(self, layer):
+        gates = {}
         if self._n_experts > 0:
             gate = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                params["gate.weight"] = (gate, None)
+                gates["gate"] = Linear({"weight": gate})
             sg = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.shared_expert_gate.weight")
             if sg is not None:
                 sg = sg.t() if sg.dim() > 1 else sg
-                params["shared_gate.weight"] = (sg, None)
-        return params
+                gates["shared_gate"] = Linear({"weight": sg})
+        return gates
+
+    def moe_params(self, layer):
+        return {}
 
     def linear_attn_params(self, layer):
         params = {}

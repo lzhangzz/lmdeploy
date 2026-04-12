@@ -130,18 +130,22 @@ class GptOssSpec(TextModelSpec):
             params["sinks"] = (sinks, SplitSide.OUTPUT)
         return params
 
-    def moe_params(self, layer):
-        params = {}
+    def moe_gate(self, layer):
+        gates = {}
         gate = self._get(
             f"{self._layer_prefix}.{layer}.mlp.router.weight")
         if gate is not None:
             gate = gate.t() if gate.dim() > 1 else gate
-            params["gate.weight"] = (gate, None)
-        gate_bias = self._get(
-            f"{self._layer_prefix}.{layer}.mlp.router.bias")
-        if gate_bias is not None:
-            params["gate.bias"] = (gate_bias, None)
-        return params
+            tensors = {"weight": gate}
+            gate_bias = self._get(
+                f"{self._layer_prefix}.{layer}.mlp.router.bias")
+            if gate_bias is not None:
+                tensors["bias"] = gate_bias
+            gates["gate"] = Linear(tensors)
+        return gates
+
+    def moe_params(self, layer):
+        return {}
 
     def tok_embeddings(self) -> torch.Tensor | None:
         return self._get("model.embed_tokens.weight")

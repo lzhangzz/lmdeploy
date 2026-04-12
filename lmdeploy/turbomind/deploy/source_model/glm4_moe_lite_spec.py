@@ -191,18 +191,24 @@ class Glm4MoeLiteSpec(TextModelSpec):
             params["kv_a_layernorm.weight"] = (kv_a, None)
         return params
 
-    def moe_params(self, layer):
-        params = {}
+    def moe_gate(self, layer):
+        gates = {}
         if self.num_experts(layer) > 0:
             gate = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.weight")
             if gate is not None:
                 gate = gate.t() if gate.dim() > 1 else gate
-                params["gate.weight"] = (gate, None)
-            gate_bias = self._get(
-                f"{self._layer_prefix}.{layer}.mlp.gate.bias")
-            if gate_bias is not None:
-                params["gate.bias"] = (gate_bias, None)
+                tensors = {"weight": gate}
+                gate_bias = self._get(
+                    f"{self._layer_prefix}.{layer}.mlp.gate.bias")
+                if gate_bias is not None:
+                    tensors["bias"] = gate_bias
+                gates["gate"] = Linear(tensors)
+        return gates
+
+    def moe_params(self, layer):
+        params = {}
+        if self.num_experts(layer) > 0:
             correction = self._get(
                 f"{self._layer_prefix}.{layer}.mlp.gate.e_score_correction_bias")
             if correction is not None:

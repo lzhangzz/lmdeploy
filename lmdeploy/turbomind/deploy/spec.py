@@ -269,6 +269,16 @@ class TextModelSpec(ABC):
         """
         return {}
 
+    def moe_gate(
+        self, layer: int
+    ) -> dict[str, 'Linear']:
+        """Return MoE gate and shared_gate as Linear bundles.
+
+        Keys are child module names (e.g. ``"gate"``, ``"shared_gate"``).
+        Values are :class:`Linear` bundles with weight (and optional bias).
+        """
+        return {}
+
     def linear_attn_params(
         self, layer: int
     ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
