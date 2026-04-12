@@ -36,7 +36,7 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     expert_num_ = cfg.expert_num;
 }
 
-// Adapted from LinkExperts in LlamaDenseWeight.cc for LinearWeight
+// Adapted from LinkExperts for LinearWeight
 static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
 {
     const auto& e0 = *experts(0);
@@ -154,7 +154,7 @@ void MoeWeight::prepare()
         // Propagate the actual fused-silu state from the first expert to
         // the block.  Each expert's prepare() has already run above, so
         // is_fused_silu() now reflects whether the GEMM epilogue applies
-        // SiLU (true for quantized formats, false for dense bf16/fp16).
+        // SiLU (true for quantized formats, false for trivial bf16/fp16).
         if (auto* e0 = expert(0)) {
             block_->set_fused_silu(e0->is_fused_silu());
         }

@@ -54,7 +54,6 @@ if (BUILD_TEST)
         add_executable(test_gemm_v2
                 test/test_gemm_v2.cc
                 ../../models/llama/LlamaLinear.cu
-                ../../models/llama/LlamaDenseWeight.cc
                 test/reference.cu)
         target_link_libraries(test_gemm_v2 PRIVATE gemm2 core cublas quantization_kernels gpt_kernels)
 
