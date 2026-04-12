@@ -6,6 +6,12 @@
 
 namespace turbomind {
 
+/// True for trivial (non-quantized) float dtypes: FP32, FP16, BF16.
+inline bool IsTrivialFloatType(DataType t) noexcept
+{
+    return t == kFloat || t == kHalf || t == kBfloat16;
+}
+
 /// Descriptor for a single quantization parameter (scales or zeros).
 struct QuantParamDesc {
     DataType dtype{};       // kNull means "not present"

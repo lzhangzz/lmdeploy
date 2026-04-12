@@ -18,17 +18,12 @@ bool DataFormat::is_quantized() const noexcept
     return false;
 }
 
-static bool IsDenseFloatType(DataType t)
-{
-    return t == kFloat || t == kHalf || t == kBfloat16;
-}
-
 DataFormat MakeLinearWeightFormat(DataType data_type, DataType weight_format, int group_size)
 {
     DataFormat fmt;
     fmt.dtype = weight_format;
 
-    if (IsDenseFloatType(weight_format)) {
+    if (IsTrivialFloatType(weight_format)) {
         fmt.block_sizes = {1, 1};
         return fmt;
     }
