@@ -15,7 +15,7 @@ TEST_CASE("DataFormat default is not quantized", "[data_format]")
     REQUIRE(!fmt.zeros.present());
 }
 
-TEST_CASE("DataFormat dense is not quantized", "[data_format]")
+TEST_CASE("DataFormat trivial is not quantized", "[data_format]")
 {
     DataFormat fmt = MakeLinearWeightFormat(kHalf, kHalf, 0);
     REQUIRE(!fmt.is_quantized());
@@ -68,7 +68,7 @@ TEST_CASE("DataFormat uint8 quantized", "[data_format]")
     REQUIRE(fmt.zeros.dtype == kBfloat16);
 }
 
-TEST_CASE("DataFormat dense BF16", "[data_format]")
+TEST_CASE("DataFormat trivial BF16", "[data_format]")
 {
     DataFormat fmt = MakeLinearWeightFormat(kBfloat16, kBfloat16, 0);
     REQUIRE(!fmt.is_quantized());

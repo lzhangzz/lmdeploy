@@ -21,7 +21,6 @@ namespace turbomind {
 using std::vector;
 using std::unique_ptr;
 
-using DenseWeight = LinearWeight;
 using Linear      = LlamaLinear;
 
 using namespace gemm;
@@ -78,7 +77,7 @@ static Tensor CopyTransposed(const Tensor& src, Tensor out = {})
 }
 
 /// Link individual expert weights into a batched block view for fused MoE.
-static void LinkExperts(std::function<DenseWeight*(int)> experts, int n, DenseWeight& d)
+static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, LinearWeight& d)
 {
     const auto& e0 = *experts(0);
 
@@ -157,14 +156,14 @@ struct Testbed_v3: Parameter {
 
         cudaGetDeviceProperties(&prop_, 0);
 
-        w_original_ = std::make_unique<DenseWeight>();
-        w_quant_    = std::make_unique<DenseWeight>();
-        w_dequant_  = std::make_unique<DenseWeight>();
+        w_original_ = std::make_unique<LinearWeight>();
+        w_quant_    = std::make_unique<LinearWeight>();
+        w_dequant_  = std::make_unique<LinearWeight>();
 
         for (int i = 0; i < expert_num; ++i) {
-            e_original_.push_back(std::make_unique<DenseWeight>());
-            e_quant_.push_back(std::make_unique<DenseWeight>());
-            e_dequant_.push_back(std::make_unique<DenseWeight>());
+            e_original_.push_back(std::make_unique<LinearWeight>());
+            e_quant_.push_back(std::make_unique<LinearWeight>());
+            e_dequant_.push_back(std::make_unique<LinearWeight>());
         }
 
         GenerateWeight();
@@ -294,7 +293,7 @@ struct Testbed_v3: Parameter {
 
     // - quantize weight
     // - dequantize weight
-    void GenerateWeight(DenseWeight& original, DenseWeight& quant, DenseWeight& dequant)
+    void GenerateWeight(LinearWeight& original, LinearWeight& quant, LinearWeight& dequant)
     {
         original.configure(input_dim, output_dim, data_type, false);
         original.set_weight_spec(data_type, group_size);
@@ -362,7 +361,7 @@ struct Testbed_v3: Parameter {
         }
     }
 
-    void GetReference(const Tensor& x, const unique_ptr<DenseWeight>& dense, Ref<Tensor> d_)
+    void GetReference(const Tensor& x, const unique_ptr<LinearWeight>& dense, Ref<Tensor> d_)
     {
         auto& d = d_.get();
         if (!d) {
@@ -374,7 +373,7 @@ struct Testbed_v3: Parameter {
         ref_.gemm(x.raw_data(), desc_A, dense->weight.raw_data(), dense->k_desc, d.raw_data(), desc_D);
     }
 
-    void GetReference(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts, Ref<Tensor> d_)
+    void GetReference(const Tensor& x, const vector<unique_ptr<LinearWeight>>& experts, Ref<Tensor> d_)
     {
         Tensor xe{{x.shape(0) * experts_per_token, input_dim}, data_type, kDEVICE};
         Tensor de{{x.shape(0) * experts_per_token, output_dim}, data_type, kDEVICE};
@@ -439,7 +438,7 @@ struct Testbed_v3: Parameter {
         }
     }
 
-    void Run(const Tensor& x, const vector<unique_ptr<DenseWeight>>& experts) {}
+    void Run(const Tensor& x, const vector<unique_ptr<LinearWeight>>& experts) {}
 
     void Compare()
     {
@@ -484,9 +483,9 @@ struct Testbed_v3: Parameter {
     Linear linear_;
 
     // ! weights are non-movable
-    unique_ptr<DenseWeight> w_original_;
-    unique_ptr<DenseWeight> w_quant_;
-    unique_ptr<DenseWeight> w_dequant_;
+    unique_ptr<LinearWeight> w_original_;
+    unique_ptr<LinearWeight> w_quant_;
+    unique_ptr<LinearWeight> w_dequant_;
 
     Tensor x_original_;
     Tensor x_quant_, x_scale_;
@@ -496,9 +495,9 @@ struct Testbed_v3: Parameter {
     Tensor d_quant_;     // x_original * w_quant, quant for X done by `Linear`
     Tensor d_dequant_;   // x_dequant  * w_dequant
 
-    vector<unique_ptr<DenseWeight>> e_original_;
-    vector<unique_ptr<DenseWeight>> e_quant_;
-    vector<unique_ptr<DenseWeight>> e_dequant_;
+    vector<unique_ptr<LinearWeight>> e_original_;
+    vector<unique_ptr<LinearWeight>> e_quant_;
+    vector<unique_ptr<LinearWeight>> e_dequant_;
 
     Buffer_<int> f2n_;
     Buffer_<int> en2f_;
