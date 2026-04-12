@@ -201,18 +201,7 @@ class TextModelLoader:
 
         # --- Non-expert MoE parameters (gate/shared_gate weights, score_correction_bias) ---
         for name, (tensor, split_side) in spec.moe_params(layer).items():
-            parts = name.split('.')
-            parent = moe
-            for seg in parts[:-1]:
-                existing = parent._handles[0].child(seg) if parent._handles else None
-                if existing is not None:
-                    children = [h.child(seg) for h in parent._handles]
-                    parent = Distributor(children, moe._contexts)
-                else:
-                    parent = parent.create_child(seg, NormConfig(
-                        dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
-                        data_type=dtype))
-            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
+            moe.commit_tensor(name, tensor, split_side=split_side)
 
         # --- experts: per-expert READ -> TRANSFORM -> CREATE -> COMMIT ---
         expert_inter = mc.expert_inter_size or 0
