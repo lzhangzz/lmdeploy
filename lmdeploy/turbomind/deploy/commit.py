@@ -73,10 +73,7 @@ def _infer_cpp_linear_dtype(linear: Linear):
     # Dense (or missing format): dtype from weight tensor
     weight = linear.tensors.get("weight")
     if weight is not None:
-        if weight.dtype == torch.bfloat16:
-            return _tm.DataType.TYPE_BF16, 0
-        if weight.dtype == torch.float16:
-            return _tm.DataType.TYPE_FP16, 0
+        return _TORCH_TO_CPP.get(weight.dtype), 0
     return None, 0
 
 
@@ -264,10 +261,7 @@ def commit_linear(module, linear: Linear, name: str,
                         f"scale blocks (block_out={wfmt.block_out}), not "
                         f"divisible by split_num={split_num}.")
 
-    # Set weight spec for quantization metadata (skip for dense weights
-    # with unrecognized dtype, e.g. FP32 gate weights in quantized models).
-    if cpp_dtype is not None:
-        linear_mod.set_weight_spec(cpp_dtype, group_size)
+    linear_mod.set_weight_spec(cpp_dtype, group_size)
 
     # Get model dimensions for correct weight allocation shape
     w = linear.tensors.get('weight')
