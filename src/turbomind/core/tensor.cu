@@ -267,6 +267,9 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     auto thr_load = load_copy.get_slice(threadIdx.x);
     auto thr_src  = thr_load.partition_S(src_tile);
     auto thr_smw  = thr_load.partition_D(smem_w);
+    // make_fragment_like is safe here: smem_w has mode-0 stride Int<1> (column-major),
+    // so make_fragment_like (which forces mode-0 to stride-1) produces the same layout
+    // as make_tensor_like. The manual rmem(i)=smem(i) loop below depends on this match.
     auto rmem_ld  = cute::make_fragment_like(thr_smw);
 
     cute::copy(load_copy, thr_src, rmem_ld);    // vectorized gmem → registers
@@ -290,6 +293,7 @@ TransposeCopyKernel(const T* __restrict__ src_ptr,
     auto thr_store = store_copy.get_slice(threadIdx.x);
     auto thr_smw2  = thr_store.partition_S(smem_w);   // same view, NOT transposed
     auto thr_dst   = thr_store.partition_D(dst_tile);
+    // Same reasoning as rmem_ld above: smem_w mode-0 is stride-1, so fragment layout matches.
     auto rmem_st   = cute::make_fragment_like(thr_smw2);
 
     // Manual smem → rmem transfer (avoids CuTe auto-vectorization on smem)
