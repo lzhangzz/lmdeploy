@@ -70,126 +70,134 @@ auto make_cute_layout_unit_inner(const ssize_t* shape, const ssize_t* stride)
 }  // namespace detail
 
 // ============================================================================
-// CUDA kernel: GenericCopyKernel (CuTe layout algebra + vectorization)
+// CUDA kernel: CopyKernel1D (rank-1 vectorized copy)
 // ============================================================================
 namespace kernel {
 
 template<typename T, int kVec, typename SrcLayoutT, typename DstLayoutT>
 __global__ void __launch_bounds__(256)
-GenericCopyKernel(const T* __restrict__ src_ptr,
-                  T* __restrict__       dst_ptr,
-                  SrcLayoutT             src_layout,
-                  DstLayoutT             dst_layout)
+CopyKernel1D(const T* __restrict__ src_ptr,
+             T* __restrict__       dst_ptr,
+             SrcLayoutT             src_layout,
+             DstLayoutT             dst_layout)
 {
-    // Guard: kVec * sizeof(T) must not exceed 16 bytes (128 bits).
-    // Invalid combos (e.g. kVec=16 with int32) are never dispatched at runtime,
-    // but the compiler instantiates all template combos. Discard the body.
+    if constexpr (kVec * cute::sizeof_bits_v<T> <= 128)
+    {
+    constexpr int kBlockThreads = 256;
+    constexpr int kCopyThreads  = kBlockThreads / kVec;
+
+    auto gSrc = cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout);
+    auto gDst = cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout);
+
+    auto tiled_copy = cute::make_tiled_copy(
+        cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
+        cute::make_layout(cute::make_shape(cute::Int<kCopyThreads>{})),
+        cute::make_layout(cute::make_shape(cute::Int<kVec>{})));
+
+    if (threadIdx.x >= kCopyThreads) return;
+
+    auto thr_copy = tiled_copy.get_slice(threadIdx.x);
+
+    if (blockIdx.y > 0) return;
+
+    auto tiler    = cute::Int<kBlockThreads>{};
+    auto tiledSrc = cute::zipped_divide(gSrc, tiler);
+    auto tiledDst = cute::zipped_divide(gDst, tiler);
+
+    if (blockIdx.x >= cute::size<1>(tiledSrc)) return;
+
+    auto ctaSrc = tiledSrc(_, blockIdx.x);
+    auto ctaDst = tiledDst(_, blockIdx.x);
+
+    auto thrSrc = thr_copy.partition_S(ctaSrc);
+    auto thrDst = thr_copy.partition_D(ctaDst);
+
+    if constexpr (kVec > 1) {
+        cute::copy(tiled_copy, thrSrc, thrDst);
+    }
+    else {
+        auto id_row   = cute::make_identity_tensor(cute::shape(gSrc));
+        auto id_tiled = cute::zipped_divide(id_row, tiler);
+        auto tile_id  = id_tiled(_, blockIdx.x);
+
+        auto thrId = thr_copy.partition_S(tile_id);
+
+        auto pred = cute::make_tensor<bool>(cute::shape(thrSrc));
+        PRAGMA_UNROLL
+        for (int i = 0; i < cute::size(pred); ++i) {
+            pred(i) = cute::get<0>(thrId(i)) < cute::size(gSrc);
+        }
+
+        cute::copy_if(pred, thrSrc, thrDst);
+    }
+    }  // end if constexpr (kVec * sizeof_bits_v<T> <= 128)
+}
+
+// ============================================================================
+// CUDA kernel: CopyKernelND (rank-2..4 vectorized copy)
+// ============================================================================
+template<typename T, int kVec, typename SrcLayoutT, typename DstLayoutT>
+__global__ void __launch_bounds__(256)
+CopyKernelND(const T* __restrict__ src_ptr,
+             T* __restrict__       dst_ptr,
+             SrcLayoutT             src_layout,
+             DstLayoutT             dst_layout)
+{
     if constexpr (kVec * cute::sizeof_bits_v<T> <= 128)
     {
     constexpr int kBlockThreads = 256;
     constexpr int kRank         = cute::rank_v<SrcLayoutT>;
     constexpr int kCopyThreads  = kBlockThreads / kVec;
 
-    // 1. Create CuTe tensors from pointers + layouts
-    auto gSrc = cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout);
-    auto gDst = cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout);
-
-    // Build TiledCopy: kCopyThreads threads, kVec elements per thread
     auto tiled_copy = cute::make_tiled_copy(
         cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
         cute::make_layout(cute::make_shape(cute::Int<kCopyThreads>{})),
         cute::make_layout(cute::make_shape(cute::Int<kVec>{})));
 
-    // Threads beyond kCopyThreads must not access the TiledCopy slice
     if (threadIdx.x >= kCopyThreads) return;
 
     auto thr_copy = tiled_copy.get_slice(threadIdx.x);
 
-    if constexpr (kRank == 1) {
-        // No outer dims — the whole tensor is the inner dim
-        if (blockIdx.y > 0) return;
+    // Group outer dims (modes 1..kRank-1) into a single mode
+    auto src_layout_g = cute::group<1, kRank>(src_layout);
+    auto dst_layout_g = cute::group<1, kRank>(dst_layout);
+    auto gSrc_g = cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout_g);
+    auto gDst_g = cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout_g);
 
-        // 2. Tile the inner dim with zipped_divide
-        auto tiler    = cute::Int<kBlockThreads>{};
-        auto tiledSrc = cute::zipped_divide(gSrc, tiler);
-        auto tiledDst = cute::zipped_divide(gDst, tiler);
+    if (blockIdx.y >= cute::size<1>(gSrc_g)) return;
 
-        if (blockIdx.x >= cute::size<1>(tiledSrc)) return;
+    auto rowSrc = gSrc_g(_, blockIdx.y);
+    auto rowDst = gDst_g(_, blockIdx.y);
 
-        auto ctaSrc = tiledSrc(_, blockIdx.x);
-        auto ctaDst = tiledDst(_, blockIdx.x);
+    auto tiler    = cute::Int<kBlockThreads>{};
+    auto tiledSrc = cute::zipped_divide(rowSrc, tiler);
+    auto tiledDst = cute::zipped_divide(rowDst, tiler);
 
-        auto thrSrc = thr_copy.partition_S(ctaSrc);
-        auto thrDst = thr_copy.partition_D(ctaDst);
+    if (blockIdx.x >= cute::size<1>(tiledSrc)) return;
 
-        if constexpr (kVec > 1) {
-            // Full tiles guaranteed by host — no predication needed
-            cute::copy(tiled_copy, thrSrc, thrDst);
-        }
-        else {
-            // Scalar path with identity tensor predication
-            auto id_row   = cute::make_identity_tensor(cute::shape(gSrc));
-            auto id_tiled = cute::zipped_divide(id_row, tiler);
-            auto tile_id  = id_tiled(_, blockIdx.x);
+    auto ctaSrc = tiledSrc(_, blockIdx.x);
+    auto ctaDst = tiledDst(_, blockIdx.x);
 
-            auto thrId = thr_copy.partition_S(tile_id);
+    auto thrSrc = thr_copy.partition_S(ctaSrc);
+    auto thrDst = thr_copy.partition_D(ctaDst);
 
-            auto pred = cute::make_tensor<bool>(cute::shape(thrSrc));
-            PRAGMA_UNROLL
-            for (int i = 0; i < cute::size(pred); ++i) {
-                pred(i) = cute::get<0>(thrId(i)) < cute::size(gSrc);
-            }
-
-            cute::copy_if(pred, thrSrc, thrDst);
-        }
+    if constexpr (kVec > 1) {
+        cute::copy(tiled_copy, thrSrc, thrDst);
     }
     else {
-        // 2. Group outer dims (modes 1..kRank-1) into a single mode
-        //    rank-k layout -> rank-2 (inner, outer_flat)
-        auto src_layout_g = cute::group<1, kRank>(src_layout);
-        auto dst_layout_g = cute::group<1, kRank>(dst_layout);
-        auto gSrc_g = cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout_g);
-        auto gDst_g = cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout_g);
+        auto id_row   = cute::make_identity_tensor(cute::shape(rowSrc));
+        auto id_tiled = cute::zipped_divide(id_row, tiler);
+        auto tile_id  = id_tiled(_, blockIdx.x);
 
-        if (blockIdx.y >= cute::size<1>(gSrc_g)) return;
+        auto thrId = thr_copy.partition_S(tile_id);
 
-        // 3. Slice to get this CTA's 1D inner tensor
-        auto rowSrc = gSrc_g(_, blockIdx.y);
-        auto rowDst = gDst_g(_, blockIdx.y);
-
-        // 4. Tile the inner dim with zipped_divide
-        auto tiler    = cute::Int<kBlockThreads>{};
-        auto tiledSrc = cute::zipped_divide(rowSrc, tiler);
-        auto tiledDst = cute::zipped_divide(rowDst, tiler);
-
-        if (blockIdx.x >= cute::size<1>(tiledSrc)) return;
-
-        auto ctaSrc = tiledSrc(_, blockIdx.x);
-        auto ctaDst = tiledDst(_, blockIdx.x);
-
-        auto thrSrc = thr_copy.partition_S(ctaSrc);
-        auto thrDst = thr_copy.partition_D(ctaDst);
-
-        if constexpr (kVec > 1) {
-            // Full tiles guaranteed by host — no predication needed
-            cute::copy(tiled_copy, thrSrc, thrDst);
+        auto pred = cute::make_tensor<bool>(cute::shape(thrSrc));
+        PRAGMA_UNROLL
+        for (int i = 0; i < cute::size(pred); ++i) {
+            pred(i) = cute::get<0>(thrId(i)) < cute::size(rowSrc);
         }
-        else {
-            // Scalar path with identity tensor predication
-            auto id_row   = cute::make_identity_tensor(cute::shape(rowSrc));
-            auto id_tiled = cute::zipped_divide(id_row, tiler);
-            auto tile_id  = id_tiled(_, blockIdx.x);
 
-            auto thrId = thr_copy.partition_S(tile_id);
-
-            auto pred = cute::make_tensor<bool>(cute::shape(thrSrc));
-            PRAGMA_UNROLL
-            for (int i = 0; i < cute::size(pred); ++i) {
-                pred(i) = cute::get<0>(thrId(i)) < cute::size(rowSrc);
-            }
-
-            cute::copy_if(pred, thrSrc, thrDst);
-        }
+        cute::copy_if(pred, thrSrc, thrDst);
     }
     }  // end if constexpr (kVec * sizeof_bits_v<T> <= 128)
 }
@@ -369,7 +377,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
             dim3 grid(static_cast<uint32_t>(N / kTileDim),
                       static_cast<uint32_t>(M / kTileDim));
 
-            auto tr_dispatch_dtype = [&](auto t) {
+            auto tr_dispatch_elem_size = [&](auto t) {
                 using T = decltype(t);
 
                 auto tr_dispatch_vec = [&](auto v) {
@@ -391,16 +399,13 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                 }
             };
 
-            switch (dtype) {
-                case DataType::kFloat32:  return tr_dispatch_dtype(float{});
-                case DataType::kFloat16:  return tr_dispatch_dtype(half_t{});
-                case DataType::kBfloat16: return tr_dispatch_dtype(bfloat16_t{});
-                case DataType::kInt8:     return tr_dispatch_dtype(int8_t{});
-                case DataType::kInt32:    return tr_dispatch_dtype(int32_t{});
-                case DataType::kBool:     return tr_dispatch_dtype(uint8_t{});
-                case DataType::kUint8:    return tr_dispatch_dtype(uint8_t{});
+            switch (byte_size(dtype)) {
+                case 1: return tr_dispatch_elem_size(uint8_t{});
+                case 2: return tr_dispatch_elem_size(uint16_t{});
+                case 4: return tr_dispatch_elem_size(uint32_t{});
                 default:
-                    throw std::runtime_error(std::string("GenericCopy: unsupported data type ") + to_string(dtype));
+                    TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
+                    break;
             }
         }
     }
@@ -443,18 +448,40 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     }
 
     // --- Dispatch on data type T, vec_size kVec, and rank kRank ---
-    auto dispatch_dtype = [&](auto t) {
+    auto dispatch_elem_size = [&](auto t) {
         using T = decltype(t);
 
         auto dispatch_vec = [&](auto v) {
             constexpr int kVec = v.value;
 
-            auto invoke = [&](auto d) {
+            auto invoke_1d = [&] {
+                int64_t inner_size   = a.shape(0);
+                int64_t num_inner_tiles = (inner_size + kBlockThreads - 1) / kBlockThreads;
+                dim3 grid(static_cast<uint32_t>(num_inner_tiles), 1u);
+
+                if constexpr (kVec > 1) {
+                    auto src_layout = detail::make_cute_layout_unit_inner<1>(a.shape().data(), a.stride().data());
+                    auto dst_layout = detail::make_cute_layout_unit_inner<1>(a.shape().data(), b.stride().data());
+                    auto func = kernel::CopyKernel1D<T, kVec, decltype(src_layout), decltype(dst_layout)>;
+                    func<<<grid, 256, 0, stream>>>(
+                        reinterpret_cast<const T*>(data_a),
+                        reinterpret_cast<T*>(data_b),
+                        src_layout, dst_layout);
+                }
+                else {
+                    auto src_layout = detail::make_cute_layout<1>(a.shape().data(), a.stride().data());
+                    auto dst_layout = detail::make_cute_layout<1>(a.shape().data(), b.stride().data());
+                    auto func = kernel::CopyKernel1D<T, kVec, decltype(src_layout), decltype(dst_layout)>;
+                    func<<<grid, 256, 0, stream>>>(
+                        reinterpret_cast<const T*>(data_a),
+                        reinterpret_cast<T*>(data_b),
+                        src_layout, dst_layout);
+                }
+            };
+
+            auto invoke_nd = [&](auto d) {
                 constexpr int kRank = d.value;
 
-                // Compute 2D grid: (num_inner_tiles, outer_total)
-                // inner_size is NOT divided by kVec — the layout describes
-                // individual elements, val_layout handles vector grouping.
                 int64_t inner_size = a.shape(0);
                 int64_t outer_total = 1;
                 for (int i = 1; i < rank; ++i) {
@@ -465,47 +492,35 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                 dim3 grid(static_cast<uint32_t>(num_inner_tiles),
                           static_cast<uint32_t>(outer_total));
 
-                // Layout types differ between vectorized (Int<1> inner stride)
-                // and scalar (dynamic strides), so dispatch in two branches.
                 if constexpr (kVec > 1) {
-                    // No shape adjustment — val_layout groups kVec elements per thread.
-                    // Just use compile-time Int<1> inner stride for CuTe recast.
                     auto src_layout = detail::make_cute_layout_unit_inner<kRank>(a.shape().data(), a.stride().data());
                     auto dst_layout = detail::make_cute_layout_unit_inner<kRank>(a.shape().data(), b.stride().data());
-
-                    auto func = kernel::GenericCopyKernel<T, kVec, decltype(src_layout), decltype(dst_layout)>;
+                    auto func = kernel::CopyKernelND<T, kVec, decltype(src_layout), decltype(dst_layout)>;
                     func<<<grid, 256, 0, stream>>>(
                         reinterpret_cast<const T*>(data_a),
                         reinterpret_cast<T*>(data_b),
-                        src_layout,
-                        dst_layout);
+                        src_layout, dst_layout);
                 }
                 else {
                     auto src_layout = detail::make_cute_layout<kRank>(a.shape().data(), a.stride().data());
                     auto dst_layout = detail::make_cute_layout<kRank>(a.shape().data(), b.stride().data());
-
-                    auto func = kernel::GenericCopyKernel<T, kVec, decltype(src_layout), decltype(dst_layout)>;
+                    auto func = kernel::CopyKernelND<T, kVec, decltype(src_layout), decltype(dst_layout)>;
                     func<<<grid, 256, 0, stream>>>(
                         reinterpret_cast<const T*>(data_a),
                         reinterpret_cast<T*>(data_b),
-                        src_layout,
-                        dst_layout);
+                        src_layout, dst_layout);
                 }
             };
 
-            // Dispatch on exact rank (1-6)
             switch (rank) {
-                case 1: invoke(constant<1>{}); break;
-                case 2: invoke(constant<2>{}); break;
-                case 3: invoke(constant<3>{}); break;
-                case 4: invoke(constant<4>{}); break;
-                case 5: invoke(constant<5>{}); break;
-                case 6: invoke(constant<6>{}); break;
-                default: throw std::runtime_error("GenericCopy: rank > 6 not implemented");
+                case 1: invoke_1d(); break;
+                case 2: invoke_nd(constant<2>{}); break;
+                case 3: invoke_nd(constant<3>{}); break;
+                case 4: invoke_nd(constant<4>{}); break;
+                default: TM_CHECK(0) << "GenericCopy: rank > 4 not implemented"; break;
             }
         };
 
-        // Dispatch on vec_size (powers of 2, max 128 bits)
         switch (vec_size) {
             case 16: dispatch_vec(constant<16>{}); break;
             case 8:  dispatch_vec(constant<8>{}); break;
@@ -515,17 +530,11 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         }
     };
 
-    // Dispatch on data type
-    switch (dtype) {
-        case DataType::kFloat32:  return dispatch_dtype(float{});
-        case DataType::kFloat16:  return dispatch_dtype(half_t{});
-        case DataType::kBfloat16: return dispatch_dtype(bfloat16_t{});
-        case DataType::kInt8:     return dispatch_dtype(int8_t{});
-        case DataType::kInt32:    return dispatch_dtype(int32_t{});
-        case DataType::kBool:     return dispatch_dtype(uint8_t{});
-        case DataType::kUint8:    return dispatch_dtype(uint8_t{});
-        default:
-            throw std::runtime_error(std::string("GenericCopy: unsupported data type ") + to_string(dtype));
+    switch (byte_size(dtype)) {
+        case 1: return dispatch_elem_size(uint8_t{});
+        case 2: return dispatch_elem_size(uint16_t{});
+        case 4: return dispatch_elem_size(uint32_t{});
+        default: TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype); break;
     }
 }
 
