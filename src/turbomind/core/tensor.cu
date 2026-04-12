@@ -421,6 +421,10 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     }
 
     // --- Alignment detection ---
+    // NOTE: GenericCopy vectorizes along the innermost (stride-sorted) dimension.
+    // If neither src nor dst has a stride-1 innermost dim, alignment falls to
+    // byte_size(dtype) (vec_size=1), resulting in scalar copies. Vectorizing
+    // along a non-contiguous dimension would require a different kernel architecture.
     int64_t alignment = 16;
 
     auto align = [&](auto v) { alignment = std::gcd(alignment, v); };
