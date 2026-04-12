@@ -70,7 +70,7 @@ def _infer_cpp_linear_dtype(linear: Linear):
         if cpp_dtype is not None:
             return cpp_dtype, fmt.block_in or 0
 
-    # Dense (or missing format): dtype from weight tensor
+    # Trivial (or missing format): dtype from weight tensor
     weight = linear.tensors.get("weight")
     if weight is not None:
         return _TORCH_TO_CPP.get(weight.dtype), 0
@@ -80,7 +80,7 @@ def _infer_cpp_linear_dtype(linear: Linear):
 def _infer_compute_dtype(linear: Linear):
     """Get the model's compute dtype from a Linear's tensors.
 
-    For dense formats the weight itself carries the compute dtype.
+    For trivial formats the weight itself carries the compute dtype.
     For quantized formats we infer from scales or bias.
     """
     w = linear.tensors.get('weight')
@@ -118,7 +118,7 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
     # the weight shard has a different shape/dtype than the allocation, but
     # byte sizes match due to the packing invariant.
     fmt = linear.weight_format
-    is_quantized = fmt is not None and fmt.name != 'dense'
+    is_quantized = fmt is not None and fmt.name != 'trivial'
 
     def _kind_order(item):
         k, _ = item
@@ -153,7 +153,7 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             alloc_shape = [in_dim, out_dim]
             alloc_dtype = cpp_dtype
         elif kind == "weight" and model_dtype is not None:
-            # Dense weight: use model compute dtype for dtype coercion.
+            # Trivial weight: use model compute dtype for dtype coercion.
             alloc_shape = list(shard.shape)
             alloc_dtype = model_dtype
         else:
@@ -205,7 +205,7 @@ def commit_linear(module, linear: Linear, name: str,
         Which shard to extract and copy.
     model_dtype : int | None
         The model's configured compute dtype (C++ DataType value).  When set,
-        dense (non-quantized) weights use this dtype instead of the weight
+        trivial (non-quantized) weights use this dtype instead of the weight
         tensor's dtype.  This prevents dtype mismatches when the checkpoint
         stores weights in a different precision than the model config (e.g.
         BF16 weights in an FP16 model).

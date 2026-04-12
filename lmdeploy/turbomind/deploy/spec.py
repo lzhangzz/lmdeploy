@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from abc import ABC, abstractmethod
 import torch
-from .kind_map import DENSE_FORMAT
+from .kind_map import TRIVIAL_FORMAT
 from .linear import Linear
 from .module_configs import SpecAttnConfig
 
@@ -326,16 +326,16 @@ class TextModelSpec(ABC):
 
 
 def _dequant_linear(linear: Linear) -> Linear:
-    """Dequantize a quantized Linear to dense when the format provides ``dequant``."""
+    """Dequantize a quantized Linear to trivial when the format provides ``dequant``."""
     fmt = linear.weight_format
     if fmt is None or fmt.dequant is None:
         return linear
     new_tensors = fmt.dequant(linear.tensors)
-    return Linear(tensors=new_tensors, weight_format=DENSE_FORMAT, data_format=None)
+    return Linear(tensors=new_tensors, weight_format=TRIVIAL_FORMAT, data_format=None)
 
 
 def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
-    """Dequant linears to a common dense format if a fusion group has mixed formats."""
+    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
     formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
         return linears
@@ -364,7 +364,7 @@ def _block_ops_need_dequant(
       only when ``block_out % head_dim == 0`` (each block = integer number
       of heads, so permuting within one head is intra-block).
 
-    If any condition fails, the caller should dequantise to dense first.
+    If any condition fails, the caller should dequantise to trivial first.
     """
     wfmt = lin.weight_format
     if wfmt is None or wfmt.block_out is None:
@@ -406,7 +406,7 @@ def merge_qkv_linear(
     Block-unsafe operations
     -----------------------
     If any planned transformation would cross block boundaries (detected via
-    ``_block_ops_need_dequant``), the entire group is dequantised to dense
+    ``_block_ops_need_dequant``), the entire group is dequantised to trivial
     bf16/fp16 before merging, with a warning.
     """
     group = _ensure_compatible_formats({"q": q, "k": k, "v": v})
@@ -422,7 +422,7 @@ def merge_qkv_linear(
             f"QKV merge with format '{_wfmt.name if _wfmt else None}' "
             f"(block_out={_wfmt.block_out if _wfmt else None}) and "
             f"head_dim={head_dim}: inter-block transformation detected; "
-            f"dequantising to dense.")
+            f"dequantising to trivial.")
         q, k, v = _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
 
     merged_tensors: dict[str, torch.Tensor] = {}

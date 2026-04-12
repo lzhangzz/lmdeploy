@@ -52,14 +52,14 @@ class GptOssSpec(TextModelSpec):
         """Read one expert from packed ``[n_experts, ...]`` tensors.
 
         gpt-oss stores expert weights in M-major (TM) ``[K, N]`` layout.
-        The dense normalizer assumes HF ``[N, K]`` input, so the weight gets
+        The trivial normalizer assumes HF ``[N, K]`` input, so the weight gets
         an extra ``.t()`` after normalisation to cancel the over-transpose.
         Quantized normalizers (AWQ, GPTQ, MXFP4, FP8) produce TM already.
         """
         lin = build_linear(self.params, prefix, index=expert)
         if lin is None:
             return None
-        if lin.weight_format.name == "dense":
+        if lin.weight_format.name == "trivial":
             w = lin.tensors.get("weight")
             if w is not None and w.dim() == 2:
                 lin.tensors["weight"] = w.t().contiguous()
