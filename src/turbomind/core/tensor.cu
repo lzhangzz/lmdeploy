@@ -263,13 +263,8 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     if (is_2d_transpose &&
         a.shape(0) % kTileDim == 0 && a.shape(1) % kTileDim == 0)
     {
-        int64_t tr_alignment = 16;
         auto tr_data_a = src.raw_data();
         auto tr_data_b = dst.raw_data();
-        tr_alignment = std::gcd(tr_alignment, reinterpret_cast<uintptr_t>(tr_data_a));
-        tr_alignment = std::gcd(tr_alignment, reinterpret_cast<uintptr_t>(tr_data_b));
-
-        int max_vec_bits = std::min(128, static_cast<int>(tr_alignment * 8));
 
         int32_t M = static_cast<int32_t>(a.shape(0));
         int32_t N = static_cast<int32_t>(a.shape(1));
@@ -278,6 +273,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 
         auto tr_dispatch_elem_size = [&](auto t) {
             using T = decltype(t);
+            constexpr uint32_t kVB = 8 * sizeof(T);
 
             auto src_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
                 cute::make_layout(cute::make_shape(M, N),
@@ -287,23 +283,8 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                 cute::make_layout(cute::make_shape(M, N),
                                   cute::make_stride(b.stride(0), cute::Int<1>{})));
 
-            auto tr_dispatch_vec = [&](auto v) {
-                constexpr uint32_t kVB = v.value;
-                using SrcE = typename decltype(src_gmem)::engine_type;
-                using SrcL = typename decltype(src_gmem)::layout_type;
-                using DstE = typename decltype(dst_gmem)::engine_type;
-                using DstL = typename decltype(dst_gmem)::layout_type;
-                kernel::TransposeCopyKernel<kTileDim, kVB, SrcE, SrcL, DstE, DstL>
-                    <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
-            };
-
-            switch (max_vec_bits) {
-                case 128: tr_dispatch_vec(constant<128>{}); break;
-                case 64:  tr_dispatch_vec(constant<64>{}); break;
-                case 32:  tr_dispatch_vec(constant<32>{}); break;
-                case 16:  tr_dispatch_vec(constant<16>{}); break;
-                default:  tr_dispatch_vec(constant<8>{}); break;
-            }
+            kernel::TransposeCopyKernel<kTileDim, kVB>
+                <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
         };
 
         switch (byte_size(dtype)) {
