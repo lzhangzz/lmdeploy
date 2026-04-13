@@ -182,27 +182,25 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     static_assert(std::is_same_v<T, typename DstEngine::value_type>,
                   "TransposeCopyKernel: src and dst value types must match");
 
-    __shared__ T smem[kTileDim * (kTileDim + 1)];
+    __shared__ T smem[kTileDim * (kTileDim)];
 
     // Smem view: row-major — stride-1 on dim 0 (matches src contiguous dim)
     auto smem_view = make_tensor(make_smem_ptr(smem),
         make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}),
-                          make_stride(Int<1>{}, Int<kTileDim + 1>{})));
+                          make_stride(Int<1>{}, Int<kTileDim>{})));
 
-    // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
+    // Tile gmem tensors — tiled_divide produces ((TM,TN), M/TM, N/TN)
     auto tiler = make_shape(Int<kTileDim>{}, Int<kTileDim>{});
-    auto src_tiled = zipped_divide(src, tiler);
-    auto dst_tiled = zipped_divide(dst, tiler);
+    auto src_tiled = tiled_divide(src, tiler);
+    auto dst_tiled = tiled_divide(dst, tiler);
 
     // Bounds check on tile grid
-    if (blockIdx.y >= size<1, 0>(src_tiled) ||
-        blockIdx.x >= size<1, 1>(src_tiled)) return;
+    if (blockIdx.y >= size<1>(src_tiled) ||
+        blockIdx.x >= size<2>(src_tiled)) return;
 
-    // Per-CTA tile — unwrap zipped rank-1 ((32,32)) to rank-2 (32,32) for TiledCopy
-    auto src_tile_z = src_tiled(_, make_coord(blockIdx.y, blockIdx.x));
-    auto dst_tile_z = dst_tiled(_, make_coord(blockIdx.y, blockIdx.x));
-    auto src_tile = make_tensor(src_tile_z.data(), get<0>(src_tile_z.layout()));
-    auto dst_tile = make_tensor(dst_tile_z.data(), get<0>(dst_tile_z.layout()));
+    // Per-CTA tile — make_coord(_,_) unpacks zipped inner mode to rank-2 (TM,TN)
+    auto src_tile = src_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
+    auto dst_tile = dst_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
 
     // Phase 1: gmem(src) -> smem via TiledCopy
     auto tc1 = make_tiled_copy(
