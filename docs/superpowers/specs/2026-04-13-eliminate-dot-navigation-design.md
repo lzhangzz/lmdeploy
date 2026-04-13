@@ -61,7 +61,7 @@ for name, (tensor, split_side) in spec.attn_params(layer).items():
 # --- Norm children (q_norm, k_norm, etc.) ---
 for name, tensor in spec.attn_norm_children(layer).items():
     child = attn.create_child(name, NormConfig(
-        dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
+        dim=tensor.shape[-1],
         data_type=dtype))
     child.commit_tensor('weight', tensor)
 ```
@@ -75,7 +75,7 @@ for name, (tensor, split_side) in spec.linear_attn_params(layer).items():
 # --- Norm children (norm, etc.) ---
 for name, tensor in spec.linear_attn_norm_children(layer).items():
     child = linear_attn.create_child(name, NormConfig(
-        dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
+        dim=tensor.shape[-1],
         data_type=dtype))
     child.commit_tensor('weight', tensor)
 ```
