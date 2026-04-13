@@ -69,15 +69,18 @@ class Qwen3TextSpec(TextModelSpec):
         return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
     def attn_params(self, layer):
+        return {}
+
+    def attn_norm_children(self, layer):
         params = {}
         q = self._get(f"{self._layer_prefix}.{layer}.self_attn.q_norm.weight")
         k = self._get(f"{self._layer_prefix}.{layer}.self_attn.k_norm.weight")
         if q is not None and k is not None:
             q, k = self._permute_qk_tensors(q, k)
         if q is not None:
-            params["q_norm.weight"] = (q, None)
+            params["q_norm"] = q
         if k is not None:
-            params["k_norm.weight"] = (k, None)
+            params["k_norm"] = k
         return params
 
     def moe_gate(self, layer):

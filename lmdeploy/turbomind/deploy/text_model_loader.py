@@ -107,15 +107,16 @@ class TextModelLoader:
             rule = _ATTN_TP_RULES.get(name, {})
             attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 
-        # --- Parameters (q_norm, k_norm, sinks, etc.) ---
+        # --- Direct params (sinks, etc.) ---
         for name, (tensor, split_side) in spec.attn_params(layer).items():
-            parts = name.split('.')
-            parent = attn
-            for seg in parts[:-1]:
-                parent = parent.create_child(seg, NormConfig(
-                    dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
-                    data_type=dtype))
-            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
+            attn.commit_tensor(name, tensor, split_side=split_side)
+
+        # --- Norm children (q_norm, k_norm, etc.) ---
+        for name, tensor in spec.attn_norm_children(layer).items():
+            child = attn.create_child(name, NormConfig(
+                dim=tensor.shape[-1],
+                data_type=dtype))
+            child.commit_tensor('weight', tensor)
 
     def _process_ffn(self, writer: Distributor, spec: 'TextModelSpec',
                      layer: int):
@@ -253,15 +254,16 @@ class TextModelLoader:
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
             linear_attn.commit_linear(name, lin, model_dtype=dtype, **rule)
 
-        # --- Parameters (A_log, dt_bias, conv1d, norm.weight) ---
+        # --- Direct params (A_log, dt_bias, conv1d, etc.) ---
         for name, (tensor, split_side) in spec.linear_attn_params(layer).items():
-            parts = name.split('.')
-            parent = linear_attn
-            for seg in parts[:-1]:
-                parent = parent.create_child(seg, NormConfig(
-                    dim=tensor.shape[-1] if tensor.dim() >= 1 else 0,
-                    data_type=dtype))
-            parent.commit_tensor(parts[-1], tensor, split_side=split_side)
+            linear_attn.commit_tensor(name, tensor, split_side=split_side)
+
+        # --- Norm children (norm, etc.) ---
+        for name, tensor in spec.linear_attn_norm_children(layer).items():
+            child = linear_attn.create_child(name, NormConfig(
+                dim=tensor.shape[-1],
+                data_type=dtype))
+            child.commit_tensor('weight', tensor)
 
     # ------------------------------------------------------------------
     # Top-level orchestration

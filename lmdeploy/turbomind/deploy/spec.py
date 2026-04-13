@@ -249,12 +249,21 @@ class TextModelSpec(ABC):
     def attn_params(
         self, layer: int
     ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
-        """Return non-linear attention parameters.
+        """Return direct attention parameters.
 
         Each entry is ``{param_name: (tensor, split_side)}``.
-        ``param_name`` is the leaf name within the attention subtree
-        (e.g. ``"q_norm.weight"``, ``"sinks"``).
+        ``param_name`` is a single-segment name within the attention subtree
+        (e.g. ``"sinks"``).
         ``split_side`` is ``None`` for broadcast, or a ``SplitSide`` value.
+        """
+        return {}
+
+    def attn_norm_children(self, layer: int) -> dict[str, torch.Tensor]:
+        """Return norm submodule weights for the attention block.
+
+        Each entry is ``{child_name: tensor}``.  The loader creates a
+        ``NormConfig`` child and commits the tensor as ``"weight"``.
+        All norm children are broadcast (no TP split).
         """
         return {}
 
@@ -282,11 +291,20 @@ class TextModelSpec(ABC):
     def linear_attn_params(
         self, layer: int
     ) -> dict[str, tuple[torch.Tensor, SplitSide | None]]:
-        """Return non-linear linear-attention (GDN) parameters.
+        """Return direct linear-attention (GDN) parameters.
 
         Each entry is ``{param_name: (tensor, split_side)}``.
-        ``param_name`` is the leaf name within the linear_attn subtree
-        (e.g. ``"A_log"``, ``"dt_bias"``, ``"conv1d"``, ``"norm.weight"``).
+        ``param_name`` is a single-segment name within the linear_attn
+        subtree (e.g. ``"A_log"``, ``"dt_bias"``, ``"conv1d"``).
+        """
+        return {}
+
+    def linear_attn_norm_children(self, layer: int) -> dict[str, torch.Tensor]:
+        """Return norm submodule weights for the linear-attention block.
+
+        Each entry is ``{child_name: tensor}``.  The loader creates a
+        ``NormConfig`` child and commits the tensor as ``"weight"``.
+        All norm children are broadcast (no TP split).
         """
         return {}
 

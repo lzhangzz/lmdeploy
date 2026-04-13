@@ -211,6 +211,9 @@ class Qwen3_5Spec(TextModelSpec):
         return self._zero_centered(self._get(self._norm_key))
 
     def attn_params(self, layer):
+        return {}
+
+    def attn_norm_children(self, layer):
         params = {}
         if not self._is_linear_attn(layer):
             q = self._zero_centered(
@@ -220,9 +223,9 @@ class Qwen3_5Spec(TextModelSpec):
             if q is not None and k is not None:
                 q, k = self._permute_qk_tensors(q, k)
             if q is not None:
-                params["q_norm.weight"] = (q, None)
+                params["q_norm"] = q
             if k is not None:
-                params["k_norm.weight"] = (k, None)
+                params["k_norm"] = k
         return params
 
     def moe_gate(self, layer):
@@ -271,9 +274,16 @@ class Qwen3_5Spec(TextModelSpec):
                     v_part.reshape(d_conv, tp, v_dim // tp),
                 ], dim=2).reshape(d_conv, -1).contiguous()
             params["conv1d"] = (conv1d, SplitSide.OUTPUT)
+        return params
+
+    def linear_attn_norm_children(self, layer):
+        params = {}
+        if not self._is_linear_attn(layer):
+            return params
+        pfx = f"{self._layer_prefix}.{layer}.linear_attn"
         norm = self._get(f"{pfx}.norm.weight")
         if norm is not None:
-            params["norm.weight"] = (norm, None)
+            params["norm"] = norm
         return params
 
     def tok_embeddings(self) -> torch.Tensor | None:

@@ -180,15 +180,18 @@ class Glm4MoeLiteSpec(TextModelSpec):
         return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
 
     def attn_params(self, layer):
+        return {}
+
+    def attn_norm_children(self, layer):
         params = {}
         q_a = self._get(
             f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
         kv_a = self._get(
             f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
         if q_a is not None:
-            params["q_a_layernorm.weight"] = (q_a, None)
+            params["q_a_layernorm"] = q_a
         if kv_a is not None:
-            params["kv_a_layernorm.weight"] = (kv_a, None)
+            params["kv_a_layernorm"] = kv_a
         return params
 
     def moe_gate(self, layer):
