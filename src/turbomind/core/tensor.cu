@@ -165,13 +165,12 @@ CopyKernelND(const T* __restrict__ src_ptr,
 }
 
 // ============================================================================
-// CUDA kernel: TransposeCopyKernel (cooperative_copy 2D layout conversion)
+// CUDA kernel: TransposeCopyKernel (TiledCopy 2D layout conversion)
 // ============================================================================
 // Copies a 2D tensor from src to dst where src and dst have orthogonal
 // contiguous dimensions (src contiguous on dim 0, dst contiguous on dim 1).
-// Uses smem staging with two views of a flat buffer: row-major write view
-// for Phase 1, column-major read view for Phase 2 (implicit transpose).
-// Both phases use kMaxVecBits (scalar = 8*sizeof(T) from host).
+// Uses smem staging to decouple read/write access patterns for coalesced gmem
+// access in both phases. Both phases use explicit TiledCopy (scalar Copy_Atom).
 template<int kTileDim, uint32_t kMaxVecBits,
          typename SrcEngine, typename SrcLayout,
          typename DstEngine, typename DstLayout>
@@ -185,36 +184,43 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
 
     __shared__ T smem[kTileDim * kTileDim];
 
-    // Write view: row-major (stride-1 on dim 0, matches src)
-    auto smem_w = cute::make_tensor(cute::make_smem_ptr(smem),
+    // Smem view: row-major — stride-1 on dim 0 (matches src contiguous dim)
+    auto smem_view = cute::make_tensor(cute::make_smem_ptr(smem),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
                           cute::make_stride(cute::Int<1>{}, cute::Int<kTileDim>{})));
-
-    // Read view: column-major (stride-1 on dim 0, matches dst) — transposed
-    auto smem_r = cute::make_tensor(cute::make_smem_ptr(smem),
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<kTileDim>{}, cute::Int<1>{})));
 
     // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
     auto tiler = cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{});
     auto src_tiled = cute::zipped_divide(src, tiler);
     auto dst_tiled = cute::zipped_divide(dst, tiler);
 
-    // Bounds check on tile grid — zipped_divide produces ((inner0,inner1),(outer0,outer1))
+    // Bounds check on tile grid
     if (blockIdx.y >= cute::size<1, 0>(src_tiled) ||
         blockIdx.x >= cute::size<1, 1>(src_tiled)) return;
 
-    // Per-CTA tile with static shape (kTileDim, kTileDim)
-    auto src_tile = src_tiled(cute::_,
-                              cute::make_coord(blockIdx.y, blockIdx.x));
-    auto dst_tile = dst_tiled(cute::_,
-                              cute::make_coord(blockIdx.y, blockIdx.x));
+    // Per-CTA tile — unwrap zipped rank-1 ((32,32)) to rank-2 (32,32) for TiledCopy
+    auto src_tile_z = src_tiled(cute::_, cute::make_coord(blockIdx.y, blockIdx.x));
+    auto dst_tile_z = dst_tiled(cute::_, cute::make_coord(blockIdx.y, blockIdx.x));
+    auto src_tile = cute::make_tensor(src_tile_z.data(), cute::get<0>(src_tile_z.layout()));
+    auto dst_tile = cute::make_tensor(dst_tile_z.data(), cute::get<0>(dst_tile_z.layout()));
 
-    // Phase 1: gmem(src) -> smem (row-major)
-    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, src_tile, smem_w);
+    // Phase 1: gmem(src) -> smem via TiledCopy
+    auto tc1 = cute::make_tiled_copy(
+        cute::Copy_Atom<cute::UniversalCopy<T>, T>{},
+        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim / 4>{})),
+        cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<1>{})));
+    auto thr1 = tc1.get_slice(threadIdx.x);
+    cute::copy(tc1, thr1.partition_S(src_tile), thr1.partition_D(smem_view));
+
     __syncthreads();
-    // Phase 2: smem -> gmem(dst) (column-major view — transposed)
-    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, smem_r, dst_tile);
+
+    // Phase 2: smem -> gmem(dst) via TiledCopy
+    auto tc2 = cute::make_tiled_copy(
+        cute::Copy_Atom<cute::UniversalCopy<T>, T>{},
+        cute::make_layout(cute::make_shape(cute::Int<kTileDim / 4>{}, cute::Int<kTileDim>{})),
+        cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<1>{})));
+    auto thr2 = tc2.get_slice(threadIdx.x);
+    cute::copy(tc2, thr2.partition_S(smem_view), thr2.partition_D(dst_tile));
 }
 
 }  // namespace kernel
@@ -273,7 +279,6 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 
         auto tr_dispatch_elem_size = [&](auto t) {
             using T = decltype(t);
-            constexpr uint32_t kVB = 8 * sizeof(T);
 
             auto src_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
                 cute::make_layout(cute::make_shape(M, N),
@@ -283,7 +288,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                 cute::make_layout(cute::make_shape(M, N),
                                   cute::make_stride(b.stride(0), cute::Int<1>{})));
 
-            kernel::TransposeCopyKernel<kTileDim, kVB>
+            kernel::TransposeCopyKernel<kTileDim, 8 * sizeof(T)>
                 <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
         };
 
