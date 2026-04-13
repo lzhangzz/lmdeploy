@@ -102,7 +102,8 @@ def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
     """Run a single GenericCopy test. Returns True on pass."""
     tm_src, tm_dst, golden = make_tensors(torch_tensor)
 
-    _tm.generic_copy(tm_src, tm_dst)
+    stream = torch.cuda.current_stream()
+    _tm.generic_copy_on_stream(tm_src, tm_dst, stream.cuda_stream)
 
     # Read back the result through DLPack
     result = torch.from_dlpack(tm_dst)

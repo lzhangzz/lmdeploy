@@ -485,21 +485,6 @@ PYBIND11_MODULE(_turbomind, m)
         },
         "dl_managed_tensor"_a);
     m.def(
-        "generic_copy",
-        [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst) {
-            using ft::core::GenericCopy;
-
-            // Use the caller's current CUDA stream (e.g., PyTorch's stream)
-            // to avoid memory visibility issues between streams.
-            cudaStream_t stream{};
-            ft::check_cuda_error(cudaStreamSynchronize(stream));
-            GenericCopy(*src, *dst, stream);
-            ft::check_cuda_error(cudaStreamSynchronize(stream));
-        },
-        "src"_a,
-        "dst"_a);
-
-    m.def(
         "generic_copy_on_stream",
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
             using ft::core::GenericCopy;
