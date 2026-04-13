@@ -488,15 +488,13 @@ PYBIND11_MODULE(_turbomind, m)
         "generic_copy",
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst) {
             using ft::core::GenericCopy;
-            using ft::core::Context;
-            using ft::core::ContextGuard;
-            using ft::core::Stream;
 
-            // Create a local stream + context so this works without the engine
-            auto stream = Stream::create();
-            ContextGuard guard{stream};
-            GenericCopy(*src, *dst, Context::stream().handle());
-            Context::stream().Sync();
+            // Use the caller's current CUDA stream (e.g., PyTorch's stream)
+            // to avoid memory visibility issues between streams.
+            cudaStream_t stream{};
+            ft::check_cuda_error(cudaStreamSynchronize(stream));
+            GenericCopy(*src, *dst, stream);
+            ft::check_cuda_error(cudaStreamSynchronize(stream));
         },
         "src"_a,
         "dst"_a);
