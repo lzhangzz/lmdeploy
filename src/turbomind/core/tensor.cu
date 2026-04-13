@@ -169,9 +169,9 @@ CopyKernelND(const T* __restrict__ src_ptr,
 // ============================================================================
 // Copies a 2D tensor from src to dst where src and dst have orthogonal
 // contiguous dimensions (src contiguous on dim 0, dst contiguous on dim 1).
-// Uses smem staging to decouple read/write access patterns for coalesced gmem
-// access in both phases. Phase 1 vectorizes along dim 0; Phase 2 writes along
-// dim 1 (coalesced gmem stores).
+// Uses smem staging with two views of a flat buffer: row-major write view
+// for Phase 1, column-major read view for Phase 2 (implicit transpose).
+// Both phases use kMaxVecBits (scalar = 8*sizeof(T) from host).
 template<int kTileDim, uint32_t kMaxVecBits,
          typename SrcEngine, typename SrcLayout,
          typename DstEngine, typename DstLayout>
@@ -183,18 +183,17 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     static_assert(std::is_same_v<T, typename DstEngine::value_type>,
                   "TransposeCopyKernel: src and dst value types must match");
 
-    // Padding ensures column offsets are 16-byte aligned for cooperative_copy's
-    // vectorized smem access (recast to uint128_t). Round kTileDim up to the next
-    // multiple of (16/sizeof(T)) elements.
-    constexpr int kVecElems = 16 / sizeof(T);
-    constexpr int kPadded = ((kTileDim / kVecElems) + 1) * kVecElems;
+    __shared__ T smem[kTileDim * kTileDim];
 
-    __shared__ T smem[kTileDim * kPadded];
-
-    // Smem layout: row-major padded — stride-1 on dim 0 (matches src contiguous dim)
-    auto smem_tile = cute::make_tensor(cute::make_smem_ptr(smem),
+    // Write view: row-major (stride-1 on dim 0, matches src)
+    auto smem_w = cute::make_tensor(cute::make_smem_ptr(smem),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<1>{}, cute::Int<kPadded>{})));
+                          cute::make_stride(cute::Int<1>{}, cute::Int<kTileDim>{})));
+
+    // Read view: column-major (stride-1 on dim 0, matches dst) — transposed
+    auto smem_r = cute::make_tensor(cute::make_smem_ptr(smem),
+        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
+                          cute::make_stride(cute::Int<kTileDim>{}, cute::Int<1>{})));
 
     // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
     auto tiler = cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{});
@@ -211,11 +210,11 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     auto dst_tile = dst_tiled(cute::_,
                               cute::make_coord(blockIdx.y, blockIdx.x));
 
-    // Phase 1: gmem(src) -> smem (vectorized along dim 0 — both stride-1)
-    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, src_tile, smem_tile);
+    // Phase 1: gmem(src) -> smem (row-major)
+    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, src_tile, smem_w);
     __syncthreads();
-    // Phase 2: smem -> gmem(dst) (element-wise — smem dim-0 contiguous, dst dim-1 contiguous)
-    cute::cooperative_copy<256, 8 * sizeof(T)>(threadIdx.x, smem_tile, dst_tile);
+    // Phase 2: smem -> gmem(dst) (column-major view — transposed)
+    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, smem_r, dst_tile);
 }
 
 }  // namespace kernel
