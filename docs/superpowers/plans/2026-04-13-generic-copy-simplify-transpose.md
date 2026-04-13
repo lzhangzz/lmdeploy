@@ -115,11 +115,7 @@ Replace lines 266–317 (the body of the `if (is_2d_transpose && ...)` block) wi
                 cute::make_layout(cute::make_shape(M, N),
                                   cute::make_stride(b.stride(0), cute::Int<1>{})));
 
-            using SrcE = typename decltype(src_gmem)::engine_type;
-            using SrcL = typename decltype(src_gmem)::layout_type;
-            using DstE = typename decltype(dst_gmem)::engine_type;
-            using DstL = typename decltype(dst_gmem)::layout_type;
-            kernel::TransposeCopyKernel<kTileDim, kVB, SrcE, SrcL, DstE, DstL>
+            kernel::TransposeCopyKernel<kTileDim, kVB>
                 <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
         };
 
