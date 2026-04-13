@@ -13,7 +13,7 @@
 
 namespace turbomind::core {
 
-using cute::_;
+using namespace cute;
 
 // CuTe's make_shape/make_stride require compile-time variadic template args,
 // but our tensor shapes and strides are runtime values. These helpers bridge
@@ -26,7 +26,7 @@ namespace detail {
 template<size_t... Is>
 auto make_cute_shape_impl(const ssize_t* data, std::index_sequence<Is...>)
 {
-    return cute::make_shape(static_cast<int32_t>(data[Is])...);
+    return make_shape(static_cast<int32_t>(data[Is])...);
 }
 
 template<int kRank>
@@ -38,7 +38,7 @@ auto make_cute_shape(const ssize_t* data)
 template<size_t... Is>
 auto make_cute_stride_impl(const ssize_t* data, std::index_sequence<Is...>)
 {
-    return cute::make_stride(static_cast<int64_t>(data[Is])...);
+    return make_stride(static_cast<int64_t>(data[Is])...);
 }
 
 template<int kRank>
@@ -50,7 +50,7 @@ auto make_cute_stride(const ssize_t* data)
 template<int kRank>
 auto make_cute_layout(const ssize_t* shape, const ssize_t* stride)
 {
-    return cute::make_layout(make_cute_shape<kRank>(shape),
+    return make_layout(make_cute_shape<kRank>(shape),
                              make_cute_stride<kRank>(stride));
 }
 
@@ -59,13 +59,13 @@ auto make_cute_layout(const ssize_t* shape, const ssize_t* stride)
 template<size_t... Is>
 auto make_unit_inner_stride_impl(const ssize_t* stride, std::index_sequence<Is...>)
 {
-    return cute::make_stride(cute::Int<1>{}, static_cast<int64_t>(stride[Is + 1])...);
+    return make_stride(Int<1>{}, static_cast<int64_t>(stride[Is + 1])...);
 }
 
 template<int kRank>
 auto make_cute_layout_unit_inner(const ssize_t* shape, const ssize_t* stride)
 {
-    return cute::make_layout(
+    return make_layout(
         make_cute_shape<kRank>(shape),
         make_unit_inner_stride_impl(stride, std::make_index_sequence<kRank - 1>{}));
 }
@@ -83,17 +83,17 @@ CopyKernelND(const T* __restrict__ src_ptr,
              SrcLayoutT             src_layout,
              DstLayoutT             dst_layout)
 {
-    if constexpr (kVec * cute::sizeof_bits_v<T> <= 128)
+    if constexpr (kVec * sizeof_bits_v<T> <= 128)
     {
     constexpr int kBlockThreads = 256;
-    constexpr int kRank         = cute::rank_v<SrcLayoutT>;
+    constexpr int kRank         = rank_v<SrcLayoutT>;
     static_assert(1 <= kRank && kRank <= 4, "CopyKernelND: rank must be 1..4");
     constexpr int kCopyThreads  = kBlockThreads / kVec;
 
-    auto tiled_copy = cute::make_tiled_copy(
-        cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kCopyThreads>{})),
-        cute::make_layout(cute::make_shape(cute::Int<kVec>{})));
+    auto tiled_copy = make_tiled_copy(
+        Copy_Atom<UniversalCopy<uint_bit_t<kVec * sizeof_bits_v<T>>>, T>{},
+        make_layout(make_shape(Int<kCopyThreads>{})),
+        make_layout(make_shape(Int<kVec>{})));
 
     if (threadIdx.x >= kCopyThreads) return;
 
@@ -104,8 +104,8 @@ CopyKernelND(const T* __restrict__ src_ptr,
     // This is intentional — group is a pure compile-time operation with zero
     // runtime cost. The compiler eliminates the redundancy via CSE.
     if constexpr (kRank > 1) {
-        auto src_layout_g = cute::group<1, kRank>(src_layout);
-        if (blockIdx.y >= cute::size(cute::get<1>(src_layout_g))) return;
+        auto src_layout_g = group<1, kRank>(src_layout);
+        if (blockIdx.y >= size(get<1>(src_layout_g))) return;
     } else {
         if (blockIdx.y > 0) return;
     }
@@ -113,29 +113,29 @@ CopyKernelND(const T* __restrict__ src_ptr,
     // Obtain the 1D row tensor (for rank>1, group outer dims and slice; for rank-1, use as-is)
     auto rowSrc = [&] {
         if constexpr (kRank > 1) {
-            auto src_layout_g = cute::group<1, kRank>(src_layout);
-            auto gSrc_g = cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout_g);
+            auto src_layout_g = group<1, kRank>(src_layout);
+            auto gSrc_g = make_tensor(make_gmem_ptr(src_ptr), src_layout_g);
             return gSrc_g(_, blockIdx.y);
         } else {
-            return cute::make_tensor(cute::make_gmem_ptr(src_ptr), src_layout);
+            return make_tensor(make_gmem_ptr(src_ptr), src_layout);
         }
     }();
 
     auto rowDst = [&] {
         if constexpr (kRank > 1) {
-            auto dst_layout_g = cute::group<1, kRank>(dst_layout);
-            auto gDst_g = cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout_g);
+            auto dst_layout_g = group<1, kRank>(dst_layout);
+            auto gDst_g = make_tensor(make_gmem_ptr(dst_ptr), dst_layout_g);
             return gDst_g(_, blockIdx.y);
         } else {
-            return cute::make_tensor(cute::make_gmem_ptr(dst_ptr), dst_layout);
+            return make_tensor(make_gmem_ptr(dst_ptr), dst_layout);
         }
     }();
 
-    auto tiler    = cute::Int<kBlockThreads>{};
-    auto tiledSrc = cute::zipped_divide(rowSrc, tiler);
-    auto tiledDst = cute::zipped_divide(rowDst, tiler);
+    auto tiler    = Int<kBlockThreads>{};
+    auto tiledSrc = zipped_divide(rowSrc, tiler);
+    auto tiledDst = zipped_divide(rowDst, tiler);
 
-    if (blockIdx.x >= cute::size<1>(tiledSrc)) return;
+    if (blockIdx.x >= size<1>(tiledSrc)) return;
 
     auto ctaSrc = tiledSrc(_, blockIdx.x);
     auto ctaDst = tiledDst(_, blockIdx.x);
@@ -144,22 +144,22 @@ CopyKernelND(const T* __restrict__ src_ptr,
     auto thrDst = thr_copy.partition_D(ctaDst);
 
     if constexpr (kVec > 1) {
-        cute::copy(tiled_copy, thrSrc, thrDst);
+        copy(tiled_copy, thrSrc, thrDst);
     }
     else {
-        auto id_row   = cute::make_identity_tensor(cute::shape(rowSrc));
-        auto id_tiled = cute::zipped_divide(id_row, tiler);
+        auto id_row   = make_identity_tensor(shape(rowSrc));
+        auto id_tiled = zipped_divide(id_row, tiler);
         auto tile_id  = id_tiled(_, blockIdx.x);
 
         auto thrId = thr_copy.partition_S(tile_id);
 
-        auto pred = cute::make_tensor<bool>(cute::shape(thrSrc));
+        auto pred = make_tensor<bool>(shape(thrSrc));
         PRAGMA_UNROLL
-        for (int i = 0; i < cute::size(pred); ++i) {
-            pred(i) = cute::get<0>(thrId(i)) < cute::size(rowSrc);
+        for (int i = 0; i < size(pred); ++i) {
+            pred(i) = get<0>(thrId(i)) < size(rowSrc);
         }
 
-        cute::copy_if(pred, thrSrc, thrDst);
+        copy_if(pred, thrSrc, thrDst);
     }
     }  // end if constexpr (kVec * sizeof_bits_v<T> <= 128)
 }
@@ -185,42 +185,42 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     __shared__ T smem[kTileDim * kTileDim];
 
     // Smem view: row-major — stride-1 on dim 0 (matches src contiguous dim)
-    auto smem_view = cute::make_tensor(cute::make_smem_ptr(smem),
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<1>{}, cute::Int<kTileDim>{})));
+    auto smem_view = make_tensor(make_smem_ptr(smem),
+        make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}),
+                          make_stride(Int<1>{}, Int<kTileDim>{})));
 
     // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
-    auto tiler = cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{});
-    auto src_tiled = cute::zipped_divide(src, tiler);
-    auto dst_tiled = cute::zipped_divide(dst, tiler);
+    auto tiler = make_shape(Int<kTileDim>{}, Int<kTileDim>{});
+    auto src_tiled = zipped_divide(src, tiler);
+    auto dst_tiled = zipped_divide(dst, tiler);
 
     // Bounds check on tile grid
-    if (blockIdx.y >= cute::size<1, 0>(src_tiled) ||
-        blockIdx.x >= cute::size<1, 1>(src_tiled)) return;
+    if (blockIdx.y >= size<1, 0>(src_tiled) ||
+        blockIdx.x >= size<1, 1>(src_tiled)) return;
 
     // Per-CTA tile — unwrap zipped rank-1 ((32,32)) to rank-2 (32,32) for TiledCopy
-    auto src_tile_z = src_tiled(cute::_, cute::make_coord(blockIdx.y, blockIdx.x));
-    auto dst_tile_z = dst_tiled(cute::_, cute::make_coord(blockIdx.y, blockIdx.x));
-    auto src_tile = cute::make_tensor(src_tile_z.data(), cute::get<0>(src_tile_z.layout()));
-    auto dst_tile = cute::make_tensor(dst_tile_z.data(), cute::get<0>(dst_tile_z.layout()));
+    auto src_tile_z = src_tiled(_, make_coord(blockIdx.y, blockIdx.x));
+    auto dst_tile_z = dst_tiled(_, make_coord(blockIdx.y, blockIdx.x));
+    auto src_tile = make_tensor(src_tile_z.data(), get<0>(src_tile_z.layout()));
+    auto dst_tile = make_tensor(dst_tile_z.data(), get<0>(dst_tile_z.layout()));
 
     // Phase 1: gmem(src) -> smem via TiledCopy
-    auto tc1 = cute::make_tiled_copy(
-        cute::Copy_Atom<cute::UniversalCopy<T>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim / 4>{})),
-        cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<1>{})));
+    auto tc1 = make_tiled_copy(
+        Copy_Atom<UniversalCopy<T>, T>{},
+        make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim / 4>{})),
+        make_layout(make_shape(Int<1>{}, Int<1>{})));
     auto thr1 = tc1.get_slice(threadIdx.x);
-    cute::copy(tc1, thr1.partition_S(src_tile), thr1.partition_D(smem_view));
+    copy(tc1, thr1.partition_S(src_tile), thr1.partition_D(smem_view));
 
     __syncthreads();
 
     // Phase 2: smem -> gmem(dst) via TiledCopy
-    auto tc2 = cute::make_tiled_copy(
-        cute::Copy_Atom<cute::UniversalCopy<T>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim / 4>{}, cute::Int<kTileDim>{})),
-        cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<1>{})));
+    auto tc2 = make_tiled_copy(
+        Copy_Atom<UniversalCopy<T>, T>{},
+        make_layout(make_shape(Int<kTileDim / 4>{}, Int<kTileDim>{})),
+        make_layout(make_shape(Int<1>{}, Int<1>{})));
     auto thr2 = tc2.get_slice(threadIdx.x);
-    cute::copy(tc2, thr2.partition_S(smem_view), thr2.partition_D(dst_tile));
+    copy(tc2, thr2.partition_S(smem_view), thr2.partition_D(dst_tile));
 }
 
 }  // namespace kernel
@@ -280,13 +280,13 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         auto tr_dispatch_elem_size = [&](auto t) {
             using T = decltype(t);
 
-            auto src_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
-                cute::make_layout(cute::make_shape(M, N),
-                                  cute::make_stride(cute::Int<1>{}, a.stride(1))));
+            auto src_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
+                make_layout(make_shape(M, N),
+                                  make_stride(Int<1>{}, a.stride(1))));
 
-            auto dst_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<T*>(tr_data_b)),
-                cute::make_layout(cute::make_shape(M, N),
-                                  cute::make_stride(b.stride(0), cute::Int<1>{})));
+            auto dst_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<T*>(tr_data_b)),
+                make_layout(make_shape(M, N),
+                                  make_stride(b.stride(0), Int<1>{})));
 
             kernel::TransposeCopyKernel<kTileDim, 8 * sizeof(T)>
                 <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
