@@ -165,106 +165,51 @@ CopyKernelND(const T* __restrict__ src_ptr,
 }
 
 // ============================================================================
-// CUDA kernel: TransposeCopyKernel (SMEM tiled 2D transpose)
+// CUDA kernel: TransposeCopyKernel (cooperative_copy 2D transpose)
 // ============================================================================
-template<typename T, int kVec, int kTileDim>
+template<int kTileDim, uint32_t kMaxVecBits,
+         typename SrcEngine, typename SrcLayout,
+         typename DstEngine, typename DstLayout>
 __global__ void __launch_bounds__(256)
-TransposeCopyKernel(const T* __restrict__ src_ptr,
-                    T* __restrict__       dst_ptr,
-                    int64_t               src_stride_outer,
-                    int64_t               dst_stride_outer,
-                    int32_t               M,
-                    int32_t               N)
+TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
+                    cute::Tensor<DstEngine, DstLayout> dst)
 {
-    // Guard: kVec * sizeof(T) must not exceed 16 bytes (128 bits).
-    // Also require kVec >= 2 — kVec=1 would need 1024 threads (kTileDim*kTileDim)
-    // but we only launch 256, so the template body must not be instantiated.
-    if constexpr (kVec * cute::sizeof_bits_v<T> <= 128 && kVec >= 2)
-    {
-    static_assert(kTileDim % kVec == 0, "TransposeCopyKernel: kTileDim must be divisible by kVec");
-    // Thread bounds: for kTileDim=32, kVec=4: 8*32=256 (all threads).
-    // For kVec=8: 4*32=128 (half threads). Compute min across both phases.
-    constexpr int kThrLoad  = (kTileDim / kVec) * kTileDim;
-    constexpr int kThrStore = kTileDim * (kTileDim / kVec);
-    constexpr int kCopyThreads = kThrLoad < kThrStore ? kThrLoad : kThrStore;
-    if (threadIdx.x >= kCopyThreads) return;
+    using T = typename SrcEngine::value_type;
+    static_assert(std::is_same_v<T, typename DstEngine::value_type>,
+                  "TransposeCopyKernel: src and dst value types must match");
 
-    // --- Shared memory with padding for bank conflict avoidance ---
-    __shared__ T smem[kTileDim * (kTileDim + 1)];
+    constexpr int kPadded = kTileDim + (4 + sizeof(T) - 1) / sizeof(T);
 
-    // Single smem view: row-major padded layout.
-    // Phase 1 writes through this view (coalesced along mode 0).
-    // Phase 2 reads through this SAME view (NOT a transposed view — we
-    // want smem(i,j) for both phases, not smem(j,i)).
+    __shared__ T smem[kTileDim * kPadded];
+
     auto smem_w = cute::make_tensor(cute::make_smem_ptr(smem),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<1>{}, cute::Int<kTileDim + 1>{})));
+                          cute::make_stride(cute::Int<1>{}, cute::Int<kPadded>{})));
 
-    // --- Tile coordinates ---
-    int m0 = blockIdx.y * kTileDim;
-    int n0 = blockIdx.x * kTileDim;
-
-    // --- Gmem tile tensors with Int<1> on contiguous modes ---
-    // Src tile: contiguous along mode 0 (Int<1> stride)
-    auto src_tile = cute::make_tensor(cute::make_gmem_ptr(src_ptr + m0 + n0 * src_stride_outer),
+    auto smem_r = cute::make_tensor(cute::make_smem_ptr(smem),
         cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(cute::Int<1>{}, src_stride_outer)));
+                          cute::make_stride(cute::Int<kPadded>{}, cute::Int<1>{})));
 
-    // Dst tile: contiguous along mode 1 (Int<1> stride).
-    // Same logical position (m0,n0): dst[m0+i, n0+j] = dst_ptr + (m0+i)*dst_stride_outer + (n0+j)
-    auto dst_tile = cute::make_tensor(cute::make_gmem_ptr(dst_ptr + n0 + m0 * dst_stride_outer),
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{}),
-                          cute::make_stride(dst_stride_outer, cute::Int<1>{})));
+    // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
+    auto tiler = cute::make_shape(cute::Int<kTileDim>{}, cute::Int<kTileDim>{});
+    auto src_tiled = cute::zipped_divide(src, tiler);
+    auto dst_tiled = cute::zipped_divide(dst, tiler);
 
-    // --- Phase 1: gmem(src) → registers → smem ---
-    // Thread layout: (kTileDim/kVec, kTileDim) — vectorize along mode 0
-    auto load_copy = cute::make_tiled_copy(
-        cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim / kVec>{},
-                                           cute::Int<kTileDim>{})),
-        cute::make_layout(cute::make_shape(cute::Int<kVec>{}, cute::Int<1>{})));
+    // Bounds check on tile grid — zipped_divide produces ((inner0,inner1),(outer0,outer1))
+    if (blockIdx.y >= cute::size<1, 0>(src_tiled) ||
+        blockIdx.x >= cute::size<1, 1>(src_tiled)) return;
 
-    auto thr_load = load_copy.get_slice(threadIdx.x);
-    auto thr_src  = thr_load.partition_S(src_tile);
-    auto thr_smw  = thr_load.partition_D(smem_w);
-    // make_fragment_like is safe here: smem_w has mode-0 stride Int<1> (column-major),
-    // so make_fragment_like (which forces mode-0 to stride-1) produces the same layout
-    // as make_tensor_like. The manual rmem(i)=smem(i) loop below depends on this match.
-    auto rmem_ld  = cute::make_fragment_like(thr_smw);
+    // Per-CTA tile with static shape (kTileDim, kTileDim)
+    auto src_tile = src_tiled(cute::_,
+                              cute::make_coord(blockIdx.y, blockIdx.x));
+    auto dst_tile = dst_tiled(cute::_,
+                              cute::make_coord(blockIdx.y, blockIdx.x));
 
-    cute::copy(load_copy, thr_src, rmem_ld);    // vectorized gmem → registers
-
-    // Manual rmem → smem transfer (avoids CuTe auto-vectorization on smem)
-    CUTE_UNROLL
-    for (int i = 0; i < cute::size(thr_smw); ++i) {
-        thr_smw(i) = rmem_ld(i);
-    }
-
+    // Phase 1: gmem(src) -> smem (cooperative, vectorized)
+    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, src_tile, smem_w);
     __syncthreads();
-
-    // --- Phase 2: smem → registers → gmem(dst) ---
-    // Thread layout: (kTileDim, kTileDim/kVec) — vectorize along mode 1
-    auto store_copy = cute::make_tiled_copy(
-        cute::Copy_Atom<cute::UniversalCopy<cute::uint_bit_t<kVec * cute::sizeof_bits_v<T>>>, T>{},
-        cute::make_layout(cute::make_shape(cute::Int<kTileDim>{},
-                                           cute::Int<kTileDim / kVec>{})),
-        cute::make_layout(cute::make_shape(cute::Int<1>{}, cute::Int<kVec>{})));
-
-    auto thr_store = store_copy.get_slice(threadIdx.x);
-    auto thr_smw2  = thr_store.partition_S(smem_w);   // same view, NOT transposed
-    auto thr_dst   = thr_store.partition_D(dst_tile);
-    // Same reasoning as rmem_ld above: smem_w mode-0 is stride-1, so fragment layout matches.
-    auto rmem_st   = cute::make_fragment_like(thr_smw2);
-
-    // Manual smem → rmem transfer (avoids CuTe auto-vectorization on smem)
-    CUTE_UNROLL
-    for (int i = 0; i < cute::size(thr_smw2); ++i) {
-        rmem_st(i) = thr_smw2(i);
-    }
-
-    cute::copy(store_copy, rmem_st, thr_dst);    // vectorized registers → gmem
-
-    }  // end if constexpr (kVec * sizeof_bits_v<T> <= 128)
+    // Phase 2: smem -> gmem(dst) (cooperative, vectorized, transposed via smem_r view)
+    cute::cooperative_copy<256, kMaxVecBits>(threadIdx.x, smem_r, dst_tile);
 }
 
 }  // namespace kernel
@@ -313,67 +258,56 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     if (is_2d_transpose &&
         a.shape(0) % kTileDim == 0 && a.shape(1) % kTileDim == 0)
     {
-        // NOTE: The transpose kernel requires kVec >= 2 because kTileDim=32 with
-        // kVec=1 would need 1024 threads (32*32) but we only have 256.
-        // If pointer alignment gives vec_size=1, fall through to scalar GenericCopy.
-
-        // Transpose alignment: only pointer alignment matters
         int64_t tr_alignment = 16;
         auto tr_data_a = src.raw_data();
         auto tr_data_b = dst.raw_data();
         tr_alignment = std::gcd(tr_alignment, reinterpret_cast<uintptr_t>(tr_data_a));
         tr_alignment = std::gcd(tr_alignment, reinterpret_cast<uintptr_t>(tr_data_b));
 
-        const int tr_elem_size = byte_size(dtype);
-        int tr_vec_size = static_cast<int>(tr_alignment / std::max<int64_t>(1, tr_elem_size));
+        int max_vec_bits = std::min(128, static_cast<int>(tr_alignment * 8));
 
-        // Cap at 128 bits (16 bytes)
-        if (tr_vec_size * tr_elem_size > 16) {
-            tr_vec_size = 16 / tr_elem_size;
-        }
+        int32_t M = static_cast<int32_t>(a.shape(0));
+        int32_t N = static_cast<int32_t>(a.shape(1));
+        dim3 grid(static_cast<uint32_t>(N / kTileDim),
+                  static_cast<uint32_t>(M / kTileDim));
 
-        // kTileDim must be divisible by vec_size for TiledCopy thread layout
-        while (tr_vec_size > 1 && kTileDim % tr_vec_size != 0) {
-            tr_vec_size /= 2;
-        }
+        auto tr_dispatch_elem_size = [&](auto t) {
+            using T = decltype(t);
 
-        // Require vec_size >= 2 for transpose kernel (otherwise fall through to scalar)
-        if (tr_vec_size >= 2) {
-            int32_t M = static_cast<int32_t>(a.shape(0));
-            int32_t N = static_cast<int32_t>(a.shape(1));
-            dim3 grid(static_cast<uint32_t>(N / kTileDim),
-                      static_cast<uint32_t>(M / kTileDim));
+            auto src_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
+                cute::make_layout(cute::make_shape(M, N),
+                                  cute::make_stride(cute::Int<1>{}, a.stride(1))));
 
-            auto tr_dispatch_elem_size = [&](auto t) {
-                using T = decltype(t);
+            auto dst_gmem = cute::make_tensor(cute::make_gmem_ptr(reinterpret_cast<T*>(tr_data_b)),
+                cute::make_layout(cute::make_shape(M, N),
+                                  cute::make_stride(b.stride(0), cute::Int<1>{})));
 
-                auto tr_dispatch_vec = [&](auto v) {
-                    constexpr int kVec = v.value;
-                    auto func = kernel::TransposeCopyKernel<T, kVec, kTileDim>;
-                    func<<<grid, 256, 0, stream>>>(
-                        reinterpret_cast<const T*>(tr_data_a),
-                        reinterpret_cast<T*>(tr_data_b),
-                        a.stride(1), b.stride(0),
-                        M, N);
-                };
-
-                switch (tr_vec_size) {
-                    case 16: tr_dispatch_vec(constant<16>{}); break;
-                    case 8:  tr_dispatch_vec(constant<8>{}); break;
-                    case 4:  tr_dispatch_vec(constant<4>{}); break;
-                    case 2:  tr_dispatch_vec(constant<2>{}); break;
-                    default: tr_dispatch_vec(constant<1>{}); break;
-                }
+            auto tr_dispatch_vec = [&](auto v) {
+                constexpr uint32_t kVB = v.value;
+                using SrcE = typename decltype(src_gmem)::engine_type;
+                using SrcL = typename decltype(src_gmem)::layout_type;
+                using DstE = typename decltype(dst_gmem)::engine_type;
+                using DstL = typename decltype(dst_gmem)::layout_type;
+                kernel::TransposeCopyKernel<kTileDim, kVB, SrcE, SrcL, DstE, DstL>
+                    <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
             };
 
-            switch (byte_size(dtype)) {
-                case 1: return tr_dispatch_elem_size(uint8_t{});
-                case 2: return tr_dispatch_elem_size(uint16_t{});
-                case 4: return tr_dispatch_elem_size(uint32_t{});
-                default:
-                    TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
-                    break;
+            switch (max_vec_bits) {
+                case 128: tr_dispatch_vec(constant<128>{}); break;
+                case 64:  tr_dispatch_vec(constant<64>{}); break;
+                case 32:  tr_dispatch_vec(constant<32>{}); break;
+                case 16:  tr_dispatch_vec(constant<16>{}); break;
+                default:  tr_dispatch_vec(constant<8>{}); break;
             }
+        };
+
+        switch (byte_size(dtype)) {
+            case 1: return tr_dispatch_elem_size(uint8_t{});
+            case 2: return tr_dispatch_elem_size(uint16_t{});
+            case 4: return tr_dispatch_elem_size(uint32_t{});
+            default:
+                TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
+                break;
         }
     }
 
