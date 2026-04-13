@@ -9,10 +9,31 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(REPO, 'lmdeploy'))
 sys.path.insert(0, os.path.join(REPO, 'build', 'lib'))
 
+import argparse
+
 import torch
 import _turbomind as _tm
 
 DEV = torch.device('cuda')
+
+DTYPE_MAP = {
+    'f32': torch.float32,
+    'f16': torch.float16,
+    'bf16': torch.bfloat16,
+    'i8': torch.int8,
+    'i32': torch.int32,
+}
+
+# Set by CLI args
+DTYPE = torch.float32
+
+
+def _rand(*shape, **kwargs):
+    if DTYPE.is_floating_point:
+        return torch.randn(*shape, dtype=DTYPE, device=DEV, **kwargs)
+    if DTYPE == torch.int8:
+        return torch.randint(-128, 127, shape, dtype=DTYPE, device=DEV, **kwargs)
+    return torch.randint(0, 1000, shape, dtype=DTYPE, device=DEV, **kwargs)
 
 
 def make_tensors(torch_tensor):
@@ -96,24 +117,18 @@ def benchmark_copy(name, tm_src, tm_dst, torch_tensor):
     pct = gc_gbps / pt_gbps * 100 if pt_gbps > 0 else 0
     print(f"         GenericCopy: {gc_gbps:.1f} GB/s | PyTorch: {pt_gbps:.1f} GB/s | "
           f"Contiguous: {bl_gbps:.1f} GB/s ({pct:.1f}% of PyTorch)")
+    return gc_gbps, pt_gbps, pct
 
 
-def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
-    """Run a single GenericCopy test. Returns True on pass."""
+def run_test(name, torch_tensor):
+    """Run a single GenericCopy test. Returns (passed, bench_data)."""
     tm_src, tm_dst, golden = make_tensors(torch_tensor)
 
     stream = torch.cuda.current_stream()
     _tm.generic_copy_on_stream(tm_src, tm_dst, stream.cuda_stream)
 
-    # Read back the result through DLPack
     result = torch.from_dlpack(tm_dst)
-
-    is_float = torch_tensor.is_floating_point()
-
-    if is_float:
-        match = torch.allclose(result, golden, atol=atol, rtol=rtol)
-    else:
-        match = torch.equal(result, golden)
+    match = torch.equal(result, golden)
 
     status = "PASS" if match else "FAIL"
     shape = list(torch_tensor.shape)
@@ -121,84 +136,110 @@ def run_test(name, torch_tensor, atol=1e-5, rtol=1e-5):
     print(f"  [{status}] {name}: shape={shape}, stride={stride}")
 
     if not match:
-        if is_float:
-            diff = (result - golden).abs()
-            print(f"         max_diff={diff.max().item()}, mean_diff={diff.mean().item()}")
-        else:
-            mismatches = (result != golden).sum().item()
-            total = result.numel()
-            print(f"         mismatches={mismatches}/{total}")
+        mismatches = (result != golden).sum().item()
+        total = result.numel()
+        print(f"         mismatches={mismatches}/{total}")
 
     if match:
-        benchmark_copy(name, tm_src, tm_dst, torch_tensor)
-
-    return match
+        bench = benchmark_copy(name, tm_src, tm_dst, torch_tensor)
+        return True, bench
+    return False, None
 
 
 def main():
-    print("GenericCopy Test Suite")
+    global DTYPE
+
+    parser = argparse.ArgumentParser(description='GenericCopy Test Suite')
+    parser.add_argument('--dtype', choices=list(DTYPE_MAP), default='f32',
+                        help='Data type for all tests (default: f32)')
+    args = parser.parse_args()
+
+    DTYPE = DTYPE_MAP[args.dtype]
+
+    print(f"GenericCopy Test Suite — dtype={args.dtype}")
     print("=" * 60)
 
     all_passed = True
     total = 0
     passed = 0
 
-    def check(name, tensor, **kwargs):
+    def check(name, tensor):
         nonlocal all_passed, total, passed
         total += 1
-        if run_test(name, tensor, **kwargs):
+        ok, _ = run_test(name, tensor)
+        if ok:
             passed += 1
         else:
             all_passed = False
 
     # --- Contiguous baseline ---
     print("\nContiguous baseline:")
-    check("contiguous f32", torch.randn(64, 128, dtype=torch.float32, device=DEV))
+    check("contiguous", _rand(64, 128))
 
     # --- Rank-1 (1D contiguous) ---
     print("\nRank-1:")
-    check("rank-1 f32", torch.randn(8192, dtype=torch.float32, device=DEV))
-    check("rank-1 f16", torch.randn(8192, dtype=torch.float16, device=DEV), atol=1e-3, rtol=1e-3)
-    check("rank-1 i32", torch.randint(0, 1000, (8192,), dtype=torch.int32, device=DEV))
+    check("rank-1", _rand(8192))
 
     # --- 2D layout transformations ---
     print("\n2D transformations:")
-    check("transpose f32", torch.randn(64, 128, dtype=torch.float32, device=DEV).t())
-    check("row-stride (every-other-row)", torch.randn(64, 128, dtype=torch.float32, device=DEV)[::2, :])
-    check("col-stride (every-other-col)", torch.randn(64, 128, dtype=torch.float32, device=DEV)[:, ::2])
-    check("narrow outer dim", torch.randn(128, 64, dtype=torch.float32, device=DEV)[10:50, :])
+    check("transpose", _rand(64, 128).t())
+    check("row-stride (every-other-row)", _rand(64, 128)[::2, :])
+    check("col-stride (every-other-col)", _rand(64, 128)[:, ::2])
+    check("narrow outer dim", _rand(128, 64)[10:50, :])
 
     # --- 3D transformations ---
     print("\n3D transformations:")
-    check("permute (2,0,1)", torch.randn(16, 32, 64, dtype=torch.float32, device=DEV).permute(2, 0, 1))
+    check("permute (2,0,1)", _rand(16, 32, 64).permute(2, 0, 1))
 
     # --- 4D transformations ---
     print("\n4D transformations:")
-    check("4D slice", torch.randn(4, 8, 32, 64, dtype=torch.float32, device=DEV)[:, :, ::3, :])
+    check("4D slice", _rand(4, 8, 32, 64)[:, :, ::3, :])
 
     # --- Combined operations ---
     print("\nCombined operations:")
-    check("slice+transpose", torch.randn(64, 128, dtype=torch.float32, device=DEV)[::2, :].t())
+    check("slice+transpose", _rand(64, 128)[::2, :].t())
 
-    # --- Dtype sweep (all use transpose) ---
-    print("\nDtype sweep (transpose):")
-    check("transpose f16", torch.randn(64, 128, dtype=torch.float16, device=DEV).t(), atol=1e-3, rtol=1e-3)
-    check("transpose i8", torch.randint(-128, 127, (64, 128), dtype=torch.int8, device=DEV).t())
-    check("transpose i32", torch.randint(0, 1000, (64, 128), dtype=torch.int32, device=DEV).t())
-
-    # --- Throughput sweep (1M to 256M elements) ---
+    # --- Throughput sweep ---
     print("\nThroughput sweep:")
+    sweep_contig = []
+    sweep_trans = []
     for n in [1024, 2048, 4096, 8192, 16384]:
         numel = n * n
-        label = f"contig {numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"contig {numel // 1024}K"
-        check(f"{label} ({n}x{n})", torch.randn(n, n, dtype=torch.float32, device=DEV))
-        label = f"trans  {numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"trans  {numel // 1024}K"
-        check(f"{label} ({n}x{n})", torch.randn(n, n, dtype=torch.float32, device=DEV).t())
+        size_label = f"{numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"{numel // 1024}K"
+        shape_label = f"{n}x{n}"
+
+        total += 1
+        ok, bench = run_test(f"contig {size_label} ({shape_label})", _rand(n, n))
+        if ok:
+            passed += 1
+            sweep_contig.append((shape_label, *bench))
+        else:
+            all_passed = False
+
+        total += 1
+        ok, bench = run_test(f"trans  {size_label} ({shape_label})", _rand(n, n).t())
+        if ok:
+            passed += 1
+            sweep_trans.append((shape_label, *bench))
+        else:
+            all_passed = False
+
+    # --- Throughput summary table ---
+    print(f"\n{'=' * 60}")
+    print(f"Throughput Summary (dtype={args.dtype}, GB/s):")
+    print(f"  {'Shape':<14} {'GenericCopy':>12} {'PyTorch':>12} {'%PT':>8}")
+    print(f"  {'-' * 14} {'-' * 12} {'-' * 12} {'-' * 8}")
+    print("  Contiguous:")
+    for shape, gc, pt, pct in sweep_contig:
+        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
+    print("  Transpose:")
+    for shape, gc, pt, pct in sweep_trans:
+        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
 
     # --- Negative strides ---
     print("\nNegative strides (flip):")
     try:
-        check("flip dim=0", torch.randn(32, 64, dtype=torch.float32, device=DEV).flip(0))
+        check("flip dim=0", _rand(32, 64).flip(0))
     except Exception as e:
         print(f"  [SKIP] flip dim=0: {e}")
         total += 1
