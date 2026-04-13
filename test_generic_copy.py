@@ -18,10 +18,12 @@ DEV = torch.device('cuda')
 
 DTYPE_MAP = {
     'f32': torch.float32,
+    'f64': torch.float64,
     'f16': torch.float16,
     'bf16': torch.bfloat16,
     'i8': torch.int8,
     'i32': torch.int32,
+    'i64': torch.int64,
 }
 
 # Set by CLI args

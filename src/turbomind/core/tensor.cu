@@ -182,12 +182,12 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     static_assert(std::is_same_v<T, typename DstEngine::value_type>,
                   "TransposeCopyKernel: src and dst value types must match");
 
-    __shared__ T smem[kTileDim * kTileDim];
+    __shared__ T smem[kTileDim * (kTileDim + 1)];
 
     // Smem view: row-major — stride-1 on dim 0 (matches src contiguous dim)
     auto smem_view = make_tensor(make_smem_ptr(smem),
         make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}),
-                          make_stride(Int<1>{}, Int<kTileDim>{})));
+                          make_stride(Int<1>{}, Int<kTileDim + 1>{})));
 
     // Tile gmem tensors — inner (kTileDim, kTileDim) is static, outer is dynamic
     auto tiler = make_shape(Int<kTileDim>{}, Int<kTileDim>{});
@@ -296,6 +296,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
             case 1: return tr_dispatch_elem_size(uint8_t{});
             case 2: return tr_dispatch_elem_size(uint16_t{});
             case 4: return tr_dispatch_elem_size(uint32_t{});
+            case 8: return tr_dispatch_elem_size(uint64_t{});
             default:
                 TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
                 break;
@@ -405,6 +406,7 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         case 1: return dispatch_elem_size(uint8_t{});
         case 2: return dispatch_elem_size(uint16_t{});
         case 4: return dispatch_elem_size(uint32_t{});
+        case 8: return dispatch_elem_size(uint64_t{});
         default: TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype); break;
     }
 }
