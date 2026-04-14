@@ -18,10 +18,8 @@ using namespace cute;
 
 // CuTe's make_shape/make_stride require compile-time variadic template args,
 // but our tensor shapes and strides are runtime values. These helpers bridge
-// that gap via std::index_sequence expansion, producing CuTe Layout objects
-// from runtime shape/stride arrays. Only the innermost stride is promoted to
-// compile-time Int<1> (in make_cute_layout_unit_inner) to enable CuTe's
-// vectorized Copy_Atom recast.
+// that gap via std::index_sequence expansion, producing CuTe tuple types
+// from runtime shape/stride arrays.
 namespace detail {
 
 template<size_t... Is>
@@ -48,28 +46,6 @@ auto make_cute_stride(const ssize_t* data)
     return make_cute_stride_impl(data, std::make_index_sequence<kRank>{});
 }
 
-template<int kRank>
-auto make_cute_layout(const ssize_t* shape, const ssize_t* stride)
-{
-    return make_layout(make_cute_shape<kRank>(shape),
-                             make_cute_stride<kRank>(stride));
-}
-
-// Layout with compile-time Int<1> inner stride — needed for CuTe's recast
-// in wide Copy_Atom (vectorized path). Only valid when inner stride == 1.
-template<size_t... Is>
-auto make_unit_inner_stride_impl(const ssize_t* stride, std::index_sequence<Is...>)
-{
-    return make_stride(Int<1>{}, static_cast<int64_t>(stride[Is + 1])...);
-}
-
-template<int kRank>
-auto make_cute_layout_unit_inner(const ssize_t* shape, const ssize_t* stride)
-{
-    return make_layout(
-        make_cute_shape<kRank>(shape),
-        make_unit_inner_stride_impl(stride, std::make_index_sequence<kRank - 1>{}));
-}
 
 // Construct vec_factors tuple: (kVec, 1, 1, ...) — used for element coord scaling.
 // Dim 0 (innermost) scales by kVec; all other dims scale by 1.
@@ -230,7 +206,156 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
 }  // namespace kernel
 
 // ============================================================================
-// Host function: GenericCopy (alignment-gated vectorization)
+// TransposeCopy: 2D transpose via smem-staged TiledCopy
+// ============================================================================
+static void TransposeCopy(const void* data_a, void* data_b,
+                          const Layout& a, const Layout& b,
+                          DataType dtype, cudaStream_t stream)
+{
+    constexpr int kTileDim = 32;
+
+    int32_t M = static_cast<int32_t>(a.shape(0));
+    int32_t N = static_cast<int32_t>(a.shape(1));
+    dim3 grid(static_cast<uint32_t>(N / kTileDim),
+              static_cast<uint32_t>(M / kTileDim));
+
+    auto dispatch = [&](auto t) {
+        using T = decltype(t);
+
+        auto src_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<const T*>(data_a)),
+            make_layout(make_shape(M, N),
+                              make_stride(Int<1>{}, a.stride(1))));
+
+        auto dst_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<T*>(data_b)),
+            make_layout(make_shape(M, N),
+                              make_stride(b.stride(0), Int<1>{})));
+
+        kernel::TransposeCopyKernel<kTileDim, 8 * sizeof(T)>
+            <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
+    };
+
+    switch (byte_size(dtype)) {
+        case 1: return dispatch(uint8_t{});
+        case 2: return dispatch(uint16_t{});
+        case 4: return dispatch(uint32_t{});
+        case 8: return dispatch(uint64_t{});
+        default:
+            TM_CHECK(0) << "TransposeCopy: unsupported element size " << byte_size(dtype);
+            break;
+    }
+}
+
+// ============================================================================
+// VectorizedCopy: alignment-gated vectorized ND copy via CopyKernelND
+// ============================================================================
+static void VectorizedCopy(const void* data_a, void* data_b,
+                           const Layout& a, const Layout& b,
+                           int rank, DataType dtype, cudaStream_t stream)
+{
+    constexpr int kBlockThreads = 256;
+
+    // --- Alignment detection ---
+    int64_t alignment = 16;
+
+    auto align = [&](auto v) { alignment = std::gcd(alignment, v); };
+
+    if (a.stride(0) > 1 || b.stride(0) > 1) {
+        alignment = byte_size(dtype);
+    }
+
+    align(byte_size(dtype, a.shape(0)));
+    align(reinterpret_cast<uintptr_t>(data_a));
+    align(reinterpret_cast<uintptr_t>(data_b));
+
+    for (int i = 1; i < rank; ++i) {
+        align(byte_size(dtype, a.stride(i)));
+        align(byte_size(dtype, b.stride(i)));
+    }
+
+    // --- vec_size computation ---
+    const int elem_size = byte_size(dtype);
+    int vec_size = static_cast<int>(alignment / std::max<int64_t>(1, elem_size));
+
+    if (vec_size * elem_size > 16) {
+        vec_size = 16 / elem_size;
+    }
+
+    while (vec_size > 1 && a.shape(0) % static_cast<int64_t>(vec_size) != 0) {
+        vec_size /= 2;
+    }
+
+    // --- Dispatch on data type T and vec_size kVec ---
+    auto dispatch_elem_size = [&](auto t) {
+        using T = decltype(t);
+        constexpr int kElemBits = sizeof_bits_v<T>;
+        constexpr int kMaxVec = 128 / kElemBits;
+
+        auto dispatch_vec = [&](auto v) {
+            constexpr int kVec = v.value;
+
+            auto dispatch_rank = [&](auto d) {
+                constexpr int kRank = d.value;
+
+                auto data_shape  = detail::make_cute_shape<kRank>(a.shape().data());
+                auto src_strides = detail::make_cute_stride<kRank>(a.stride().data());
+                auto dst_strides = detail::make_cute_stride<kRank>(b.stride().data());
+
+                auto partition_arr = detail::compute_thr_partition<kRank>(
+                    a.shape().data(), kVec);
+                auto thr_partition = detail::make_cute_shape<kRank>(
+                    partition_arr.data());
+
+                auto vec_factors = detail::make_vec_factors<kVec, kRank>();
+                auto tile_sizes  = transform(thr_partition, vec_factors,
+                    [](auto tp, auto vf) { return tp * vf; });
+                auto tile_counts = transform(data_shape, tile_sizes,
+                    [](auto s, auto ts) -> int64_t {
+                        return (static_cast<int64_t>(s) + static_cast<int64_t>(ts) - 1)
+                               / static_cast<int64_t>(ts);
+                    });
+
+                int64_t total_tiles = product(tile_counts);
+                dim3 grid(static_cast<uint32_t>(total_tiles));
+
+                kernel::CopyKernelND<kVec>
+                    <<<grid, kBlockThreads, 0, stream>>>(
+                        reinterpret_cast<const T*>(data_a),
+                        reinterpret_cast<T*>(data_b),
+                        data_shape, src_strides, dst_strides,
+                        thr_partition, tile_counts, vec_factors);
+            };
+
+            switch (rank) {
+                case 1: dispatch_rank(constant<1>{}); break;
+                case 2: dispatch_rank(constant<2>{}); break;
+                case 3: dispatch_rank(constant<3>{}); break;
+                case 4: dispatch_rank(constant<4>{}); break;
+                default: TM_CHECK(0) << "VectorizedCopy: rank > 4 not implemented"; break;
+            }
+        };
+
+        switch (vec_size) {
+            case 16: if constexpr (16 <= kMaxVec) dispatch_vec(constant<16>{}); break;
+            case 8:  if constexpr (8  <= kMaxVec) dispatch_vec(constant<8>{});  break;
+            case 4:  if constexpr (4  <= kMaxVec) dispatch_vec(constant<4>{});  break;
+            case 2:  if constexpr (2  <= kMaxVec) dispatch_vec(constant<2>{});  break;
+            default: dispatch_vec(constant<1>{}); break;
+        }
+    };
+
+    switch (byte_size(dtype)) {
+        case 1: return dispatch_elem_size(uint8_t{});
+        case 2: return dispatch_elem_size(uint16_t{});
+        case 4: return dispatch_elem_size(uint32_t{});
+        case 8: return dispatch_elem_size(uint64_t{});
+        default:
+            TM_CHECK(0) << "VectorizedCopy: unsupported element size " << byte_size(dtype);
+            break;
+    }
+}
+
+// ============================================================================
+// GenericCopy: layout normalization + dispatch
 // ============================================================================
 void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 {
@@ -262,7 +387,6 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     }
 
     const DataType dtype = src.dtype();
-    constexpr int  kBlockThreads = 256;
 
     // --- 2D transpose detection ---
     constexpr int kTileDim = 32;
@@ -273,176 +397,12 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     if (is_2d_transpose &&
         a.shape(0) % kTileDim == 0 && a.shape(1) % kTileDim == 0)
     {
-        auto tr_data_a = src.raw_data();
-        auto tr_data_b = dst.raw_data();
-
-        int32_t M = static_cast<int32_t>(a.shape(0));
-        int32_t N = static_cast<int32_t>(a.shape(1));
-        dim3 grid(static_cast<uint32_t>(N / kTileDim),
-                  static_cast<uint32_t>(M / kTileDim));
-
-        auto tr_dispatch_elem_size = [&](auto t) {
-            using T = decltype(t);
-
-            auto src_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<const T*>(tr_data_a)),
-                make_layout(make_shape(M, N),
-                                  make_stride(Int<1>{}, a.stride(1))));
-
-            auto dst_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<T*>(tr_data_b)),
-                make_layout(make_shape(M, N),
-                                  make_stride(b.stride(0), Int<1>{})));
-
-            kernel::TransposeCopyKernel<kTileDim, 8 * sizeof(T)>
-                <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
-        };
-
-        switch (byte_size(dtype)) {
-            case 1: return tr_dispatch_elem_size(uint8_t{});
-            case 2: return tr_dispatch_elem_size(uint16_t{});
-            case 4: return tr_dispatch_elem_size(uint32_t{});
-            case 8: return tr_dispatch_elem_size(uint64_t{});
-            default:
-                TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
-                break;
-        }
+        TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
+        return;
     }
 
-    // --- Alignment detection ---
-    // NOTE: GenericCopy vectorizes along the innermost (stride-sorted) dimension.
-    // If neither src nor dst has a stride-1 innermost dim, alignment falls to
-    // byte_size(dtype) (vec_size=1), resulting in scalar copies. Vectorizing
-    // along a non-contiguous dimension would require a different kernel architecture.
-    int64_t alignment = 16;
-
-    auto align = [&](auto v) { alignment = std::gcd(alignment, v); };
-
-    // If the innermost dim is not stride-1, we can't vectorize along it
-    if (a.stride(0) > 1 || b.stride(0) > 1) {
-        alignment = byte_size(dtype);
-    }
-
-    align(byte_size(dtype, a.shape(0)));
-
-    auto data_a = src.raw_data();
-    auto data_b = dst.raw_data();
-
-    align(reinterpret_cast<uintptr_t>(data_a));
-    align(reinterpret_cast<uintptr_t>(data_b));
-
-    for (int i = 1; i < rank; ++i) {
-        align(byte_size(dtype, a.stride(i)));
-        align(byte_size(dtype, b.stride(i)));
-    }
-
-    // --- vec_size computation ---
-    const int elem_size = byte_size(dtype);
-    int vec_size = static_cast<int>(alignment / std::max<int64_t>(1, elem_size));
-
-    // Cap at 128 bits (16 bytes) — CuTe's max
-    if (vec_size * elem_size > 16) {
-        vec_size = 16 / elem_size;
-    }
-
-    // Shape divisibility: shape[0] must be divisible by vec_size
-    while (vec_size > 1 && a.shape(0) % static_cast<int64_t>(vec_size) != 0) {
-        vec_size /= 2;
-    }
-
-    // --- Dispatch on data type T and vec_size kVec ---
-    auto dispatch_elem_size = [&](auto t) {
-        using T = decltype(t);
-        constexpr int kElemBits = sizeof_bits_v<T>;
-
-        auto dispatch_vec = [&](auto v) {
-            constexpr int kVec = v.value;
-
-            // Guard: CuTe Copy_Atom supports up to 128 bits
-            if constexpr (kVec * kElemBits <= 128) {
-
-            auto dispatch_rank = [&](auto d) {
-                constexpr int kRank = d.value;
-
-                // 1. Create CuTe layouts (same helpers as before)
-                auto src_layout = [&] {
-                    if constexpr (kVec > 1)
-                        return detail::make_cute_layout_unit_inner<kRank>(
-                            a.shape().data(), a.stride().data());
-                    else
-                        return detail::make_cute_layout<kRank>(
-                            a.shape().data(), a.stride().data());
-                }();
-                auto dst_layout = [&] {
-                    if constexpr (kVec > 1)
-                        return detail::make_cute_layout_unit_inner<kRank>(
-                            a.shape().data(), b.stride().data());
-                    else
-                        return detail::make_cute_layout<kRank>(
-                            a.shape().data(), b.stride().data());
-                }();
-
-                // 2. Extract shapes and strides as CuTe tuples
-                auto data_shape   = src_layout.shape();
-                auto src_strides  = src_layout.stride();
-                auto dst_strides  = dst_layout.stride();
-
-                // 3. Compute thread partition
-                auto partition_arr = detail::compute_thr_partition<kRank>(
-                    a.shape().data(), kVec);
-                auto thr_partition = detail::make_cute_shape<kRank>(
-                    partition_arr.data());
-
-                // 4. Compute vec_factors and tile_counts
-                auto vec_factors = detail::make_vec_factors<kVec, kRank>();
-                auto tile_sizes  = transform(thr_partition, vec_factors,
-                    [](auto tp, auto vf) { return tp * vf; });
-                auto tile_counts = transform(data_shape, tile_sizes,
-                    [](auto s, auto ts) -> int64_t {
-                        return (static_cast<int64_t>(s) + static_cast<int64_t>(ts) - 1)
-                               / static_cast<int64_t>(ts);
-                    });
-
-                // 5. Grid: 1D, each block = one flat tile
-                int64_t total_tiles = product(tile_counts);
-                dim3 grid(static_cast<uint32_t>(total_tiles));
-
-                // 6. Launch kernel
-                kernel::CopyKernelND<kVec>
-                    <<<grid, kBlockThreads, 0, stream>>>(
-                        reinterpret_cast<const T*>(data_a),
-                        reinterpret_cast<T*>(data_b),
-                        data_shape, src_strides, dst_strides,
-                        thr_partition, tile_counts, vec_factors);
-            };
-
-            switch (rank) {
-                case 1: dispatch_rank(constant<1>{}); break;
-                case 2: dispatch_rank(constant<2>{}); break;
-                case 3: dispatch_rank(constant<3>{}); break;
-                case 4: dispatch_rank(constant<4>{}); break;
-                default: TM_CHECK(0) << "GenericCopy: rank > 4 not implemented"; break;
-            }
-
-            }  // end if constexpr (kVec * kElemBits <= 128)
-        };
-
-        switch (vec_size) {
-            case 16: dispatch_vec(constant<16>{}); break;
-            case 8:  dispatch_vec(constant<8>{}); break;
-            case 4:  dispatch_vec(constant<4>{}); break;
-            case 2:  dispatch_vec(constant<2>{}); break;
-            default: dispatch_vec(constant<1>{}); break;
-        }
-    };
-
-    switch (byte_size(dtype)) {
-        case 1: return dispatch_elem_size(uint8_t{});
-        case 2: return dispatch_elem_size(uint16_t{});
-        case 4: return dispatch_elem_size(uint32_t{});
-        case 8: return dispatch_elem_size(uint64_t{});
-        default:
-            TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
-            break;
-    }
+    // --- Vectorized / scalar copy ---
+    VectorizedCopy(src.raw_data(), dst.raw_data(), a, b, rank, dtype, stream);
 }
 
 }  // namespace turbomind::core
