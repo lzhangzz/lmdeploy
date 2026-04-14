@@ -230,9 +230,6 @@ void Clear(Ref<Tensor> a_, const Stream& stream);
 
 void Clear(Ref<Tensor> a_);
 
-// Launch a kernel to perform the complicated copying
-void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream);
-
 template<class T>
 struct Tensor_: public Tensor {
     Tensor_() = default;

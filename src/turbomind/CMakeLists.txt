@@ -32,6 +32,7 @@ target_link_libraries(turbomind PUBLIC
         device_comm
         host_comm
         core
+        copy
         memory_utils
         nvtx_utils
         CUDA::cublasLt

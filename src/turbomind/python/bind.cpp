@@ -16,6 +16,7 @@
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"

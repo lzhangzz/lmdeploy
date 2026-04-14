@@ -23,7 +23,6 @@ add_library(core STATIC
         buffer.cc
         layout.cc
         tensor.cc
-        tensor.cu
         module.cc
         copy.cc
         logger.cc)

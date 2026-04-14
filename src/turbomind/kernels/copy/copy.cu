@@ -1,15 +1,14 @@
-#include "src/turbomind/core/tensor.h"
+#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
+#include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/logger.h"
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
 #include <cute/algorithm/copy.hpp>
 
-#include <algorithm>
 #include <array>
 #include <numeric>
-#include <string>
 #include <utility>
 
 namespace turbomind::core {
@@ -45,7 +44,6 @@ auto make_cute_stride(const ssize_t* data)
 {
     return make_cute_stride_impl(data, std::make_index_sequence<kRank>{});
 }
-
 
 // Construct vec_factors tuple: (kVec, 1, 1, ...) — used for element coord scaling.
 // Dim 0 (innermost) scales by kVec; all other dims scale by 1.
@@ -96,9 +94,6 @@ auto compute_thr_partition(const ssize_t* shape, int kVec)
 // ============================================================================
 // CUDA kernel: CopyKernelND (full-utilization manual-tiling copy)
 // ============================================================================
-// All 256 threads participate. Thread-to-element mapping is done manually
-// using CuTe tuple operations (idx2crd, crd2idx, transform).
-// Copy_Atom is applied to per-thread rank-1 (kVec,) gmem tensors.
 namespace kernel {
 
 template<int kVec, class DataShape, class SrcStride, class DstStride,
@@ -119,8 +114,6 @@ CopyKernelND(const T* __restrict__ src, T* __restrict__ dst,
     auto tile_coord = idx2crd(int64_t(blockIdx.x), tile_counts);
 
     // 3. Compute element coordinate
-    //    inner_coord[i] = tile_coord[i] * thr_partition[i] + thr_coord[i]
-    //    elem_coord[i]  = inner_coord[i] * vec_factors[i]
     auto inner_coord = transform(tile_coord, thr_coord, thr_partition,
         [](auto tc, auto thr, auto tp) { return tc * tp + thr; });
     auto elem_coord = transform(inner_coord, vec_factors,
@@ -146,111 +139,14 @@ CopyKernelND(const T* __restrict__ src, T* __restrict__ dst,
          src_frag, dst_frag);
 }
 
-// ============================================================================
-// CUDA kernel: TransposeCopyKernel (TiledCopy 2D layout conversion)
-// ============================================================================
-// Copies a 2D tensor from src to dst where src and dst have orthogonal
-// contiguous dimensions (src contiguous on dim 0, dst contiguous on dim 1).
-// Uses smem staging to decouple read/write access patterns for coalesced gmem
-// access in both phases. Both phases use explicit TiledCopy (scalar Copy_Atom).
-template<int kTileDim, uint32_t kMaxVecBits,
-         typename SrcEngine, typename SrcLayout,
-         typename DstEngine, typename DstLayout>
-__global__ void __launch_bounds__(256)
-TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
-                    cute::Tensor<DstEngine, DstLayout> dst)
-{
-    using T = typename SrcEngine::value_type;
-    static_assert(std::is_same_v<T, typename DstEngine::value_type>,
-                  "TransposeCopyKernel: src and dst value types must match");
-
-    __shared__ T smem[kTileDim * (kTileDim + 1)];
-
-    // Smem view: row-major — stride-1 on dim 0 (matches src contiguous dim)
-    auto smem_view = make_tensor(make_smem_ptr(smem),
-        make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}),
-                          make_stride(Int<1>{}, Int<kTileDim + 1>{})));
-
-    // Tile gmem tensors — tiled_divide produces ((TM,TN), M/TM, N/TN)
-    auto tiler = make_shape(Int<kTileDim>{}, Int<kTileDim>{});
-    auto src_tiled = tiled_divide(src, tiler);
-    auto dst_tiled = tiled_divide(dst, tiler);
-
-    // Bounds check on tile grid
-    if (blockIdx.y >= size<1>(src_tiled) ||
-        blockIdx.x >= size<2>(src_tiled)) return;
-
-    // Per-CTA tile — make_coord(_,_) unpacks zipped inner mode to rank-2 (TM,TN)
-    auto src_tile = src_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
-    auto dst_tile = dst_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
-
-    // Phase 1: gmem(src) -> smem via TiledCopy
-    auto tc1 = make_tiled_copy(
-        Copy_Atom<UniversalCopy<T>, T>{},
-        make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim / 4>{})),
-        make_layout(make_shape(Int<1>{}, Int<1>{})));
-    auto thr1 = tc1.get_slice(threadIdx.x);
-    copy(tc1, thr1.partition_S(src_tile), thr1.partition_D(smem_view));
-
-    __syncthreads();
-
-    // Phase 2: smem -> gmem(dst) via TiledCopy
-    auto tc2 = make_tiled_copy(
-        Copy_Atom<UniversalCopy<T>, T>{},
-        make_layout(make_shape(Int<kTileDim / 4>{}, Int<kTileDim>{})),
-        make_layout(make_shape(Int<1>{}, Int<1>{})));
-    auto thr2 = tc2.get_slice(threadIdx.x);
-    copy(tc2, thr2.partition_S(smem_view), thr2.partition_D(dst_tile));
-}
-
 }  // namespace kernel
-
-// ============================================================================
-// TransposeCopy: 2D transpose via smem-staged TiledCopy
-// ============================================================================
-static void TransposeCopy(const void* data_a, void* data_b,
-                          const Layout& a, const Layout& b,
-                          DataType dtype, cudaStream_t stream)
-{
-    constexpr int kTileDim = 32;
-
-    int32_t M = static_cast<int32_t>(a.shape(0));
-    int32_t N = static_cast<int32_t>(a.shape(1));
-    dim3 grid(static_cast<uint32_t>(N / kTileDim),
-              static_cast<uint32_t>(M / kTileDim));
-
-    auto dispatch = [&](auto t) {
-        using T = decltype(t);
-
-        auto src_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<const T*>(data_a)),
-            make_layout(make_shape(M, N),
-                              make_stride(Int<1>{}, a.stride(1))));
-
-        auto dst_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<T*>(data_b)),
-            make_layout(make_shape(M, N),
-                              make_stride(b.stride(0), Int<1>{})));
-
-        kernel::TransposeCopyKernel<kTileDim, 8 * sizeof(T)>
-            <<<grid, 256, 0, stream>>>(src_gmem, dst_gmem);
-    };
-
-    switch (byte_size(dtype)) {
-        case 1: return dispatch(uint8_t{});
-        case 2: return dispatch(uint16_t{});
-        case 4: return dispatch(uint32_t{});
-        case 8: return dispatch(uint64_t{});
-        default:
-            TM_CHECK(0) << "TransposeCopy: unsupported element size " << byte_size(dtype);
-            break;
-    }
-}
 
 // ============================================================================
 // VectorizedCopy: alignment-gated vectorized ND copy via CopyKernelND
 // ============================================================================
-static void VectorizedCopy(const void* data_a, void* data_b,
-                           const Layout& a, const Layout& b,
-                           int rank, DataType dtype, cudaStream_t stream)
+void VectorizedCopy(const void* data_a, void* data_b,
+                    const Layout& a, const Layout& b,
+                    int rank, DataType dtype, cudaStream_t stream)
 {
     constexpr int kBlockThreads = 256;
 
@@ -352,57 +248,6 @@ static void VectorizedCopy(const void* data_a, void* data_b,
             TM_CHECK(0) << "VectorizedCopy: unsupported element size " << byte_size(dtype);
             break;
     }
-}
-
-// ============================================================================
-// GenericCopy: layout normalization + dispatch
-// ============================================================================
-void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
-{
-    auto a = src.layout();
-    auto b = dst.layout();
-
-    TM_CHECK_EQ(a.size(), b.size()) << "GenericCopy: src and dst must have the same number of elements";
-
-    // Sort strides ascending so innermost (fastest-varying) dim is first
-    vector<int> idxs(a.rank());
-    std::iota(idxs.begin(), idxs.end(), 0);
-    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) {
-        return a.stride()[i] < a.stride()[j];
-    });
-
-    a = a.permute(idxs);
-    b = b.permute(idxs);
-
-    a = a.coalesce();
-    b = b.coalesce();
-
-    int rank = std::max(a.rank(), b.rank());
-
-    if (a.rank() < rank) {
-        a = a.view(b.shape());
-    }
-    else if (b.rank() < rank) {
-        b = b.view(a.shape());
-    }
-
-    const DataType dtype = src.dtype();
-
-    // --- 2D transpose detection ---
-    constexpr int kTileDim = 32;
-    bool is_2d_transpose = (rank == 2) &&
-        (a.stride(0) == 1) && (b.stride(1) == 1) &&
-        (a.stride(1) > 1) && (b.stride(0) > 1);
-
-    if (is_2d_transpose &&
-        a.shape(0) % kTileDim == 0 && a.shape(1) % kTileDim == 0)
-    {
-        TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
-        return;
-    }
-
-    // --- Vectorized / scalar copy ---
-    VectorizedCopy(src.raw_data(), dst.raw_data(), a, b, rank, dtype, stream);
 }
 
 }  // namespace turbomind::core

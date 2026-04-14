@@ -78,3 +78,4 @@ set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY CUDA_RESOLVE_DEVIC
 add_subdirectory(attention)
 add_subdirectory(gemm)
 add_subdirectory(norm)
+add_subdirectory(copy)
