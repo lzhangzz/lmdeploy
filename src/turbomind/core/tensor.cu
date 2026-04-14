@@ -1,12 +1,13 @@
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/core/meta.h"
-
+#include "src/turbomind/core/logger.h"
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
 #include <cute/algorithm/copy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -70,68 +71,103 @@ auto make_cute_layout_unit_inner(const ssize_t* shape, const ssize_t* stride)
         make_unit_inner_stride_impl(stride, std::make_index_sequence<kRank - 1>{}));
 }
 
+// Construct vec_factors tuple: (kVec, 1, 1, ...) — used for element coord scaling.
+// Dim 0 (innermost) scales by kVec; all other dims scale by 1.
+template<int kVec, int kRank, size_t... Is>
+auto make_vec_factors_impl(std::index_sequence<Is...>)
+{
+    return make_shape((Is == 0 ? Int<kVec>{} : Int<1>{})...);
+}
+
+template<int kVec, int kRank>
+auto make_vec_factors()
+{
+    return make_vec_factors_impl<kVec, kRank>(std::make_index_sequence<kRank>{});
+}
+
+// Compute thread partition: (T0, T1, ..., Tk-1) where T0*...*Tk-1 = 256.
+// T0 is the largest power-of-2 <= shape[0]/kVec.
+// Remaining threads are distributed across outer dims.
+template<int kRank>
+auto compute_thr_partition(const ssize_t* shape, int kVec)
+    -> std::array<ssize_t, kRank>
+{
+    std::array<ssize_t, kRank> partition{};
+    partition.fill(1);
+
+    // Inner dim: largest power-of-2 that divides 256 and <= shape[0]/kVec
+    int64_t max_inner = shape[0] / kVec;
+    ssize_t T0 = 256;
+    while (T0 > 1 && T0 > max_inner) {
+        T0 /= 2;
+    }
+    partition[0] = T0;
+
+    // Distribute remaining threads across outer dims
+    ssize_t remaining = 256 / T0;
+    for (int i = 1; i < kRank; ++i) {
+        partition[i] = std::min<ssize_t>(shape[i], remaining);
+        remaining /= partition[i];
+        if (remaining < 1) {
+            remaining = 1;
+        }
+    }
+    return partition;
+}
+
 }  // namespace detail
 
 // ============================================================================
-// CUDA kernel: CopyKernelND (tutorial-pattern vectorized copy)
+// CUDA kernel: CopyKernelND (full-utilization manual-tiling copy)
 // ============================================================================
+// All 256 threads participate. Thread-to-element mapping is done manually
+// using CuTe tuple operations (idx2crd, crd2idx, transform).
+// Copy_Atom is applied to per-thread rank-1 (kVec,) gmem tensors.
 namespace kernel {
-// Matches the copy_kernel_vectorized pattern from
-// cutlass/examples/cute/tutorial/tiled_copy.cu:
-//   1. Host creates and tiles tensors via tiled_divide
-//   2. Kernel slices tile by blockIdx
-//   3. Thread partition via TiledCopy
-//   4. Register fragment + two-phase copy (gmem→fragment→gmem)
-template<bool kPredicated, class TensorS, class TensorD, class TiledCopy>
+
+template<int kVec, class DataShape, class SrcStride, class DstStride,
+         class ThrPartition, class TileCounts, class VecFactors, typename T>
 __global__ void __launch_bounds__(256)
-CopyKernelND(TensorS S, TensorD D, TiledCopy tiled_copy, int64_t inner_size)
+CopyKernelND(const T* __restrict__ src, T* __restrict__ dst,
+             DataShape data_shape,
+             SrcStride src_strides, DstStride dst_strides,
+             ThrPartition thr_partition, TileCounts tile_counts,
+             VecFactors vec_factors)
 {
     using namespace cute;
 
-    constexpr int kBlockThreads = 256;
+    // 1. Decode threadIdx -> per-dim thread coordinate (colexicographic)
+    auto thr_coord = idx2crd(threadIdx.x, thr_partition);
 
-    // Excess threads (kCopyThreads < kBlockThreads when kVec > 1) exit early
-    if (threadIdx.x >= size(tiled_copy)) return;
+    // 2. Decode blockIdx -> per-dim tile coordinate
+    auto tile_coord = idx2crd(int64_t(blockIdx.x), tile_counts);
 
-    // Bounds check on tile grid
-    if (blockIdx.y >= size<2>(S) || blockIdx.x >= size<1>(S)) return;
+    // 3. Compute element coordinate
+    //    inner_coord[i] = tile_coord[i] * thr_partition[i] + thr_coord[i]
+    //    elem_coord[i]  = inner_coord[i] * vec_factors[i]
+    auto inner_coord = transform(tile_coord, thr_coord, thr_partition,
+        [](auto tc, auto thr, auto tp) { return tc * tp + thr; });
+    auto elem_coord = transform(inner_coord, vec_factors,
+        [](auto ic, auto vf) { return ic * vf; });
 
-    // Slice tile — tutorial pattern
-    auto tile_S = S(_, blockIdx.x, blockIdx.y);
-    auto tile_D = D(_, blockIdx.x, blockIdx.y);
+    // 4. Bounds check: elem[i] + vec_factor[i] <= shape[i]
+    bool valid = true;
+    for_each(transform(elem_coord, vec_factors, data_shape,
+        [](auto ec, auto vf, auto s) { return ec + vf <= s; }),
+        [&](auto v) { valid = valid && static_cast<bool>(v); });
+    if (!valid) return;
 
-    // Thread partition — tutorial pattern
-    ThrCopy thr_copy = tiled_copy.get_thread_slice(threadIdx.x);
-    auto thr_S = thr_copy.partition_S(tile_S);
-    auto thr_D = thr_copy.partition_D(tile_D);
+    // 5. Compute memory offsets via CuTe's crd2idx
+    int64_t src_off = crd2idx(elem_coord, data_shape, src_strides);
+    int64_t dst_off = crd2idx(elem_coord, data_shape, dst_strides);
 
-    // Register fragment — tutorial pattern
-    auto fragment = make_fragment_like(thr_D);
-
-    if constexpr (!kPredicated) {
-        // Vectorized: unconditional two-phase copy
-        copy(tiled_copy, thr_S, fragment);
-        copy(tiled_copy, fragment, thr_D);
-    } else {
-        // Scalar: predicated copy for partial last tile
-        // Use identity tensor to find this thread's element index within the tile,
-        // then check against inner_size. Avoid copy_if(TiledCopy, pred, ...)
-        // because the Copy_Atom-level copy_if calls pred() expecting a scalar,
-        // but our pred tensor is rank-1.
-        auto id_tile = make_identity_tensor(make_shape(size<0>(tile_S)));
-        auto thr_id  = thr_copy.partition_S(id_tile);
-
-        // Each thread has 0 or 1 elements for scalar TiledCopy
-        if (size(thr_id) > 0) {
-            bool valid = static_cast<int64_t>(get<0>(thr_id(0)))
-                         + static_cast<int64_t>(blockIdx.x) * kBlockThreads
-                         < inner_size;
-            if (valid) {
-                copy(tiled_copy, thr_S, fragment);
-                copy(tiled_copy, fragment, thr_D);
-            }
-        }
-    }
+    // 6. Per-thread vectorized copy via Copy_Atom
+    auto src_frag = make_tensor(make_gmem_ptr(src + src_off),
+        make_layout(make_shape(Int<kVec>{}), make_stride(Int<1>{})));
+    auto dst_frag = make_tensor(make_gmem_ptr(dst + dst_off),
+        make_layout(make_shape(Int<kVec>{}), make_stride(Int<1>{})));
+    copy(Copy_Atom<UniversalCopy<uint_bit_t<kVec * sizeof_bits_v<T>>>, T>{},
+         src_frag, dst_frag);
 }
 
 // ============================================================================
@@ -307,12 +343,12 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         vec_size = 16 / elem_size;
     }
 
-    // Shape divisibility: shape[0] must be divisible by vec_size * kBlockThreads
-    while (vec_size > 1 && a.shape(0) % (static_cast<int64_t>(vec_size) * kBlockThreads) != 0) {
+    // Shape divisibility: shape[0] must be divisible by vec_size
+    while (vec_size > 1 && a.shape(0) % static_cast<int64_t>(vec_size) != 0) {
         vec_size /= 2;
     }
 
-    // --- Dispatch on data type T, vec_size kVec, and rank kRank ---
+    // --- Dispatch on data type T and vec_size kVec ---
     auto dispatch_elem_size = [&](auto t) {
         using T = decltype(t);
         constexpr int kElemBits = sizeof_bits_v<T>;
@@ -323,12 +359,10 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
             // Guard: CuTe Copy_Atom supports up to 128 bits
             if constexpr (kVec * kElemBits <= 128) {
 
-            auto invoke_nd = [&](auto d) {
-                constexpr int kRank      = d.value;
-                constexpr int kBlockThreads = 256;
-                constexpr int kCopyThreads  = kBlockThreads / kVec;
+            auto dispatch_rank = [&](auto d) {
+                constexpr int kRank = d.value;
 
-                // 1. Create CuTe layouts (same as before)
+                // 1. Create CuTe layouts (same helpers as before)
                 auto src_layout = [&] {
                     if constexpr (kVec > 1)
                         return detail::make_cute_layout_unit_inner<kRank>(
@@ -337,7 +371,6 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                         return detail::make_cute_layout<kRank>(
                             a.shape().data(), a.stride().data());
                 }();
-
                 auto dst_layout = [&] {
                     if constexpr (kVec > 1)
                         return detail::make_cute_layout_unit_inner<kRank>(
@@ -347,75 +380,45 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
                             a.shape().data(), b.stride().data());
                 }();
 
-                // 2. Wrap in CuTe gmem tensors
-                auto src_gmem = make_tensor(
-                    make_gmem_ptr(reinterpret_cast<const T*>(data_a)), src_layout);
-                auto dst_gmem = make_tensor(
-                    make_gmem_ptr(reinterpret_cast<T*>(data_b)), dst_layout);
+                // 2. Extract shapes and strides as CuTe tuples
+                auto data_shape   = src_layout.shape();
+                auto src_strides  = src_layout.stride();
+                auto dst_strides  = dst_layout.stride();
 
-                // 3. Group outer dims → rank-2 (inner, outer_grouped)
-                //    For kRank=1, append trivial outer dim (size 1, stride 0).
-                //    Use stride<0>() to get scalar inner stride (not .stride()
-                //    which returns a tuple even for rank-1).
-                auto src_grouped = [&] {
-                    if constexpr (kRank > 1) return group_modes<1, kRank>(src_gmem);
-                    else return make_tensor(src_gmem.data(),
-                        make_layout(make_shape(src_gmem.size(), Int<1>{}),
-                                    make_stride(stride<0>(src_gmem.layout()), Int<0>{})));
-                }();
-                auto dst_grouped = [&] {
-                    if constexpr (kRank > 1) return group_modes<1, kRank>(dst_gmem);
-                    else return make_tensor(dst_gmem.data(),
-                        make_layout(make_shape(dst_gmem.size(), Int<1>{}),
-                                    make_stride(stride<0>(dst_gmem.layout()), Int<0>{})));
-                }();
+                // 3. Compute thread partition
+                auto partition_arr = detail::compute_thr_partition<kRank>(
+                    a.shape().data(), kVec);
+                auto thr_partition = detail::make_cute_shape<kRank>(
+                    partition_arr.data());
 
-                // 4. Construct rank-3 tiled tensor: (tile, num_tiles, outer_grouped)
-                //    Manually build the layout to avoid CuTe's logical_divide
-                //    flattening multi-mode tensors with scalar tilers.
-                auto make_tiled_3d = [&](auto tensor_2d) {
-                    auto inner_size_val   = size<0>(tensor_2d);
-                    auto inner_stride_val = stride<0>(tensor_2d.layout());
-                    int   num_tiles       = (inner_size_val + kBlockThreads - 1) / kBlockThreads;
-                    auto outer_shape      = shape<1>(tensor_2d.layout());
-                    auto outer_stride     = stride<1>(tensor_2d.layout());
-                    // Tile stride = kBlockThreads * inner_stride.
-                    // Int<N> * runtime doesn't compile in CuTe, so cast explicitly.
-                    auto tile_num_stride  = static_cast<int64_t>(inner_stride_val) * kBlockThreads;
-                    return make_tensor(tensor_2d.data(),
-                        make_layout(
-                            make_shape(Int<kBlockThreads>{}, num_tiles, outer_shape),
-                            make_stride(inner_stride_val, tile_num_stride, outer_stride)));
-                };
+                // 4. Compute vec_factors and tile_counts
+                auto vec_factors = detail::make_vec_factors<kVec, kRank>();
+                auto tile_sizes  = transform(thr_partition, vec_factors,
+                    [](auto tp, auto vf) { return tp * vf; });
+                auto tile_counts = transform(data_shape, tile_sizes,
+                    [](auto s, auto ts) -> int64_t {
+                        return (static_cast<int64_t>(s) + static_cast<int64_t>(ts) - 1)
+                               / static_cast<int64_t>(ts);
+                    });
 
-                auto tiled_src = make_tiled_3d(src_grouped);
-                auto tiled_dst = make_tiled_3d(dst_grouped);
+                // 5. Grid: 1D, each block = one flat tile
+                int64_t total_tiles = product(tile_counts);
+                dim3 grid(static_cast<uint32_t>(total_tiles));
 
-                // 5. Create TiledCopy
-                auto tiled_copy = make_tiled_copy(
-                    Copy_Atom<UniversalCopy<uint_bit_t<kVec * kElemBits>>, T>{},
-                    make_layout(make_shape(Int<kCopyThreads>{})),
-                    make_layout(make_shape(Int<kVec>{})));
-
-                // 6. Grid and launch
-                int64_t inner_size = static_cast<int64_t>(a.shape(0));
-                dim3    grid(size<1>(tiled_src), size<2>(tiled_src));
-
-                auto func = kernel::CopyKernelND<
-                    kVec == 1,
-                    decltype(tiled_src),
-                    decltype(tiled_dst),
-                    decltype(tiled_copy)>;
-
-                func<<<grid, kBlockThreads, 0, stream>>>(
-                    tiled_src, tiled_dst, tiled_copy, inner_size);
+                // 6. Launch kernel
+                kernel::CopyKernelND<kVec>
+                    <<<grid, kBlockThreads, 0, stream>>>(
+                        reinterpret_cast<const T*>(data_a),
+                        reinterpret_cast<T*>(data_b),
+                        data_shape, src_strides, dst_strides,
+                        thr_partition, tile_counts, vec_factors);
             };
 
             switch (rank) {
-                case 1: invoke_nd(constant<1>{}); break;
-                case 2: invoke_nd(constant<2>{}); break;
-                case 3: invoke_nd(constant<3>{}); break;
-                case 4: invoke_nd(constant<4>{}); break;
+                case 1: dispatch_rank(constant<1>{}); break;
+                case 2: dispatch_rank(constant<2>{}); break;
+                case 3: dispatch_rank(constant<3>{}); break;
+                case 4: dispatch_rank(constant<4>{}); break;
                 default: TM_CHECK(0) << "GenericCopy: rank > 4 not implemented"; break;
             }
 
@@ -436,7 +439,9 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
         case 2: return dispatch_elem_size(uint16_t{});
         case 4: return dispatch_elem_size(uint32_t{});
         case 8: return dispatch_elem_size(uint64_t{});
-        default: TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype); break;
+        default:
+            TM_CHECK(0) << "GenericCopy: unsupported element size " << byte_size(dtype);
+            break;
     }
 }
 
