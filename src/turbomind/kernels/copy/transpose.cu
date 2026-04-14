@@ -56,9 +56,12 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
     __syncthreads();
 
     // Phase 2: smem -> gmem(dst) via TiledCopy
+    // Row-major thread layout (stride<32,1>) so consecutive threads map to
+    // consecutive columns — coalesces gmem writes for narrow types (i8, f16).
     auto tc2 = make_tiled_copy(
         Copy_Atom<UniversalCopy<T>, T>{},
-        make_layout(make_shape(Int<kTileDim / 4>{}, Int<kTileDim>{})),
+        make_layout(make_shape(Int<kTileDim / 4>{}, Int<kTileDim>{}),
+                       make_stride(Int<kTileDim>{}, Int<1>{})),
         make_layout(make_shape(Int<1>{}, Int<1>{})));
     auto thr2 = tc2.get_slice(threadIdx.x);
     copy(tc2, thr2.partition_S(smem_view), thr2.partition_D(dst_tile));
