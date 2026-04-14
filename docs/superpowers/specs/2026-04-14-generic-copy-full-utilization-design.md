@@ -55,7 +55,9 @@ Parameters:
 
 Logic:
 1. **Decode thread** — `thr_coord = idx2crd(threadIdx.x, thr_partition)`
+   (colexicographical: dim 0 fastest-varying)
 2. **Decode tile** — `tile_coord = idx2crd(int64_t(blockIdx.x), tile_counts)`
+   (same ordering)
 3. **Compute element coordinate**:
    - `tile_size[0] = thr_partition[0] * kVec`, `tile_size[i>0] = thr_partition[i]`
    - `vec_factor[0] = kVec`, `vec_factor[i>0] = 1`
@@ -122,20 +124,21 @@ Common cases:
 - **Scalar path** (kVec == 1): bounds check via the coordinate loop. Threads
   whose element is out-of-bounds return early.
 
-### Utility: idx2crd
+### CuTe coordinate utilities
 
-CuTe has `detail::idx2crd(idx, shape)` internally. We expose a clean version
-that decomposes a linear index into a CuTe coordinate tuple given a CuTe
-shape. For shape `(S0, S1, ..., Sn)`:
-```
-cn = idx % Sn
-c(n-1) = (idx / Sn) % S(n-1)
-...
-c0 = idx / (S1 * S2 * ... * Sn)
-```
+CuTe provides the required coordinate operations natively
+(`cute/stride.hpp`):
 
-This is a right-to-left row-major decomposition, matching CuTe's
-`crd2idx` inverse.
+- **`idx2crd(idx, shape)`** — decomposes a linear index into a coordinate
+  tuple given a shape. Uses colexicographical (column-major) ordering:
+  dim 0 is fastest-varying (`c0 = idx % s0`), which matches our innermost-dim
+  convention.
+- **`crd2idx(coord, shape, stride)`** — converts a coordinate tuple to a
+  linear offset given shape and stride. Handles mixed `Int<N>` / runtime
+  tuples. For each mode: `coord * stride` (scalar) or recursive
+  decomposition (tuple).
+
+No custom coordinate utilities are needed.
 
 ## What this replaces
 
@@ -151,9 +154,8 @@ This is a right-to-left row-major decomposition, matching CuTe's
 - The `invoke_nd` rank-dispatch lambda (rank is now implicit in tuple types)
 
 **Added:**
-- `idx2crd` utility (small, ~10 lines)
 - Thread partition selection heuristic (~20 lines)
-- `crd2idx`-based offset computation in kernel
+- CuTe `idx2crd` / `crd2idx` for coordinate decomposition and offset computation (built-in)
 
 ## Expected performance
 
