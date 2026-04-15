@@ -123,12 +123,8 @@ class TextModelSpec(ABC):
     def model(self):
         """Build the full model hierarchy using builders.
 
-        Called once by the loader with all weights available.
-        Override in subclasses to use builder-driven loading.
+        Override in subclasses.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement model(). "
-            f"Use legacy load_global/load_layer pattern instead.")
 
     # -- Configuration (called by TextModelLoader before processing) --
 
