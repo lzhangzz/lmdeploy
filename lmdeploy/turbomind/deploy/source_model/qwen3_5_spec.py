@@ -14,10 +14,19 @@ import re
 
 import torch
 
-from ..linear import Linear
-from ..spec import TextModelSpec
-from ..builder import SplitSide
+from ..builder import (
+    AttentionBuilder, Builder, DecoderLayerBuilder, FfnBuilder, LinearBuilder,
+    MoeBuilder, ModuleListBuilder, NormBuilder, SplitSide, TextModelBuilder,
+    _LINEAR_ATTN_TP_RULES, _act_type_id, _cpp_dtype as _cd,
+    fuse_gdn_in_proj,
+)
 from ..kind_map import build_linear
+from ..linear import Linear, pad_out_dim
+from ..module_configs import (
+    AttentionConfig, DecoderLayerConfig, DeltaNetConfig, FfnConfig, LinearConfig,
+    ModuleListConfig, MoeConfig, NormConfig,
+)
+from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
 
@@ -30,6 +39,27 @@ def map_packed_qwen35_experts(name: str) -> str:
     Only matches names ending without ``.weight``; a no-op for already-unpacked checkpoints.
     """
     return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
+
+
+def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
+    """Reorder rotary embedding layout for TurboMind's RoPE kernel."""
+    if rope_dim < head_dim:
+        output_dims = x.size(-1)
+        head_num = output_dims // head_dim
+        orig_shape = x.shape
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        x = x.view(x.size(0), head_num, head_dim)
+        rotary = x[:, :, :rope_dim]
+        passthrough = x[:, :, rope_dim:]
+        rotary = rotary.view(x.size(0), head_num, 2, rope_dim // 2).transpose(2, 3).contiguous()
+        rotary = rotary.view(x.size(0), head_num, rope_dim)
+        x = torch.cat([rotary, passthrough], dim=-1)
+        return x.reshape(orig_shape)
+    else:
+        output_dims = x.size(-1)
+        head_num = output_dims // head_dim
+        return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
 def _qwen35_model_info_base(cfg: dict) -> dict:
@@ -119,29 +149,23 @@ class Qwen3_5Spec(TextModelSpec):
     # ------------------------------------------------------------------
 
     def _cpp_dtype(self):
-        from ..builder import _cpp_dtype as _cd
         return _cd(self._mc.data_type)
 
     def model(self):
-        from ..builder import TextModelBuilder
-
         root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds()
-        root.norm = self.root_norm()
-        root.output = self.lm_head()
+        root.tok_embeddings = self.token_embeds('model.embed_tokens')
+        root.norm = self.root_norm('model.norm')
+        root.output = self.lm_head('lm_head')
         root.layers = self.layers(self._layer_prefix)
 
     # ------------------------------------------------------------------
     # Factory methods: read weights, create builders, return them
     # ------------------------------------------------------------------
 
-    def token_embeds(self):
+    def token_embeds(self, pfx):
         """Return LinearBuilder for tok_embeddings, or None."""
-        from ..builder import LinearBuilder, SplitSide
-        from ..module_configs import LinearConfig
-        from ..linear import pad_out_dim
-
-        emb = self.tok_embeddings()
+        key = self._embed_key
+        emb = self._get(key)
         if emb is None:
             return None
 
@@ -158,12 +182,9 @@ class Qwen3_5Spec(TextModelSpec):
         m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
         return m
 
-    def root_norm(self):
+    def root_norm(self, pfx):
         """Return NormBuilder for the final norm, or None."""
-        from ..builder import NormBuilder
-        from ..module_configs import NormConfig
-
-        w = self.norm_weight()
+        w = self._zero_centered(self._get(self._norm_key))
         if w is None:
             return None
 
@@ -174,13 +195,11 @@ class Qwen3_5Spec(TextModelSpec):
         m.set_weight(w)
         return m
 
-    def lm_head(self):
+    def lm_head(self, pfx):
         """Return LinearBuilder for the output head, or None."""
-        from ..builder import LinearBuilder, SplitSide
-        from ..module_configs import LinearConfig
-        from ..linear import pad_out_dim
-
-        output = self.output_weight()
+        tie = self.cfg.get("tie_word_embeddings", False)
+        key = self._embed_key if tie else f"{pfx}.weight"
+        output = self._get(key)
         if output is None:
             return None
 
@@ -200,9 +219,6 @@ class Qwen3_5Spec(TextModelSpec):
 
     def norm(self, pfx):
         """Return NormBuilder for the given prefix, or None."""
-        from ..builder import NormBuilder
-        from ..module_configs import NormConfig
-
         w = self._zero_centered(self._get(f'{pfx}.weight'))
         if w is None:
             return None
@@ -215,13 +231,10 @@ class Qwen3_5Spec(TextModelSpec):
 
     def attn(self, pfx, layer):
         """Return AttentionBuilder for the given layer, or None."""
-        from ..builder import AttentionBuilder
-        from ..module_configs import AttentionConfig
-
-        q = self._read_linear(f"{pfx}.q_proj")
-        k = self._read_linear(f"{pfx}.k_proj")
-        v = self._read_linear(f"{pfx}.v_proj")
-        o = self._read_linear(f"{pfx}.o_proj")
+        q = self._linear(f"{pfx}.q_proj")
+        k = self._linear(f"{pfx}.k_proj")
+        v = self._linear(f"{pfx}.v_proj")
+        o = self._linear(f"{pfx}.o_proj")
 
         if q is None and k is None and v is None and o is None:
             return None
@@ -249,12 +262,13 @@ class Qwen3_5Spec(TextModelSpec):
         if o is not None:
             attn.add_o_proj(o)
 
-        for name, tensor in self.attn_params(layer).items():
-            attn.add_param(name, tensor)
-
-        norm_children = self.attn_norm_children(layer)
-        q_norm = norm_children.get('q_norm')
-        k_norm = norm_children.get('k_norm')
+        # Inline qk norm
+        q_norm = self._zero_centered(self._get(f"{pfx}.q_norm.weight"))
+        k_norm = self._zero_centered(self._get(f"{pfx}.k_norm.weight"))
+        if q_norm is not None and k_norm is not None:
+            if self._permute_qk:
+                q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope_dim)
+                k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope_dim)
         if q_norm is not None or k_norm is not None:
             attn.add_qk_norm(q_norm, k_norm)
 
@@ -262,11 +276,12 @@ class Qwen3_5Spec(TextModelSpec):
 
     def linear_attn(self, pfx, layer):
         """Return Builder for linear-attention (Gated Delta Net), or None."""
-        from ..builder import Builder, SplitSide
-        from ..module_configs import DeltaNetConfig
-        from ..builder import _LINEAR_ATTN_TP_RULES
-
-        la_linears = self.linear_attn_linears(layer)
+        # Read GDN input projection linears
+        la_linears: dict[str, Linear] = {}
+        for key in ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj"]:
+            lin = self._linear(f"{pfx}.{key}")
+            if lin is not None:
+                la_linears[key] = lin
         if not la_linears:
             return None
 
@@ -279,6 +294,9 @@ class Qwen3_5Spec(TextModelSpec):
         linear_attn = Builder(dn_cfg, self._contexts,
                               tp=tp, ranks=self._attn_ranks)
 
+        # Fuse GDN input projections
+        la_linears = fuse_gdn_in_proj(la_linears, tp, self._linear_qkv_split)
+
         # Commit linear bundles with TP rules from the rule table
         for name, lin in la_linears.items():
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
@@ -286,32 +304,56 @@ class Qwen3_5Spec(TextModelSpec):
             linear_attn._commit_linear(name, lin, split_side=split_side,
                                        model_dtype=dtype)
 
-        # Direct params (A_log, dt_bias, conv1d) -- values are (tensor, split_side)
-        for name, val in self.linear_attn_params(layer).items():
-            tensor, ss = val
-            linear_attn._commit_tensor(name, tensor, split_side=ss)
+        # Inline params: A_log, dt_bias
+        for key in ["A_log", "dt_bias"]:
+            t = self._get(f"{pfx}.{key}")
+            if t is not None:
+                linear_attn._commit_tensor(key, t, split_side=SplitSide.OUTPUT)
 
-        # Norm children (norm, etc.)
-        for name, tensor in self.linear_attn_norm_children(layer).items():
-            linear_attn._add_norm_child(name, tensor, data_type=dtype)
+        # Inline param: conv1d
+        conv1d = self._get(f"{pfx}.conv1d.weight")
+        if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
+            conv1d = conv1d.squeeze(1)
+        # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
+        if conv1d is not None:
+            conv1d = conv1d.t().contiguous()
+            if self._attn_tp > 1 and self._linear_qkv_split is not None:
+                q_dim, k_dim, v_dim = self._linear_qkv_split
+                d_conv = conv1d.shape[0]
+                tp = self._attn_tp
+                q_part = conv1d[:, :q_dim]
+                k_part = conv1d[:, q_dim:q_dim + k_dim]
+                v_part = conv1d[:, q_dim + k_dim:]
+                conv1d = torch.cat([
+                    q_part.reshape(d_conv, tp, q_dim // tp),
+                    k_part.reshape(d_conv, tp, k_dim // tp),
+                    v_part.reshape(d_conv, tp, v_dim // tp),
+                ], dim=2).reshape(d_conv, -1).contiguous()
+            linear_attn._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
+
+        # Inline param: D
+        d_param = self._get(f"{pfx}.D")
+        if d_param is not None:
+            linear_attn._commit_tensor("D", d_param, split_side=SplitSide.OUTPUT)
+
+        # Inline norm children
+        norm = self._get(f"{pfx}.norm.weight")
+        if norm is not None:
+            linear_attn._add_norm_child("norm", norm, data_type=dtype)
 
         return linear_attn
 
-    def ffn(self, pfx, layer, linears=None, inter_size=None,
-            fused_moe=False):
+    def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
         """Return FfnBuilder for the given layer, or None."""
-        from ..builder import FfnBuilder
-        from ..module_configs import FfnConfig
-        from ..builder import _act_type_id
-
-        if linears is None:
-            linears = self._read_ffn_linears(pfx)
+        w1 = self._linear(f"{pfx}.gate_proj")
+        w3 = self._linear(f"{pfx}.up_proj")
+        w2 = self._linear(f"{pfx}.down_proj")
+        linears = {}
+        if w1 is not None: linears['w1'] = w1
+        if w3 is not None: linears['w3'] = w3
+        if w2 is not None: linears['w2'] = w2
         if not linears:
             return None
-
-        w1 = linears.get('w1')
-        w3 = linears.get('w3')
-        w2 = linears.get('w2')
 
         mc = self._mc
         tp = self._mlp_tp
@@ -333,10 +375,6 @@ class Qwen3_5Spec(TextModelSpec):
 
     def moe(self, pfx, layer):
         """Return MoeBuilder for the given layer, or None."""
-        from ..builder import MoeBuilder, ModuleListBuilder
-        from ..module_configs import MoeConfig, ModuleListConfig
-        from ..builder import _act_type_id
-
         if self.num_experts(layer) <= 0:
             return None
 
@@ -355,23 +393,22 @@ class Qwen3_5Spec(TextModelSpec):
             fuse_silu=True, expert_num=expert_num)
         m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
 
-        for name, linear in self.moe_gate(layer).items():
-            m.add_gate(name, linear, model_dtype=dtype)
-
-        for name, val in self.moe_params(layer).items():
-            if isinstance(val, tuple):
-                tensor, ss = val
-            else:
-                tensor, ss = val, None
-            m.add_param(name, tensor)
+        # Inline gate read
+        if self._n_experts > 0:
+            gate_w = self._get(f'{pfx}.gate.weight')
+            if gate_w is not None:
+                gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
+                m.add_gate('gate', Linear({"weight": gate_w}), model_dtype=dtype)
+            # Shared expert gate
+            sg = self._get(f'{pfx}.shared_expert_gate.weight')
+            if sg is not None:
+                sg = sg.t() if sg.dim() > 1 else sg
+                m.add_gate('shared_gate', Linear({"weight": sg}), model_dtype=dtype)
 
         expert_inter = mc.expert_inter_size or 0
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            expert = self.ffn(
-                f'{pfx}.experts.{e}', layer,
-                linears=self.moe_ffn_linears(layer, e),
-                inter_size=expert_inter, fused_moe=True)
+            expert = self._moe_expert_ffn(pfx, layer, e, expert_inter)
             if expert is not None:
                 experts[str(e)] = expert
 
@@ -380,10 +417,7 @@ class Qwen3_5Spec(TextModelSpec):
 
     def layers(self, pfx):
         """Return ModuleListBuilder with all decoder layers."""
-        from ..builder import ModuleListBuilder, DecoderLayerBuilder
-        from ..module_configs import ModuleListConfig, DecoderLayerConfig
-
-        m = ModuleListBuilder(ModuleListConfig(), self._contexts)
+        layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
 
         for i in range(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
@@ -405,58 +439,42 @@ class Qwen3_5Spec(TextModelSpec):
             else:
                 d.feed_forward = self.ffn(
                     f'{pfx}.{i}.mlp', layer=i)
-            m[str(i)] = d
+            layers[str(i)] = d
 
-        return m
+        return layers
 
-    # ---- zero-centered RMSNorm: add 1.0 ----
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _linear(self, prefix: str) -> Linear | None:
+        """Read a Linear bundle from the checkpoint at *prefix*."""
+        return build_linear(self.params, prefix)
 
     def _zero_centered(self, w: torch.Tensor | None) -> torch.Tensor | None:
+        """Zero-centered RMSNorm: add 1.0."""
         if w is not None:
             return w.float() + 1.0
         return None
 
-    # ---- Linear bundles: linear attention (Gated Delta Net) ----
-
-    def _read_linear_attn_linears(self, layer: int) -> dict[str, Linear]:
-        if not self._is_linear_attn(layer):
-            return {}
-        pfx = f"{self._layer_prefix}.{layer}.linear_attn"
-        result: dict[str, Linear] = {}
-        for key in ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj"]:
-            lin = self._read_linear(f"{pfx}.{key}")
-            if lin is not None:
-                result[key] = lin
-        return result
-
-    # ---- Linear bundles: FFN / MoE ----
-
-    def ffn_linears(self, layer: int) -> dict[str, Linear]:
-        if self._n_experts > 0:
-            return self._shared_expert_linears(layer)
-        pfx = f"{self._layer_prefix}.{layer}.mlp"
-        return self._read_ffn_linears(pfx)
-
-    def _shared_expert_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._layer_prefix}.{layer}.mlp.shared_expert"
-        return self._read_ffn_linears(pfx)
-
-    def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
-        pfx = f"{self._layer_prefix}.{layer}.mlp.experts.{expert}"
-        result = self._read_ffn_linears(pfx)
-        if result:
+    def _moe_expert_ffn(self, pfx, layer, expert_idx, inter_size):
+        """Build FfnBuilder for one MoE expert, handling packed format."""
+        expert_pfx = f'{pfx}.experts.{expert_idx}'
+        # Try standard per-expert format first
+        result = self.ffn(expert_pfx, layer,
+                          inter_size=inter_size, fused_moe=True)
+        if result is not None:
             return result
-        return self._packed_moe_expert(layer, expert)
+        # Fall back to packed format
+        packed_pfx = f'{pfx}.experts'
+        return self._packed_moe_expert_indexed(packed_pfx, layer, expert_idx, inter_size)
 
-    def _packed_moe_expert(self, layer: int, expert: int) -> dict[str, Linear]:
-        """Handle packed Qwen3.5 MoE checkpoints where all experts share one
-        tensor with the expert index in the leading dimension.
-        """
-        pfx = f"{self._layer_prefix}.{layer}.mlp.experts"
-        gate_up_lin = build_linear(self.params, f"{pfx}.gate_up_proj", index=expert)
-        down_lin = build_linear(self.params, f"{pfx}.down_proj", index=expert)
+    def _packed_moe_expert_indexed(self, pfx, layer, expert_idx, inter_size):
+        """Read a single expert from packed tensors by index."""
+        gate_up_lin = build_linear(self.params, f"{pfx}.gate_up_proj", index=expert_idx)
+        down_lin = build_linear(self.params, f"{pfx}.down_proj", index=expert_idx)
         if gate_up_lin is None or down_lin is None:
-            return {}
+            return None
 
         # gate_up is in TM layout [in, 2*out]; split along output dim.
         gate_tensors: dict[str, torch.Tensor] = {}
@@ -466,111 +484,27 @@ class Qwen3_5Spec(TextModelSpec):
             gate_tensors[kind] = t[..., :half].contiguous()
             up_tensors[kind] = t[..., half:].contiguous()
 
-        return {
+        linears = {
             "w1": Linear(tensors=gate_tensors, weight_format=gate_up_lin.weight_format),
             "w2": down_lin,
             "w3": Linear(tensors=up_tensors, weight_format=gate_up_lin.weight_format),
         }
 
+        mc = self._mc
+        tp = self._mlp_tp
+        dtype = self._cpp_dtype()
+
+        ffn_cfg = FfnConfig.from_model_config(
+            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            act_type=_act_type_id(mc.activation_type),
+            fuse_silu=False, inter_size=inter_size,
+            fused_moe=True)
+        m = FfnBuilder(ffn_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
+        m.add_ffn(linears.get('w1'), linears.get('w2'), linears.get('w3'))
+        return m
+
     def num_experts(self, layer: int) -> int:
         return self._n_experts
-
-    # ---- Raw tensors (zero-centered norm) ----
-
-    def attn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._zero_centered(
-            self._get(f"{self._layer_prefix}.{layer}.input_layernorm.weight"))
-
-    def ffn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._zero_centered(
-            self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight"))
-
-    def norm_weight(self) -> torch.Tensor | None:
-        return self._zero_centered(self._get(self._norm_key))
-
-    def attn_params(self, layer):
-        return {}
-
-    def attn_norm_children(self, layer):
-        params = {}
-        if not self._is_linear_attn(layer):
-            q = self._zero_centered(
-                self._get(f"{self._layer_prefix}.{layer}.self_attn.q_norm.weight"))
-            k = self._zero_centered(
-                self._get(f"{self._layer_prefix}.{layer}.self_attn.k_norm.weight"))
-            if q is not None and k is not None:
-                q, k = self._permute_qk_tensors(q, k)
-            if q is not None:
-                params["q_norm"] = q
-            if k is not None:
-                params["k_norm"] = k
-        return params
-
-    def moe_gate(self, layer):
-        gates = {}
-        if self._n_experts > 0:
-            gate = self._get(
-                f"{self._layer_prefix}.{layer}.mlp.gate.weight")
-            if gate is not None:
-                gate = gate.t() if gate.dim() > 1 else gate
-                gates["gate"] = Linear({"weight": gate})
-            sg = self._get(
-                f"{self._layer_prefix}.{layer}.mlp.shared_expert_gate.weight")
-            if sg is not None:
-                sg = sg.t() if sg.dim() > 1 else sg
-                gates["shared_gate"] = Linear({"weight": sg})
-        return gates
-
-    def moe_params(self, layer):
-        return {}
-
-    def linear_attn_params(self, layer):
-        params = {}
-        if not self._is_linear_attn(layer):
-            return params
-        pfx = f"{self._layer_prefix}.{layer}.linear_attn"
-        for key in ["A_log", "dt_bias"]:
-            t = self._get(f"{pfx}.{key}")
-            if t is not None:
-                params[key] = (t, SplitSide.OUTPUT)
-        conv1d = self._get(f"{pfx}.conv1d.weight")
-        if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
-            conv1d = conv1d.squeeze(1)
-        # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
-        if conv1d is not None:
-            conv1d = conv1d.t().contiguous()
-            if self._attn_tp > 1 and self._linear_qkv_split is not None:
-                q_dim, k_dim, v_dim = self._linear_qkv_split
-                d_conv = conv1d.shape[0]
-                tp = self._attn_tp
-                q_part = conv1d[:, :q_dim]
-                k_part = conv1d[:, q_dim:q_dim + k_dim]
-                v_part = conv1d[:, q_dim + k_dim:]
-                conv1d = torch.cat([
-                    q_part.reshape(d_conv, tp, q_dim // tp),
-                    k_part.reshape(d_conv, tp, k_dim // tp),
-                    v_part.reshape(d_conv, tp, v_dim // tp),
-                ], dim=2).reshape(d_conv, -1).contiguous()
-            params["conv1d"] = (conv1d, SplitSide.OUTPUT)
-        return params
-
-    def linear_attn_norm_children(self, layer):
-        params = {}
-        if not self._is_linear_attn(layer):
-            return params
-        pfx = f"{self._layer_prefix}.{layer}.linear_attn"
-        norm = self._get(f"{pfx}.norm.weight")
-        if norm is not None:
-            params["norm"] = norm
-        return params
-
-    def tok_embeddings(self) -> torch.Tensor | None:
-        return self._get(self._embed_key)
-
-    def output_weight(self) -> torch.Tensor | None:
-        tie = self.cfg.get("tie_word_embeddings", False)
-        key = self._embed_key if tie else "lm_head.weight"
-        return self._get(key)
 
     # ---- metadata ----
 
