@@ -103,7 +103,7 @@ class Qwen3TextSpec(TextModelSpec):
                 n_b.set_weight(attn_norm_w)
                 d.attention_norm = n_b
 
-            # attention (TP-split)
+            # attention (builder-driven: spec reads, builder transforms)
             self._build_attention(d, i, mc, dtype, attn_tp, attn_ranks,
                                   contexts)
 
@@ -129,12 +129,19 @@ class Qwen3TextSpec(TextModelSpec):
 
     def _build_attention(self, parent, layer, mc, dtype, tp, ranks,
                          contexts):
-        """Build attention module for one decoder layer."""
-        from ..builder import AttentionBuilder, SplitSide
+        """Build attention module: spec reads projections, builder merges QKV."""
+        from ..builder import AttentionBuilder
         from ..module_configs import AttentionConfig
 
-        attn_linears = self.attn_linears(layer)
-        if not attn_linears:
+        pfx = f"{self._layer_prefix}.{layer}.self_attn"
+
+        # READ: spec reads projections directly from checkpoint
+        q = self._read_linear(f"{pfx}.q_proj")
+        k = self._read_linear(f"{pfx}.k_proj")
+        v = self._read_linear(f"{pfx}.v_proj")
+        o = self._read_linear(f"{pfx}.o_proj")
+
+        if q is None and k is None and v is None and o is None:
             return
 
         window_size = 0
@@ -144,37 +151,37 @@ class Qwen3TextSpec(TextModelSpec):
 
         attn_cfg = AttentionConfig.from_model_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
-            window_size=window_size)
+            window_size=window_size,
+            rope_dim=self._rope_dim,
+            permute_qk=self._permute_qk,
+            repeat_kv=self._repeat_kv)
         attn = AttentionBuilder(attn_cfg, contexts, tp=tp, ranks=ranks)
 
-        # Commit attention linear bundles with standard TP rules
-        for name, lin in attn_linears.items():
-            if name == 'w_qkv':
-                attn._commit_linear('w_qkv', lin, SplitSide.OUTPUT,
-                                    model_dtype=dtype)
-            elif name == 'wo':
-                attn._commit_linear('wo', lin, SplitSide.INPUT,
-                                    model_dtype=dtype)
-            else:
-                attn._commit_linear(name, lin, model_dtype=dtype)
+        # TRANSFORM + COMMIT: builder handles QKV merge, RoPE perm, TP split
+        if q is not None and k is not None and v is not None:
+            attn.add_qkv_proj(q, k, v)
+        if o is not None:
+            attn.add_o_proj(o)
 
         # Direct params (none for Qwen3, but hook exists for subclasses)
         for name, tensor in self.attn_params(layer).items():
-            attn._commit_tensor(name, tensor)
+            attn.add_param(name, tensor)
 
-        # Norm children (q_norm, k_norm)
-        for name, tensor in self.attn_norm_children(layer).items():
-            attn._add_norm_child(name, tensor, data_type=dtype)
+        # Norm children (q_norm, k_norm) — spec already permuted them
+        norm_children = self.attn_norm_children(layer)
+        q_norm = norm_children.get('q_norm')
+        k_norm = norm_children.get('k_norm')
+        if q_norm is not None or k_norm is not None:
+            attn.add_qk_norm(q_norm, k_norm)
 
         parent.attention = attn
 
     def _build_ffn(self, parent, layer, mc, dtype, tp, ranks, contexts,
                    child_name='feed_forward', inter_size=None,
                    fused_moe=False):
-        """Build dense FFN module for one decoder layer."""
-        from ..builder import FfnBuilder, SplitSide
+        """Build dense FFN: spec reads w1/w2/w3, builder handles fusion."""
+        from ..builder import FfnBuilder
         from ..module_configs import FfnConfig
-        from ..transforms import fuse_ffn_linears
         from ..commit import _act_type_id
 
         ffn_linears = self.ffn_linears(layer)
@@ -185,46 +192,28 @@ class Qwen3TextSpec(TextModelSpec):
         w3 = ffn_linears.get('w3')
         w2 = ffn_linears.get('w2')
 
-        # Transform: optionally fuse w1 + w3
-        fused, fused_silu = None, False
-        if w1 is not None and w3 is not None:
-            fused, fused_silu = fuse_ffn_linears(
-                w1, w3, tp, mc.activation_type, is_moe=fused_moe)
-
         if inter_size is None:
             is_list = mc.inter_size
             inter_size = is_list[layer] if is_list and layer < len(
                 is_list) else 0
 
+        # fuse_silu=False initially; builder updates it based on fusion result
         ffn_cfg = FfnConfig.from_model_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
-            fuse_silu=fused_silu, inter_size=inter_size,
+            fuse_silu=False, inter_size=inter_size,
             fused_moe=fused_moe)
         ffn = FfnBuilder(ffn_cfg, contexts, tp=tp, ranks=ranks)
 
-        if fused is not None:
-            ffn._commit_linear('w1w3', fused, SplitSide.OUTPUT,
-                               model_dtype=dtype)
-        else:
-            if w1 is not None:
-                ffn._commit_linear('w1', w1, SplitSide.OUTPUT,
-                                   model_dtype=dtype)
-            if w3 is not None:
-                ffn._commit_linear('w3', w3, SplitSide.OUTPUT,
-                                   model_dtype=dtype)
-        if w2 is not None:
-            ffn._commit_linear('w2', w2, SplitSide.INPUT,
-                               model_dtype=dtype)
+        # TRANSFORM + COMMIT: builder handles w1+w3 fusion + TP split
+        ffn.add_ffn(w1, w2, w3)
 
         setattr(parent, child_name, ffn)
 
     def _build_moe(self, parent, layer, mc, dtype, tp, ranks, contexts):
-        """Build MoE module for one decoder layer."""
-        from ..builder import (MoeBuilder, FfnBuilder, ModuleListBuilder,
-                               SplitSide)
+        """Build MoE module: spec reads expert weights, builder handles fusion."""
+        from ..builder import MoeBuilder, FfnBuilder, ModuleListBuilder
         from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
-        from ..transforms import fuse_ffn_linears
         from ..commit import _act_type_id
 
         if self.num_experts(layer) <= 0:
@@ -249,7 +238,7 @@ class Qwen3TextSpec(TextModelSpec):
         for name, tensor in self.moe_params(layer).items():
             moe.add_param(name, tensor)
 
-        # Experts
+        # Experts: each expert is an FfnBuilder
         expert_inter = mc.expert_inter_size or 0
         experts = ModuleListBuilder(ModuleListConfig(), contexts)
         for e in range(self.num_experts(layer)):
@@ -258,32 +247,15 @@ class Qwen3TextSpec(TextModelSpec):
             w3 = expert_linears.get('w3')
             w2 = expert_linears.get('w2')
 
-            # Transform: fuse w1 + w3
-            fused, fused_silu = None, False
-            if w1 is not None and w3 is not None:
-                fused, fused_silu = fuse_ffn_linears(
-                    w1, w3, tp, mc.activation_type, is_moe=True)
-
             expert_cfg = FfnConfig.from_model_config(
                 mc, tp_size=tp, tp_rank=0, dtype=dtype,
                 act_type=_act_type_id(mc.activation_type),
-                fuse_silu=fused_silu, inter_size=expert_inter,
+                fuse_silu=False, inter_size=expert_inter,
                 fused_moe=True)
             expert = FfnBuilder(expert_cfg, contexts, tp=tp, ranks=ranks)
 
-            if fused is not None:
-                expert._commit_linear('w1w3', fused, SplitSide.OUTPUT,
-                                      model_dtype=dtype)
-            else:
-                if w1 is not None:
-                    expert._commit_linear('w1', w1, SplitSide.OUTPUT,
-                                          model_dtype=dtype)
-                if w3 is not None:
-                    expert._commit_linear('w3', w3, SplitSide.OUTPUT,
-                                          model_dtype=dtype)
-            if w2 is not None:
-                expert._commit_linear('w2', w2, SplitSide.INPUT,
-                                      model_dtype=dtype)
+            # TRANSFORM + COMMIT: builder handles w1+w3 fusion + TP split
+            expert.add_ffn(w1, w2, w3)
 
             experts[str(e)] = expert
 
@@ -291,24 +263,8 @@ class Qwen3TextSpec(TextModelSpec):
         parent.moe_ffn = moe
 
     # ------------------------------------------------------------------
-    # Weight reading methods (unchanged)
+    # Weight reading methods
     # ------------------------------------------------------------------
-
-    # ---- Linear bundles: attention ----
-
-    def _read_attn_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._layer_prefix}.{layer}.self_attn"
-        result: dict[str, Linear] = {}
-        for tm_name, hf_key in [
-            ("w_qkv.q", "q_proj"),
-            ("w_qkv.k", "k_proj"),
-            ("w_qkv.v", "v_proj"),
-            ("wo", "o_proj"),
-        ]:
-            lin = self._read_linear(f"{pfx}.{hf_key}")
-            if lin is not None:
-                result[tm_name] = lin
-        return result
 
     # ---- Linear bundles: FFN ----
 

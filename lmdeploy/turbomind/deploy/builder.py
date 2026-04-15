@@ -9,6 +9,7 @@ across all GPUs with bound TP configuration.
 from __future__ import annotations
 
 import enum
+from dataclasses import replace
 
 import torch
 
@@ -238,15 +239,10 @@ class Builder:
         object.__setattr__(self, '_tp', tp)
         object.__setattr__(self, '_ranks', ranks)
         object.__setattr__(self, '_children', {})
+        object.__setattr__(self, 'config', config)
 
-        handles = []
-        for i, ctx in enumerate(contexts):
-            with ctx:
-                rank = ranks[i] if ranks and tp > 1 else 0
-                cfg = config.for_rank(rank).to_cpp()
-                handle = _tm.create_module(cfg)
-                handles.append(handle)
-        object.__setattr__(self, '_handles', handles)
+        object.__setattr__(self, '_handles', None)
+        object.__setattr__(self, '_handles_created', False)
 
     # ------------------------------------------------------------------
     # Child binding via attribute / item assignment
@@ -255,6 +251,8 @@ class Builder:
     def __setattr__(self, name: str, value):
         """If *value* is a Builder, bind its handles as named children."""
         if isinstance(value, Builder):
+            self._ensure_handles()
+            value._ensure_handles()
             for i, (parent_h, child_h) in enumerate(
                     zip(self._handles, value._handles)):
                 with self._contexts[i]:
@@ -267,6 +265,8 @@ class Builder:
         """Bind a Builder as an indexed child (for ModuleList children)."""
         name = str(index)
         if isinstance(value, Builder):
+            self._ensure_handles()
+            value._ensure_handles()
             for i, (parent_h, child_h) in enumerate(
                     zip(self._handles, value._handles)):
                 with self._contexts[i]:
@@ -285,6 +285,20 @@ class Builder:
         if self._ranks and self._tp > 1:
             return self._ranks[gpu_idx]
         return 0
+
+    def _ensure_handles(self):
+        """Lazily create C++ module handles on first access."""
+        if self._handles_created:
+            return
+        handles = []
+        for i, ctx in enumerate(self._contexts):
+            with ctx:
+                rank = self._ranks[i] if self._ranks and self._tp > 1 else 0
+                cfg = self.config.for_rank(rank).to_cpp()
+                handle = _tm.create_module(cfg)
+                handles.append(handle)
+        object.__setattr__(self, '_handles', handles)
+        object.__setattr__(self, '_handles_created', True)
 
     # ------------------------------------------------------------------
     # Commit methods (distributed across all GPUs)
@@ -318,6 +332,7 @@ class Builder:
             checkpoint stores weights in a different precision than the
             model config (e.g. BF16 weights in an FP16 model).
         """
+        self._ensure_handles()
         cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
         if group_size == 0:
             group_size = max(1, 128)  # default; caller should pass correct value
@@ -409,6 +424,7 @@ class Builder:
         split_side : SplitSide | None
             TP split semantics.  ``None`` means broadcast.
         """
+        self._ensure_handles()
         if tensor is None:
             return
 
@@ -448,6 +464,7 @@ class Builder:
         data_type : C++ DataType value | None
             Compute dtype for the norm.  Defaults to FP32 if not set.
         """
+        self._ensure_handles()
         if data_type is None:
             data_type = _tm.DataType.TYPE_FP32
         norm_cfg = NormConfig(dim=tensor.shape[-1], data_type=data_type)
@@ -486,6 +503,8 @@ class TextModelBuilder(Builder):
         object.__setattr__(self, '_tp', tp)
         object.__setattr__(self, '_ranks', ranks)
         object.__setattr__(self, '_children', {})
+        object.__setattr__(self, '_handles_created', True)
+        object.__setattr__(self, 'config', None)
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +543,7 @@ class NormBuilder(Builder):
 
     def set_weight(self, tensor: torch.Tensor):
         """Commit the norm weight tensor to all GPU handles."""
+        self._ensure_handles()
         if tensor is None:
             return
         for i, handle in enumerate(self._handles):
@@ -552,16 +572,16 @@ class AttentionBuilder(Builder):
     }
 
     def add_qkv_proj(self, q, k, v):
-        """Fuse QKV, shard along output dim, commit."""
+        """Fuse Q/K/V into a single w_qkv, apply RoPE + TP interleave, commit."""
         from .spec import merge_qkv_linear
         merged = merge_qkv_linear(
             q, k, v,
             tp=self._tp,
             head_dim=self.config.head_dim,
-            rope_dim=self.config.head_dim,
-            permute_qk=True,
+            rope_dim=self.config.rope_dim or self.config.head_dim,
+            permute_qk=self.config.permute_qk,
             attn_output_gate=self.config.attn_output_gate,
-            repeat_kv=0,
+            repeat_kv=self.config.repeat_kv,
             kv_head_num=self.config.kv_head_num,
         )
         self._commit_linear('w_qkv', merged, SplitSide.OUTPUT,
@@ -570,6 +590,22 @@ class AttentionBuilder(Builder):
     def add_o_proj(self, o):
         """Shard along input dim, commit."""
         self._commit_linear('wo', o, SplitSide.INPUT,
+                            model_dtype=self.config.data_type)
+
+    def add_linear(self, name, linear):
+        """Commit a named attention linear using TP rules from commit.py.
+
+        Looks up ``_ATTN_TP_RULES`` for the split side; absent keys are
+        broadcast (no TP split).  Used for MLA projections (q_b_proj,
+        kv_b_proj, o_proj) and other non-QKV attention linears.
+        """
+        from .commit import _ATTN_TP_RULES
+        rule = _ATTN_TP_RULES.get(name, {})
+        split_side = rule.get('split_side')
+        if split_side is not None:
+            # Convert spec.SplitSide -> builder.SplitSide by value
+            split_side = SplitSide(split_side.value)
+        self._commit_linear(name, linear, split_side=split_side,
                             model_dtype=self.config.data_type)
 
     def add_qk_norm(self, q, k):
@@ -594,20 +630,28 @@ class FfnBuilder(Builder):
     """FFN weight loading builder with w1+w3 fusion."""
 
     def add_ffn(self, w1, w2, w3):
-        """Fuse w1+w3 if possible, shard, commit."""
+        """Fuse w1+w3 if possible, update config, then shard and commit.
+
+        The fusion result determines ``fuse_silu`` on the C++ module config.
+        Updating ``self.config.fuse_silu`` **before** any ``_commit_linear``
+        call ensures the C++ module is lazily created with the correct flag.
+        """
         from .transforms import fuse_ffn_linears
         fused = None
         fused_silu = False
         if w1 is not None and w3 is not None:
-            act_type = getattr(self.config, 'act_type', 'silu')
-            # act_type is an int in FfnConfig, convert to string if needed
+            act_type = getattr(self.config, 'act_type', 0)
+            # act_type is an int in FfnConfig, convert to string for transform
             if isinstance(act_type, int):
                 act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
             fused, fused_silu = fuse_ffn_linears(
                 w1, w3, self._tp, act_type,
                 is_moe=getattr(self.config, 'fused_moe', False))
 
-        model_dtype = getattr(self.config, 'data_type', None)
+        # Update config BEFORE first _commit_linear triggers _ensure_handles()
+        self.config = replace(self.config, fuse_silu=fused_silu)
+
+        model_dtype = self.config.data_type
         if fused is not None:
             self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)

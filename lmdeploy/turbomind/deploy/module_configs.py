@@ -52,10 +52,15 @@ class AttentionConfig:
     attn_sink: bool = False
     attn_output_gate: bool = False
 
+    rope_dim: int = 0
+    permute_qk: bool = True
+    repeat_kv: int = 0
+
     k_type_name: str = 'AttentionWeight'
 
     @classmethod
-    def from_model_config(cls, mc, *, tp_size, tp_rank, dtype, window_size):
+    def from_model_config(cls, mc, *, tp_size, tp_rank, dtype, window_size,
+                          rope_dim=0, permute_qk=True, repeat_kv=0):
         """Build from ModelConfig. dtype is the C++ DataType value."""
         return cls(
             hidden_dim=mc.hidden_units,
@@ -74,6 +79,9 @@ class AttentionConfig:
             window_size=window_size,
             attn_sink=mc.attn_sink,
             attn_output_gate=mc.attn_output_gate,
+            rope_dim=rope_dim,
+            permute_qk=permute_qk,
+            repeat_kv=repeat_kv,
         )
 
     def for_rank(self, rank: int) -> AttentionConfig:
