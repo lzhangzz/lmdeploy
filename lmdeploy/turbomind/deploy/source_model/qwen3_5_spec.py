@@ -15,20 +15,20 @@ import re
 import torch
 
 from ..builder import (
-    AttentionBuilder, Builder, DecoderLayerBuilder, FfnBuilder, LinearBuilder,
+    AttentionBuilder, Builder, DecoderLayerBuilder, FfnBuilder,
     MoeBuilder, ModuleListBuilder, NormBuilder, SplitSide, TextModelBuilder,
-    _LINEAR_ATTN_TP_RULES, _act_type_id, _cpp_dtype as _cd,
+    _LINEAR_ATTN_TP_RULES, _act_type_id,
     fuse_gdn_in_proj,
 )
 from ..kind_map import build_linear
-from ..linear import Linear, pad_out_dim
+from ..linear import Linear
 from ..module_configs import (
-    AttentionConfig, DecoderLayerConfig, DeltaNetConfig, FfnConfig, LinearConfig,
+    AttentionConfig, DecoderLayerConfig, DeltaNetConfig, FfnConfig,
     ModuleListConfig, MoeConfig, NormConfig,
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
-from .utils import load_model_config, parse_rope_param
+from .utils import parse_rope_param, reorder_rotary_emb
 
 _LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
 
@@ -39,27 +39,6 @@ def map_packed_qwen35_experts(name: str) -> str:
     Only matches names ending without ``.weight``; a no-op for already-unpacked checkpoints.
     """
     return re.sub(r'(mlp\.experts\.(?:gate_up|down)_proj)$', r'\1.weight', name)
-
-
-def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
-    """Reorder rotary embedding layout for TurboMind's RoPE kernel."""
-    if rope_dim < head_dim:
-        output_dims = x.size(-1)
-        head_num = output_dims // head_dim
-        orig_shape = x.shape
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-        x = x.view(x.size(0), head_num, head_dim)
-        rotary = x[:, :, :rope_dim]
-        passthrough = x[:, :, rope_dim:]
-        rotary = rotary.view(x.size(0), head_num, 2, rope_dim // 2).transpose(2, 3).contiguous()
-        rotary = rotary.view(x.size(0), head_num, rope_dim)
-        x = torch.cat([rotary, passthrough], dim=-1)
-        return x.reshape(orig_shape)
-    else:
-        output_dims = x.size(-1)
-        head_num = output_dims // head_dim
-        return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
 def _qwen35_model_info_base(cfg: dict) -> dict:
@@ -148,96 +127,39 @@ class Qwen3_5Spec(TextModelSpec):
     # Builder-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
-    def _cpp_dtype(self):
-        return _cd(self._mc.data_type)
-
     def model(self):
         root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds('model.embed_tokens')
-        root.norm = self.root_norm('model.norm')
-        root.output = self.lm_head('lm_head')
+        root.tok_embeddings = self.token_embeds(self._embed_key)
+        root.norm = self.output_norm(self._norm_key)
+        tie = self.cfg.get("tie_word_embeddings", False)
+        lm_key = self._embed_key if tie else "lm_head.weight"
+        root.output = self.lm_head(lm_key)
         root.layers = self.layers(self._layer_prefix)
 
     # ------------------------------------------------------------------
     # Factory methods: read weights, create builders, return them
     # ------------------------------------------------------------------
 
-    def token_embeds(self, pfx):
-        """Return LinearBuilder for tok_embeddings, or None."""
-        key = self._embed_key
-        emb = self._get(key)
-        if emb is None:
-            return None
-
-        mc = self._mc
-        tp = self._attn_tp * self._attn_cp
-        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-        emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-        dtype = self._cpp_dtype()
-
-        cfg = LinearConfig(input_dim=padded_vocab,
-                           output_dim=mc.hidden_units // tp,
-                           data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
-        return m
-
-    def root_norm(self, pfx):
-        """Return NormBuilder for the final norm, or None."""
-        w = self._zero_centered(self._get(self._norm_key))
-        if w is None:
-            return None
-
-        mc = self._mc
-        dtype = self._cpp_dtype()
-        cfg = NormConfig(dim=mc.hidden_units, data_type=dtype)
+    def output_norm(self, key):
+        w = self._zero_centered(self._get(key))
+        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
 
-    def lm_head(self, pfx):
-        """Return LinearBuilder for the output head, or None."""
-        tie = self.cfg.get("tie_word_embeddings", False)
-        key = self._embed_key if tie else f"{pfx}.weight"
-        output = self._get(key)
-        if output is None:
-            return None
-
-        mc = self._mc
-        tp = self._attn_tp * self._attn_cp
-        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-        output_padded = pad_out_dim(output, padded_vocab, dim=0)
-        output_t = output_padded.t()
-        dtype = self._cpp_dtype()
-
-        cfg = LinearConfig(input_dim=mc.hidden_units,
-                           output_dim=padded_vocab // tp,
-                           data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(output_t, split_side=SplitSide.OUTPUT)
-        return m
-
-    def norm(self, pfx):
-        """Return NormBuilder for the given prefix, or None."""
-        w = self._zero_centered(self._get(f'{pfx}.weight'))
-        if w is None:
-            return None
-
-        dtype = self._cpp_dtype()
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=dtype)
+    def norm(self, key):
+        w = self._zero_centered(self._get(key))
+        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
 
     def attn(self, pfx, layer):
-        """Return AttentionBuilder for the given layer, or None."""
+        """Return AttentionBuilder for the given layer."""
         q = self._linear(f"{pfx}.q_proj")
         k = self._linear(f"{pfx}.k_proj")
         v = self._linear(f"{pfx}.v_proj")
         o = self._linear(f"{pfx}.o_proj")
-
-        if q is None and k is None and v is None and o is None:
-            return None
 
         mc = self._mc
         tp = self._attn_tp
@@ -257,33 +179,27 @@ class Qwen3_5Spec(TextModelSpec):
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
 
-        if q is not None and k is not None and v is not None:
-            attn.add_qkv_proj(q, k, v)
-        if o is not None:
-            attn.add_o_proj(o)
+        attn.add_qkv_proj(q, k, v)
+        attn.add_o_proj(o)
 
         # Inline qk norm
         q_norm = self._zero_centered(self._get(f"{pfx}.q_norm.weight"))
         k_norm = self._zero_centered(self._get(f"{pfx}.k_norm.weight"))
-        if q_norm is not None and k_norm is not None:
-            if self._permute_qk:
-                q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope_dim)
-                k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope_dim)
-        if q_norm is not None or k_norm is not None:
-            attn.add_qk_norm(q_norm, k_norm)
+        if self._permute_qk:
+            q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope_dim)
+            k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope_dim)
+        attn.add_qk_norm(q_norm, k_norm)
 
         return attn
 
     def linear_attn(self, pfx, layer):
-        """Return Builder for linear-attention (Gated Delta Net), or None."""
+        """Return Builder for linear-attention (Gated Delta Net)."""
         # Read GDN input projection linears
         la_linears: dict[str, Linear] = {}
         for key in ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj"]:
             lin = self._linear(f"{pfx}.{key}")
             if lin is not None:
                 la_linears[key] = lin
-        if not la_linears:
-            return None
 
         mc = self._mc
         tp = self._attn_tp
@@ -307,53 +223,43 @@ class Qwen3_5Spec(TextModelSpec):
         # Inline params: A_log, dt_bias
         for key in ["A_log", "dt_bias"]:
             t = self._get(f"{pfx}.{key}")
-            if t is not None:
-                linear_attn._commit_tensor(key, t, split_side=SplitSide.OUTPUT)
+            linear_attn._commit_tensor(key, t, split_side=SplitSide.OUTPUT)
 
         # Inline param: conv1d
         conv1d = self._get(f"{pfx}.conv1d.weight")
-        if conv1d is not None and conv1d.ndim == 3 and conv1d.shape[1] == 1:
+        if conv1d.ndim == 3 and conv1d.shape[1] == 1:
             conv1d = conv1d.squeeze(1)
         # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
-        if conv1d is not None:
-            conv1d = conv1d.t().contiguous()
-            if self._attn_tp > 1 and self._linear_qkv_split is not None:
-                q_dim, k_dim, v_dim = self._linear_qkv_split
-                d_conv = conv1d.shape[0]
-                tp = self._attn_tp
-                q_part = conv1d[:, :q_dim]
-                k_part = conv1d[:, q_dim:q_dim + k_dim]
-                v_part = conv1d[:, q_dim + k_dim:]
-                conv1d = torch.cat([
-                    q_part.reshape(d_conv, tp, q_dim // tp),
-                    k_part.reshape(d_conv, tp, k_dim // tp),
-                    v_part.reshape(d_conv, tp, v_dim // tp),
-                ], dim=2).reshape(d_conv, -1).contiguous()
-            linear_attn._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
+        conv1d = conv1d.t().contiguous()
+        if self._attn_tp > 1 and self._linear_qkv_split is not None:
+            q_dim, k_dim, v_dim = self._linear_qkv_split
+            d_conv = conv1d.shape[0]
+            tp = self._attn_tp
+            q_part = conv1d[:, :q_dim]
+            k_part = conv1d[:, q_dim:q_dim + k_dim]
+            v_part = conv1d[:, q_dim + k_dim:]
+            conv1d = torch.cat([
+                q_part.reshape(d_conv, tp, q_dim // tp),
+                k_part.reshape(d_conv, tp, k_dim // tp),
+                v_part.reshape(d_conv, tp, v_dim // tp),
+            ], dim=2).reshape(d_conv, -1).contiguous()
+        linear_attn._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
 
         # Inline param: D
         d_param = self._get(f"{pfx}.D")
-        if d_param is not None:
-            linear_attn._commit_tensor("D", d_param, split_side=SplitSide.OUTPUT)
+        linear_attn._commit_tensor("D", d_param, split_side=SplitSide.OUTPUT)
 
         # Inline norm children
         norm = self._get(f"{pfx}.norm.weight")
-        if norm is not None:
-            linear_attn._add_norm_child("norm", norm, data_type=dtype)
+        linear_attn._add_norm_child("norm", norm, data_type=dtype)
 
         return linear_attn
 
     def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
-        """Return FfnBuilder for the given layer, or None."""
+        """Return FfnBuilder for the given layer."""
         w1 = self._linear(f"{pfx}.gate_proj")
         w3 = self._linear(f"{pfx}.up_proj")
         w2 = self._linear(f"{pfx}.down_proj")
-        linears = {}
-        if w1 is not None: linears['w1'] = w1
-        if w3 is not None: linears['w3'] = w3
-        if w2 is not None: linears['w2'] = w2
-        if not linears:
-            return None
 
         mc = self._mc
         tp = self._mlp_tp
@@ -374,7 +280,7 @@ class Qwen3_5Spec(TextModelSpec):
         return m
 
     def moe(self, pfx, layer):
-        """Return MoeBuilder for the given layer, or None."""
+        """Build MoeBuilder for the given MoE layer."""
         if self.num_experts(layer) <= 0:
             return None
 
@@ -394,23 +300,18 @@ class Qwen3_5Spec(TextModelSpec):
         m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
 
         # Inline gate read
-        if self._n_experts > 0:
-            gate_w = self._get(f'{pfx}.gate.weight')
-            if gate_w is not None:
-                gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-                m.add_gate('gate', Linear({"weight": gate_w}), model_dtype=dtype)
-            # Shared expert gate
-            sg = self._get(f'{pfx}.shared_expert_gate.weight')
-            if sg is not None:
-                sg = sg.t() if sg.dim() > 1 else sg
-                m.add_gate('shared_gate', Linear({"weight": sg}), model_dtype=dtype)
+        gate_w = self._get(f'{pfx}.gate.weight')
+        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
+        m.add_gate('gate', Linear({"weight": gate_w}), model_dtype=dtype)
+        # Shared expert gate
+        sg = self._get(f'{pfx}.shared_expert_gate.weight')
+        sg = sg.t() if sg.dim() > 1 else sg
+        m.add_gate('shared_gate', Linear({"weight": sg}), model_dtype=dtype)
 
         expert_inter = mc.expert_inter_size or 0
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            expert = self._moe_expert_ffn(pfx, layer, e, expert_inter)
-            if expert is not None:
-                experts[str(e)] = expert
+            experts[str(e)] = self._moe_expert_ffn(pfx, layer, e, expert_inter)
 
         m.experts = experts
         return m
@@ -422,7 +323,7 @@ class Qwen3_5Spec(TextModelSpec):
         for i in range(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
             d.attention_norm = self.norm(
-                f'{pfx}.{i}.input_layernorm')
+                f'{pfx}.{i}.input_layernorm.weight')
             if self._is_linear_attn(i):
                 d.linear_attn = self.linear_attn(
                     f'{pfx}.{i}.linear_attn', layer=i)
@@ -430,7 +331,7 @@ class Qwen3_5Spec(TextModelSpec):
                 d.attention = self.attn(
                     f'{pfx}.{i}.self_attn', layer=i)
             d.ffn_norm = self.norm(
-                f'{pfx}.{i}.post_attention_layernorm')
+                f'{pfx}.{i}.post_attention_layernorm.weight')
             if self.num_experts(i) > 0:
                 d.feed_forward = self.ffn(
                     f'{pfx}.{i}.mlp.shared_expert', layer=i)
@@ -446,10 +347,6 @@ class Qwen3_5Spec(TextModelSpec):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _linear(self, prefix: str) -> Linear | None:
-        """Read a Linear bundle from the checkpoint at *prefix*."""
-        return build_linear(self.params, prefix)
 
     def _zero_centered(self, w: torch.Tensor | None) -> torch.Tensor | None:
         """Zero-centered RMSNorm: add 1.0."""
@@ -467,9 +364,9 @@ class Qwen3_5Spec(TextModelSpec):
             return result
         # Fall back to packed format
         packed_pfx = f'{pfx}.experts'
-        return self._packed_moe_expert_indexed(packed_pfx, layer, expert_idx, inter_size)
+        return self._packed_moe_expert_indexed(packed_pfx, expert_idx, inter_size)
 
-    def _packed_moe_expert_indexed(self, pfx, layer, expert_idx, inter_size):
+    def _packed_moe_expert_indexed(self, pfx, expert_idx, inter_size):
         """Read a single expert from packed tensors by index."""
         gate_up_lin = build_linear(self.params, f"{pfx}.gate_up_proj", index=expert_idx)
         down_lin = build_linear(self.params, f"{pfx}.down_proj", index=expert_idx)
@@ -506,53 +403,6 @@ class Qwen3_5Spec(TextModelSpec):
     def num_experts(self, layer: int) -> int:
         return self._n_experts
 
-    # ---- metadata ----
-
-    def model_info(self) -> dict:
-        cfg = self.cfg
-        hidden = cfg["hidden_size"]
-        heads = cfg["num_attention_heads"]
-        kv_heads = cfg.get("num_key_value_heads", heads)
-        head_dim = cfg.get("head_dim", hidden // heads)
-        info = dict(
-            num_layer=cfg["num_hidden_layers"],
-            hidden_units=hidden,
-            head_num=heads,
-            kv_head_num=kv_heads,
-            size_per_head=head_dim,
-            vocab_size=cfg["vocab_size"],
-            norm_eps=cfg["rms_norm_eps"],
-            inter_size=cfg.get("intermediate_size", 0),
-            qk_norm=True,
-            attn_bias=cfg.get("attention_bias", 0),
-        )
-        if self._n_experts:
-            info.update(
-                expert_num=self._n_experts,
-                expert_inter_size=cfg.get("moe_intermediate_size", 0),
-                experts_per_token=cfg.get("num_experts_per_tok", 0),
-                inter_size=cfg.get("shared_expert_intermediate_size", 0),
-                moe_shared_gate=True,
-                scoring_func="softmax",
-                norm_topk_prob=True,
-            )
-        if self._layer_types:
-            info.update(
-                layer_types=self._layer_types,
-                linear_key_head_dim=cfg.get("linear_key_head_dim", 0),
-                linear_value_head_dim=cfg.get("linear_value_head_dim", 0),
-                linear_conv_kernel_dim=cfg.get("linear_conv_kernel_dim", 0),
-                linear_num_key_heads=cfg.get("linear_num_key_heads", 0),
-                linear_num_value_heads=cfg.get("linear_num_value_heads", 0),
-                attn_output_gate=cfg.get("attn_output_gate", False),
-            )
-        rope_params = cfg.get("rope_parameters", {})
-        partial_rot = rope_params.get("partial_rotary_factor",
-                                      cfg.get("partial_rotary_factor", 1.0))
-        if partial_rot < 1.0:
-            info["rope_dim"] = int(head_dim * partial_rot)
-        return info
-
 
 @INPUT_MODELS.register_module(name='qwen3_5')
 class Qwen3_5InputModel(BaseInputModel):
@@ -560,12 +410,6 @@ class Qwen3_5InputModel(BaseInputModel):
 
     _layer_pattern = _LAYER_PATTERN
     _spec_class = Qwen3_5Spec
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def model_info(self) -> dict:
         cfg = self.model_config
@@ -591,12 +435,6 @@ class Qwen3_5MoeInputModel(BaseInputModel):
     _layer_pattern = _LAYER_PATTERN
     _spec_class = Qwen3_5Spec
     _loader_mappings = [map_packed_qwen35_experts]
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def model_info(self) -> dict:
         cfg = self.model_config
