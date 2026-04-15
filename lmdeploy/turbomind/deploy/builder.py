@@ -15,7 +15,7 @@ import torch
 
 import _turbomind as _tm
 
-from .linear import Linear
+from .linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
 from .module_configs import NormConfig
 
 # ---------------------------------------------------------------------------
@@ -233,6 +233,88 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
             padded[tuple(idx)].copy_(shard)
             shard = padded
         dst.copy_from(shard)
+
+
+# ---------------------------------------------------------------------------
+# FFN fusion helpers (moved from transforms.py)
+# ---------------------------------------------------------------------------
+
+
+def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
+    """Determine if fused SiLU (interleave) should be used for w1+w3 fusion.
+
+    Gold standard condition (from GEMM kernel constraints — trust it):
+        act_type == SiLU && (int4 || mxfp4 || fp8 || moe) && !(fp8 && SM90)
+    """
+    if act_type not in ('', 'silu', 'SiLU'):
+        return False
+
+    # Dense bf16/fp16 without MoE -> chunk, not interleave
+    weight = w1_linear.tensors.get("weight")
+    is_quantized = weight is not None and weight.element_size() < 2
+    if not is_quantized and not is_moe:
+        return False
+
+    # FP8 on SM90 -> chunk
+    fmt = w1_linear.weight_format
+    if fmt is not None and fmt.name == "fp8":
+        if torch.cuda.is_available():
+            cap = torch.cuda.get_device_capability()
+            if cap == (9, 0):
+                return False
+
+    return True
+
+
+def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
+    """Check whether w1+w3 fusion is safe for the given TP.
+
+    Fusion (interleave or chunk) concatenates w1 and w3 along the output dim.
+    For block-quantized formats (e.g. FP8 with block_out=128), the fused
+    scale count ``2 * cdiv(N/tp, block_out)`` must equal
+    ``cdiv(2*N/tp, block_out)``.  This holds iff ``(N/tp) % block_out == 0``.
+    When it doesn't, the fused module's C++ allocation won't match the
+    concatenated scales and we must commit w1/w3 separately.
+    """
+    if tp <= 1:
+        return True
+    fmt = w1.weight_format
+    if fmt is None or fmt.block_out is None:
+        return True
+    w = w1.tensors.get("weight")
+    if w is None:
+        return True
+    return (w.size(-1) // tp) % fmt.block_out == 0
+
+
+def fuse_ffn_linears(
+    w1: Linear,
+    w3: Linear,
+    tp: int,
+    act_type: str,
+    is_moe: bool = False,
+) -> tuple[Linear | None, bool]:
+    """Optionally fuse w1/w3 on full (unsharded) tensors for FFN.
+
+    Returns (fused_w1w3_or_none, fused_silu).
+    When fusion is possible, fused_w1w3 is set.
+    When block-scale boundaries prevent fusion, returns (None, fused_silu).
+
+    TP sharding is NOT done here — the caller's commit path handles it
+    via split_side=SplitSide.OUTPUT.  ``tp`` is only used for the
+    block-scale alignment check in ``_can_fuse_w1w3``.
+    """
+    fused_silu = _should_fuse_silu(w1, act_type, is_moe)
+    can_fuse = _can_fuse_w1w3(w1, tp)
+
+    if can_fuse:
+        if fused_silu:
+            w1w3 = _interleave_linears(w1, w3)
+        else:
+            w1w3 = _chunk_linears(w1, w3, tp)
+        return (w1w3, fused_silu)
+    else:
+        return (None, fused_silu)
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +744,6 @@ class FfnBuilder(Builder):
         Updating ``self.config.fuse_silu`` **before** any ``_commit_linear``
         call ensures the C++ module is lazily created with the correct flag.
         """
-        from .transforms import fuse_ffn_linears
         fused = None
         fused_silu = False
         if w1 is not None and w3 is not None:
