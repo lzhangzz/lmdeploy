@@ -12,7 +12,7 @@ from .commit import (
     _cpp_dtype, _act_type_id,
     _ATTN_TP_RULES, _LINEAR_ATTN_TP_RULES,
 )
-from .spec import SplitSide
+from .builder import SplitSide
 from .transforms import fuse_ffn_linears
 from .distributor import Distributor
 

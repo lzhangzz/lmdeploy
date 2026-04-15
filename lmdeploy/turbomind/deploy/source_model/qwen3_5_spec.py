@@ -15,7 +15,8 @@ import re
 import torch
 
 from ..linear import Linear
-from ..spec import TextModelSpec, SplitSide
+from ..spec import TextModelSpec
+from ..builder import SplitSide
 from ..kind_map import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
@@ -120,7 +121,7 @@ class Qwen3_5Spec(TextModelSpec):
     def model(self):
         from ..builder import (TextModelBuilder, ModuleListBuilder,
                                DecoderLayerBuilder, NormBuilder, Builder,
-                               SplitSide as BSplitSide)
+                               SplitSide)
         from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
                                       NormConfig, LinearConfig)
         from ..commit import _cpp_dtype
@@ -149,7 +150,7 @@ class Qwen3_5Spec(TextModelSpec):
                                    data_type=dtype)
             tok = Builder(tok_cfg, contexts, tp=tp, ranks=attn_ranks)
             tok._commit_tensor('weight', emb_padded,
-                               split_side=BSplitSide.OUTPUT)
+                               split_side=SplitSide.OUTPUT)
             root.tok_embeddings = tok
 
         # --- final norm (zero-centered) ---
@@ -172,7 +173,7 @@ class Qwen3_5Spec(TextModelSpec):
                                    data_type=dtype)
             out = Builder(out_cfg, contexts, tp=tp, ranks=attn_ranks)
             out._commit_tensor('weight', output_t,
-                               split_side=BSplitSide.OUTPUT)
+                               split_side=SplitSide.OUTPUT)
             root.output = out
 
         # --- decoder layers ---
@@ -273,7 +274,7 @@ class Qwen3_5Spec(TextModelSpec):
     def _build_linear_attn(self, parent, layer, mc, dtype, tp, ranks,
                            contexts):
         """Build linear-attention (Gated Delta Net) module for one layer."""
-        from ..builder import Builder, SplitSide as BSplitSide
+        from ..builder import Builder, SplitSide
         from ..module_configs import DeltaNetConfig
         from ..commit import _LINEAR_ATTN_TP_RULES
 
@@ -288,7 +289,7 @@ class Qwen3_5Spec(TextModelSpec):
         # Commit linear bundles with TP rules from the rule table
         for name, lin in la_linears.items():
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-            bs = (BSplitSide(rule['split_side'].value)
+            bs = (SplitSide(rule['split_side'].value)
                   if 'split_side' in rule else None)
             linear_attn._commit_linear(name, lin, split_side=bs,
                                        model_dtype=dtype)
@@ -296,7 +297,7 @@ class Qwen3_5Spec(TextModelSpec):
         # Direct params (A_log, dt_bias, conv1d) -- tuples with SplitSide
         for name, val in self.linear_attn_params(layer).items():
             tensor, ss = val
-            bs = BSplitSide(ss.value) if ss is not None else None
+            bs = SplitSide(ss.value) if ss is not None else None
             linear_attn._commit_tensor(name, tensor, split_side=bs)
 
         # Norm children (norm, etc.)

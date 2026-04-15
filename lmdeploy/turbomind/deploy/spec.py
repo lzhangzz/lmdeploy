@@ -1,22 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
-import enum
+
+from typing import TYPE_CHECKING
 from abc import ABC, abstractmethod
 import torch
 from .kind_map import TRIVIAL_FORMAT
 from .linear import Linear
 from .module_configs import SpecAttnConfig
 
-
-class SplitSide(enum.Enum):
-    """Semantic TP split direction for ``commit_linear`` / ``commit_tensor``.
-
-    ``OUTPUT`` — column-parallel: split along the output dimension
-    ``INPUT``  — row-parallel:    split along the input dimension
-    """
-
-    OUTPUT = "output"
-    INPUT = "input"
+if TYPE_CHECKING:
+    from .builder import SplitSide
 
 
 def permute_v2(x: torch.Tensor, size_per_head: int = 128):
