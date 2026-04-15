@@ -55,6 +55,25 @@ class TextModelLoader:
         try:
             spec._contexts = self._contexts
             spec._root_handles = [h for h in self._root._handles]
+            # Inject model config and TP configuration
+            spec._mc = self.model.model_config
+            spec._attn_tp = self.attn_tp
+            spec._attn_cp = self.model.attn_cp_size
+            spec._mlp_tp = self.mlp_tp
+            spec._attn_ranks = self._attn_ranks
+            spec._mlp_ranks = self._mlp_ranks
+            spec._repeat_kv = self.model.repeat_kv
+            # Configure spec for QKV merge (needed by attn_linears via _read_attn_linears)
+            mc = self.model.model_config
+            rope_param = self.model.attention_config.rope_param
+            spec.configure(SpecAttnConfig(
+                tp=self.attn_tp,
+                repeat_kv=self.model.repeat_kv,
+                head_dim=mc.size_per_head,
+                rope_dim=rope_param.dim if rope_param else mc.size_per_head,
+                output_gate=mc.attn_output_gate,
+                kv_head_num=mc.kv_head_num,
+            ))
             spec.model()
             return 1
         except NotImplementedError:
