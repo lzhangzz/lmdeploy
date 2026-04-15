@@ -6,6 +6,8 @@ from collections.abc import Iterator
 
 from mmengine import Registry
 
+from .utils import load_model_config
+
 INPUT_MODELS = Registry('source model', locations=['lmdeploy.turbomind.deploy.source_model.base'])
 
 
@@ -18,14 +20,11 @@ class BaseInputModel(ABC):
     _loader_mappings: list = []
 
     def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        """Constructor for BaseInputModel.
-
-        Args:
-            model_path (str): the path of the model.
-            tokenizer_path (str): the path of the tokenizer model.
-        """
         self.model_path = model_path
         self.tokenizer_path = tokenizer_path
+        self.model_config = load_model_config(model_path)
+        self.model_format = kwargs.get('model_format')
+        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     @abstractmethod
     def model_info(self) -> dict:
