@@ -537,3 +537,107 @@ class NormBuilder(Builder):
                 dst = handle.param('weight').alloc(list(shard.shape), cpp_dtype)
                 shard = _cast_shard_for_tm(shard, dst)
                 dst.copy_from(shard)
+
+
+# ---------------------------------------------------------------------------
+# AttentionBuilder -- QKV fusion, O-proj, QK-norm, direct params
+# ---------------------------------------------------------------------------
+
+
+class AttentionBuilder(Builder):
+    """Attention weight loading builder."""
+
+    _PARAM_TP_RULES: dict[str, SplitSide] = {
+        'sinks': SplitSide.OUTPUT,
+    }
+
+    def add_qkv_proj(self, q, k, v):
+        """Fuse QKV, shard along output dim, commit."""
+        from .spec import merge_qkv_linear
+        merged = merge_qkv_linear(
+            q, k, v,
+            tp=self._tp,
+            head_dim=self.config.head_dim,
+            rope_dim=self.config.head_dim,
+            permute_qk=True,
+            attn_output_gate=self.config.attn_output_gate,
+            repeat_kv=0,
+            kv_head_num=self.config.kv_head_num,
+        )
+        self._commit_linear('w_qkv', merged, SplitSide.OUTPUT,
+                            model_dtype=self.config.data_type)
+
+    def add_o_proj(self, o):
+        """Shard along input dim, commit."""
+        self._commit_linear('wo', o, SplitSide.INPUT,
+                            model_dtype=self.config.data_type)
+
+    def add_qk_norm(self, q, k):
+        """Create NormConfig children for q_norm, k_norm, commit tensors."""
+        if q is not None:
+            self._add_norm_child('q_norm', q, data_type=self.config.data_type)
+        if k is not None:
+            self._add_norm_child('k_norm', k, data_type=self.config.data_type)
+
+    def add_param(self, name, tensor):
+        """Commit a direct parameter. Builder determines split side."""
+        split_side = self._PARAM_TP_RULES.get(name)
+        self._commit_tensor(name, tensor, split_side)
+
+
+# ---------------------------------------------------------------------------
+# FfnBuilder -- w1+w3 fusion, w2 commit
+# ---------------------------------------------------------------------------
+
+
+class FfnBuilder(Builder):
+    """FFN weight loading builder with w1+w3 fusion."""
+
+    def add_ffn(self, w1, w2, w3):
+        """Fuse w1+w3 if possible, shard, commit."""
+        from .transforms import fuse_ffn_linears
+        fused = None
+        fused_silu = False
+        if w1 is not None and w3 is not None:
+            act_type = getattr(self.config, 'act_type', 'silu')
+            # act_type is an int in FfnConfig, convert to string if needed
+            if isinstance(act_type, int):
+                act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
+            fused, fused_silu = fuse_ffn_linears(
+                w1, w3, self._tp, act_type,
+                is_moe=getattr(self.config, 'fused_moe', False))
+
+        model_dtype = getattr(self.config, 'data_type', None)
+        if fused is not None:
+            self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
+                                model_dtype=model_dtype)
+        else:
+            if w1 is not None:
+                self._commit_linear('w1', w1, SplitSide.OUTPUT,
+                                    model_dtype=model_dtype)
+            if w3 is not None:
+                self._commit_linear('w3', w3, SplitSide.OUTPUT,
+                                    model_dtype=model_dtype)
+        if w2 is not None:
+            self._commit_linear('w2', w2, SplitSide.INPUT,
+                                model_dtype=model_dtype)
+
+
+# ---------------------------------------------------------------------------
+# MoeBuilder -- gate, non-expert params
+# ---------------------------------------------------------------------------
+
+
+class MoeBuilder(Builder):
+    """MoE weight loading builder."""
+
+    def add_gate(self, name, linear, model_dtype=None):
+        """Commit a gate linear (broadcast, no split)."""
+        self._commit_linear(name, linear, split_side=None,
+                            model_dtype=model_dtype)
+
+    def add_param(self, name, tensor, split_side=None):
+        """Commit a non-expert MoE parameter."""
+        if split_side is not None and not isinstance(split_side, SplitSide):
+            split_side = None  # specs may pass None for broadcast
+        self._commit_tensor(name, tensor, split_side)
