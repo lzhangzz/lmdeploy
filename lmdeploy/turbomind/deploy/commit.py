@@ -7,7 +7,7 @@ import torch
 import _turbomind as _tm
 
 from .linear import Linear
-from .spec import SplitSide
+from .builder import SplitSide
 
 # Canonical dtype mappings
 _STR_TO_DTYPE: dict[str, _tm.DataType] = {
@@ -120,13 +120,7 @@ def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
     fmt = linear.weight_format
     is_quantized = fmt is not None and fmt.name != 'trivial'
 
-    def _kind_order(item):
-        k, _ = item
-        if k == "weight":
-            return (0, k)
-        return (1, k)
-
-    for kind, tensor in sorted(linear.tensors.items(), key=_kind_order):
+    for kind, tensor in linear.tensors.items():
         if packer is not None:
             tensor = packer(tensor, kind)
 
