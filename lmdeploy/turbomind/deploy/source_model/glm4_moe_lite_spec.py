@@ -2,7 +2,7 @@
 """GLM-4 MoE Lite (GLM-4.7-Flash) TextModelSpec for the new pipeline.
 
 Demonstrates the composable-ops pipeline with:
-  - MLA (Multi-head Latent Attention) via ``read_linear``
+  - MLA (Multi-head Latent Attention)
   - MoE experts with dense first layer
   - noaux_tc routing with score correction bias
   - Raw tensors for norms, router, embeddings
@@ -13,7 +13,17 @@ import os
 
 import torch
 
-from ..linear import Linear
+from ..builder import (
+    AttentionBuilder, DecoderLayerBuilder, FfnBuilder, LinearBuilder,
+    MoeBuilder, ModuleListBuilder, NormBuilder, SplitSide, TextModelBuilder,
+    _act_type_id, _cpp_dtype as _cd,
+)
+from ..kind_map import build_linear
+from ..linear import Linear, pad_out_dim
+from ..module_configs import (
+    AttentionConfig, DecoderLayerConfig, FfnConfig, LinearConfig,
+    ModuleListConfig, MoeConfig, NormConfig,
+)
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import get_yarn_params, load_model_config, parse_rope_param
@@ -36,36 +46,29 @@ class Glm4MoeLiteSpec(TextModelSpec):
         self.cfg = model_cfg
         self._num_layer = model_cfg["num_hidden_layers"]
         self._n_experts = model_cfg.get("n_routed_experts", 0)
-        self._first_k_dense = model_cfg.get("first_k_dense_replace", 1)
+        self._dense_layers = model_cfg.get("first_k_dense_replace", 1)
 
     # ------------------------------------------------------------------
     # Builder-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
     def _cpp_dtype(self):
-        from ..builder import _cpp_dtype as _cd
         return _cd(self._mc.data_type)
 
     def model(self):
-        from ..builder import TextModelBuilder
-
         root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds()
-        root.norm = self.root_norm()
-        root.output = self.lm_head()
-        root.layers = self.layers(self._layer_prefix)
+        root.tok_embeddings = self.token_embeds('model.embed_tokens')
+        root.norm = self.root_norm('model.norm')
+        root.output = self.lm_head('lm_head')
+        root.layers = self.layers('model.layers')
 
     # ------------------------------------------------------------------
     # Factory methods: read weights, create builders, return them
     # ------------------------------------------------------------------
 
-    def token_embeds(self):
+    def token_embeds(self, pfx):
         """Return LinearBuilder for tok_embeddings, or None."""
-        from ..builder import LinearBuilder, SplitSide
-        from ..module_configs import LinearConfig
-        from ..linear import pad_out_dim
-
-        emb = self.tok_embeddings()
+        emb = self._get(f'{pfx}.weight')
         if emb is None:
             return None
 
@@ -82,12 +85,9 @@ class Glm4MoeLiteSpec(TextModelSpec):
         m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
         return m
 
-    def root_norm(self):
+    def root_norm(self, pfx):
         """Return NormBuilder for the final norm, or None."""
-        from ..builder import NormBuilder
-        from ..module_configs import NormConfig
-
-        w = self.norm_weight()
+        w = self._get(f'{pfx}.weight')
         if w is None:
             return None
 
@@ -98,13 +98,9 @@ class Glm4MoeLiteSpec(TextModelSpec):
         m.set_weight(w)
         return m
 
-    def lm_head(self):
+    def lm_head(self, pfx):
         """Return LinearBuilder for the output head, or None."""
-        from ..builder import LinearBuilder, SplitSide
-        from ..module_configs import LinearConfig
-        from ..linear import pad_out_dim
-
-        output = self.output_weight()
+        output = self._get(f'{pfx}.weight')
         if output is None:
             return None
 
@@ -124,9 +120,6 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     def norm(self, pfx):
         """Return NormBuilder for the given prefix, or None."""
-        from ..builder import NormBuilder
-        from ..module_configs import NormConfig
-
         w = self._get(f'{pfx}.weight')
         if w is None:
             return None
@@ -139,9 +132,6 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     def attn(self, pfx, layer):
         """Return AttentionBuilder for MLA attention, or None."""
-        from ..builder import AttentionBuilder
-        from ..module_configs import AttentionConfig
-
         # READ: spec reads all MLA projections directly
         raw: dict = {}
         for tm_name, hf_key in [
@@ -152,7 +142,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
             ("kv_b_proj", "kv_b_proj"),
             ("wo", "o_proj"),
         ]:
-            lin = self._read_linear(f"{pfx}.{hf_key}")
+            lin = self._linear(f"{pfx}.{hf_key}")
             if lin is not None:
                 raw[tm_name] = lin
 
@@ -180,34 +170,29 @@ class Glm4MoeLiteSpec(TextModelSpec):
             attn.add_linear(name, lin)
 
         # Direct params (values may be tuples)
-        for name, val in self.attn_params(layer).items():
-            if isinstance(val, tuple):
-                tensor, _ = val
-            else:
-                tensor = val
-            attn.add_param(name, tensor)
-
-        # Norm children (q_a_layernorm, kv_a_layernorm)
-        for name, tensor in self.attn_norm_children(layer).items():
-            attn._add_norm_child(name, tensor, data_type=dtype)
+        # Inline attn_params: empty for GLM4MoeLite
+        # Inline attn_norm_children
+        for norm_name, norm_key in [
+            ("q_a_layernorm", "q_a_layernorm.weight"),
+            ("kv_a_layernorm", "kv_a_layernorm.weight"),
+        ]:
+            norm_tensor = self._get(f"{pfx}.{norm_key}")
+            if norm_tensor is not None:
+                attn._add_norm_child(norm_name, norm_tensor, data_type=dtype)
 
         return attn
 
-    def ffn(self, pfx, layer, linears=None, inter_size=None,
-            fused_moe=False):
+    def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
         """Return FfnBuilder for the given layer, or None."""
-        from ..builder import FfnBuilder
-        from ..module_configs import FfnConfig
-        from ..builder import _act_type_id
-
-        if linears is None:
-            linears = self.ffn_linears(layer)
+        w1 = self._linear(f"{pfx}.gate_proj")
+        w3 = self._linear(f"{pfx}.up_proj")
+        w2 = self._linear(f"{pfx}.down_proj")
+        linears = {}
+        if w1 is not None: linears['w1'] = w1
+        if w3 is not None: linears['w3'] = w3
+        if w2 is not None: linears['w2'] = w2
         if not linears:
             return None
-
-        w1 = linears.get('w1')
-        w3 = linears.get('w3')
-        w2 = linears.get('w2')
 
         mc = self._mc
         tp = self._mlp_tp
@@ -224,15 +209,11 @@ class Glm4MoeLiteSpec(TextModelSpec):
             fuse_silu=False, inter_size=inter_size,
             fused_moe=fused_moe)
         m = FfnBuilder(ffn_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
-        m.add_ffn(w1, w2, w3)
+        m.add_ffn(linears.get('w1'), linears.get('w2'), linears.get('w3'))
         return m
 
     def moe(self, pfx, layer):
         """Return MoeBuilder for the given layer, or None."""
-        from ..builder import MoeBuilder, ModuleListBuilder
-        from ..module_configs import MoeConfig, ModuleListConfig
-        from ..builder import _act_type_id
-
         if self.num_experts(layer) <= 0:
             return None
 
@@ -251,23 +232,27 @@ class Glm4MoeLiteSpec(TextModelSpec):
             fuse_silu=True, expert_num=expert_num)
         m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
 
-        for name, linear in self.moe_gate(layer).items():
-            m.add_gate(name, linear, model_dtype=dtype)
+        # Inline gate read
+        gate_w = self._get(f'{pfx}.gate.weight')
+        if gate_w is not None:
+            gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
+            tensors = {"weight": gate_w}
+            gate_bias = self._get(f'{pfx}.gate.bias')
+            if gate_bias is not None:
+                tensors["bias"] = gate_bias
+            m.add_gate('gate', Linear(tensors), model_dtype=dtype)
 
-        # Non-expert MoE parameters (values may be tuples)
-        for name, val in self.moe_params(layer).items():
-            if isinstance(val, tuple):
-                tensor, _ = val
-            else:
-                tensor = val
-            m.add_param(name, tensor)
+        # Inline score correction bias
+        correction = self._get(
+            f'{pfx}.gate.e_score_correction_bias')
+        if correction is not None:
+            m.add_param("score_correction_bias", correction)
 
         expert_inter = mc.expert_inter_size or 0
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
             expert = self.ffn(
                 f'{pfx}.experts.{e}', layer,
-                linears=self.moe_ffn_linears(layer, e),
                 inter_size=expert_inter, fused_moe=True)
             if expert is not None:
                 experts[str(e)] = expert
@@ -277,10 +262,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     def layers(self, pfx):
         """Return ModuleListBuilder with all decoder layers."""
-        from ..builder import ModuleListBuilder, DecoderLayerBuilder
-        from ..module_configs import ModuleListConfig, DecoderLayerConfig
-
-        m = ModuleListBuilder(ModuleListConfig(), self._contexts)
+        layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
 
         for i in range(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
@@ -290,23 +272,23 @@ class Glm4MoeLiteSpec(TextModelSpec):
                 f'{pfx}.{i}.self_attn', layer=i)
             d.ffn_norm = self.norm(
                 f'{pfx}.{i}.post_attention_layernorm')
-            if self.num_experts(i) > 0:
+            if i < self._dense_layers:
+                # Dense FFN layer
+                d.feed_forward = self.ffn(
+                    f'{pfx}.{i}.mlp', layer=i)
+            else:
+                # MoE layer: shared expert as feed_forward, routed as moe_ffn
                 d.feed_forward = self.ffn(
                     f'{pfx}.{i}.mlp.shared_experts', layer=i)
                 d.moe_ffn = self.moe(
                     f'{pfx}.{i}.mlp', layer=i)
-            else:
-                d.feed_forward = self.ffn(
-                    f'{pfx}.{i}.mlp', layer=i)
-            m[str(i)] = d
+            layers[str(i)] = d
 
-        return m
+        return layers
 
     # ------------------------------------------------------------------
-    # Weight reading methods
+    # MLA fold (model-specific weight transform)
     # ------------------------------------------------------------------
-
-    # ---- MLA fold (model-specific weight transform) ----
 
     def _mla_fold_and_pad(self, linears: dict[str, Linear]):
         """Fold kv_b_proj into q_b_proj and wo, then pad wo.
@@ -392,84 +374,18 @@ class Glm4MoeLiteSpec(TextModelSpec):
                 o_lin.tensors["weight"] = o_w.reshape(
                     o_w.size(0), head_num * size_per_head)
 
-    # ---- Linear bundles: dense FFN (layer 0) ----
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-    def ffn_linears(self, layer: int) -> dict[str, Linear]:
-        if layer >= self._first_k_dense:
-            return self._shared_expert_linears(layer)
-        pfx = f"{self._layer_prefix}.{layer}.mlp"
-        return self._read_ffn_linears(pfx)
-
-    def _shared_expert_linears(self, layer: int) -> dict[str, Linear]:
-        pfx = f"{self._layer_prefix}.{layer}.mlp.shared_experts"
-        return self._read_ffn_linears(pfx)
-
-    # ---- Linear bundles: MoE experts ----
-
-    def moe_ffn_linears(self, layer: int, expert: int) -> dict[str, Linear]:
-        pfx = f"{self._layer_prefix}.{layer}.mlp.experts.{expert}"
-        return self._read_ffn_linears(pfx)
+    def _linear(self, prefix: str) -> Linear | None:
+        """Read a Linear bundle from the checkpoint at *prefix*."""
+        return build_linear(self.params, prefix)
 
     def num_experts(self, layer: int) -> int:
-        if layer < self._first_k_dense:
+        if layer < self._dense_layers:
             return 0
         return self._n_experts
-
-    # ---- Raw tensors ----
-
-    def attn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._layer_prefix}.{layer}.input_layernorm.weight")
-
-    def ffn_norm(self, layer: int) -> torch.Tensor | None:
-        return self._get(f"{self._layer_prefix}.{layer}.post_attention_layernorm.weight")
-
-    def attn_params(self, layer):
-        return {}
-
-    def attn_norm_children(self, layer):
-        params = {}
-        q_a = self._get(
-            f"{self._layer_prefix}.{layer}.self_attn.q_a_layernorm.weight")
-        kv_a = self._get(
-            f"{self._layer_prefix}.{layer}.self_attn.kv_a_layernorm.weight")
-        if q_a is not None:
-            params["q_a_layernorm"] = q_a
-        if kv_a is not None:
-            params["kv_a_layernorm"] = kv_a
-        return params
-
-    def moe_gate(self, layer):
-        gates = {}
-        if self.num_experts(layer) > 0:
-            gate = self._get(
-                f"{self._layer_prefix}.{layer}.mlp.gate.weight")
-            if gate is not None:
-                gate = gate.t() if gate.dim() > 1 else gate
-                tensors = {"weight": gate}
-                gate_bias = self._get(
-                    f"{self._layer_prefix}.{layer}.mlp.gate.bias")
-                if gate_bias is not None:
-                    tensors["bias"] = gate_bias
-                gates["gate"] = Linear(tensors)
-        return gates
-
-    def moe_params(self, layer):
-        params = {}
-        if self.num_experts(layer) > 0:
-            correction = self._get(
-                f"{self._layer_prefix}.{layer}.mlp.gate.e_score_correction_bias")
-            if correction is not None:
-                params["score_correction_bias"] = (correction, None)
-        return params
-
-    def tok_embeddings(self) -> torch.Tensor | None:
-        return self._get("model.embed_tokens.weight")
-
-    def output_weight(self) -> torch.Tensor | None:
-        return self._get("lm_head.weight")
-
-    def norm_weight(self) -> torch.Tensor | None:
-        return self._get("model.norm.weight")
 
     # ---- metadata ----
 
