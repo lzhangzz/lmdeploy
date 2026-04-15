@@ -113,6 +113,314 @@ class Qwen3_5Spec(TextModelSpec):
     def _is_moe_layer(self, layer: int) -> bool:
         return self._n_experts > 0
 
+    # ------------------------------------------------------------------
+    # Builder-driven loading: build full model hierarchy
+    # ------------------------------------------------------------------
+
+    def model(self):
+        from ..builder import (TextModelBuilder, ModuleListBuilder,
+                               DecoderLayerBuilder, NormBuilder, Builder,
+                               SplitSide as BSplitSide)
+        from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
+                                      NormConfig, LinearConfig)
+        from ..commit import _cpp_dtype
+        from ..linear import pad_out_dim
+
+        mc = self._mc
+        dtype = _cpp_dtype(mc.data_type)
+        hidden = mc.hidden_units
+        contexts = self._contexts
+        attn_tp = self._attn_tp
+        mlp_tp = self._mlp_tp
+        attn_ranks = self._attn_ranks
+        mlp_ranks = self._mlp_ranks
+        attn_cp = self._attn_cp
+
+        root = TextModelBuilder(self._root_handles, contexts)
+
+        # --- tok_embeddings (column-parallel raw tensor) ---
+        emb = self.tok_embeddings()
+        if emb is not None:
+            tp = attn_tp * attn_cp
+            padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
+            emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
+            tok_cfg = LinearConfig(input_dim=padded_vocab,
+                                   output_dim=hidden // tp,
+                                   data_type=dtype)
+            tok = Builder(tok_cfg, contexts, tp=tp, ranks=attn_ranks)
+            tok._commit_tensor('weight', emb_padded,
+                               split_side=BSplitSide.OUTPUT)
+            root.tok_embeddings = tok
+
+        # --- final norm (zero-centered) ---
+        norm_w = self.norm_weight()
+        if norm_w is not None:
+            norm_cfg = NormConfig(dim=hidden, data_type=dtype)
+            norm_b = NormBuilder(norm_cfg, contexts)
+            norm_b.set_weight(norm_w)
+            root.norm = norm_b
+
+        # --- output head (column-parallel, transposed) ---
+        output = self.output_weight()
+        if output is not None:
+            tp = attn_tp * attn_cp
+            padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
+            output_padded = pad_out_dim(output, padded_vocab, dim=0)
+            output_t = output_padded.t()
+            out_cfg = LinearConfig(input_dim=hidden,
+                                   output_dim=padded_vocab // tp,
+                                   data_type=dtype)
+            out = Builder(out_cfg, contexts, tp=tp, ranks=attn_ranks)
+            out._commit_tensor('weight', output_t,
+                               split_side=BSplitSide.OUTPUT)
+            root.output = out
+
+        # --- decoder layers ---
+        layers = ModuleListBuilder(ModuleListConfig(), contexts)
+
+        for i in range(self._num_layer):
+            d = DecoderLayerBuilder(DecoderLayerConfig(), contexts)
+
+            # attention_norm (broadcast, zero-centered)
+            attn_norm_w = self.attn_norm(i)
+            if attn_norm_w is not None:
+                n_cfg = NormConfig(dim=hidden, data_type=dtype)
+                n_b = NormBuilder(n_cfg, contexts)
+                n_b.set_weight(attn_norm_w)
+                d.attention_norm = n_b
+
+            # attention or linear_attn
+            if self._is_linear_attn(i):
+                self._build_linear_attn(d, i, mc, dtype, attn_tp,
+                                        attn_ranks, contexts)
+            else:
+                self._build_attention(d, i, mc, dtype, attn_tp,
+                                      attn_ranks, contexts)
+
+            # ffn_norm (broadcast, zero-centered)
+            ffn_norm_w = self.ffn_norm(i)
+            if ffn_norm_w is not None:
+                n_cfg = NormConfig(dim=hidden, data_type=dtype)
+                n_b = NormBuilder(n_cfg, contexts)
+                n_b.set_weight(ffn_norm_w)
+                d.ffn_norm = n_b
+
+            # feed_forward (shared expert for MoE) and/or moe_ffn
+            if self.num_experts(i) > 0:
+                # Shared expert goes as feed_forward
+                self._build_ffn(d, i, mc, dtype, mlp_tp, mlp_ranks,
+                                contexts, child_name='feed_forward')
+                # Routed experts go as moe_ffn
+                self._build_moe(d, i, mc, dtype, mlp_tp, mlp_ranks,
+                                contexts)
+            else:
+                self._build_ffn(d, i, mc, dtype, mlp_tp, mlp_ranks,
+                                contexts, child_name='feed_forward')
+
+            layers[str(i)] = d
+
+        root.layers = layers
+
+    def _build_attention(self, parent, layer, mc, dtype, tp, ranks,
+                         contexts):
+        """Build attention module for one decoder layer."""
+        from ..builder import AttentionBuilder, SplitSide
+        from ..module_configs import AttentionConfig
+
+        attn_linears = self.attn_linears(layer)
+        if not attn_linears:
+            return
+
+        window_size = 0
+        ws_list = mc.window_size
+        if ws_list and layer < len(ws_list):
+            window_size = ws_list[layer]
+
+        attn_cfg = AttentionConfig.from_model_config(
+            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            window_size=window_size)
+        attn = AttentionBuilder(attn_cfg, contexts, tp=tp, ranks=ranks)
+
+        # Commit attention linear bundles with standard TP rules
+        for name, lin in attn_linears.items():
+            if name == 'w_qkv':
+                attn._commit_linear('w_qkv', lin, SplitSide.OUTPUT,
+                                    model_dtype=dtype)
+            elif name == 'wo':
+                attn._commit_linear('wo', lin, SplitSide.INPUT,
+                                    model_dtype=dtype)
+            else:
+                attn._commit_linear(name, lin, model_dtype=dtype)
+
+        # Direct params (none for Qwen3.5 full attention)
+        for name, tensor in self.attn_params(layer).items():
+            attn._commit_tensor(name, tensor)
+
+        # Norm children (q_norm, k_norm) -- zero-centered
+        for name, tensor in self.attn_norm_children(layer).items():
+            attn._add_norm_child(name, tensor, data_type=dtype)
+
+        parent.attention = attn
+
+    def _build_linear_attn(self, parent, layer, mc, dtype, tp, ranks,
+                           contexts):
+        """Build linear-attention (Gated Delta Net) module for one layer."""
+        from ..builder import Builder, SplitSide as BSplitSide
+        from ..module_configs import DeltaNetConfig
+        from ..commit import _LINEAR_ATTN_TP_RULES
+
+        la_linears = self.linear_attn_linears(layer)
+        if not la_linears:
+            return
+
+        dn_cfg = DeltaNetConfig.from_model_config(
+            mc, tp_size=tp, tp_rank=0, dtype=dtype)
+        linear_attn = Builder(dn_cfg, contexts, tp=tp, ranks=ranks)
+
+        # Commit linear bundles with TP rules from the rule table
+        for name, lin in la_linears.items():
+            rule = _LINEAR_ATTN_TP_RULES.get(name, {})
+            bs = (BSplitSide(rule['split_side'].value)
+                  if 'split_side' in rule else None)
+            linear_attn._commit_linear(name, lin, split_side=bs,
+                                       model_dtype=dtype)
+
+        # Direct params (A_log, dt_bias, conv1d) -- tuples with SplitSide
+        for name, val in self.linear_attn_params(layer).items():
+            tensor, ss = val
+            bs = BSplitSide(ss.value) if ss is not None else None
+            linear_attn._commit_tensor(name, tensor, split_side=bs)
+
+        # Norm children (norm, etc.)
+        for name, tensor in self.linear_attn_norm_children(layer).items():
+            linear_attn._add_norm_child(name, tensor, data_type=dtype)
+
+        parent.linear_attn = linear_attn
+
+    def _build_ffn(self, parent, layer, mc, dtype, tp, ranks, contexts,
+                   child_name='feed_forward', inter_size=None,
+                   fused_moe=False):
+        """Build dense FFN module for one decoder layer."""
+        from ..builder import FfnBuilder, SplitSide
+        from ..module_configs import FfnConfig
+        from ..transforms import fuse_ffn_linears
+        from ..commit import _act_type_id
+
+        ffn_linears = self.ffn_linears(layer)
+        if not ffn_linears:
+            return
+
+        w1 = ffn_linears.get('w1')
+        w3 = ffn_linears.get('w3')
+        w2 = ffn_linears.get('w2')
+
+        # Transform: optionally fuse w1 + w3
+        fused, fused_silu = None, False
+        if w1 is not None and w3 is not None:
+            fused, fused_silu = fuse_ffn_linears(
+                w1, w3, tp, mc.activation_type, is_moe=fused_moe)
+
+        if inter_size is None:
+            is_list = mc.inter_size
+            inter_size = is_list[layer] if is_list and layer < len(
+                is_list) else 0
+
+        ffn_cfg = FfnConfig.from_model_config(
+            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            act_type=_act_type_id(mc.activation_type),
+            fuse_silu=fused_silu, inter_size=inter_size,
+            fused_moe=fused_moe)
+        ffn = FfnBuilder(ffn_cfg, contexts, tp=tp, ranks=ranks)
+
+        if fused is not None:
+            ffn._commit_linear('w1w3', fused, SplitSide.OUTPUT,
+                               model_dtype=dtype)
+        else:
+            if w1 is not None:
+                ffn._commit_linear('w1', w1, SplitSide.OUTPUT,
+                                   model_dtype=dtype)
+            if w3 is not None:
+                ffn._commit_linear('w3', w3, SplitSide.OUTPUT,
+                                   model_dtype=dtype)
+        if w2 is not None:
+            ffn._commit_linear('w2', w2, SplitSide.INPUT,
+                               model_dtype=dtype)
+
+        setattr(parent, child_name, ffn)
+
+    def _build_moe(self, parent, layer, mc, dtype, tp, ranks, contexts):
+        """Build MoE module for one decoder layer."""
+        from ..builder import (MoeBuilder, FfnBuilder, ModuleListBuilder,
+                               SplitSide)
+        from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
+        from ..transforms import fuse_ffn_linears
+        from ..commit import _act_type_id
+
+        if self.num_experts(layer) <= 0:
+            return
+
+        expert_num = 0
+        en_list = mc.expert_num
+        if en_list and layer < len(en_list):
+            expert_num = en_list[layer]
+
+        moe_cfg = MoeConfig.from_model_config(
+            mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
+            act_type=_act_type_id(mc.activation_type),
+            fuse_silu=True, expert_num=expert_num)
+        moe = MoeBuilder(moe_cfg, contexts, tp=tp, ranks=ranks)
+
+        # Gate linears
+        for name, linear in self.moe_gate(layer).items():
+            moe.add_gate(name, linear, model_dtype=dtype)
+
+        # Non-expert MoE parameters (empty for Qwen3.5)
+        for name, val in self.moe_params(layer).items():
+            tensor, ss = val
+            bs = SplitSide(ss.value) if ss is not None else None
+            moe.add_param(name, tensor, split_side=bs)
+
+        # Experts
+        expert_inter = mc.expert_inter_size or 0
+        experts = ModuleListBuilder(ModuleListConfig(), contexts)
+        for e in range(self.num_experts(layer)):
+            expert_linears = self.moe_ffn_linears(layer, e)
+            w1 = expert_linears.get('w1')
+            w3 = expert_linears.get('w3')
+            w2 = expert_linears.get('w2')
+
+            # Transform: fuse w1 + w3
+            fused, fused_silu = None, False
+            if w1 is not None and w3 is not None:
+                fused, fused_silu = fuse_ffn_linears(
+                    w1, w3, tp, mc.activation_type, is_moe=True)
+
+            expert_cfg = FfnConfig.from_model_config(
+                mc, tp_size=tp, tp_rank=0, dtype=dtype,
+                act_type=_act_type_id(mc.activation_type),
+                fuse_silu=fused_silu, inter_size=expert_inter,
+                fused_moe=True)
+            expert = FfnBuilder(expert_cfg, contexts, tp=tp, ranks=ranks)
+
+            if fused is not None:
+                expert._commit_linear('w1w3', fused, SplitSide.OUTPUT,
+                                      model_dtype=dtype)
+            else:
+                if w1 is not None:
+                    expert._commit_linear('w1', w1, SplitSide.OUTPUT,
+                                          model_dtype=dtype)
+                if w3 is not None:
+                    expert._commit_linear('w3', w3, SplitSide.OUTPUT,
+                                          model_dtype=dtype)
+            if w2 is not None:
+                expert._commit_linear('w2', w2, SplitSide.INPUT,
+                                      model_dtype=dtype)
+
+            experts[str(e)] = expert
+
+        moe.experts = experts
+        parent.moe_ffn = moe
+
     # ---- zero-centered RMSNorm: add 1.0 ----
 
     def _zero_centered(self, w: torch.Tensor | None) -> torch.Tensor | None:
