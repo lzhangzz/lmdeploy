@@ -215,6 +215,9 @@ public:
 
     // ----- Registry-driven child creation -----
 
+    /// Create a standalone module using the type registry (no parent binding).
+    static std::unique_ptr<Module> create(const ModuleConfig& config);
+
     /// Create a child module using the type registry and attach it.
     /// Uses config.module_type to look up the factory.
     /// Returns pointer to the created child, or nullptr on failure.

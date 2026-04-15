@@ -64,10 +64,15 @@ void Module::prepare()
 
 // ----- Registry-driven child creation -----
 
+std::unique_ptr<Module> Module::create(const ModuleConfig& config)
+{
+    return ModuleRegistry::instance().create(std::string(config.module_type), config);
+}
+
 Module* Module::create_child(const std::string& name,
                              const ModuleConfig& config)
 {
-    auto mod = ModuleRegistry::instance().create(std::string(config.module_type), config);
+    auto mod = create(config);
     if (!mod) {
         return nullptr;
     }

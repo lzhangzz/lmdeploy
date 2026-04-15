@@ -634,7 +634,25 @@ PYBIND11_MODULE(_turbomind, m)
              [](ft::core::Module& m, int idx) -> ft::core::Module* {
                  return m.get(std::to_string(idx));
              },
-             py::return_value_policy::reference);
+             py::return_value_policy::reference)
+        // Deferred parent binding — transfer ownership of a previously created module
+        .def("add_child_raw",
+            [](ft::core::Module& parent, const std::string& name,
+               ft::core::Module* child) -> ft::core::Module* {
+                auto owned = std::unique_ptr<ft::core::Module>(child);
+                return parent.add_child(name, std::move(owned));
+            },
+            py::return_value_policy::reference,
+            "name"_a, "child"_a);
+
+    // Standalone module creation (no parent needed)
+    m.def("create_module",
+        [](turbomind::core::ModuleConfig& config) -> ft::core::Module* {
+            auto mod = ft::core::Module::create(config);
+            return mod.release();
+        },
+        py::return_value_policy::reference,
+        "config"_a);
 
     // LinearWeight — specific interface for weight loading
     py::class_<turbomind::LinearWeight, ft::core::Module>(m, "LinearWeight")
