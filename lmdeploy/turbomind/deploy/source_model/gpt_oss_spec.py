@@ -20,7 +20,7 @@ import torch
 
 from ..linear import Linear
 from ..spec import TextModelSpec
-from ..builder import SplitSide
+from ..builder import SplitSide, _cpp_dtype, _act_type_id, LinearBuilder
 from ..kind_map import build_linear
 from .base import INPUT_MODELS, BaseInputModel
 from .utils import load_model_config, parse_rope_param
@@ -50,115 +50,115 @@ class GptOssSpec(TextModelSpec):
     # Builder-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
+    def _cpp_dtype(self):
+        from ..builder import _cpp_dtype as _cd
+        return _cd(self._mc.data_type)
+
     def model(self):
-        from ..builder import (TextModelBuilder, ModuleListBuilder,
-                               DecoderLayerBuilder, NormBuilder, Builder,
-                               SplitSide as BSplitSide)
-        from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
-                                      NormConfig, LinearConfig)
-        from ..builder import _cpp_dtype, _act_type_id
+        from ..builder import TextModelBuilder
+
+        root = TextModelBuilder(self._root_handles, self._contexts)
+        root.tok_embeddings = self.token_embeds()
+        root.norm = self.root_norm()
+        root.output = self.lm_head()
+        root.layers = self.layers(self._layer_prefix)
+
+    # ------------------------------------------------------------------
+    # Factory methods: read weights, create builders, return them
+    # ------------------------------------------------------------------
+
+    def token_embeds(self):
+        """Return LinearBuilder for tok_embeddings, or None."""
+        from ..module_configs import LinearConfig
         from ..linear import pad_out_dim
 
-        mc = self._mc
-        dtype = _cpp_dtype(mc.data_type)
-        hidden = mc.hidden_units
-        contexts = self._contexts
-        attn_tp = self._attn_tp
-        mlp_tp = self._mlp_tp
-        attn_ranks = self._attn_ranks
-        mlp_ranks = self._mlp_ranks
-        attn_cp = self._attn_cp
-        num_layer = mc.num_layer
-
-        root = TextModelBuilder(self._root_handles, contexts)
-
-        # --- tok_embeddings ---
         emb = self.tok_embeddings()
-        if emb is not None:
-            tp = attn_tp * attn_cp
-            padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-            emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-            tok_cfg = LinearConfig(input_dim=padded_vocab,
-                                   output_dim=hidden // tp,
-                                   data_type=dtype)
-            tok = Builder(tok_cfg, contexts, tp=tp, ranks=attn_ranks)
-            tok._commit_tensor('weight', emb_padded,
-                               split_side=BSplitSide.OUTPUT)
-            root.tok_embeddings = tok
+        if emb is None:
+            return None
 
-        # --- final norm ---
-        norm_w = self.norm_weight()
-        if norm_w is not None:
-            norm_cfg = NormConfig(dim=hidden, data_type=dtype)
-            norm_b = NormBuilder(norm_cfg, contexts)
-            norm_b.set_weight(norm_w)
-            root.norm = norm_b
+        mc = self._mc
+        tp = self._attn_tp * self._attn_cp
+        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
+        emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
+        dtype = self._cpp_dtype()
 
-        # --- output head ---
+        cfg = LinearConfig(input_dim=padded_vocab,
+                           output_dim=mc.hidden_units // tp,
+                           data_type=dtype)
+        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
+        m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
+        return m
+
+    def root_norm(self):
+        """Return NormBuilder for the final norm, or None."""
+        from ..builder import NormBuilder
+        from ..module_configs import NormConfig
+
+        w = self.norm_weight()
+        if w is None:
+            return None
+
+        mc = self._mc
+        dtype = self._cpp_dtype()
+        cfg = NormConfig(dim=mc.hidden_units, data_type=dtype)
+        m = NormBuilder(cfg, self._contexts)
+        m.set_weight(w)
+        return m
+
+    def lm_head(self):
+        """Return LinearBuilder for the output head, or None."""
+        from ..module_configs import LinearConfig
+        from ..linear import pad_out_dim
+
         output = self.output_weight()
-        if output is not None:
-            tp = attn_tp * attn_cp
-            padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-            output_padded = pad_out_dim(output, padded_vocab, dim=0)
-            output_t = output_padded.t()
-            out_cfg = LinearConfig(input_dim=hidden,
-                                   output_dim=padded_vocab // tp,
-                                   data_type=dtype)
-            out = Builder(out_cfg, contexts, tp=tp, ranks=attn_ranks)
-            out._commit_tensor('weight', output_t,
-                               split_side=BSplitSide.OUTPUT)
-            root.output = out
+        if output is None:
+            return None
 
-        # --- decoder layers ---
-        layers = ModuleListBuilder(ModuleListConfig(), contexts)
-        for i in range(num_layer):
-            d = DecoderLayerBuilder(DecoderLayerConfig(), contexts)
+        mc = self._mc
+        tp = self._attn_tp * self._attn_cp
+        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
+        output_padded = pad_out_dim(output, padded_vocab, dim=0)
+        output_t = output_padded.t()
+        dtype = self._cpp_dtype()
 
-            # attention_norm
-            attn_norm_w = self.attn_norm(i)
-            if attn_norm_w is not None:
-                n_cfg = NormConfig(dim=hidden, data_type=dtype)
-                n_b = NormBuilder(n_cfg, contexts)
-                n_b.set_weight(attn_norm_w)
-                d.attention_norm = n_b
+        cfg = LinearConfig(input_dim=mc.hidden_units,
+                           output_dim=padded_vocab // tp,
+                           data_type=dtype)
+        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
+        m.set_weight(output_t, split_side=SplitSide.OUTPUT)
+        return m
 
-            # attention
-            self._build_attention(d, i, mc, dtype, attn_tp, attn_ranks,
-                                  contexts)
+    def norm(self, pfx):
+        """Return NormBuilder for the given prefix, or None."""
+        from ..builder import NormBuilder
+        from ..module_configs import NormConfig
 
-            # ffn_norm
-            ffn_norm_w = self.ffn_norm(i)
-            if ffn_norm_w is not None:
-                n_cfg = NormConfig(dim=hidden, data_type=dtype)
-                n_b = NormBuilder(n_cfg, contexts)
-                n_b.set_weight(ffn_norm_w)
-                d.ffn_norm = n_b
+        w = self._get(f'{pfx}.weight')
+        if w is None:
+            return None
 
-            # MoE (all layers are MoE for gpt-oss)
-            if self.num_experts(i) > 0:
-                self._build_moe(d, i, mc, dtype, mlp_tp, mlp_ranks,
-                                contexts)
+        dtype = self._cpp_dtype()
+        cfg = NormConfig(dim=self._mc.hidden_units, data_type=dtype)
+        m = NormBuilder(cfg, self._contexts)
+        m.set_weight(w)
+        return m
 
-            layers[str(i)] = d
-
-        root.layers = layers
-
-    def _build_attention(self, parent, layer, mc, dtype, tp, ranks,
-                         contexts):
-        """Build attention: spec reads projections, builder merges QKV."""
+    def attn(self, pfx, layer):
+        """Return AttentionBuilder for the given layer, or None."""
         from ..builder import AttentionBuilder
         from ..module_configs import AttentionConfig
 
-        pfx = f"{self._layer_prefix}.{layer}.self_attn"
-
-        # READ: spec reads projections directly from checkpoint
         q = self._read_linear(f"{pfx}.q_proj")
         k = self._read_linear(f"{pfx}.k_proj")
         v = self._read_linear(f"{pfx}.v_proj")
         o = self._read_linear(f"{pfx}.o_proj")
 
         if q is None and k is None and v is None and o is None:
-            return
+            return None
+
+        mc = self._mc
+        tp = self._attn_tp
+        dtype = self._cpp_dtype()
 
         window_size = 0
         ws_list = mc.window_size
@@ -171,32 +171,65 @@ class GptOssSpec(TextModelSpec):
             rope_dim=self._rope_dim,
             permute_qk=self._permute_qk,
             repeat_kv=self._repeat_kv)
-        attn = AttentionBuilder(attn_cfg, contexts, tp=tp, ranks=ranks)
+        attn = AttentionBuilder(attn_cfg, self._contexts,
+                                tp=tp, ranks=self._attn_ranks)
 
-        # TRANSFORM + COMMIT: builder handles QKV merge, RoPE perm, TP split
         if q is not None and k is not None and v is not None:
             attn.add_qkv_proj(q, k, v)
         if o is not None:
             attn.add_o_proj(o)
 
-        # Direct params -- attention sinks
+        # Direct params -- attention sinks (values are (tensor, split_side))
         for name, val in self.attn_params(layer).items():
-            if isinstance(val, tuple):
-                tensor, ss = val
-            else:
-                tensor, ss = val, None
+            tensor, _ = val
             attn.add_param(name, tensor)
 
-        parent.attention = attn
+        return attn
 
-    def _build_moe(self, parent, layer, mc, dtype, tp, ranks, contexts):
-        """Build MoE module: spec reads expert weights, builder handles fusion."""
-        from ..builder import MoeBuilder, FfnBuilder, ModuleListBuilder
-        from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
-        from ..builder import _act_type_id
+    def ffn(self, pfx, layer, linears=None, inter_size=None,
+            fused_moe=False):
+        """Return FfnBuilder for the given layer, or None."""
+        from ..builder import FfnBuilder
+        from ..module_configs import FfnConfig
+
+        if linears is None:
+            linears = self.ffn_linears(layer)
+        if not linears:
+            return None
+
+        w1 = linears.get('w1')
+        w3 = linears.get('w3')
+        w2 = linears.get('w2')
+
+        mc = self._mc
+        tp = self._mlp_tp
+        dtype = self._cpp_dtype()
+
+        if inter_size is None:
+            is_list = mc.inter_size
+            inter_size = is_list[layer] if is_list and layer < len(
+                is_list) else 0
+
+        ffn_cfg = FfnConfig.from_model_config(
+            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            act_type=_act_type_id(mc.activation_type),
+            fuse_silu=False, inter_size=inter_size,
+            fused_moe=fused_moe)
+        m = FfnBuilder(ffn_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
+        m.add_ffn(w1, w2, w3)
+        return m
+
+    def moe(self, pfx, layer):
+        """Return MoeBuilder for the given layer, or None."""
+        from ..builder import MoeBuilder, ModuleListBuilder
+        from ..module_configs import MoeConfig, ModuleListConfig
 
         if self.num_experts(layer) <= 0:
-            return
+            return None
+
+        mc = self._mc
+        tp = self._mlp_tp
+        dtype = self._cpp_dtype()
 
         expert_num = 0
         en_list = mc.expert_num
@@ -207,43 +240,49 @@ class GptOssSpec(TextModelSpec):
             mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
-        moe = MoeBuilder(moe_cfg, contexts, tp=tp, ranks=ranks)
+        m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
 
-        # Gate linears
         for name, linear in self.moe_gate(layer).items():
-            moe.add_gate(name, linear, model_dtype=dtype)
+            m.add_gate(name, linear, model_dtype=dtype)
 
-        # Non-expert MoE parameters
+        # Non-expert MoE parameters (values are (tensor, split_side))
         for name, val in self.moe_params(layer).items():
-            if isinstance(val, tuple):
-                tensor, ss = val
-            else:
-                tensor, ss = val, None
-            moe.add_param(name, tensor)
+            tensor, _ = val
+            m.add_param(name, tensor)
 
-        # Experts: each expert is an FfnBuilder
         expert_inter = mc.expert_inter_size or 0
-        experts = ModuleListBuilder(ModuleListConfig(), contexts)
+        experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            expert_linears = self.moe_ffn_linears(layer, e)
-            w1 = expert_linears.get('w1')
-            w3 = expert_linears.get('w3')
-            w2 = expert_linears.get('w2')
+            expert = self.ffn(
+                f'{pfx}.experts.{e}', layer,
+                linears=self.moe_ffn_linears(layer, e),
+                inter_size=expert_inter, fused_moe=True)
+            if expert is not None:
+                experts[str(e)] = expert
 
-            expert_cfg = FfnConfig.from_model_config(
-                mc, tp_size=tp, tp_rank=0, dtype=dtype,
-                act_type=_act_type_id(mc.activation_type),
-                fuse_silu=False, inter_size=expert_inter,
-                fused_moe=True)
-            expert = FfnBuilder(expert_cfg, contexts, tp=tp, ranks=ranks)
+        m.experts = experts
+        return m
 
-            # TRANSFORM + COMMIT: builder handles w1+w3 fusion + TP split
-            expert.add_ffn(w1, w2, w3)
+    def layers(self, pfx):
+        """Return ModuleListBuilder with all decoder layers."""
+        from ..builder import ModuleListBuilder, DecoderLayerBuilder
+        from ..module_configs import ModuleListConfig, DecoderLayerConfig
 
-            experts[str(e)] = expert
+        layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
 
-        moe.experts = experts
-        parent.moe_ffn = moe
+        for i in range(self._mc.num_layer):
+            d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
+            d.attention_norm = self.norm(
+                f'{pfx}.{i}.input_layernorm')
+            d.attention = self.attn(
+                f'{pfx}.{i}.self_attn', i)
+            d.ffn_norm = self.norm(
+                f'{pfx}.{i}.post_attention_layernorm')
+            if self.num_experts(i) > 0:
+                d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
+            layers[str(i)] = d
+
+        return layers
 
     # ------------------------------------------------------------------
     # Weight reading methods
