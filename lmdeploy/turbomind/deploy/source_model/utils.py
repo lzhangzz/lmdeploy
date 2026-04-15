@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import torch
+
 from lmdeploy.archs import get_model_arch
 
 from ..config import RopeParam
@@ -119,3 +121,24 @@ def get_yarn_params(rope_scaling: dict) -> tuple[float, float]:
         softmax_scale = scale * scale
 
     return attention_factor, softmax_scale
+
+
+def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
+    """Reorder rotary embedding layout for TurboMind's RoPE kernel."""
+    if rope_dim < head_dim:
+        output_dims = x.size(-1)
+        head_num = output_dims // head_dim
+        orig_shape = x.shape
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        x = x.view(x.size(0), head_num, head_dim)
+        rotary = x[:, :, :rope_dim]
+        passthrough = x[:, :, rope_dim:]
+        rotary = rotary.view(x.size(0), head_num, 2, rope_dim // 2).transpose(2, 3).contiguous()
+        rotary = rotary.view(x.size(0), head_num, rope_dim)
+        x = torch.cat([rotary, passthrough], dim=-1)
+        return x.reshape(orig_shape)
+    else:
+        output_dims = x.size(-1)
+        head_num = output_dims // head_dim
+        return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
