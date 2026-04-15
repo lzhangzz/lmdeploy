@@ -58,6 +58,11 @@ class BaseLoader(ABC):
     def items(self) -> Iterator[tuple[int, dict]]:
         pass
 
+    @abstractmethod
+    def all_items(self) -> dict:
+        """Return ALL weights in a single dict."""
+        pass
+
 
 class SafetensorsLoader(BaseLoader):
 
@@ -104,6 +109,18 @@ class SafetensorsLoader(BaseLoader):
                     yield (-1, {k: f.get_tensor(k) for k in misc})
         assert not params
 
+    def all_items(self) -> dict:
+        """Return ALL weights in a single dict (mmap-backed, no eager load)."""
+        all_params = {}
+        for shard in self.shards:
+            with safe_open(shard, 'pt') as f:
+                filename = osp.basename(shard)
+                for k in f.keys():
+                    if k not in self.index or self.index[k] != filename:
+                        continue
+                    all_params[self.map_key(k)] = f.get_tensor(k)
+        return all_params
+
 
 class PytorchLoader(BaseLoader):
 
@@ -144,6 +161,16 @@ class PytorchLoader(BaseLoader):
         for idx in idxs:
             yield (idx, params.pop(idx))
 
+    def all_items(self) -> dict:
+        """Return ALL weights in a single dict."""
+        all_params = {}
+        for shard in self.shards:
+            tmp = torch.load(shard, map_location='cpu', weights_only=True)
+            for k, v in tmp.items():
+                all_params[self.map_key(k)] = v
+            del tmp
+        return all_params
+
 
 class StateDictLoader:
     """This loader is used for `update_params`.
@@ -172,6 +199,9 @@ class StateDictLoader:
 
             torch.cuda.empty_cache()
             self.que.task_done()
+
+    def all_items(self) -> dict:
+        raise NotImplementedError("StateDictLoader does not support all_items()")
 
 
 def create_loader(model_path: str | Queue, pattern: str, mappings: list) -> BaseLoader:

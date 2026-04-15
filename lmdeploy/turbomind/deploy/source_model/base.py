@@ -33,10 +33,10 @@ class BaseInputModel(ABC):
         pass
 
     def readers(self) -> Iterator:
-        """Yield ``(layer_id, spec)`` for every layer in the checkpoint."""
+        """Yield a single ``(layer_id=-1, spec)`` pair with ALL weights."""
         import torch
         from ..loader import create_loader
         loader = create_loader(self.model_path, self._layer_pattern, self._loader_mappings)
-        for i, param in loader.items():
-            yield i, self._spec_class(param, self.model_config)
+        all_params = loader.all_items()
+        yield -1, self._spec_class(all_params, self.model_config)
         torch.cuda.empty_cache()
