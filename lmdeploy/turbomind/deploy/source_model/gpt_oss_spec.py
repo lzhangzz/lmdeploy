@@ -19,19 +19,19 @@ import re
 import torch
 
 from ..builder import (
-    AttentionBuilder, DecoderLayerBuilder, FfnBuilder, LinearBuilder,
-    MoeBuilder, ModuleListBuilder, NormBuilder, SplitSide, TextModelBuilder,
-    _act_type_id, _cpp_dtype as _cd,
-)
-from ..linear import Linear, pad_out_dim
-from ..module_configs import (
-    AttentionConfig, DecoderLayerConfig, FfnConfig, LinearConfig,
-    ModuleListConfig, MoeConfig, NormConfig,
+    AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
+    MoeBuilder, ModuleListBuilder, TextModelBuilder,
+    _act_type_id,
 )
 from ..kind_map import build_linear
+from ..linear import Linear
+from ..module_configs import (
+    AttentionConfig, DecoderLayerConfig, FfnConfig,
+    ModuleListConfig, MoeConfig,
+)
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
-from .utils import load_model_config, parse_rope_param
+from .utils import parse_rope_param
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -58,95 +58,25 @@ class GptOssSpec(TextModelSpec):
     # Builder-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
-    def _cpp_dtype(self):
-        return _cd(self._mc.data_type)
-
     def model(self):
         root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds('model.embed_tokens')
-        root.norm = self.root_norm('model.norm')
-        root.output = self.lm_head('lm_head')
+        root.tok_embeddings = self.token_embeds('model.embed_tokens.weight')
+        root.norm = self.output_norm('model.norm.weight')
+        tie = self.cfg.get("tie_word_embeddings", False)
+        lm_key = "model.embed_tokens.weight" if tie else "lm_head.weight"
+        root.output = self.lm_head(lm_key)
         root.layers = self.layers('model.layers')
 
     # ------------------------------------------------------------------
     # Factory methods: read weights, create builders, return them
     # ------------------------------------------------------------------
 
-    def token_embeds(self, pfx):
-        """Return LinearBuilder for tok_embeddings, or None."""
-        emb = self._get(f'{pfx}.weight')
-        if emb is None:
-            return None
-
-        mc = self._mc
-        tp = self._attn_tp * self._attn_cp
-        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-        emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-        dtype = self._cpp_dtype()
-
-        cfg = LinearConfig(input_dim=padded_vocab,
-                           output_dim=mc.hidden_units // tp,
-                           data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
-        return m
-
-    def root_norm(self, pfx):
-        """Return NormBuilder for the final norm, or None."""
-        w = self._get(f'{pfx}.weight')
-        if w is None:
-            return None
-
-        mc = self._mc
-        dtype = self._cpp_dtype()
-        cfg = NormConfig(dim=mc.hidden_units, data_type=dtype)
-        m = NormBuilder(cfg, self._contexts)
-        m.set_weight(w)
-        return m
-
-    def lm_head(self, pfx):
-        """Return LinearBuilder for the output head, or None."""
-        tie = self.cfg.get("tie_word_embeddings", False)
-        key = "model.embed_tokens.weight" if tie else f"{pfx}.weight"
-        output = self._get(key)
-        if output is None:
-            return None
-
-        mc = self._mc
-        tp = self._attn_tp * self._attn_cp
-        padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
-        output_padded = pad_out_dim(output, padded_vocab, dim=0)
-        output_t = output_padded.t()
-        dtype = self._cpp_dtype()
-
-        cfg = LinearConfig(input_dim=mc.hidden_units,
-                           output_dim=padded_vocab // tp,
-                           data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(output_t, split_side=SplitSide.OUTPUT)
-        return m
-
-    def norm(self, pfx):
-        """Return NormBuilder for the given prefix, or None."""
-        w = self._get(f'{pfx}.weight')
-        if w is None:
-            return None
-
-        dtype = self._cpp_dtype()
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=dtype)
-        m = NormBuilder(cfg, self._contexts)
-        m.set_weight(w)
-        return m
-
     def attn(self, pfx, layer):
-        """Return AttentionBuilder for the given layer, or None."""
+        """Return AttentionBuilder for the given layer."""
         q = self._linear(f"{pfx}.q_proj")
         k = self._linear(f"{pfx}.k_proj")
         v = self._linear(f"{pfx}.v_proj")
         o = self._linear(f"{pfx}.o_proj")
-
-        if q is None and k is None and v is None and o is None:
-            return None
 
         mc = self._mc
         tp = self._attn_tp
@@ -166,29 +96,19 @@ class GptOssSpec(TextModelSpec):
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
 
-        if q is not None and k is not None and v is not None:
-            attn.add_qkv_proj(q, k, v)
-        if o is not None:
-            attn.add_o_proj(o)
+        attn.add_qkv_proj(q, k, v)
+        attn.add_o_proj(o)
 
         # Inline attn params -- attention sinks
-        sinks = self._get(f'{pfx}.sinks')
-        if sinks is not None:
-            attn.add_param('sinks', sinks)
+        attn.add_param('sinks', self._get(f'{pfx}.sinks'))
 
         return attn
 
     def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
-        """Return FfnBuilder for the given layer, or None."""
+        """Return FfnBuilder for the given layer."""
         w1 = self._linear(f"{pfx}.gate_proj")
         w3 = self._linear(f"{pfx}.up_proj")
         w2 = self._linear(f"{pfx}.down_proj")
-        linears = {}
-        if w1 is not None: linears['w1'] = w1
-        if w3 is not None: linears['w3'] = w3
-        if w2 is not None: linears['w2'] = w2
-        if not linears:
-            return None
 
         mc = self._mc
         tp = self._mlp_tp
@@ -209,7 +129,7 @@ class GptOssSpec(TextModelSpec):
         return m
 
     def moe(self, pfx, layer):
-        """Return MoeBuilder for the given layer, or None."""
+        """Build MoeBuilder for the given MoE layer."""
         if self.num_experts(layer) <= 0:
             return None
 
@@ -230,21 +150,18 @@ class GptOssSpec(TextModelSpec):
 
         # Inline gate read
         gate_w = self._get(f'{pfx}.router.weight')
-        if gate_w is not None:
-            gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-            tensors = {"weight": gate_w}
-            gate_bias = self._get(f'{pfx}.router.bias')
-            if gate_bias is not None:
-                tensors["bias"] = gate_bias
-            m.add_gate('gate', Linear(tensors), model_dtype=dtype)
+        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
+        tensors = {"weight": gate_w}
+        gate_bias = self._get(f'{pfx}.router.bias')
+        if gate_bias is not None:
+            tensors["bias"] = gate_bias
+        m.add_gate('gate', Linear(tensors), model_dtype=dtype)
 
         expert_inter = mc.expert_inter_size or 0
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
             expert_pfx = f'{pfx}.experts.{e}'
-            expert = self._moe_expert_ffn(expert_pfx, layer, expert_inter)
-            if expert is not None:
-                experts[str(e)] = expert
+            experts[str(e)] = self._moe_expert_ffn(expert_pfx, layer, expert_inter)
 
         m.experts = experts
         return m
@@ -256,11 +173,11 @@ class GptOssSpec(TextModelSpec):
         for i in range(self._mc.num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
             d.attention_norm = self.norm(
-                f'{pfx}.{i}.input_layernorm')
+                f'{pfx}.{i}.input_layernorm.weight')
             d.attention = self.attn(
                 f'{pfx}.{i}.self_attn', i)
             d.ffn_norm = self.norm(
-                f'{pfx}.{i}.post_attention_layernorm')
+                f'{pfx}.{i}.post_attention_layernorm.weight')
             if self.num_experts(i) > 0:
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             layers[str(i)] = d
@@ -270,10 +187,6 @@ class GptOssSpec(TextModelSpec):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    def _linear(self, prefix: str) -> Linear | None:
-        """Read a Linear bundle from the checkpoint at *prefix*."""
-        return build_linear(self.params, prefix)
 
     def _read_packed_expert(self, prefix: str, expert: int) -> Linear | None:
         """Read one expert from packed ``[n_experts, ...]`` tensors.
@@ -340,42 +253,6 @@ class GptOssSpec(TextModelSpec):
     def num_experts(self, layer: int) -> int:
         return self._n_experts
 
-    # ---- metadata ----
-
-    def model_info(self) -> dict:
-        cfg = self.cfg
-        hidden = cfg["hidden_size"]
-        heads = cfg["num_attention_heads"]
-        kv_heads = cfg.get("num_key_value_heads", heads)
-        head_dim = cfg.get("head_dim", None) or hidden // heads
-
-        types = cfg["layer_types"]
-        sliding_window = cfg["sliding_window"]
-
-        return dict(
-            num_layer=cfg["num_hidden_layers"],
-            hidden_units=hidden,
-            head_num=heads,
-            kv_head_num=kv_heads,
-            size_per_head=head_dim,
-            vocab_size=cfg["vocab_size"],
-            norm_eps=cfg["rms_norm_eps"],
-            attn_bias=int(cfg["attention_bias"]),
-            mlp_bias=True,
-            expert_router_bias=True,
-            expert_num=self._n_experts,
-            expert_inter_size=cfg["intermediate_size"],
-            experts_per_token=cfg["experts_per_token"],
-            norm_topk_prob=True,
-            inter_size=0,
-            window_size=[
-                sliding_window if t == "sliding_attention" else 0
-                for t in types
-            ],
-            attn_sink=True,
-            activation_type="gpt-oss",
-        )
-
 
 @INPUT_MODELS.register_module(name='gpt-oss')
 class GptOssInputModel(BaseInputModel):
@@ -384,12 +261,6 @@ class GptOssInputModel(BaseInputModel):
     _layer_pattern = _LAYER_PATTERN
     _spec_class = GptOssSpec
     _loader_mappings = [map_experts]
-
-    def __init__(self, model_path: str, tokenizer_path: str, **kwargs):
-        super().__init__(model_path, tokenizer_path)
-        self.model_config = load_model_config(model_path)
-        self.model_format = kwargs.get('model_format')
-        self.fp8_quant = kwargs.get('fp8_quant', False)
 
     def model_info(self) -> dict:
         cfg = self.model_config
