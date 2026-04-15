@@ -161,7 +161,7 @@ class GptOssSpec(TextModelSpec):
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
             expert_pfx = f'{pfx}.experts.{e}'
-            experts[str(e)] = self._moe_expert_ffn(expert_pfx, layer, expert_inter)
+            experts[str(e)] = self._moe_expert_ffn(expert_pfx, expert_inter)
 
         m.experts = experts
         return m
@@ -221,7 +221,7 @@ class GptOssSpec(TextModelSpec):
             Linear(tensors=up_t, weight_format=lin.weight_format),
         )
 
-    def _moe_expert_ffn(self, pfx, layer, expert_inter):
+    def _moe_expert_ffn(self, pfx, expert_inter):
         """Build FfnBuilder for one MoE expert with packed weight decoding."""
         base_pfx = pfx.rsplit('.', 1)[0]  # strip .{expert_id}
         expert_id = int(pfx.rsplit('.', 1)[1])
