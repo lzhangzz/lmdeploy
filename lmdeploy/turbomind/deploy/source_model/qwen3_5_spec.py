@@ -124,7 +124,7 @@ class Qwen3_5Spec(TextModelSpec):
                                SplitSide)
         from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
                                       NormConfig, LinearConfig)
-        from ..commit import _cpp_dtype
+        from ..builder import _cpp_dtype, _act_type_id
         from ..linear import pad_out_dim
 
         mc = self._mc
@@ -276,7 +276,7 @@ class Qwen3_5Spec(TextModelSpec):
         """Build linear-attention (Gated Delta Net) module for one layer."""
         from ..builder import Builder, SplitSide
         from ..module_configs import DeltaNetConfig
-        from ..commit import _LINEAR_ATTN_TP_RULES
+        from ..builder import _LINEAR_ATTN_TP_RULES
 
         la_linears = self.linear_attn_linears(layer)
         if not la_linears:
@@ -289,9 +289,8 @@ class Qwen3_5Spec(TextModelSpec):
         # Commit linear bundles with TP rules from the rule table
         for name, lin in la_linears.items():
             rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-            bs = (SplitSide(rule['split_side'].value)
-                  if 'split_side' in rule else None)
-            linear_attn._commit_linear(name, lin, split_side=bs,
+            split_side = rule.get('split_side')
+            linear_attn._commit_linear(name, lin, split_side=split_side,
                                        model_dtype=dtype)
 
         # Direct params (A_log, dt_bias, conv1d) -- tuples with SplitSide
@@ -312,7 +311,7 @@ class Qwen3_5Spec(TextModelSpec):
         """Build dense FFN: spec reads w1/w2/w3, builder handles fusion."""
         from ..builder import FfnBuilder
         from ..module_configs import FfnConfig
-        from ..commit import _act_type_id
+        from ..builder import _act_type_id
 
         ffn_linears = self.ffn_linears(layer)
         if not ffn_linears:
@@ -344,7 +343,7 @@ class Qwen3_5Spec(TextModelSpec):
         """Build MoE module: spec reads expert weights, builder handles fusion."""
         from ..builder import MoeBuilder, FfnBuilder, ModuleListBuilder
         from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
-        from ..commit import _act_type_id
+        from ..builder import _act_type_id
 
         if self.num_experts(layer) <= 0:
             return

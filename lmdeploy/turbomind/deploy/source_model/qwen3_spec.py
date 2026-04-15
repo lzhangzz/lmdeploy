@@ -37,7 +37,7 @@ class Qwen3TextSpec(TextModelSpec):
                                SplitSide)
         from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
                                       NormConfig, LinearConfig)
-        from ..commit import _cpp_dtype
+        from ..builder import _cpp_dtype, _act_type_id
         from ..linear import pad_out_dim
 
         mc = self._mc
@@ -182,7 +182,7 @@ class Qwen3TextSpec(TextModelSpec):
         """Build dense FFN: spec reads w1/w2/w3, builder handles fusion."""
         from ..builder import FfnBuilder
         from ..module_configs import FfnConfig
-        from ..commit import _act_type_id
+        from ..builder import _act_type_id
 
         ffn_linears = self.ffn_linears(layer)
         if not ffn_linears:
@@ -214,7 +214,7 @@ class Qwen3TextSpec(TextModelSpec):
         """Build MoE module: spec reads expert weights, builder handles fusion."""
         from ..builder import MoeBuilder, FfnBuilder, ModuleListBuilder
         from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
-        from ..commit import _act_type_id
+        from ..builder import _act_type_id
 
         if self.num_experts(layer) <= 0:
             return

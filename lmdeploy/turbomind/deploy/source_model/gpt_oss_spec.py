@@ -56,7 +56,7 @@ class GptOssSpec(TextModelSpec):
                                SplitSide as BSplitSide)
         from ..module_configs import (ModuleListConfig, DecoderLayerConfig,
                                       NormConfig, LinearConfig)
-        from ..commit import _cpp_dtype
+        from ..builder import _cpp_dtype, _act_type_id
         from ..linear import pad_out_dim
 
         mc = self._mc
@@ -193,7 +193,7 @@ class GptOssSpec(TextModelSpec):
         """Build MoE module: spec reads expert weights, builder handles fusion."""
         from ..builder import MoeBuilder, FfnBuilder, ModuleListBuilder
         from ..module_configs import MoeConfig, FfnConfig, ModuleListConfig
-        from ..commit import _act_type_id
+        from ..builder import _act_type_id
 
         if self.num_experts(layer) <= 0:
             return

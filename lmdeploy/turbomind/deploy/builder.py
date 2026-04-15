@@ -73,6 +73,11 @@ def _cpp_dtype(dtype_str: str):
     return _STR_TO_DTYPE[dtype_str]
 
 
+def _act_type_id(act_str: str) -> int:
+    """Convert activation_type string to C++ ActivationType enum value."""
+    return {'silu': 0, 'gpt-oss': 1}.get(act_str, 0)
+
+
 def _torch_dtype_to_cpp(dtype: torch.dtype):
     """Convert a torch dtype to the C++ ``DataType`` enum, or ``None``."""
     return _TORCH_TO_CPP.get(dtype)
@@ -127,6 +132,31 @@ def _infer_compute_dtype(linear: Linear):
             if d is not None:
                 return d
     return None
+
+
+# ---------------------------------------------------------------------------
+# TP split rules
+# ---------------------------------------------------------------------------
+
+# TP split rules use SplitSide.OUTPUT (column-parallel) or
+# SplitSide.INPUT (row-parallel).  Keys absent from the table are
+# broadcast to all TP ranks (no split needed).
+_ATTN_TP_RULES: dict[str, dict] = {
+    "w_qkv":     dict(split_side=SplitSide.OUTPUT),  # column-parallel
+    "wo":        dict(split_side=SplitSide.INPUT),   # row-parallel
+    "q_proj":    dict(split_side=SplitSide.OUTPUT),
+    "q_b_proj":  dict(split_side=SplitSide.OUTPUT),
+    "kv_b_proj": dict(split_side=SplitSide.OUTPUT),
+}
+
+_LINEAR_ATTN_TP_RULES: dict[str, dict] = {
+    "in_proj_qkv": dict(split_side=SplitSide.OUTPUT),
+    "in_proj_z":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_b":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_a":   dict(split_side=SplitSide.OUTPUT),
+    "in_proj_all": dict(split_side=SplitSide.OUTPUT),
+    "out_proj":    dict(split_side=SplitSide.INPUT),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -593,18 +623,14 @@ class AttentionBuilder(Builder):
                             model_dtype=self.config.data_type)
 
     def add_linear(self, name, linear):
-        """Commit a named attention linear using TP rules from commit.py.
+        """Commit a named attention linear using TP rules.
 
         Looks up ``_ATTN_TP_RULES`` for the split side; absent keys are
         broadcast (no TP split).  Used for MLA projections (q_b_proj,
         kv_b_proj, o_proj) and other non-QKV attention linears.
         """
-        from .commit import _ATTN_TP_RULES
         rule = _ATTN_TP_RULES.get(name, {})
         split_side = rule.get('split_side')
-        if split_side is not None:
-            # Convert spec.SplitSide -> builder.SplitSide by value
-            split_side = SplitSide(split_side.value)
         self._commit_linear(name, linear, split_side=split_side,
                             model_dtype=self.config.data_type)
 
