@@ -116,7 +116,7 @@ class Qwen3TextSpec(TextModelSpec):
         return m
 
     def moe(self, pfx, layer):
-        """Return MoeBuilder for the given layer, or None."""
+        """Build MoeBuilder for the given MoE layer."""
         if self.num_experts(layer) <= 0:
             return None
 
