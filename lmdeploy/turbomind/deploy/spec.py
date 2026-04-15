@@ -123,6 +123,20 @@ class TextModelSpec(ABC):
     _linear_qkv_split: tuple[int, int, int] | None = None
     _gdn_qkv_split: tuple[int, int, int] | None = None
 
+    # --- Builder-driven loading context (injected by TextModelLoader) ---
+    _contexts: list = None  # GPU contexts
+    _root_handles: list = None  # Root C++ ModelWeight handles
+
+    def model(self):
+        """Build the full model hierarchy using builders.
+
+        Called once by the loader with all weights available.
+        Override in subclasses to use builder-driven loading.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement model(). "
+            f"Use legacy load_global/load_layer pattern instead.")
+
     # -- Configuration (called by TextModelLoader before processing) --
 
     def configure(self, cfg: SpecAttnConfig):

@@ -106,9 +106,8 @@ class BaseOutputModel(ABC):
 
     def export(self) -> None:
         """Export to turbomind model format."""
-        num_layer = self.model_config.num_layer
         from tqdm import tqdm
-        pbar = tqdm(total=num_layer, desc='Convert to turbomind format', leave=False)
+        pbar = tqdm(total=1, desc='Convert to turbomind format', leave=False)
         for i, reader in self.input_model.readers():
             if self.model(i, reader):
                 pbar.update(1)

@@ -46,10 +46,21 @@ class TextModelLoader:
                 break
             handles.append(root)
             contexts.append(model.context(gpu))
+        self._contexts = contexts
         self._root = Distributor(handles, contexts)
         self._layers = self._root.create_child('layers', ModuleListConfig())
 
     def __call__(self, layer: int, spec: 'TextModelSpec'):
+        # Try builder-driven path first
+        try:
+            spec._contexts = self._contexts
+            spec._root_handles = [h for h in self._root._handles]
+            spec.model()
+            return 1
+        except NotImplementedError:
+            pass  # Fall through to legacy path
+
+        # Legacy path (kept until all specs are migrated)
         if layer < 0:
             self._load_global(spec)
         elif layer >= self.model.model_config.num_layer:
