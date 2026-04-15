@@ -672,6 +672,31 @@ class NormBuilder(Builder):
 
 
 # ---------------------------------------------------------------------------
+# LinearBuilder -- standalone linear layers (embeddings, lm_head)
+# ---------------------------------------------------------------------------
+
+
+class LinearBuilder(Builder):
+    """Builder for standalone linear layers (embeddings, lm_head).
+
+    Wraps a C++ LinearWeight module. Use ``set_weight()`` to commit
+    the weight tensor.
+    """
+
+    def set_weight(self, tensor: torch.Tensor, split_side=None):
+        """Commit the weight tensor to all GPU handles.
+
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            The weight tensor (already padded/transposed by the spec).
+        split_side : SplitSide | None
+            TP split semantics. None means broadcast.
+        """
+        self._commit_tensor('weight', tensor, split_side)
+
+
+# ---------------------------------------------------------------------------
 # AttentionBuilder -- QKV fusion, O-proj, QK-norm, direct params
 # ---------------------------------------------------------------------------
 
