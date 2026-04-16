@@ -378,7 +378,7 @@ class LoadContext:
         Args:
             handle: C++ Module handle (pybind11 object).
             tp_config: Dict with keys: tp_size, rank, head_dim,
-                       rope_dim, permute_qk, repeat_kv, attn_output_gate,
+                       rope_dim, permute_qk, attn_output_gate,
                        kv_head_num.
             model_config: The Python ``ModelConfig`` for the model being loaded.
             context: Optional context manager to wrap load operations.
@@ -413,10 +413,6 @@ class LoadContext:
     @property
     def rope_dim(self) -> int:
         return self._tp_config.get('rope_dim', 0)
-
-    @property
-    def repeat_kv(self) -> int:
-        return self._tp_config.get('repeat_kv', 0)
 
     @property
     def attn_output_gate(self) -> bool:

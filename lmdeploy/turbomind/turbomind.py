@@ -234,7 +234,7 @@ class TurboMind:
         from .deploy.text_model_loader import TextModelLoader
         from .deploy.target_model.base import OUTPUT_MODELS
 
-        input_model, tm_cfg, repeat_kv = get_tm_config(
+        input_model, tm_cfg = get_tm_config(
             model_path, self.model_name, self.chat_template_name, engine_config)
 
         self._postprocess_config(tm_cfg, engine_config)
@@ -248,8 +248,7 @@ class TurboMind:
             cfg=tm_cfg,
             model_cls=TextModelLoader,
             model_comm=model_comm,
-            gpu_count=self.gpu_count,
-            repeat_kv=repeat_kv)
+            gpu_count=self.gpu_count)
         return model_comm
 
     def sleep(self, level: int = 1):

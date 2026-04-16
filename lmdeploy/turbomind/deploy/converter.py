@@ -136,7 +136,7 @@ def get_tm_config(model_path,
             is a grouped quantized model
 
     Returns:
-        tuple: (input_model, tm_cfg, repeat_kv)
+        tuple: (input_model, tm_cfg)
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
@@ -201,6 +201,6 @@ def get_tm_config(model_path,
     if engine_config.mlp_tp_size is not None:
         tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
-    repeat_kv = BaseOutputModel.finalize_config(input_model, tm_cfg)
+    BaseOutputModel.finalize_config(input_model, tm_cfg)
 
-    return input_model, tm_cfg, repeat_kv
+    return input_model, tm_cfg

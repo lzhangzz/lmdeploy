@@ -27,7 +27,6 @@ class BaseOutputModel(ABC):
     def finalize_config(cls, input_model, cfg):
         """Finalize cfg by merging input model info. Mutates cfg in-place.
 
-        Returns repeat_kv (int).
         """
         mc = cfg.model_config
         attn_tp = mc.attn_tp_size
@@ -56,11 +55,9 @@ class BaseOutputModel(ABC):
             mc.expert_inter_size = _pad_inter_size(
                 mc.expert_inter_size, mc.group_size, mlp_tp)
 
-        # Handle repeat_kv
+        # Pad kv_head_num to tp-divisible
         assert mc.head_num % attn_tp == 0
-        repeat_kv = 0
         if attn_tp > mc.kv_head_num and attn_tp % mc.kv_head_num == 0:
-            repeat_kv = attn_tp // mc.kv_head_num
             mc.kv_head_num = attn_tp
         mc.verify()
         assert mc.kv_head_num % attn_tp == 0
@@ -73,10 +70,10 @@ class BaseOutputModel(ABC):
             merged.update(info)
             setattr(cfg, config_attr, config_from_dict(cls_type, merged))
 
-        return repeat_kv
+        return
 
     def __init__(self, input_model, cfg, model_cls,
-                 model_comm, gpu_count, *, repeat_kv):
+                 model_comm, gpu_count):
         super().__init__()
         self.input_model = input_model
         self.model_config = cfg.model_config
@@ -87,7 +84,6 @@ class BaseOutputModel(ABC):
         self.mlp_tp_size = cfg.model_config.mlp_tp_size
         self.model_comm = model_comm
         self.gpu_count = gpu_count
-        self.repeat_kv = repeat_kv
 
         self.model = model_cls(self)
 
