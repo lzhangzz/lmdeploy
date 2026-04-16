@@ -70,7 +70,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         cfg = self.cfg
 
         mla_cfg = MLAConfig.from_model_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype, window_size=-1,
+            mc, tp_size=tp, tp_rank=0, dtype=dtype, window_size=0,
             qk_nope_dim=cfg['qk_nope_head_dim'])
         builder = MLABuilder(mla_cfg, self._contexts,
                              tp=tp, ranks=self._attn_ranks)
