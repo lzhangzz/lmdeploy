@@ -405,17 +405,20 @@ class AttentionBuilder(Builder):
     }
 
     def add_qkv_proj(self, q, k, v):
-        """Fuse Q/K/V into a single w_qkv, apply RoPE + TP interleave, commit."""
-        merged = merge_qkv_linear(
-            q, k, v,
-            tp=self._tp,
-            head_dim=self.config.head_dim,
-            rope_dim=self.config.rope_dim or self.config.head_dim,
-            permute_qk=True,
-            attn_output_gate=self.config.attn_output_gate,
-            repeat_kv=self.config.repeat_kv,
-            kv_head_num=self.config.kv_head_num,
-        )
+        """Fuse Q/K/V into a single w_qkv with TP interleave, commit.
+
+        Pipeline: dequant_mixed -> pad_for_tp -> [split_output_gate] -> fuse_qkv -> commit.
+        RoPE permutation is done by the spec before calling this method.
+        """
+        q, k, v = dequant_mixed(q, k, v)
+        q, k, v = pad_for_tp(q, k, v, tp=self._tp,
+                              head_dim=self.config.head_dim,
+                              q_heads=self.config.head_num,
+                              kv_heads=self.config.kv_head_num)
+        gate = None
+        if self.config.attn_output_gate:
+            q, gate = split_output_gate(q, head_dim=self.config.head_dim)
+        merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)
         self._commit_linear('w_qkv', merged, SplitSide.OUTPUT,
                             model_dtype=self.config.data_type)
 

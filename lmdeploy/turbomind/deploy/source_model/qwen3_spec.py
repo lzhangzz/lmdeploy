@@ -20,7 +20,7 @@ from ..module_configs import (
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
-from .utils import parse_rope_param, reorder_rotary_emb
+from .utils import parse_rope_param, reorder_rotary_emb, reorder_rotary_emb_linear
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -59,6 +59,9 @@ class Qwen3TextSpec(TextModelSpec):
         k = self._linear(f"{pfx}.k_proj")
         v = self._linear(f"{pfx}.v_proj")
         o = self._linear(f"{pfx}.o_proj")
+
+        q = reorder_rotary_emb_linear(q, self._mc.size_per_head, self._rope_dim)
+        k = reorder_rotary_emb_linear(k, self._mc.size_per_head, self._rope_dim)
 
         mc = self._mc
         tp = self._attn_tp
