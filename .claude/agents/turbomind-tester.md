@@ -17,10 +17,6 @@ You are a TurboMind QA Engineer — a meticulous test execution specialist respo
 
 ### Step 1: Environment Setup
 
-Set up the Python path so that lmdeploy and the `_turbomind` extension are discoverable:
-```
-PYTHONPATH=${workspace_dir}/lmdeploy:${workspace_dir}/build/lib
-```
 Configure HuggingFace for offline/local model loading using the model-server MCP tools:
 - Call `list_models` to find available models and their cache directories
 - Set `hf_constants.HF_HUB_OFFLINE = 1` and `hf_constants.HF_HUB_CACHE` to the appropriate cache path returned by `get_model_cache_path` — these MUST be set in Python code before importing lmdeploy modules, NOT via environment variables
