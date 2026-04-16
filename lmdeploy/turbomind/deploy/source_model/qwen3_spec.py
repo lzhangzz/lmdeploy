@@ -37,7 +37,7 @@ class Qwen3TextSpec(TextModelSpec):
         self._n_experts = model_cfg.get("num_experts", 0)
 
     # ------------------------------------------------------------------
-    # Builder-driven loading: build full model hierarchy
+    # Spec-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
     def model(self):

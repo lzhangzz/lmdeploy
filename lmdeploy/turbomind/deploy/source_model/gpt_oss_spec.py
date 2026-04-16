@@ -55,7 +55,7 @@ class GptOssSpec(TextModelSpec):
         self._n_experts = model_cfg["num_local_experts"]
 
     # ------------------------------------------------------------------
-    # Builder-driven loading: build full model hierarchy
+    # Spec-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
     def model(self):

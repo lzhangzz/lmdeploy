@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Builder base class and commit internals for builder-driven module loading.
+"""Builder base class and commit internals for spec-driven module loading.
 
 Absorbs Distributor and the core commit logic from commit.py into a unified
 Builder hierarchy.  Each Builder wraps N GPU handles for a single logical

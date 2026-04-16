@@ -123,7 +123,7 @@ class Qwen3_5Spec(TextModelSpec):
         return self._n_experts > 0
 
     # ------------------------------------------------------------------
-    # Builder-driven loading: build full model hierarchy
+    # Spec-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
     def model(self):

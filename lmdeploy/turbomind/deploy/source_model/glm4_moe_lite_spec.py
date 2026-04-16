@@ -48,7 +48,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         self._dense_layers = model_cfg.get("first_k_dense_replace", 1)
 
     # ------------------------------------------------------------------
-    # Builder-driven loading: build full model hierarchy
+    # Spec-driven loading: build full model hierarchy
     # ------------------------------------------------------------------
 
     def model(self):
