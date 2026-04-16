@@ -198,7 +198,7 @@ class Qwen3_5Spec(TextModelSpec):
         dtype = self._cpp_dtype()
 
         dn_cfg = make_deltanet_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype)
+            mc, tp_size=tp, dtype=dtype)
         builder = DeltaNetBuilder(dn_cfg, self._contexts,
                                   tp=tp, ranks=self._attn_ranks)
 
@@ -238,7 +238,7 @@ class Qwen3_5Spec(TextModelSpec):
                 is_list) else 0
 
         ffn_cfg = make_ffn_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            mc, tp_size=tp, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
             fused_moe=fused_moe)
@@ -261,7 +261,7 @@ class Qwen3_5Spec(TextModelSpec):
             expert_num = en_list[layer]
 
         moe_cfg = make_moe_config(
-            mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
+            mc, layer_id=layer, tp_size=tp, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
         m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
@@ -359,7 +359,7 @@ class Qwen3_5Spec(TextModelSpec):
         dtype = self._cpp_dtype()
 
         ffn_cfg = make_ffn_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            mc, tp_size=tp, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
             fused_moe=True)

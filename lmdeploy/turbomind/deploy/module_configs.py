@@ -101,7 +101,7 @@ def make_mla_config(mc, *, tp_size, tp_rank=0, dtype, window_size=0,
 # ---------------------------------------------------------------------------
 
 
-def make_ffn_config(mc, *, tp_size, tp_rank, dtype, act_type,
+def make_ffn_config(mc, *, tp_size, tp_rank=0, dtype, act_type,
                     fuse_silu, inter_size=None, fused_moe=False):
     """Build C++ FfnConfig from ModelConfig."""
     cfg = _tm.FfnConfig()
@@ -117,7 +117,7 @@ def make_ffn_config(mc, *, tp_size, tp_rank, dtype, act_type,
     return cfg
 
 
-def make_moe_config(mc, *, layer_id, tp_size, tp_rank, dtype,
+def make_moe_config(mc, *, layer_id, tp_size, tp_rank=0, dtype,
                     act_type, fuse_silu, expert_num):
     """Build C++ MoeConfig from ModelConfig."""
     cfg = _tm.MoeConfig()
@@ -150,7 +150,7 @@ def make_moe_config(mc, *, layer_id, tp_size, tp_rank, dtype,
 # ---------------------------------------------------------------------------
 
 
-def make_deltanet_config(mc, *, tp_size, tp_rank, dtype):
+def make_deltanet_config(mc, *, tp_size, tp_rank=0, dtype):
     """Build C++ DeltaNetConfig from ModelConfig."""
     cfg = _tm.DeltaNetConfig()
     cfg.hidden_dim = mc.hidden_units

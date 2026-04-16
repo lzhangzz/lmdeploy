@@ -70,7 +70,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         cfg = self.cfg
 
         mla_cfg = make_mla_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype, window_size=0,
+            mc, tp_size=tp, dtype=dtype, window_size=0,
             qk_nope_dim=cfg['qk_nope_head_dim'])
         builder = MLABuilder(mla_cfg, self._contexts,
                              tp=tp, ranks=self._attn_ranks)
@@ -106,7 +106,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
                 is_list) else 0
 
         ffn_cfg = make_ffn_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype,
+            mc, tp_size=tp, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
             fused_moe=fused_moe)
@@ -129,7 +129,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
             expert_num = en_list[layer]
 
         moe_cfg = make_moe_config(
-            mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
+            mc, layer_id=layer, tp_size=tp, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
         m = MoeBuilder(moe_cfg, self._contexts, tp=tp, ranks=self._mlp_ranks)
