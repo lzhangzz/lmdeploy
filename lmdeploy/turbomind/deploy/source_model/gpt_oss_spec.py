@@ -26,8 +26,8 @@ from ..builder import (
 from ..kind_map import build_linear
 from ..linear import Linear
 from ..module_configs import (
-    AttentionConfig, DecoderLayerConfig, FfnConfig,
-    ModuleListConfig, MoeConfig,
+    DecoderLayerConfig, ModuleListConfig,
+    make_attention_config, make_ffn_config, make_moe_config,
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
@@ -87,11 +87,10 @@ class GptOssSpec(TextModelSpec):
         if ws_list and layer < len(ws_list):
             window_size = ws_list[layer]
 
-        attn_cfg = AttentionConfig.from_model_config(
+        attn_cfg = make_attention_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             window_size=window_size,
             rope_dim=self._rope_dim,
-            permute_qk=self._permute_qk,
             repeat_kv=self._repeat_kv)
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
@@ -119,7 +118,7 @@ class GptOssSpec(TextModelSpec):
             inter_size = is_list[layer] if is_list and layer < len(
                 is_list) else 0
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
@@ -142,7 +141,7 @@ class GptOssSpec(TextModelSpec):
         if en_list and layer < len(en_list):
             expert_num = en_list[layer]
 
-        moe_cfg = MoeConfig.from_model_config(
+        moe_cfg = make_moe_config(
             mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
@@ -241,7 +240,7 @@ class GptOssSpec(TextModelSpec):
         tp = self._mlp_tp
         dtype = self._cpp_dtype()
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=expert_inter,
