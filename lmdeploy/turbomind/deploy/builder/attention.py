@@ -35,7 +35,7 @@ _ATTN_TP_RULES: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 
-def dequant_mixed(q: Linear, k: Linear, v: Linear):
+def dequant_mixed(q: Linear, k: Linear, v: Linear) -> tuple[Linear, Linear, Linear]:
     """Dequantize to trivial if formats are mixed.
 
     Two cases:
@@ -55,7 +55,7 @@ def dequant_mixed(q: Linear, k: Linear, v: Linear):
 
 def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
                tp: int, head_dim: int,
-               q_heads: int, kv_heads: int):
+               q_heads: int, kv_heads: int) -> tuple[Linear, Linear, Linear]:
     """Make head counts tp-divisible.
 
     q: pad with zero heads to reach tp-divisible count.
@@ -132,7 +132,7 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
     return q, k, v
 
 
-def split_output_gate(q: Linear, *, head_dim: int):
+def split_output_gate(q: Linear, *, head_dim: int) -> tuple[Linear, Linear]:
     """Split output gate from Q projection (Qwen3.5).
 
     Q's output dim is 2 * head_num * head_dim. Reshape to
@@ -162,7 +162,7 @@ def split_output_gate(q: Linear, *, head_dim: int):
 
 
 def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
-             tp: int, gate: Linear | None = None):
+             tp: int, gate: Linear | None = None) -> Linear:
     """Fuse Q, K, V (and optionally gate) into a single w_qkv Linear.
 
     Concatenates output channels with TP interleaving.
