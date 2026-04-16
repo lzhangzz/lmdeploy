@@ -67,11 +67,6 @@ class Qwen3TextSpec(TextModelSpec):
         tp = self._attn_tp
         dtype = self._cpp_dtype()
 
-        window_size = 0
-        ws_list = mc.window_size
-        if ws_list and layer < len(ws_list):
-            window_size = ws_list[layer]
-
         attn_cfg = make_attention_config(
             mc, tp_size=tp, dtype=dtype,
             rope_dim=self._rope_dim)
