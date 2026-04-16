@@ -10,7 +10,7 @@ from __future__ import annotations
 from ._base import (Builder, TextModelBuilder, SplitSide,
                     _cpp_dtype, _act_type_id, _torch_dtype_to_cpp)
 from .attention import AttentionBuilder
-from .deltanet import DeltaNetBuilder, fuse_gdn_in_proj
+from .deltanet import DeltaNetBuilder
 from .decoder_layer import DecoderLayerBuilder
 from .ffn import FfnBuilder, fuse_ffn_linears
 from .linear import LinearBuilder
@@ -29,5 +29,5 @@ __all__ = [
     'DecoderLayerBuilder', 'ModuleListBuilder',
     'NormBuilder', 'LinearBuilder',
     # Helper functions
-    'fuse_gdn_in_proj', 'fuse_ffn_linears',
+    'fuse_ffn_linears',
 ]

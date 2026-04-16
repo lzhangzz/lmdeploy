@@ -240,7 +240,7 @@ def chunk_linears(w1: Linear, w3: Linear, tp: int = 1) -> Linear:
     When ``tp > 1``, the result is TP-interleaved so that a naive
     output-dim split gives each rank ``[w1_shard | w3_shard]``.
     This matches the pattern used by ``merge_qkv_v2`` and
-    ``fuse_gdn_in_proj``.
+    ``fuse_gdn``.
     """
     fused: dict[str, Tensor] = {}
     for kind in w1.tensors:
