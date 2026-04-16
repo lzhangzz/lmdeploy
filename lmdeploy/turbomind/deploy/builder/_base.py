@@ -147,34 +147,6 @@ def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
     return {name: _dequant_linear(lin) for name, lin in linears.items()}
 
 
-def _block_ops_need_dequant(
-    lin: Linear, head_dim: int,
-    repeat_kv: bool, attn_output_gate: bool, permute_qk: bool,
-) -> bool:
-    """Return True if any planned QKV-merge operation crosses block boundaries.
-
-    For quantised formats with a non-None ``block_out``:
-
-    - KV repetition and output-gate splitting each split along the output
-      dimension at head_dim granularity.  This is block-safe only when
-      ``head_dim % block_out == 0`` (each KV head = integer number of blocks).
-    - RoPE permutation permutes elements within a head.  This is block-safe
-      only when ``block_out % head_dim == 0`` (each block = integer number
-      of heads, so permuting within one head is intra-block).
-
-    If any condition fails, the caller should dequantise to trivial first.
-    """
-    wfmt = lin.weight_format
-    if wfmt is None or wfmt.block_out is None:
-        return False
-    block_out = wfmt.block_out
-    if (repeat_kv or attn_output_gate) and head_dim % block_out != 0:
-        return True
-    if permute_qk and block_out % head_dim != 0:
-        return True
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Core tensor commit (moved from commit.py)
 # ---------------------------------------------------------------------------

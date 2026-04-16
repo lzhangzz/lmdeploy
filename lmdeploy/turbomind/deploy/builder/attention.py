@@ -1,17 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Attention weight loading builder and QKV merge helpers.
+"""Attention weight loading builder and QKV fusion pipeline.
 
 Provides ``AttentionBuilder`` for committing attention weights (QKV fusion,
-O-proj, QK-norm, direct params) and ``merge_qkv_linear`` for fusing Q/K/V
-Linear bundles into a single interleaved w_qkv with RoPE permutation, KV
-head repetition, and output-gate splitting.
+O-proj, QK-norm, direct params) and pipeline functions (``dequant_mixed``,
+``pad_for_tp``, ``split_output_gate``, ``fuse_qkv``) for fusing Q/K/V
+Linear bundles into a single interleaved w_qkv with KV head padding and
+output-gate splitting.
 """
 from __future__ import annotations
 
 import torch
 
 from ..linear import Linear, pad_out_dim
-from ._base import Builder, SplitSide, _dequant_linear, _ensure_compatible_formats, _block_ops_need_dequant
+from ._base import Builder, SplitSide, _dequant_linear
 
 # ---------------------------------------------------------------------------
 # TP split rules (attention)
@@ -211,193 +212,6 @@ def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
             merged.squeeze_()
         merged_tensors[kind] = merged
 
-    return Linear(tensors=merged_tensors, weight_format=q.weight_format,
-                  data_format=q.data_format)
-
-
-# ---------------------------------------------------------------------------
-# QKV merge / RoPE permutation helpers
-# ---------------------------------------------------------------------------
-
-
-def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
-    """Interleave rotary embedding layout for TurboMind's RoPE kernel.
-
-    Combines the former ``permute_v2`` (full permutation when
-    ``rope_dim == head_dim``) and ``permute_v2_partial`` (partial
-    permutation when ``rope_dim < head_dim``) into a single function.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Input tensor whose last dimension is ``head_num * head_dim``.
-    head_dim : int
-        Full head dimension.
-    rope_dim : int
-        Rotary embedding dimension (``<= head_dim``).
-    """
-    assert x.size(-1) > 1
-    assert rope_dim % 2 == 0, f'rope_dim must be even, got {rope_dim}'
-    assert rope_dim <= head_dim, f'rope_dim ({rope_dim}) must be <= head_dim ({head_dim})'
-    output_dims = x.size(-1)
-    assert output_dims % head_dim == 0, (f'output_dims ({output_dims}) must be divisible by '
-                                          f'head_dim ({head_dim})')
-    head_num = output_dims // head_dim
-    orig_shape = x.shape
-    if x.dim() == 1:
-        x = x.unsqueeze(0)
-
-    x = x.view(x.size(0), head_num, head_dim)
-
-    if rope_dim < head_dim:
-        # Partial permutation: only interleave the rotary portion
-        rotary = x[:, :, :rope_dim]
-        passthrough = x[:, :, rope_dim:]
-        rotary = rotary.view(x.size(0), head_num, 2, rope_dim // 2).transpose(2, 3).contiguous()
-        rotary = rotary.view(x.size(0), head_num, rope_dim)
-        x = torch.cat([rotary, passthrough], dim=-1)
-    else:
-        # Full permutation: interleave all elements
-        x = x.view(x.size(0), head_num, 2, head_dim // 2).transpose(2, 3).contiguous()
-        x = x.view(x.size(0), head_num, head_dim)
-
-    return x.reshape(orig_shape)
-
-
-def _merge_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, tp: int):
-    """Merge Q, K, V with TP interleaving.
-
-    Contract: x.size(-1) is output dims.
-    """
-    def reshape(x):
-        return x.view(x.size(0), tp, -1) if q.dim() == 2 else x.view(tp, -1)
-
-    qkv = torch.cat(tuple(map(reshape, (q, k, v))), dim=-1)
-    qkv = qkv.view(-1, qkv.size(-1) * tp)
-    if q.dim() == 1:
-        qkv.squeeze_()
-    return qkv
-
-
-def _merge_qkvg(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-                gate: torch.Tensor, tp: int):
-    """Merge Q, K, V, and Gate with gate appended after V.
-
-    Layout per tp-shard: [Q | K | V | Gate].
-    """
-    def reshape(x):
-        return x.view(x.size(0), tp, -1) if q.dim() == 2 else x.view(tp, -1)
-
-    qkvg = torch.cat(tuple(map(reshape, (q, k, v, gate))), dim=-1)
-    qkvg = qkvg.view(-1, qkvg.size(-1) * tp)
-    if q.dim() == 1:
-        qkvg.squeeze_()
-    return qkvg
-
-
-def merge_qkv_linear(
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    tp: int,
-    head_dim: int,
-    rope_dim: int,
-    permute_qk: bool = True,
-    attn_output_gate: bool = False,
-    repeat_kv: int = 0,
-    kv_head_num: int = 0,
-) -> Linear:
-    """Merge Q/K/V ``Linear`` bundles into a single interleaved ``w_qkv`` Linear.
-
-    Applies RoPE permutation, KV head repetition, and output-gate splitting
-    as required, then interleaves components for TP.  Returns a ``Linear``
-    in TM layout ``[in, out]``.
-
-    Per-kind routing
-    ----------------
-    - ``weight`` / ``qweight`` / ``bias``: per-element structure along the
-      output dim; all transforms applied when ``tensor.size(-1) % head_dim == 0``.
-    - ``scales`` / ``zeros`` with ``block_out > 0``: block structure; KV
-      repetition uses ``repeat_interleave`` at block granularity.  All other
-      per-element transforms (permute, gate-split) are skipped for these kinds.
-
-    Block-unsafe operations
-    -----------------------
-    If any planned transformation would cross block boundaries (detected via
-    ``_block_ops_need_dequant``), the entire group is dequantised to trivial
-    bf16/fp16 before merging, with a warning.
-    """
-    group = _ensure_compatible_formats({"q": q, "k": k, "v": v})
-    q, k, v = group["q"], group["k"], group["v"]
-
-    # Pre-dequantise if any output-dimension transformation is inter-block.
-    if any(_block_ops_need_dequant(lin, head_dim, bool(repeat_kv),
-                                   attn_output_gate, permute_qk)
-           for lin in (q, k, v)):
-        import warnings
-        _wfmt = q.weight_format or k.weight_format or v.weight_format
-        warnings.warn(
-            f"QKV merge with format '{_wfmt.name if _wfmt else None}' "
-            f"(block_out={_wfmt.block_out if _wfmt else None}) and "
-            f"head_dim={head_dim}: inter-block transformation detected; "
-            f"dequantising to trivial.")
-        q, k, v = _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
-
-    merged_tensors: dict[str, torch.Tensor] = {}
-    all_kinds = sorted(set(q.tensors) | set(k.tensors) | set(v.tensors))
-    for kind in all_kinds:
-        qt = q.tensors.get(kind)
-        kt = k.tensors.get(kind)
-        vt = v.tensors.get(kind)
-        if qt is None or kt is None or vt is None:
-            continue
-
-        # Block scales (scales/zeros with block_out > 0) carry one value per
-        # block of output elements; they need block-granular operations.
-        wfmt = q.weight_format
-        block_out = (wfmt.block_out or 0) if wfmt is not None else 0
-        is_block_kind = kind in ("scales", "zeros") and block_out > 0
-
-        # Per-element flag: True when the output dim is head_dim-aligned and
-        # the kind is not a block scale (so reshape/repeat work correctly).
-        full_res = not is_block_kind and (qt.size(-1) % head_dim == 0)
-        gate = None
-
-        if repeat_kv:
-            n = repeat_kv
-            kv_heads = kv_head_num // n
-            if is_block_kind:
-                # Block-scale KV repetition: repeat each output-block entry n
-                # times.  The pre-dequant check above guarantees alignment.
-                kt = kt.repeat_interleave(n, dim=-1)
-                vt = vt.repeat_interleave(n, dim=-1)
-            elif full_res:
-                kt = kt.reshape(-1, kv_heads, head_dim).repeat(1, 1, n).reshape(-1, kv_heads * n * head_dim)
-                vt = vt.reshape(-1, kv_heads, head_dim).repeat(1, 1, n).reshape(-1, kv_heads * n * head_dim)
-
-        if attn_output_gate and full_res:
-            head_num = qt.size(-1) // (head_dim * 2)
-            orig_shape = list(qt.shape)
-            if qt.dim() == 1:
-                qt = qt.unsqueeze(0)
-            qt = qt.view(qt.size(0), head_num, 2, head_dim)
-            q_real = qt[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
-            gate = qt[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
-            if len(orig_shape) == 1:
-                q_real = q_real.squeeze(0)
-                gate = gate.squeeze(0)
-            qt = q_real
-
-        if permute_qk and full_res:
-            qt = _reorder_rotary_emb(qt, head_dim, rope_dim)
-            kt = _reorder_rotary_emb(kt, head_dim, rope_dim)
-
-        if gate is not None:
-            merged_tensors[kind] = _merge_qkvg(qt, kt, vt, gate, tp)
-        else:
-            merged_tensors[kind] = _merge_qkv(qt, kt, vt, tp)
-
-    # All three linears share the same format after _ensure_compatible_formats.
     return Linear(tensors=merged_tensors, weight_format=q.weight_format,
                   data_format=q.data_format)
 
