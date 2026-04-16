@@ -1164,3 +1164,82 @@ class MoeBuilder(Builder):
         if split_side is not None and not isinstance(split_side, SplitSide):
             split_side = None  # specs may pass None for broadcast
         self._commit_tensor(name, tensor, split_side)
+
+
+# ---------------------------------------------------------------------------
+# DeltaNetBuilder -- Gated Delta Net input projections, scalar params, conv1d
+# ---------------------------------------------------------------------------
+
+
+class DeltaNetBuilder(Builder):
+    """DeltaNet (Gated Delta Net) weight loading builder."""
+
+    def add_input_projections(self, *, in_proj_qkv=None, in_proj_z=None,
+                              in_proj_b=None, in_proj_a=None, out_proj=None,
+                              qkv_split=None):
+        """Fuse GDN input projections, commit all linears with TP rules.
+
+        Internally calls ``fuse_gdn_in_proj`` to merge qkv/z/b/a into a
+        single ``in_proj_all`` with TP interleaving.  Commits each resulting
+        linear using ``_LINEAR_ATTN_TP_RULES`` for split-side lookup.
+        """
+        linears = {}
+        if in_proj_qkv is not None:
+            linears["in_proj_qkv"] = in_proj_qkv
+        if in_proj_z is not None:
+            linears["in_proj_z"] = in_proj_z
+        if in_proj_b is not None:
+            linears["in_proj_b"] = in_proj_b
+        if in_proj_a is not None:
+            linears["in_proj_a"] = in_proj_a
+        if out_proj is not None:
+            linears["out_proj"] = out_proj
+
+        linears = fuse_gdn_in_proj(linears, self._tp, qkv_split)
+
+        model_dtype = self.config.data_type
+        for name, lin in linears.items():
+            rule = _LINEAR_ATTN_TP_RULES.get(name, {})
+            split_side = rule.get('split_side')
+            self._commit_linear(name, lin, split_side=split_side,
+                                model_dtype=model_dtype)
+
+    def add_scalar_params(self, a_log=None, dt_bias=None):
+        """Commit A_log and dt_bias as OUTPUT-split tensors."""
+        if a_log is not None:
+            self._commit_tensor("A_log", a_log, split_side=SplitSide.OUTPUT)
+        if dt_bias is not None:
+            self._commit_tensor("dt_bias", dt_bias, split_side=SplitSide.OUTPUT)
+
+    def add_conv1d(self, conv1d, qkv_split=None):
+        """Transpose HF layout to TM layout, TP-reshape if needed, commit.
+
+        HF stores conv1d as [conv_dim, d_conv]; TM kernel expects
+        [d_conv, conv_dim].  When tp > 1 and *qkv_split* is provided,
+        the Q/K/V sub-dims are TP-interleaved.
+        """
+        if conv1d is None:
+            return
+        # Squeeze leading singleton dim if present
+        if conv1d.ndim == 3 and conv1d.shape[1] == 1:
+            conv1d = conv1d.squeeze(1)
+        # Transpose: HF [conv_dim, d_conv] -> TM [d_conv, conv_dim]
+        conv1d = conv1d.t().contiguous()
+        # TP Q/K/V interleaving
+        if self._tp > 1 and qkv_split is not None:
+            q_dim, k_dim, v_dim = qkv_split
+            d_conv = conv1d.shape[0]
+            tp = self._tp
+            q_part = conv1d[:, :q_dim]
+            k_part = conv1d[:, q_dim:q_dim + k_dim]
+            v_part = conv1d[:, q_dim + k_dim:]
+            conv1d = torch.cat([
+                q_part.reshape(d_conv, tp, q_dim // tp),
+                k_part.reshape(d_conv, tp, k_dim // tp),
+                v_part.reshape(d_conv, tp, v_dim // tp),
+            ], dim=2).reshape(d_conv, -1).contiguous()
+        self._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
+
+    def add_norm(self, norm_weight, data_type):
+        """Add inline norm child."""
+        self._add_norm_child("norm", norm_weight, data_type=data_type)
