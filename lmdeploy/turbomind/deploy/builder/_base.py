@@ -288,7 +288,7 @@ class Builder:
         handles = []
         for i, ctx in enumerate(self._contexts):
             with ctx:
-                if self._tp > 1:
+                if self._tp > 1 and hasattr(self.config, 'tp_rank'):
                     cfg = self.config.clone()
                     cfg.tp_rank = self._ranks[i]
                 else:
