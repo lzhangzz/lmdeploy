@@ -54,14 +54,24 @@ def dequant_mixed(q: Linear, k: Linear, v: Linear) -> tuple[Linear, Linear, Line
 
 
 def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
-               tp: int, head_dim: int,
-               q_heads: int, kv_heads: int) -> tuple[Linear, Linear, Linear]:
+               tp: int, head_dim: int) -> tuple[Linear, Linear, Linear]:
     """Make head counts tp-divisible.
 
     q: pad with zero heads to reach tp-divisible count.
     kv: repeat heads to reach tp-divisible count (preserves real data).
     Also handles quantization block alignment.
+
+    Head counts are derived from actual tensor shapes, not config parameters,
+    because config may have been mutated by finalize_config (e.g. kv_head_num
+    already padded to attn_tp).
     """
+    def _infer_heads(linear):
+        """Derive head count from the weight tensor's output dimension."""
+        w = linear.tensors.get('weight')
+        if w is None:
+            return 0
+        return w.size(-1) // head_dim
+
     def _adjust_linear(linear, heads, is_kv: bool):
         """Adjust one linear's head count. Pad for q, repeat for kv."""
         wfmt = linear.weight_format
@@ -132,9 +142,9 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
         return Linear(tensors=new_tensors, weight_format=linear.weight_format,
                       data_format=linear.data_format)
 
-    q = _adjust_linear(q, q_heads, is_kv=False)
-    k = _adjust_linear(k, kv_heads, is_kv=True)
-    v = _adjust_linear(v, kv_heads, is_kv=True)
+    q = _adjust_linear(q, _infer_heads(q), is_kv=False)
+    k = _adjust_linear(k, _infer_heads(k), is_kv=True)
+    v = _adjust_linear(v, _infer_heads(v), is_kv=True)
     return q, k, v
 
 
@@ -412,9 +422,7 @@ class AttentionBuilder(Builder):
         """
         q, k, v = dequant_mixed(q, k, v)
         q, k, v = pad_for_tp(q, k, v, tp=self._tp,
-                              head_dim=self.config.head_dim,
-                              q_heads=self.config.head_num,
-                              kv_heads=self.config.kv_head_num)
+                              head_dim=self.config.head_dim)
         gate = None
         if self.config.attn_output_gate:
             q, gate = split_output_gate(q, head_dim=self.config.head_dim)
