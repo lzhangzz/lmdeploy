@@ -183,12 +183,12 @@ def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
     new_tensors = {}
     for kind, tensor in linear.tensors.items():
         if kind in ("scales", "zeros") and block_out > 0:
-            # Block-level shuffle: each head = (block_out / head_dim) blocks
+            # Block-level shuffle: apply RoPE at block granularity.
+            # scales/zeros have shape [in_blocks, n_heads * blocks_per_head].
+            # reorder_rotary_emb handles this: head_num = last_dim // blocks_per_head.
             blocks_per_head = block_out // head_dim
-            n_heads = tensor.size(-1) // blocks_per_head
-            t = tensor.view(*tensor.shape[:-1], n_heads, blocks_per_head)
-            t = reorder_rotary_emb(t, blocks_per_head, rope_dim * blocks_per_head // head_dim)
-            new_tensors[kind] = t.reshape(tensor.shape)
+            rope_dim_blocks = rope_dim * blocks_per_head // head_dim
+            new_tensors[kind] = reorder_rotary_emb(tensor, blocks_per_head, rope_dim_blocks)
         elif tensor.size(-1) % head_dim == 0:
             new_tensors[kind] = reorder_rotary_emb(tensor, head_dim, rope_dim)
         else:

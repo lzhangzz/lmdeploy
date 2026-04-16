@@ -104,6 +104,7 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
                     if is_kv:
                         # Repeat: each head's blocks get repeated
                         n_repeat = target_heads // heads
+                        new_tensors[kind] = tensor.repeat_interleave(n_repeat, dim=-1)
                     else:
                         # Pad with identity scale=1, zero=0
                         pad_val = 1.0 if kind == "scales" else 0.0
