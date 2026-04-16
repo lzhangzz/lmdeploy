@@ -66,7 +66,10 @@ struct AttentionConfig: ModuleConfig {
         X(DataType, data_type) \
         X(int,      window_size, -1) \
         X(bool,     attn_sink) \
-        X(bool,     attn_output_gate)
+        X(bool,     attn_output_gate) \
+        X(int,      rope_dim) \
+        X(int,      repeat_kv) \
+        X(int,      qk_nope_dim)
 
     ATTENTION_FIELDS(TM_MEMBER)
     TM_FOR_EACH(AttentionConfig, ATTENTION_FIELDS)
