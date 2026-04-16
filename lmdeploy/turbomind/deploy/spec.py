@@ -7,7 +7,7 @@ import torch
 
 from .builder import LinearBuilder, NormBuilder, SplitSide, _cpp_dtype as _cd
 from .linear import Linear, pad_out_dim
-from .module_configs import LinearConfig, NormConfig, SpecAttnConfig
+from .module_configs import make_linear_config, make_norm_config
 
 
 class TextModelSpec(ABC):
@@ -19,15 +19,9 @@ class TextModelSpec(ABC):
 
     params: dict[str, torch.Tensor]
 
-    # Default values for configure() fields; overwritten by configure().
     _attn_tp: int = 1
-    _permute_qk: bool = True
     _repeat_kv: int = 0
-    _head_dim: int = 0
     _rope_dim: int = 0
-    _attn_output_gate: bool = False
-    _kv_head_num: int = 0
-    # TODO: there dont belong here
     _linear_qkv_split: tuple[int, int, int] | None = None
 
     # Injected by TextModelLoader
@@ -42,16 +36,6 @@ class TextModelSpec(ABC):
     def model(self):
         """Build the full model hierarchy using builders. Override in subclasses."""
 
-    def configure(self, cfg: SpecAttnConfig):
-        """Set TP and model parameters. Called by TextModelLoader."""
-        self._attn_tp = cfg.tp
-        self._permute_qk = cfg.permute_qk
-        self._repeat_kv = cfg.repeat_kv
-        self._head_dim = cfg.head_dim
-        self._rope_dim = cfg.rope_dim if cfg.rope_dim else cfg.head_dim
-        self._attn_output_gate = cfg.output_gate
-        self._kv_head_num = cfg.kv_head_num
-
     def _cpp_dtype(self):
         return _cd(self._mc.data_type)
 
@@ -62,16 +46,16 @@ class TextModelSpec(ABC):
         padded_vocab = ((mc.vocab_size + tp - 1) // tp) * tp
         emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
         dtype = self._cpp_dtype()
-        cfg = LinearConfig(input_dim=padded_vocab,
-                           output_dim=mc.hidden_units // tp,
-                           data_type=dtype)
+        cfg = make_linear_config(input_dim=padded_vocab,
+                                 output_dim=mc.hidden_units // tp,
+                                 data_type=dtype)
         m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
         m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
         return m
 
     def output_norm(self, key):
         w = self._get(key)
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
@@ -84,16 +68,16 @@ class TextModelSpec(ABC):
         output_padded = pad_out_dim(output, padded_vocab, dim=0)
         output_t = output_padded.t()
         dtype = self._cpp_dtype()
-        cfg = LinearConfig(input_dim=mc.hidden_units,
-                           output_dim=padded_vocab // tp,
-                           data_type=dtype)
+        cfg = make_linear_config(input_dim=mc.hidden_units,
+                                 output_dim=padded_vocab // tp,
+                                 data_type=dtype)
         m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
         m.set_weight(output_t, split_side=SplitSide.OUTPUT)
         return m
 
     def norm(self, key):
         w = self._get(key)
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m

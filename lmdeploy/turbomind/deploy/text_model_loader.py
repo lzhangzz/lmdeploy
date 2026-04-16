@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .module_configs import SpecAttnConfig
 
 if TYPE_CHECKING:
     from .spec import TextModelSpec
@@ -48,15 +47,7 @@ class TextModelLoader:
         spec._attn_ranks = self._attn_ranks
         spec._mlp_ranks = self._mlp_ranks
         spec._repeat_kv = self.model.repeat_kv
-        mc = self.model.model_config
         rope_param = self.model.attention_config.rope_param
-        spec.configure(SpecAttnConfig(
-            tp=self.attn_tp,
-            repeat_kv=self.model.repeat_kv,
-            head_dim=mc.size_per_head,
-            rope_dim=rope_param.dim if rope_param else mc.size_per_head,
-            output_gate=mc.attn_output_gate,
-            kv_head_num=mc.kv_head_num,
-        ))
+        spec._rope_dim = rope_param.dim if rope_param else self.model.model_config.size_per_head
         spec.model()
         return 1
