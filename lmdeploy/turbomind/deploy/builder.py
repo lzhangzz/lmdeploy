@@ -9,15 +9,13 @@ across all GPUs with bound TP configuration.
 from __future__ import annotations
 
 import enum
-from dataclasses import replace
-
 import torch
 
 import _turbomind as _tm
 
 from .kind_map import TRIVIAL_FORMAT
 from .linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
-from .module_configs import NormConfig
+from .module_configs import make_norm_config
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -413,8 +411,11 @@ class Builder:
         handles = []
         for i, ctx in enumerate(self._contexts):
             with ctx:
-                rank = self._ranks[i] if self._ranks and self._tp > 1 else 0
-                cfg = self.config.for_rank(rank).to_cpp()
+                if self._tp > 1:
+                    cfg = self.config.clone()
+                    cfg.tp_rank = self._ranks[i]
+                else:
+                    cfg = self.config
                 handle = _tm.create_module(cfg)
                 handles.append(handle)
         object.__setattr__(self, '_handles', handles)
@@ -587,11 +588,11 @@ class Builder:
         self._ensure_handles()
         if data_type is None:
             data_type = _tm.DataType.TYPE_FP32
-        norm_cfg = NormConfig(dim=tensor.shape[-1], data_type=data_type)
+        norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type)
 
         for i, handle in enumerate(self._handles):
             with self._contexts[i]:
-                child = handle.create_child(name, norm_cfg.to_cpp())
+                child = handle.create_child(name, norm_cfg)
                 shard = tensor
                 if not shard.is_cuda:
                     shard = shard.cuda(0).contiguous()
@@ -1135,7 +1136,7 @@ class FfnBuilder(Builder):
                 is_moe=getattr(self.config, 'fused_moe', False))
 
         # Update config BEFORE first _commit_linear triggers _ensure_handles()
-        self.config = replace(self.config, fuse_silu=fused_silu)
+        self.config.fuse_silu = fused_silu
 
         model_dtype = self.config.data_type
         if fused is not None:
@@ -1330,7 +1331,7 @@ class MLABuilder(Builder):
         qk_nope_dim = cfg.qk_nope_dim
         kv_lora_rank = cfg.kv_lora_rank
         v_head_dim = cfg.v_head_dim
-        size_per_head = cfg.size_per_head
+        size_per_head = cfg.head_dim
 
         q_b_lin = linears.get("q_b_proj")
         kv_b_lin = linears.pop("kv_b_proj", None)
