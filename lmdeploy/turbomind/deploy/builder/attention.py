@@ -71,6 +71,9 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
             return linear
 
         target_heads = ((heads + tp - 1) // tp) * tp
+        if is_kv:
+            assert target_heads % heads == 0, (
+                f"target_heads={target_heads} must be divisible by heads={heads}")
         new_tensors = {}
 
         for kind, tensor in linear.tensors.items():
@@ -78,6 +81,10 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
 
             if is_block_kind:
                 # Block-scale: pad or repeat at block granularity
+                # Assumes block_out >= head_dim and block_out % head_dim == 0
+                # (dequant_mixed or reorder_rotary_emb_linear handles misalignment)
+                assert block_out % head_dim == 0, (
+                    f"block_out={block_out} must be divisible by head_dim={head_dim}")
                 blocks_per_head = block_out // head_dim
                 head_blocks = tensor.size(-1) // blocks_per_head
                 target_blocks = target_heads * blocks_per_head
@@ -86,7 +93,6 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
                     if is_kv:
                         # Repeat: each head's blocks get repeated
                         n_repeat = target_heads // heads
-                        new_tensors[kind] = tensor.repeat_interleave(n_repeat, dim=-1)
                     else:
                         # Pad with identity scale=1, zero=0
                         pad_val = 1.0 if kind == "scales" else 0.0
