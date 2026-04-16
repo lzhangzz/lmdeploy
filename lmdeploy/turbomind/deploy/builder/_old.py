@@ -13,9 +13,43 @@ import torch
 
 import _turbomind as _tm
 
-from .kind_map import TRIVIAL_FORMAT
-from .linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
-from .module_configs import make_norm_config
+from ..kind_map import TRIVIAL_FORMAT
+from ..linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
+from ..module_configs import make_norm_config
+
+__all__ = [
+    'SplitSide',
+    '_act_type_id',
+    '_cast_shard_for_tm',
+    '_commit_tensors',
+    '_cpp_dtype',
+    '_infer_compute_dtype',
+    '_infer_cpp_linear_dtype',
+    '_should_fuse_silu',
+    '_can_fuse_w1w3',
+    '_torch_dtype_to_cpp',
+    'fuse_ffn_linears',
+    'Builder',
+    'TextModelBuilder',
+    'DecoderLayerBuilder',
+    'ModuleListBuilder',
+    'NormBuilder',
+    'LinearBuilder',
+    '_reorder_rotary_emb',
+    '_merge_qkv',
+    '_merge_qkvg',
+    '_dequant_linear',
+    '_ensure_compatible_formats',
+    '_block_ops_need_dequant',
+    'merge_qkv_linear',
+    '_tp_interleave_tensor',
+    'fuse_gdn_in_proj',
+    'AttentionBuilder',
+    'FfnBuilder',
+    'MoeBuilder',
+    'DeltaNetBuilder',
+    'MLABuilder',
+]
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
