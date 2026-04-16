@@ -73,10 +73,8 @@ class Qwen3TextSpec(TextModelSpec):
             window_size = ws_list[layer]
 
         attn_cfg = make_attention_config(
-            mc, tp_size=tp, tp_rank=0, dtype=dtype,
-            window_size=window_size,
-            rope_dim=self._rope_dim,
-            repeat_kv=self._repeat_kv)
+            mc, tp_size=tp, dtype=dtype,
+            rope_dim=self._rope_dim)
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
 

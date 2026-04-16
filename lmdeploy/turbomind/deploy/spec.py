@@ -20,7 +20,6 @@ class TextModelSpec(ABC):
     params: dict[str, torch.Tensor]
 
     _attn_tp: int = 1
-    _repeat_kv: int = 0
     _rope_dim: int = 0
     _linear_qkv_split: tuple[int, int, int] | None = None
 

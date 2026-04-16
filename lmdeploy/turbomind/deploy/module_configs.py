@@ -39,8 +39,8 @@ def make_norm_config(*, dim, data_type):
 # ---------------------------------------------------------------------------
 
 
-def make_attention_config(mc, *, tp_size, tp_rank, dtype, window_size,
-                         rope_dim=0, repeat_kv=0):
+def make_attention_config(mc, *, tp_size, tp_rank=0, dtype, window_size=0,
+                         rope_dim=0):
     """Build C++ AttentionConfig from ModelConfig."""
     cfg = _tm.AttentionConfig()
     cfg.hidden_dim = mc.hidden_units
@@ -60,11 +60,10 @@ def make_attention_config(mc, *, tp_size, tp_rank, dtype, window_size,
     cfg.attn_sink = mc.attn_sink
     cfg.attn_output_gate = mc.attn_output_gate
     cfg.rope_dim = rope_dim
-    cfg.repeat_kv = repeat_kv
     return cfg
 
 
-def make_mla_config(mc, *, tp_size, tp_rank, dtype, window_size,
+def make_mla_config(mc, *, tp_size, tp_rank=0, dtype, window_size=0,
                     qk_nope_dim=0):
     """Build C++ AttentionConfig for MLA from ModelConfig."""
     qk_rope_dim = mc.qk_rope_dim or 0
@@ -94,7 +93,6 @@ def make_mla_config(mc, *, tp_size, tp_rank, dtype, window_size,
     cfg.attn_sink = False
     cfg.attn_output_gate = False
     cfg.rope_dim = 0
-    cfg.repeat_kv = 0
     return cfg
 
 

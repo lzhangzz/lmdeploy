@@ -46,7 +46,6 @@ class TextModelLoader:
         spec._mlp_tp = self.mlp_tp
         spec._attn_ranks = self._attn_ranks
         spec._mlp_ranks = self._mlp_ranks
-        spec._repeat_kv = self.model.repeat_kv
         rope_param = self.model.attention_config.rope_param
         spec._rope_dim = rope_param.dim if rope_param else self.model.model_config.size_per_head
         spec.model()
