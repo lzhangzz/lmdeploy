@@ -145,9 +145,11 @@ def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def _dequant_linear(linear):
-    """Dequantize a quantized Linear to trivial when the format provides dequant."""
-    from ..kind_map import TRIVIAL_FORMAT
+def _dequant_linear(linear) -> 'Linear':
+    """Dequantize a quantized Linear to trivial when the format provides dequant.
+
+    Local copy to avoid circular import from builder/_base.py.
+    """
     fmt = linear.weight_format
     if fmt is None or fmt.dequant is None:
         return linear
