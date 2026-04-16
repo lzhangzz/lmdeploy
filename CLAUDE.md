@@ -8,16 +8,6 @@ Build in the `build` folder:
 - Configure (if not already configured): run `sh ../my_generate.sh` from the `build` folder
 - Build: run `ninja` from the `build` folder (or specify individual targets)
 
-## Environment setup
-
-For the lmdeploy Python code and `_turbomind` Python extension to be found by Python, set:
-
-```
-PYTHONPATH=${workspace_dir}/lmdeploy:${workspace_dir}/build/lib
-```
-
-Replace `${workspace_dir}` with the current project directory.
-
 ## Using locally cached models
 
 Query the model-server MCP tool (`list_models`) for models available locally. Models are stored on different cache directories. You need:
@@ -38,7 +28,7 @@ os.environ['HF_HUB_CACHE'] = '...'
 
 ## Testing
 
-See `build/toy_example.py` for sample test code.
+Verify TurboMind with `scripts/test_turbomind_model.py`
 
 **You MUST verify the response every time you test a model.** The model must respond with meaningful human words relevant to your test prompt. Gibberish responses indicate a bug. Also the requested response length should be **at least 128 tokens** for testing a model.
 
