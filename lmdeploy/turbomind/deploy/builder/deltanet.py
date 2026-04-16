@@ -56,7 +56,7 @@ def fuse_gdn_in_proj(la_linears: dict[str, Linear], tp: int,
     naive column split would mix data from different projections across
     TP ranks.
     """
-    from .attention import _ensure_compatible_formats
+    from ._base import _ensure_compatible_formats
 
     result = dict(la_linears)
     components: list[Linear] = []

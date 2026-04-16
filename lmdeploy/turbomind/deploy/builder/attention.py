@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import torch
 
-from ..kind_map import TRIVIAL_FORMAT
 from ..linear import Linear
-from ._base import Builder, SplitSide
+from ._base import Builder, SplitSide, _dequant_linear, _ensure_compatible_formats, _block_ops_need_dequant
 
 # ---------------------------------------------------------------------------
 # TP split rules (attention)
@@ -109,51 +108,6 @@ def _merge_qkvg(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     if q.dim() == 1:
         qkvg.squeeze_()
     return qkvg
-
-
-def _dequant_linear(linear: Linear) -> Linear:
-    """Dequantize a quantized Linear to trivial when the format provides ``dequant``."""
-    fmt = linear.weight_format
-    if fmt is None or fmt.dequant is None:
-        return linear
-    new_tensors = fmt.dequant(linear.tensors)
-    return Linear(tensors=new_tensors, weight_format=TRIVIAL_FORMAT, data_format=None)
-
-
-def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
-    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
-    formats = {name: lin.weight_format.name for name, lin in linears.items()}
-    if len(set(formats.values())) <= 1:
-        return linears
-    return {name: _dequant_linear(lin) for name, lin in linears.items()}
-
-
-def _block_ops_need_dequant(
-    lin: Linear, head_dim: int,
-    repeat_kv: bool, attn_output_gate: bool, permute_qk: bool,
-) -> bool:
-    """Return True if any planned QKV-merge operation crosses block boundaries.
-
-    For quantised formats with a non-None ``block_out``:
-
-    - KV repetition and output-gate splitting each split along the output
-      dimension at head_dim granularity.  This is block-safe only when
-      ``head_dim % block_out == 0`` (each KV head = integer number of blocks).
-    - RoPE permutation permutes elements within a head.  This is block-safe
-      only when ``block_out % head_dim == 0`` (each block = integer number
-      of heads, so permuting within one head is intra-block).
-
-    If any condition fails, the caller should dequantise to trivial first.
-    """
-    wfmt = lin.weight_format
-    if wfmt is None or wfmt.block_out is None:
-        return False
-    block_out = wfmt.block_out
-    if (repeat_kv or attn_output_gate) and head_dim % block_out != 0:
-        return True
-    if permute_qk and block_out % head_dim != 0:
-        return True
-    return False
 
 
 def merge_qkv_linear(
