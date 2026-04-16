@@ -220,10 +220,13 @@ class Qwen3_5Spec(TextModelSpec):
         return builder
 
     def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
-        """Return FfnBuilder for the given layer."""
+        """Return FfnBuilder for the given layer, or None if no weights found."""
         w1 = self._linear(f"{pfx}.gate_proj")
         w3 = self._linear(f"{pfx}.up_proj")
         w2 = self._linear(f"{pfx}.down_proj")
+
+        if w1 is None and w2 is None and w3 is None:
+            return None
 
         mc = self._mc
         tp = self._mlp_tp
