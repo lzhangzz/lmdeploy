@@ -9,6 +9,7 @@ import torch
 from lmdeploy.archs import get_model_arch
 
 from ..config import RopeParam
+from ..kind_map import TRIVIAL_FORMAT
 
 
 def load_model_config(model_path: str) -> dict:
@@ -142,3 +143,54 @@ def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         output_dims = x.size(-1)
         head_num = output_dims // head_dim
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
+
+
+def _dequant_linear(linear):
+    """Dequantize a quantized Linear to trivial when the format provides dequant."""
+    from ..kind_map import TRIVIAL_FORMAT
+    fmt = linear.weight_format
+    if fmt is None or fmt.dequant is None:
+        return linear
+    new_tensors = fmt.dequant(linear.tensors)
+    from ..linear import Linear
+    return Linear(tensors=new_tensors, weight_format=TRIVIAL_FORMAT, data_format=None)
+
+
+def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
+    """Apply RoPE permutation to all tensors in a Linear.
+
+    Quantization-aware:
+    - If quantized and block_out % head_dim != 0, dequantizes first
+      (permuting within a head would cross block boundaries).
+    - For weight/bias: element-level RoPE permutation.
+    - For scales/zeros when block_out % head_dim == 0: block-level channel
+      shuffling. Each head maps to (block_out / head_dim) complete blocks,
+      so we apply the same interleave pattern at block granularity.
+    - For scales/zeros when dequantized: skipped (trivial format has none).
+    """
+    from ..linear import Linear
+
+    wfmt = linear.weight_format
+    block_out = (wfmt.block_out or 0) if wfmt is not None else 0
+
+    # If blocks don't align with heads, dequant first
+    if block_out and block_out % head_dim != 0:
+        linear = _dequant_linear(linear)
+        block_out = 0
+
+    new_tensors = {}
+    for kind, tensor in linear.tensors.items():
+        if kind in ("scales", "zeros") and block_out > 0:
+            # Block-level shuffle: each head = (block_out / head_dim) blocks
+            blocks_per_head = block_out // head_dim
+            n_heads = tensor.size(-1) // blocks_per_head
+            t = tensor.view(*tensor.shape[:-1], n_heads, blocks_per_head)
+            t = reorder_rotary_emb(t, blocks_per_head, rope_dim * blocks_per_head // head_dim)
+            new_tensors[kind] = t.reshape(tensor.shape)
+        elif tensor.size(-1) % head_dim == 0:
+            new_tensors[kind] = reorder_rotary_emb(tensor, head_dim, rope_dim)
+        else:
+            new_tensors[kind] = tensor
+
+    return Linear(tensors=new_tensors, weight_format=linear.weight_format,
+                  data_format=linear.data_format)
