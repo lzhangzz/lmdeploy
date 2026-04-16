@@ -95,17 +95,14 @@ class Qwen3_5Spec(TextModelSpec):
         self._n_experts = model_cfg.get("num_experts", 0)
 
         # QKV dimensions for GDN layers: Q/K share key heads, V uses value heads
-        ln_key_heads = model_cfg.get("linear_num_key_heads", 0)
-        ln_val_heads = model_cfg.get("linear_num_value_heads", 0)
-        ln_key_dim = model_cfg.get("linear_key_head_dim", 0)
-        ln_val_dim = model_cfg.get("linear_value_head_dim", 0)
-        if ln_key_heads and ln_val_heads:
-            q_dim = ln_key_heads * ln_key_dim
-            k_dim = ln_key_heads * ln_key_dim
-            v_dim = ln_val_heads * ln_val_dim
-            self._linear_qkv_split = (q_dim, k_dim, v_dim)
-        else:
-            self._linear_qkv_split = None
+        ln_key_heads = model_cfg["linear_num_key_heads"]
+        ln_val_heads = model_cfg["linear_num_value_heads"]
+        ln_key_dim = model_cfg["linear_key_head_dim"]
+        ln_val_dim = model_cfg["linear_value_head_dim"]
+        q_dim = ln_key_heads * ln_key_dim
+        k_dim = ln_key_heads * ln_key_dim
+        v_dim = ln_val_heads * ln_val_dim
+        self._linear_qkv_split = (q_dim, k_dim, v_dim)
 
         if any(k.startswith("model.language_model.") for k in params):
             self._layer_prefix = "model.language_model.layers"
