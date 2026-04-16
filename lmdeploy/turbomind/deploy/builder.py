@@ -1071,7 +1071,7 @@ class AttentionBuilder(Builder):
             tp=self._tp,
             head_dim=self.config.head_dim,
             rope_dim=self.config.rope_dim or self.config.head_dim,
-            permute_qk=self.config.permute_qk,
+            permute_qk=True,
             attn_output_gate=self.config.attn_output_gate,
             repeat_kv=self.config.repeat_kv,
             kv_head_num=self.config.kv_head_num,
