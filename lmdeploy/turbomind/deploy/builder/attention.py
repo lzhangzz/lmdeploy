@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear
+from ..linear import Linear, pad_out_dim
 from ._base import Builder, SplitSide, _dequant_linear, _ensure_compatible_formats, _block_ops_need_dequant
 
 # ---------------------------------------------------------------------------
@@ -29,6 +29,175 @@ _ATTN_TP_RULES: dict[str, dict] = {
     "q_b_proj":  dict(split_side=SplitSide.OUTPUT),
     "kv_b_proj": dict(split_side=SplitSide.OUTPUT),
 }
+
+# ---------------------------------------------------------------------------
+# New pipeline functions (replacing merge_qkv_linear)
+# ---------------------------------------------------------------------------
+
+
+def dequant_mixed(q: Linear, k: Linear, v: Linear):
+    """Dequantize to trivial if formats are mixed.
+
+    Two cases:
+    1. q, k, v have different weight formats -> dequant all to trivial
+    2. Some are already trivial (e.g. from reorder_rotary_emb_linear)
+       -> dequant the rest so all match for fusion
+    """
+    names = {lin.weight_format.name for lin in (q, k, v) if lin.weight_format}
+    if len(names) <= 1:
+        # All same format (or all None) -- check if any are trivial while others aren't
+        trivial = {lin.weight_format.name == 'trivial' for lin in (q, k, v)
+                   if lin.weight_format}
+        if len(trivial) <= 1:
+            return q, k, v
+    return _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
+
+
+def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
+               tp: int, head_dim: int,
+               q_heads: int, kv_heads: int):
+    """Make head counts tp-divisible.
+
+    q: pad with zero heads to reach tp-divisible count.
+    kv: repeat heads to reach tp-divisible count (preserves real data).
+    Also handles quantization block alignment.
+    """
+    def _adjust_linear(linear, heads, is_kv: bool):
+        """Adjust one linear's head count. Pad for q, repeat for kv."""
+        wfmt = linear.weight_format
+        block_out = (wfmt.block_out or 0) if wfmt is not None else 0
+
+        if heads % tp == 0:
+            return linear
+
+        target_heads = ((heads + tp - 1) // tp) * tp
+        new_tensors = {}
+
+        for kind, tensor in linear.tensors.items():
+            is_block_kind = kind in ("scales", "zeros") and block_out > 0
+
+            if is_block_kind:
+                # Block-scale: pad or repeat at block granularity
+                blocks_per_head = block_out // head_dim
+                head_blocks = tensor.size(-1) // blocks_per_head
+                target_blocks = target_heads * blocks_per_head
+                deficit = target_blocks - head_blocks
+                if deficit > 0:
+                    if is_kv:
+                        # Repeat: each head's blocks get repeated
+                        n_repeat = target_heads // heads
+                        new_tensors[kind] = tensor.repeat_interleave(n_repeat, dim=-1)
+                    else:
+                        # Pad with identity scale=1, zero=0
+                        pad_val = 1.0 if kind == "scales" else 0.0
+                        padding = torch.full(
+                            [*tensor.shape[:-1], deficit],
+                            pad_val, dtype=tensor.dtype, device=tensor.device)
+                        new_tensors[kind] = torch.cat([tensor, padding], dim=-1)
+                else:
+                    new_tensors[kind] = tensor
+            else:
+                # Per-element tensor (weight, bias, qweight)
+                out_dim = tensor.dim() - 1
+                per_head = tensor.size(out_dim) // heads
+                target_size = target_heads * per_head
+                deficit = target_size - tensor.size(out_dim)
+
+                if deficit > 0:
+                    if is_kv:
+                        # Repeat: reshape to [batch, heads, head_dim] then repeat
+                        if tensor.dim() == 2:
+                            reshaped = tensor.view(tensor.size(0), heads, per_head)
+                            n_repeat = target_heads // heads
+                            reshaped = reshaped.repeat(1, 1, n_repeat)
+                            new_tensors[kind] = reshaped.reshape(
+                                tensor.size(0), target_heads * per_head)
+                        else:
+                            reshaped = tensor.view(heads, per_head)
+                            n_repeat = target_heads // heads
+                            reshaped = reshaped.repeat(1, n_repeat)
+                            new_tensors[kind] = reshaped.reshape(target_heads * per_head)
+                    else:
+                        # Pad with zeros
+                        new_tensors[kind] = pad_out_dim(tensor, target_size, out_dim)
+                else:
+                    new_tensors[kind] = tensor
+
+        return Linear(tensors=new_tensors, weight_format=linear.weight_format,
+                      data_format=linear.data_format)
+
+    q = _adjust_linear(q, q_heads, is_kv=False)
+    k = _adjust_linear(k, kv_heads, is_kv=True)
+    v = _adjust_linear(v, kv_heads, is_kv=True)
+    return q, k, v
+
+
+def split_output_gate(q: Linear, *, head_dim: int):
+    """Split output gate from Q projection (Qwen3.5).
+
+    Q's output dim is 2 * head_num * head_dim. Reshape to
+    [batch, head_num, 2, head_dim], split into q_real and gate.
+    """
+    new_q_tensors = {}
+    gate_tensors = {}
+
+    for kind, tensor in q.tensors.items():
+        head_num = tensor.size(-1) // (head_dim * 2)
+        orig_shape = list(tensor.shape)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        tensor = tensor.view(tensor.size(0), head_num, 2, head_dim)
+        q_real = tensor[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
+        gate = tensor[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
+        if len(orig_shape) == 1:
+            q_real = q_real.squeeze(0)
+            gate = gate.squeeze(0)
+        new_q_tensors[kind] = q_real
+        gate_tensors[kind] = gate
+
+    return (Linear(tensors=new_q_tensors, weight_format=q.weight_format,
+                   data_format=q.data_format),
+            Linear(tensors=gate_tensors, weight_format=q.weight_format,
+                   data_format=q.data_format))
+
+
+def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
+             tp: int, gate: Linear | None = None):
+    """Fuse Q, K, V (and optionally gate) into a single w_qkv Linear.
+
+    Concatenates output channels with TP interleaving.
+    Layout per tp-shard: [Q | K | V] or [Q | K | V | Gate].
+    """
+    merged_tensors: dict[str, torch.Tensor] = {}
+    all_kinds = sorted(set(q.tensors) | set(k.tensors) | set(v.tensors))
+
+    for kind in all_kinds:
+        qt = q.tensors.get(kind)
+        kt = k.tensors.get(kind)
+        vt = v.tensors.get(kind)
+        if qt is None or kt is None or vt is None:
+            continue
+
+        is_2d = qt.dim() == 2
+
+        def reshape(x):
+            return x.view(x.size(0), tp, -1) if is_2d else x.view(tp, -1)
+
+        components = [reshape(qt), reshape(kt), reshape(vt)]
+        if gate is not None:
+            gt = gate.tensors.get(kind)
+            if gt is not None:
+                components.append(reshape(gt))
+
+        merged = torch.cat(components, dim=-1)
+        merged = merged.view(-1, merged.size(-1) * tp)
+        if not is_2d:
+            merged.squeeze_()
+        merged_tensors[kind] = merged
+
+    return Linear(tensors=merged_tensors, weight_format=q.weight_format,
+                  data_format=q.data_format)
+
 
 # ---------------------------------------------------------------------------
 # QKV merge / RoPE permutation helpers
