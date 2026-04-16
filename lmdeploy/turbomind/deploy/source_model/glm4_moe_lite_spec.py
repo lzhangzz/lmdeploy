@@ -20,8 +20,8 @@ from ..builder import (
 )
 from ..linear import Linear
 from ..module_configs import (
-    DecoderLayerConfig, FfnConfig,
-    MLAConfig, ModuleListConfig, MoeConfig,
+    DecoderLayerConfig, ModuleListConfig,
+    make_ffn_config, make_mla_config, make_moe_config,
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
@@ -69,7 +69,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         dtype = self._cpp_dtype()
         cfg = self.cfg
 
-        mla_cfg = MLAConfig.from_model_config(
+        mla_cfg = make_mla_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype, window_size=0,
             qk_nope_dim=cfg['qk_nope_head_dim'])
         builder = MLABuilder(mla_cfg, self._contexts,
@@ -105,7 +105,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
             inter_size = is_list[layer] if is_list and layer < len(
                 is_list) else 0
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
@@ -128,7 +128,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         if en_list and layer < len(en_list):
             expert_num = en_list[layer]
 
-        moe_cfg = MoeConfig.from_model_config(
+        moe_cfg = make_moe_config(
             mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
