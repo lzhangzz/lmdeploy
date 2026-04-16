@@ -15,10 +15,9 @@ import re
 import torch
 
 from ..builder import (
-    AttentionBuilder, Builder, DecoderLayerBuilder, FfnBuilder,
-    MoeBuilder, ModuleListBuilder, NormBuilder, SplitSide, TextModelBuilder,
-    _LINEAR_ATTN_TP_RULES, _act_type_id,
-    fuse_gdn_in_proj,
+    AttentionBuilder, DeltaNetBuilder, DecoderLayerBuilder, FfnBuilder,
+    MoeBuilder, ModuleListBuilder, NormBuilder, TextModelBuilder,
+    _act_type_id,
 )
 from ..kind_map import build_linear
 from ..linear import Linear
@@ -193,67 +192,32 @@ class Qwen3_5Spec(TextModelSpec):
         return attn
 
     def linear_attn(self, pfx, layer):
-        """Return Builder for linear-attention (Gated Delta Net)."""
-        # Read GDN input projection linears
-        la_linears: dict[str, Linear] = {}
-        for key in ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj"]:
-            lin = self._linear(f"{pfx}.{key}")
-            if lin is not None:
-                la_linears[key] = lin
-
+        """Return DeltaNetBuilder for linear-attention (Gated Delta Net)."""
         mc = self._mc
         tp = self._attn_tp
         dtype = self._cpp_dtype()
 
         dn_cfg = DeltaNetConfig.from_model_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype)
-        linear_attn = Builder(dn_cfg, self._contexts,
-                              tp=tp, ranks=self._attn_ranks)
+        builder = DeltaNetBuilder(dn_cfg, self._contexts,
+                                  tp=tp, ranks=self._attn_ranks)
 
-        # Fuse GDN input projections
-        la_linears = fuse_gdn_in_proj(la_linears, tp, self._linear_qkv_split)
-
-        # Commit linear bundles with TP rules from the rule table
-        for name, lin in la_linears.items():
-            rule = _LINEAR_ATTN_TP_RULES.get(name, {})
-            split_side = rule.get('split_side')
-            linear_attn._commit_linear(name, lin, split_side=split_side,
-                                       model_dtype=dtype)
-
-        # Inline params: A_log, dt_bias
-        for key in ["A_log", "dt_bias"]:
-            t = self._get(f"{pfx}.{key}")
-            linear_attn._commit_tensor(key, t, split_side=SplitSide.OUTPUT)
-
-        # Inline param: conv1d
-        conv1d = self._get(f"{pfx}.conv1d.weight")
-        if conv1d.ndim == 3 and conv1d.shape[1] == 1:
-            conv1d = conv1d.squeeze(1)
-        # C++ kernel expects [d_conv, conv_dim]; HF stores [conv_dim, d_conv].
-        conv1d = conv1d.t().contiguous()
-        if self._attn_tp > 1 and self._linear_qkv_split is not None:
-            q_dim, k_dim, v_dim = self._linear_qkv_split
-            d_conv = conv1d.shape[0]
-            tp = self._attn_tp
-            q_part = conv1d[:, :q_dim]
-            k_part = conv1d[:, q_dim:q_dim + k_dim]
-            v_part = conv1d[:, q_dim + k_dim:]
-            conv1d = torch.cat([
-                q_part.reshape(d_conv, tp, q_dim // tp),
-                k_part.reshape(d_conv, tp, k_dim // tp),
-                v_part.reshape(d_conv, tp, v_dim // tp),
-            ], dim=2).reshape(d_conv, -1).contiguous()
-        linear_attn._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
-
-        # Inline param: D
-        d_param = self._get(f"{pfx}.D")
-        linear_attn._commit_tensor("D", d_param, split_side=SplitSide.OUTPUT)
-
-        # Inline norm children
-        norm = self._get(f"{pfx}.norm.weight")
-        linear_attn._add_norm_child("norm", norm, data_type=dtype)
-
-        return linear_attn
+        builder.add_input_projections(
+            in_proj_qkv=self._linear(f"{pfx}.in_proj_qkv"),
+            in_proj_z=self._linear(f"{pfx}.in_proj_z"),
+            in_proj_b=self._linear(f"{pfx}.in_proj_b"),
+            in_proj_a=self._linear(f"{pfx}.in_proj_a"),
+            out_proj=self._linear(f"{pfx}.out_proj"),
+            qkv_split=self._linear_qkv_split)
+        builder.add_scalar_params(
+            a_log=self._get(f"{pfx}.A_log"),
+            dt_bias=self._get(f"{pfx}.dt_bias"))
+        builder.add_conv1d(
+            self._get(f"{pfx}.conv1d.weight"),
+            qkv_split=self._linear_qkv_split)
+        builder.add_norm(
+            self._get(f"{pfx}.norm.weight"), data_type=dtype)
+        return builder
 
     def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
         """Return FfnBuilder for the given layer."""
