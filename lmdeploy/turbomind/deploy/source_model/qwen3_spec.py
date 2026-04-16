@@ -15,8 +15,8 @@ from ..builder import (
 )
 from ..linear import Linear
 from ..module_configs import (
-    AttentionConfig, DecoderLayerConfig, FfnConfig,
-    ModuleListConfig, MoeConfig,
+    DecoderLayerConfig, ModuleListConfig,
+    make_attention_config, make_ffn_config, make_moe_config,
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
@@ -69,11 +69,10 @@ class Qwen3TextSpec(TextModelSpec):
         if ws_list and layer < len(ws_list):
             window_size = ws_list[layer]
 
-        attn_cfg = AttentionConfig.from_model_config(
+        attn_cfg = make_attention_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             window_size=window_size,
             rope_dim=self._rope_dim,
-            permute_qk=self._permute_qk,
             repeat_kv=self._repeat_kv)
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
@@ -84,9 +83,8 @@ class Qwen3TextSpec(TextModelSpec):
         # Inline qk norm
         q_norm = self._get(f"{pfx}.q_norm.weight")
         k_norm = self._get(f"{pfx}.k_norm.weight")
-        if self._permute_qk:
-            q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope_dim)
-            k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope_dim)
+        q_norm = reorder_rotary_emb(q_norm, mc.size_per_head, self._rope_dim)
+        k_norm = reorder_rotary_emb(k_norm, mc.size_per_head, self._rope_dim)
         attn.add_qk_norm(q_norm, k_norm)
 
         return attn
@@ -106,7 +104,7 @@ class Qwen3TextSpec(TextModelSpec):
             inter_size = is_list[layer] if is_list and layer < len(
                 is_list) else 0
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
@@ -129,7 +127,7 @@ class Qwen3TextSpec(TextModelSpec):
         if en_list and layer < len(en_list):
             expert_num = en_list[layer]
 
-        moe_cfg = MoeConfig.from_model_config(
+        moe_cfg = make_moe_config(
             mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
