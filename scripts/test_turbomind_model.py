@@ -27,9 +27,9 @@ Exit code: 0 only if no uncaught exception (pipeline load + inference complete).
 On failure the full traceback is printed to stderr.
 Output quality is not validated.
 
-Usage (from repo root; see CLAUDE.md for PYTHONPATH):
+Usage (from repo root):
 
-  PYTHONPATH=lmdeploy:build/lib python scripts/test_turbomind_model.py \\
+  python scripts/test_turbomind_model.py \\
       [--debug] <model_path> <cache_dir> <tp> <gpus>
 
 Optional --debug sets TM_DEBUG_LEVEL=DEBUG before loading TurboMind so asynchronous

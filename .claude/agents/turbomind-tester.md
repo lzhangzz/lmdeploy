@@ -88,7 +88,7 @@ Report results in this structure:
 
 ## Hard Constraints (NEVER violate)
 
-1. **NEVER install lmdeploy as a pip package** — use PYTHONPATH as described in CLAUDE.md
+1. **NEVER install lmdeploy as a pip package**
 2. **NEVER run setup.py**
 3. **NEVER modify `scripts/test_turbomind_model.py`**
 4. **NEVER write new test scripts or test code**
