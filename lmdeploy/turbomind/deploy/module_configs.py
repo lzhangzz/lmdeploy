@@ -110,6 +110,77 @@ class AttentionConfig:
 
 
 @dataclass
+class MLAConfig:
+    """Config for MLA (Multi-head Latent Attention) weight modules."""
+    hidden_dim: int = 0
+    head_num: int = 0
+    kv_lora_rank: int = 0
+    q_lora_rank: int = 0
+    qk_nope_dim: int = 0       # key dim without RoPE
+    qk_rope_dim: int = 0       # RoPE dim within each head
+    v_head_dim: int = 0
+    size_per_head: int = 0     # effective head dim
+    kv_head_num: int = 0       # for MQA kv_a_proj
+    tp_size: int = 1
+    tp_rank: int = 0
+    data_type: int = 0
+    window_size: int = -1
+
+    k_type_name: str = 'AttentionWeight'
+
+    @classmethod
+    def from_model_config(cls, mc, *, tp_size, tp_rank, dtype, window_size,
+                          qk_nope_dim=0):
+        """Build from ModelConfig. qk_nope_dim must be passed explicitly
+        since ModelConfig does not carry it."""
+        qk_rope_dim = mc.qk_rope_dim or 0
+        kv_lora_rank = mc.kv_lora_rank or 0
+        v_head_dim = mc.v_head_dim or 0
+        size_per_head = qk_nope_dim + qk_rope_dim
+        if kv_lora_rank and kv_lora_rank != qk_nope_dim:
+            size_per_head = kv_lora_rank + qk_rope_dim
+            v_head_dim = kv_lora_rank
+        return cls(
+            hidden_dim=mc.hidden_units,
+            head_num=mc.head_num,
+            kv_lora_rank=kv_lora_rank,
+            q_lora_rank=mc.q_lora_rank or 0,
+            qk_nope_dim=qk_nope_dim,
+            qk_rope_dim=qk_rope_dim,
+            v_head_dim=v_head_dim,
+            size_per_head=size_per_head,
+            kv_head_num=mc.kv_head_num,
+            tp_size=tp_size,
+            tp_rank=tp_rank,
+            data_type=dtype,
+            window_size=window_size,
+        )
+
+    def for_rank(self, rank):
+        return replace(self, tp_rank=rank)
+
+    def to_cpp(self):
+        cfg = _tm.AttentionConfig()
+        cfg.hidden_dim = self.hidden_dim
+        cfg.head_dim = self.size_per_head
+        cfg.head_num = self.head_num
+        cfg.kv_head_num = self.kv_head_num
+        cfg.kv_lora_rank = self.kv_lora_rank
+        cfg.q_lora_rank = self.q_lora_rank
+        cfg.qk_rope_dim = self.qk_rope_dim
+        cfg.v_head_dim = self.v_head_dim
+        cfg.tp_size = self.tp_size
+        cfg.tp_rank = self.tp_rank
+        cfg.data_type = _tm.DataType(self.data_type)
+        cfg.window_size = self.window_size
+        cfg.has_bias = False
+        cfg.qk_norm = False
+        cfg.attn_sink = False
+        cfg.attn_output_gate = False
+        return cfg
+
+
+@dataclass
 class FfnConfig:
     hidden_dim: int = 0
     inter_size: int = 0
