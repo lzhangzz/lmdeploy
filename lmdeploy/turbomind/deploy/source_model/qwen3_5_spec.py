@@ -22,8 +22,9 @@ from ..builder import (
 from ..kind_map import build_linear
 from ..linear import Linear
 from ..module_configs import (
-    AttentionConfig, DecoderLayerConfig, DeltaNetConfig, FfnConfig,
-    ModuleListConfig, MoeConfig, NormConfig,
+    DecoderLayerConfig, ModuleListConfig,
+    make_attention_config, make_deltanet_config, make_ffn_config,
+    make_moe_config, make_norm_config,
 )
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS, BaseInputModel
@@ -141,14 +142,14 @@ class Qwen3_5Spec(TextModelSpec):
 
     def output_norm(self, key):
         w = self._zero_centered(self._get(key))
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
 
     def norm(self, key):
         w = self._zero_centered(self._get(key))
-        cfg = NormConfig(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._mc.hidden_units, data_type=self._cpp_dtype())
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
@@ -169,11 +170,10 @@ class Qwen3_5Spec(TextModelSpec):
         if ws_list and layer < len(ws_list):
             window_size = ws_list[layer]
 
-        attn_cfg = AttentionConfig.from_model_config(
+        attn_cfg = make_attention_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             window_size=window_size,
             rope_dim=self._rope_dim,
-            permute_qk=self._permute_qk,
             repeat_kv=self._repeat_kv)
         attn = AttentionBuilder(attn_cfg, self._contexts,
                                 tp=tp, ranks=self._attn_ranks)
@@ -184,9 +184,8 @@ class Qwen3_5Spec(TextModelSpec):
         # Inline qk norm
         q_norm = self._zero_centered(self._get(f"{pfx}.q_norm.weight"))
         k_norm = self._zero_centered(self._get(f"{pfx}.k_norm.weight"))
-        if self._permute_qk:
-            q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope_dim)
-            k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope_dim)
+        q_norm = reorder_rotary_emb(q_norm, mc.size_per_head, self._rope_dim)
+        k_norm = reorder_rotary_emb(k_norm, mc.size_per_head, self._rope_dim)
         attn.add_qk_norm(q_norm, k_norm)
 
         return attn
@@ -197,7 +196,7 @@ class Qwen3_5Spec(TextModelSpec):
         tp = self._attn_tp
         dtype = self._cpp_dtype()
 
-        dn_cfg = DeltaNetConfig.from_model_config(
+        dn_cfg = make_deltanet_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype)
         builder = DeltaNetBuilder(dn_cfg, self._contexts,
                                   tp=tp, ranks=self._attn_ranks)
@@ -237,7 +236,7 @@ class Qwen3_5Spec(TextModelSpec):
             inter_size = is_list[layer] if is_list and layer < len(
                 is_list) else 0
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
@@ -260,7 +259,7 @@ class Qwen3_5Spec(TextModelSpec):
         if en_list and layer < len(en_list):
             expert_num = en_list[layer]
 
-        moe_cfg = MoeConfig.from_model_config(
+        moe_cfg = make_moe_config(
             mc, layer_id=layer, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=True, expert_num=expert_num)
@@ -358,7 +357,7 @@ class Qwen3_5Spec(TextModelSpec):
         tp = self._mlp_tp
         dtype = self._cpp_dtype()
 
-        ffn_cfg = FfnConfig.from_model_config(
+        ffn_cfg = make_ffn_config(
             mc, tp_size=tp, tp_rank=0, dtype=dtype,
             act_type=_act_type_id(mc.activation_type),
             fuse_silu=False, inter_size=inter_size,
