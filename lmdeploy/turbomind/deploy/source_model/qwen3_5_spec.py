@@ -363,33 +363,10 @@ class Qwen3_5Spec(TextModelSpec):
         return self._n_experts
 
 
+@INPUT_MODELS.register_module(name='qwen3_5-moe')
 @INPUT_MODELS.register_module(name='qwen3_5')
 class Qwen3_5InputModel(BaseInputModel):
-    """Input model for Qwen3.5 (dense + optional linear attention)."""
-
-    _layer_pattern = _LAYER_PATTERN
-    _spec_class = Qwen3_5Spec
-
-    def model_info(self) -> dict:
-        cfg = self.model_config
-        info = _qwen35_model_info_base(cfg)
-        info.update(
-            expert_num=cfg.get('num_experts', 0),
-            expert_inter_size=cfg.get('moe_intermediate_size', 0),
-            experts_per_token=cfg.get('num_experts_per_tok', 0),
-            moe_shared_gate=True,
-            scoring_func='softmax',
-            norm_topk_prob=True,
-        )
-        shared_expert_size = cfg.get('shared_expert_intermediate_size')
-        if shared_expert_size is not None:
-            info['inter_size'] = shared_expert_size
-        return info
-
-
-@INPUT_MODELS.register_module(name='qwen3_5-moe')
-class Qwen3_5MoeInputModel(BaseInputModel):
-    """Input model for Qwen3.5-MoE."""
+    """Input model for Qwen3.5 (dense and MoE)."""
 
     _layer_pattern = _LAYER_PATTERN
     _spec_class = Qwen3_5Spec
@@ -398,13 +375,15 @@ class Qwen3_5MoeInputModel(BaseInputModel):
     def model_info(self) -> dict:
         cfg = self.model_config
         info = _qwen35_model_info_base(cfg)
-        info.update(
-            expert_num=cfg.get('num_experts', 0),
-            expert_inter_size=cfg.get('moe_intermediate_size', 0),
-            experts_per_token=cfg.get('num_experts_per_tok', 0),
-            inter_size=cfg.get('shared_expert_intermediate_size', 0),
-            moe_shared_gate=True,
-            scoring_func='softmax',
-            norm_topk_prob=True,
-        )
+        n_experts = cfg.get('num_experts', 0)
+        if n_experts:
+            info.update(
+                expert_num=n_experts,
+                expert_inter_size=cfg['moe_intermediate_size'],
+                experts_per_token=cfg['num_experts_per_tok'],
+                inter_size=cfg.get('shared_expert_intermediate_size', 0),
+                moe_shared_gate=True,
+                scoring_func='softmax',
+                norm_topk_prob=True,
+            )
         return info
