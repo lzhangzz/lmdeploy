@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import torch
 
-import _turbomind as _tm
-
 from ..linear import Linear
 from ._base import Builder, SplitSide
 

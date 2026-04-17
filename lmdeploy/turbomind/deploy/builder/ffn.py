@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import torch
 
-import _turbomind as _tm
-
 from ..linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
 from ._base import Builder, SplitSide
 

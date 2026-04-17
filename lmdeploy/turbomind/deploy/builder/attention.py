@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import torch
 
-import _turbomind as _tm
-
 from ..linear import Linear, pad_out_dim
 from ._base import Builder, SplitSide, _dequant_linear
 
@@ -64,9 +62,10 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
     kv: repeat heads to reach tp-divisible count (preserves real data).
     Also handles quantization block alignment.
 
-    Head counts are derived from actual tensor shapes, not config parameters,
-    because config may have been mutated by finalize_config (e.g. kv_head_num
-    already padded to attn_tp).
+    Head counts are derived from actual tensor shapes, not config parameters.
+    The spec's _pad_kv_head has already bumped cfg.kv_head_num up to attn_tp
+    before this pipeline runs, so cfg cannot be used to recover the original
+    un-padded head count from the checkpoint.
     """
     def _infer_heads(linear):
         """Derive head count from the weight tensor's output dimension."""

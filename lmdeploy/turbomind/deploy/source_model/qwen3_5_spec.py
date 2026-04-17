@@ -16,8 +16,8 @@ from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import (_pad_inter_size, detect_layer_prefix,
-                    reorder_rotary_emb, reorder_rotary_emb_linear)
+from .utils import (_pad_inter_size, reorder_rotary_emb,
+                    reorder_rotary_emb_linear)
 
 _LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
 
@@ -30,7 +30,14 @@ def map_packed_qwen35_experts(name: str) -> str:
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
 @INPUT_MODELS.register_module(name='qwen3_5')
 class Qwen3_5Spec(TextModelSpec):
-    """Weight spec for Qwen3.5 (dense + linear-attn + optional MoE)."""
+    """Weight spec for Qwen3.5 (dense + linear-attn + optional MoE).
+
+    ``_pin_layer_prefix`` is intentionally left at its default False — Qwen3.5
+    may be packaged as a multimodal root where the decoder lives under
+    ``model.language_model.*``. The base-class ``set_params`` re-runs
+    ``detect_layer_prefix`` when weights arrive to resolve the correct
+    prefix.
+    """
 
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_packed_qwen35_experts]
@@ -147,14 +154,6 @@ class Qwen3_5Spec(TextModelSpec):
     def _copy_perlayer_fields(self, mc):
         super()._copy_perlayer_fields(mc)
         mc.layer_types = self._layer_types
-
-    # ------------------------------------------------------------------
-    # After params loaded: re-detect layer prefix for language_model wrapping
-    # ------------------------------------------------------------------
-
-    def set_params(self, params: dict):
-        super().set_params(params)
-        # detect_layer_prefix handles the model.language_model.* wrapping
 
     # ------------------------------------------------------------------
     # model() — same topology as old code

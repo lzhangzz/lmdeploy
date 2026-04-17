@@ -9,13 +9,13 @@ import torch
 
 import _turbomind as _tm
 
-from .builder import LinearBuilder, NormBuilder, SplitSide, _cpp_dtype as _cd
-from .builder import make_linear_config, make_norm_config
+from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
+from .builder import make_linear_config
 from .config import (AttentionConfig, LoraConfig, ModelConfig,
                      TurbomindModelConfig)
-from .linear import Linear, pad_out_dim
-from .source_model.utils import (_pad_inter_size, _pad_kv_head,
-                                 detect_layer_prefix, parse_rope_param)
+from .linear import pad_out_dim
+from .source_model.utils import (_pad_kv_head, detect_layer_prefix,
+                                 parse_rope_param)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -176,9 +176,9 @@ class TextModelSpec(ABC):
 
         if hasattr(self, '_moe_cfg'):
             moe = self._moe_cfg
-            mc.expert_num         = getattr(self, '_expert_nums', [])
+            mc.expert_num         = self._expert_nums
             mc.expert_router_bias = moe.router_bias
-            mc.expert_inter_size  = getattr(self, '_expert_inter_size_padded', 0)
+            mc.expert_inter_size  = self._expert_inter_size_padded
             mc.experts_per_token  = moe.experts_per_token
             mc.moe_shared_gate    = moe.shared_gate
             mc.norm_topk_prob     = moe.norm_topk_prob

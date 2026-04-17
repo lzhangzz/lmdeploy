@@ -50,7 +50,7 @@ def _validate_quant_group_size(model_format: str | None, group_size: int | None)
     return group_size
 
 
-def get_input_model_registered_name(model_path: str, model_format: str):
+def get_spec_registered_name(model_path: str, model_format: str):
     """Get the registered name of a model. The name will be used to access the
     INPUT_MODELS registry.
 
@@ -174,7 +174,7 @@ def get_tm_config(model_path,
     if engine_config.model_format is None:
         engine_config.model_format = 'hf'
 
-    input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
+    spec_name = get_spec_registered_name(model_path, engine_config.model_format)
 
     output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
                                                                             model_format=engine_config.model_format,
@@ -194,16 +194,12 @@ def get_tm_config(model_path,
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
-
-    if engine_config.attn_tp_size is not None:
-        tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
-    if engine_config.attn_cp_size is not None:
-        tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
-    if engine_config.mlp_tp_size is not None:
-        tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
+    tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
+    tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
+    tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
     hf_cfg = load_model_config(model_path)
-    spec_cls = INPUT_MODELS.get(input_model_name)
+    spec_cls = INPUT_MODELS.get(spec_name)
     spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
 
     BaseOutputModel.finalize_config(spec, tm_cfg)

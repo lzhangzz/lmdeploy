@@ -2,8 +2,6 @@
 """GLM-4 MoE Lite (GLM-4.7-Flash) TextModelSpec for the new pipeline."""
 from __future__ import annotations
 
-import torch
-
 import _turbomind as _tm
 
 from ..builder import (DecoderLayerBuilder, FfnBuilder, MLABuilder,
@@ -77,7 +75,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         self._attn_cfg.hidden_dim      = self._hidden_units
         self._attn_cfg.head_dim        = size_per_head
         self._attn_cfg.head_num        = self._head_num
-        self._attn_cfg.kv_head_num     = 1
+        self._attn_cfg.kv_head_num     = self._kv_head_num_padded
         self._attn_cfg.kv_lora_rank    = kv_lora_rank
         self._attn_cfg.q_lora_rank     = hf_cfg.get('q_lora_rank') or 0
         self._attn_cfg.qk_rope_dim     = qk_rope_dim
@@ -228,7 +226,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
         cfg = self._moe_cfg.clone()
         cfg.layer_id   = layer
-        cfg.expert_num = self._n_experts
+        cfg.expert_num = self._expert_nums[layer]
         cfg.inter_size = self._expert_inter_size_padded
 
         m = MoeBuilder(cfg, self._contexts,

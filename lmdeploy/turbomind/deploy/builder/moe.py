@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-import _turbomind as _tm
-
 from ._base import Builder, SplitSide
 
 
