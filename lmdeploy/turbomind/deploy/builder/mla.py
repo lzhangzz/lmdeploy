@@ -92,9 +92,9 @@ class MLABuilder(Builder):
 
         model_dtype = self.config.data_type
         for name, lin, side in [
-            ("q_a_proj", q_a_proj, SplitSide.OUTPUT),
+            ("q_a_proj", q_a_proj, None),
             ("q_b_proj", q_b_proj, SplitSide.OUTPUT),
-            ("kv_a_proj", kv_a_proj, SplitSide.OUTPUT),
+            ("kv_a_proj", kv_a_proj, None),
             ("wo", wo, SplitSide.INPUT),
         ]:
             self._commit_linear(name, lin, split_side=side,
