@@ -7,15 +7,73 @@ from ..linear import Linear
 from ._base import Builder, SplitSide
 
 # ---------------------------------------------------------------------------
-# TP split rules for MLA projections
+# MLA fold+pad pipeline (standalone functions)
 # ---------------------------------------------------------------------------
 
-_MLA_TP_RULES: dict[str, dict] = {
-    "q_a_proj":  dict(split_side=SplitSide.OUTPUT),
-    "q_b_proj":  dict(split_side=SplitSide.OUTPUT),
-    "kv_a_proj": dict(split_side=SplitSide.OUTPUT),
-    "wo":        dict(split_side=SplitSide.INPUT),
-}
+
+def fold_kv_b(q_b: Linear, kv_b: Linear, wo: Linear, *,
+              cfg) -> tuple[Linear, Linear]:
+    """Fold kv_b into q_b and wo. Returns (q_b_folded, wo_folded).
+
+    Splits kv_b into key-compressed (kc) and value-compressed (vc) parts.
+    Folds kc into q_b via matmul (q_nope @ kc^T per head).
+    Folds vc into wo via matmul (vc @ wo per head).
+    All arithmetic in TM layout [in, out].
+    """
+    head_num = cfg.head_num
+    qk_rope_dim = cfg.qk_rope_dim
+    size_per_head = cfg.head_dim
+
+    q_b_w = q_b.tensors["weight"]
+    kv_b_w = kv_b.tensors["weight"]
+    o_w = wo.tensors["weight"]
+
+    # Derive original dimensions from tensor shapes
+    orig_q_head_dim = q_b_w.shape[-1] // head_num
+    orig_qk_nope_dim = orig_q_head_dim - qk_rope_dim
+    orig_v_head_dim = o_w.shape[0] // head_num
+
+    # Split kv_b into kc and vc: [kv_lora_rank, head_num, dim]
+    kv_b_h = kv_b_w.reshape(kv_b_w.shape[0], head_num, -1)
+    kc = kv_b_h[:, :, :orig_qk_nope_dim]
+    vc = kv_b_h[:, :, orig_qk_nope_dim:]
+
+    # Fold kc into q_b: q_nope @ kc^T per head
+    q_b_h = q_b_w.reshape(q_b_w.shape[0], head_num, orig_q_head_dim)
+    q_nope = q_b_h[:, :, :orig_qk_nope_dim].permute(1, 0, 2)   # [H, R, P]
+    q_rope = q_b_h[:, :, orig_qk_nope_dim:].permute(1, 0, 2)   # [H, R, S]
+    kc_t = kc.permute(1, 2, 0)                                  # [H, P, R]
+    q_expanded = torch.bmm(q_nope, kc_t)                        # [H, R, R]
+    q_folded = torch.cat([q_expanded, q_rope], dim=-1)          # [H, R, sp]
+    q_folded = q_folded.permute(1, 0, 2).reshape(
+        q_b_w.shape[0], head_num * size_per_head)
+
+    # Fold vc into wo: vc @ wo per head
+    vc_b = vc.permute(1, 0, 2)                                  # [H, R, V]
+    o_h = o_w.reshape(head_num, orig_v_head_dim, -1)            # [H, V, N]
+    o_folded = torch.bmm(vc_b, o_h)                             # [H, R, N]
+    o_folded = o_folded.reshape(head_num * o_folded.shape[1], -1)
+
+    return (Linear(tensors={"weight": q_folded.contiguous()},
+                   weight_format=q_b.weight_format,
+                   data_format=q_b.data_format),
+            Linear(tensors={"weight": o_folded.contiguous()},
+                   weight_format=wo.weight_format,
+                   data_format=wo.data_format))
+
+
+def pad_wo_input(wo: Linear, *, cfg) -> Linear:
+    """Pad wo input dim from head_num * cur_dim to head_num * size_per_head."""
+    head_num = cfg.head_num
+    size_per_head = cfg.head_dim
+    w = wo.tensors["weight"]
+    cur_dim = w.shape[0] // head_num
+    w = w.reshape(head_num, cur_dim, -1)
+    w = torch.nn.functional.pad(w, (0, 0, size_per_head - cur_dim, 0))
+    w = w.reshape(head_num * size_per_head, -1)
+    return Linear(tensors={"weight": w.contiguous()},
+                  weight_format=wo.weight_format,
+                  data_format=wo.data_format)
 
 
 # ---------------------------------------------------------------------------
@@ -28,131 +86,23 @@ class MLABuilder(Builder):
 
     def add_projections(self, *, q_a_proj, q_b_proj, kv_a_proj, kv_b_proj,
                         wo):
-        """Apply MLA fold+pad, then commit each projection.
-
-        The fold consumes kv_b_proj -- its information is absorbed into
-        q_b_proj and wo.  After the fold, kv_b_proj is not committed.
-        """
-        linears = {
-            "q_a_proj": q_a_proj,
-            "q_b_proj": q_b_proj,
-            "kv_a_proj": kv_a_proj,
-            "wo": wo,
-        }
-        if kv_b_proj is not None:
-            linears["kv_b_proj"] = kv_b_proj
-
-        self._fold_and_pad(linears)
+        """Apply MLA fold+pad, then commit each projection."""
+        q_b_proj, wo = fold_kv_b(q_b_proj, kv_b_proj, wo, cfg=self.config)
+        wo = pad_wo_input(wo, cfg=self.config)
 
         model_dtype = self.config.data_type
-        for name, lin in linears.items():
-            if lin is None:
-                continue
-            rule = _MLA_TP_RULES.get(name, {})
-            split_side = rule.get('split_side')
-            self._commit_linear(name, lin, split_side=split_side,
+        for name, lin, side in [
+            ("q_a_proj", q_a_proj, SplitSide.OUTPUT),
+            ("q_b_proj", q_b_proj, SplitSide.OUTPUT),
+            ("kv_a_proj", kv_a_proj, SplitSide.OUTPUT),
+            ("wo", wo, SplitSide.INPUT),
+        ]:
+            self._commit_linear(name, lin, split_side=side,
                                 model_dtype=model_dtype)
 
-    def add_norms(self, *, q_a_norm, kv_a_norm, data_type=None):
+    def add_norms(self, *, q_a_norm, kv_a_norm, data_type):
         """Create norm children for q_a_layernorm and kv_a_layernorm."""
-        if q_a_norm is not None:
-            self._add_norm_child('q_a_layernorm', q_a_norm,
-                                 data_type=data_type)
-        if kv_a_norm is not None:
-            self._add_norm_child('kv_a_layernorm', kv_a_norm,
-                                 data_type=data_type)
-
-    # ------------------------------------------------------------------
-    # MLA fold+pad (moved from glm4_moe_lite_spec)
-    # ------------------------------------------------------------------
-
-    def _fold_and_pad(self, linears: dict[str, Linear]):
-        """Fold kv_b_proj into q_b_proj and wo, then pad wo.
-
-        Weight tensors are temporarily transposed to HF layout [out, in]
-        for the fold arithmetic, then transposed back to TM layout [in, out].
-        """
-        # Temporarily convert weight tensors from TM [in, out] to HF [out, in].
-        for lin in linears.values():
-            for k in list(lin.tensors.keys()):
-                t = lin.tensors[k]
-                if t.dim() >= 2:
-                    lin.tensors[k] = t.t().contiguous()
-        try:
-            self._fold_and_pad_hf(linears)
-        finally:
-            # Convert weight tensors back from HF [out, in] to TM [in, out].
-            for lin in linears.values():
-                for k in list(lin.tensors.keys()):
-                    t = lin.tensors[k]
-                    if t.dim() >= 2:
-                        lin.tensors[k] = t.t().contiguous()
-
-    def _fold_and_pad_hf(self, linears: dict[str, Linear]):
-        """Inner fold logic; expects all weight tensors in HF layout [out, in]."""
-        cfg = self.config
-        head_num = cfg.head_num
-        qk_rope_dim = cfg.qk_rope_dim
-        qk_nope_dim = cfg.qk_nope_dim
-        kv_lora_rank = cfg.kv_lora_rank
-        v_head_dim = cfg.v_head_dim
-        size_per_head = cfg.head_dim
-
-        q_b_lin = linears.get("q_b_proj")
-        kv_b_lin = linears.pop("kv_b_proj", None)
-        o_lin = linears.get("wo")
-
-        if q_b_lin is not None and kv_b_lin is not None and o_lin is not None:
-            q_b = q_b_lin.tensors.get("weight")
-            kv_b = kv_b_lin.tensors.get("weight")
-            o = o_lin.tensors.get("weight")
-
-            if (q_b is not None and kv_b is not None and o is not None
-                    and torch.is_floating_point(q_b)
-                    and torch.is_floating_point(kv_b)):
-                orig_q_head_dim = q_b.size(0) // head_num
-                orig_qk_nope_dim = orig_q_head_dim - qk_rope_dim
-                orig_v_head_dim = o.size(1) // head_num
-                target_nope_dim = size_per_head - qk_rope_dim
-
-                if (orig_qk_nope_dim != target_nope_dim
-                        or orig_v_head_dim != v_head_dim):
-                    # Split kv_b into kc and vc
-                    kv_b_per_head = kv_b.reshape(
-                        head_num, orig_qk_nope_dim + orig_v_head_dim,
-                        kv_lora_rank)
-                    kc_w = kv_b_per_head[:, :orig_qk_nope_dim, :]
-                    vc_w = kv_b_per_head[:, orig_qk_nope_dim:, :]
-
-                    # Fold kc into q_b_proj
-                    q_b_per_head = q_b.reshape(
-                        head_num, orig_q_head_dim, q_b.size(1))
-                    q_nope_w = q_b_per_head[:, :orig_qk_nope_dim, :]
-                    q_rope_w = q_b_per_head[:, orig_qk_nope_dim:, :]
-                    q_nope_expanded = torch.bmm(
-                        kc_w.transpose(1, 2), q_nope_w)
-                    q_b_folded = torch.cat(
-                        [q_nope_expanded, q_rope_w], dim=1)
-                    q_b_lin.tensors["weight"] = q_b_folded.reshape(
-                        head_num * size_per_head, q_b.size(1))
-
-                    # Fold vc into o_proj
-                    o_per_head = o.reshape(
-                        o.size(0), head_num, orig_v_head_dim)
-                    o_folded = torch.bmm(
-                        o_per_head.permute(1, 0, 2), vc_w)
-                    o_lin.tensors["weight"] = o_folded.permute(
-                        1, 0, 2).reshape(
-                            o.size(0), head_num * kv_lora_rank)
-
-        # Pad wo from [hidden, head_num*v_head_dim]
-        #           to [hidden, head_num*size_per_head]
-        if o_lin is not None:
-            o_w = o_lin.tensors["weight"]
-            cur_v = o_w.size(1) // head_num
-            if cur_v < size_per_head:
-                o_w = o_w.reshape(o_w.size(0), head_num, cur_v)
-                o_w = torch.nn.functional.pad(
-                    o_w, (size_per_head - cur_v, 0, 0, 0, 0, 0))
-                o_lin.tensors["weight"] = o_w.reshape(
-                    o_w.size(0), head_num * size_per_head)
+        self._add_norm_child('q_a_layernorm', q_a_norm,
+                             data_type=data_type)
+        self._add_norm_child('kv_a_layernorm', kv_a_norm,
+                             data_type=data_type)
