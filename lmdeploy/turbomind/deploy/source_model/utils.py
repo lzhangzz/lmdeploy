@@ -196,3 +196,54 @@ def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
 
     return Linear(tensors=new_tensors, weight_format=linear.weight_format,
                   data_format=linear.data_format)
+
+
+# --- TP padding helpers (moved from target_model/base.py) -----------------
+
+def _pad_inter_size(inter_size: int, group_size: int, tp: int) -> int:
+    """Pad inter_size so it is divisible by group_size * tp.
+
+    Moved from target_model/base.py where it lived as a module-level helper
+    inside finalize_config. Same formula.
+    """
+    group_size = max(1, group_size)
+    group_num = (inter_size + group_size - 1) // group_size
+    groups_per_rank = (group_num + tp - 1) // tp
+    inter_size_padded = groups_per_rank * group_size * tp
+    return inter_size_padded
+
+
+def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
+    """Pad kv_head_num up to attn_tp when attn_tp is a multiple of kv_head_num.
+
+    Matches the rule in finalize_config:
+      if attn_tp > kv_head_num and attn_tp % kv_head_num == 0:
+          kv_head_num = attn_tp
+    """
+    if attn_tp > kv_head_num and attn_tp % kv_head_num == 0:
+        return attn_tp
+    return kv_head_num
+
+
+# --- Layer-prefix detection ------------------------------------------------
+
+def detect_layer_prefix(params: dict | None, cfg: dict) -> tuple[str, str, str]:
+    """Return (layer_prefix, embed_key, norm_key) for a HF checkpoint.
+
+    Models that wrap the decoder in a ``language_model`` submodule (Molmo,
+    some multimodal variants, Qwen3.5 when packaged as a multimodal root)
+    store weights under ``model.language_model.*``. Plain decoder models
+    use ``model.*``.
+
+    If ``params`` is None (spec hasn't loaded weights yet), fall back to the
+    standard ``model.*`` layout. Specs that need early disambiguation can
+    override this during their own parsing.
+    """
+    if params is not None and any(
+            k.startswith('model.language_model.') for k in params):
+        return ('model.language_model.layers',
+                'model.language_model.embed_tokens.weight',
+                'model.language_model.norm.weight')
+    return ('model.layers',
+            'model.embed_tokens.weight',
+            'model.norm.weight')
