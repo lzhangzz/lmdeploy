@@ -167,6 +167,13 @@ def get_tm_config(model_path,
 
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
 
+    # Default to 'hf' for unquantized checkpoints. Without this, a None
+    # model_format flows through to ModelConfig.verify() and fails. The old
+    # pipeline tolerated None because config_from_dict filtered None values;
+    # the new spec.to_legacy_config() assigns unconditionally.
+    if engine_config.model_format is None:
+        engine_config.model_format = 'hf'
+
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
     output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
