@@ -14,7 +14,7 @@ from ..builder import (
     _act_type_id,
 )
 from ..linear import Linear
-from ..module_configs import (
+from ..builder import (
     DecoderLayerConfig, ModuleListConfig,
     make_attention_config, make_ffn_config, make_moe_config,
 )

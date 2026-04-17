@@ -7,7 +7,7 @@ import _turbomind as _tm
 
 from ..kind_map import TRIVIAL_FORMAT
 from ..linear import Linear
-from ..module_configs import make_norm_config
+from .norm import make_norm_config
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -243,7 +243,7 @@ class Builder:
 
         Parameters
         ----------
-        config : module_configs dataclass
+        config : C++ config struct
             Config with ``to_cpp()`` method and optionally ``for_rank(rank)``.
         contexts : list
             GPU context managers (one per GPU).

@@ -7,7 +7,7 @@ import torch
 
 from .builder import LinearBuilder, NormBuilder, SplitSide, _cpp_dtype as _cd
 from .linear import Linear, pad_out_dim
-from .module_configs import make_linear_config, make_norm_config
+from .builder import make_linear_config, make_norm_config
 
 
 class TextModelSpec(ABC):
