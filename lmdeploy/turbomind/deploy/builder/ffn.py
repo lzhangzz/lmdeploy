@@ -21,27 +21,6 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Config factory
-# ---------------------------------------------------------------------------
-
-
-def make_ffn_config(mc, *, tp_size, tp_rank=0, dtype, act_type,
-                    fuse_silu, inter_size=None, fused_moe=False):
-    """Build C++ FfnConfig from ModelConfig."""
-    cfg = _tm.FfnConfig()
-    cfg.hidden_dim = mc.hidden_units
-    cfg.inter_size = inter_size if inter_size is not None else mc.inter_size
-    cfg.has_bias = mc.mlp_bias
-    cfg.tp_size = tp_size
-    cfg.tp_rank = tp_rank
-    cfg.data_type = dtype
-    cfg.act_type = act_type
-    cfg.fuse_silu = fuse_silu
-    cfg.fused_moe = fused_moe
-    return cfg
-
-
-# ---------------------------------------------------------------------------
 # FFN fusion helpers
 # ---------------------------------------------------------------------------
 

@@ -15,26 +15,6 @@ import _turbomind as _tm
 from ..linear import Linear
 from ._base import Builder, SplitSide, _ensure_compatible_formats
 
-# ---------------------------------------------------------------------------
-# Config factory
-# ---------------------------------------------------------------------------
-
-
-def make_deltanet_config(mc, *, tp_size, tp_rank=0, dtype):
-    """Build C++ DeltaNetConfig from ModelConfig."""
-    cfg = _tm.DeltaNetConfig()
-    cfg.hidden_dim = mc.hidden_units
-    cfg.num_k_heads = mc.linear_num_key_heads
-    cfg.num_v_heads = mc.linear_num_value_heads
-    cfg.key_head_dim = mc.linear_key_head_dim
-    cfg.value_head_dim = mc.linear_value_head_dim
-    cfg.d_conv = mc.linear_conv_kernel_dim or 4
-    cfg.has_bias = bool(mc.attn_bias)
-    cfg.tp_size = tp_size
-    cfg.tp_rank = tp_rank
-    cfg.data_type = dtype
-    return cfg
-
 
 def tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
     """Reshape dim *d* as [tp, per_tp] for TP-rank interleaving."""
