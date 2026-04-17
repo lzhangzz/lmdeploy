@@ -7,13 +7,11 @@ norm.
 """
 from __future__ import annotations
 
-import torch
-
 import _turbomind as _tm
 
 from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
-                       _act_type_id, _cpp_dtype as _cd)
+                       _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..linear import Linear
 from ..spec import TextModelSpec
@@ -54,6 +52,7 @@ class Qwen3TextSpec(TextModelSpec):
         self._attn_cfg.has_bias    = hf_cfg.get('attention_bias', 0)
         self._attn_cfg.qk_norm     = True
         self._attn_cfg.rope_dim    = self._rope.dim
+        self._attn_cfg.window_size = 0
         self._attn_cfg.tp_size     = engine_cfg.attn_tp_size
         self._attn_cfg.data_type   = dtype
 
