@@ -174,6 +174,21 @@ class TextModelSpec(ABC):
             mc.linear_value_head_dim   = dn.value_head_dim
             mc.linear_conv_kernel_dim  = dn.d_conv
 
+        if hasattr(self, '_moe_cfg'):
+            moe = self._moe_cfg
+            mc.expert_num         = getattr(self, '_expert_nums', [])
+            mc.expert_router_bias = moe.router_bias
+            mc.expert_inter_size  = getattr(self, '_expert_inter_size_padded', 0)
+            mc.experts_per_token  = moe.experts_per_token
+            mc.moe_shared_gate    = moe.shared_gate
+            mc.norm_topk_prob     = moe.norm_topk_prob
+            mc.routed_scale       = moe.routed_scale
+            mc.topk_group         = moe.topk_group
+            mc.topk_method        = moe.topk_method
+            mc.moe_group_num      = moe.n_group
+            mc.scoring_func       = moe.scoring_func
+            mc.router_n_groups    = moe.router_n_groups
+
     def _copy_orchestration_fields(self, mc: ModelConfig):
         """Copy orchestration scalars (not in any C++ config) onto ModelConfig."""
         mc.num_layer      = self._num_layer
