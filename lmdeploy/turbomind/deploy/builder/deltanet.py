@@ -111,7 +111,7 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
 def fuse_qkv_conv1d(t: torch.Tensor, qkv_split: tuple[int, int, int],
                      tp: int) -> torch.Tensor:
     """Split conv1d into Q/K/V parts, TP-interleave each, concatenate back."""
-    q_dim, k_dim, v_dim = qkv_split
+    q_dim, k_dim, _ = qkv_split
     d_conv = t.shape[0]
     q_part = tp_interleave_tensor(t[:, :q_dim], tp, 1)
     k_part = tp_interleave_tensor(t[:, q_dim:q_dim + k_dim], tp, 1)

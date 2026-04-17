@@ -16,7 +16,7 @@ def make_norm_config(*, dim, data_type):
 class NormBuilder(Builder):
     """Builder for a single norm weight module."""
 
-    def set_weight(self, tensor: torch.Tensor):
+    def set_weight(self, tensor: torch.Tensor | None):
         """Commit the norm weight tensor to all GPU handles."""
         self._ensure_handles()
         if tensor is None:
