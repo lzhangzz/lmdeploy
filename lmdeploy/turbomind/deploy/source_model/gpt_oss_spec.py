@@ -58,6 +58,7 @@ class GptOssSpec(TextModelSpec):
         self._attn_cfg.has_bias    = int(hf_cfg['attention_bias'])
         self._attn_cfg.attn_sink   = True
         self._attn_cfg.rope_dim    = self._rope.dim
+        self._attn_cfg.window_size = 0
         self._attn_cfg.tp_size     = engine_cfg.attn_tp_size
         self._attn_cfg.data_type   = dtype
 
