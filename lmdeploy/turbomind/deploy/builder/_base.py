@@ -7,7 +7,8 @@ import _turbomind as _tm
 
 from ..kind_map import TRIVIAL_FORMAT
 from ..linear import Linear
-from .norm import make_norm_config
+# make_norm_config imported locally in _add_norm_child to avoid circular import
+# (_base -> norm -> _base)
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -486,6 +487,7 @@ class Builder:
             Compute dtype for the norm.  Defaults to FP32 if not set.
         """
         self._ensure_handles()
+        from .norm import make_norm_config
         if data_type is None:
             data_type = _tm.DataType.TYPE_FP32
         norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type)
