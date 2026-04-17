@@ -6,6 +6,13 @@ import _turbomind as _tm
 from ._base import Builder, _torch_dtype_to_cpp, _cast_shard_for_tm
 
 
+def make_norm_config(*, dim, data_type):
+    cfg = _tm.NormConfig()
+    cfg.dim = dim
+    cfg.data_type = data_type
+    return cfg
+
+
 class NormBuilder(Builder):
     """Builder for a single norm weight module."""
 
