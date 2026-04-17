@@ -13,11 +13,10 @@ import torch
 from ..linear import Linear
 from ._base import Builder, SplitSide, _ensure_compatible_formats
 
-def _tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
-    """Reshape last dim as [tp, per_tp] and flatten to interleave by TP rank."""
+def tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
+    """Reshape dim *d* as [tp, per_tp] for TP-rank interleaving."""
     shape = list(t.shape)
-    new_shape = shape[:d] + [tp, shape[d] // tp] + shape[d + 1:]
-    return t.reshape(new_shape)
+    return t.reshape(shape[:d] + [tp, shape[d] // tp] + shape[d + 1:])
 
 
 def split_qkv(linear: Linear,
@@ -68,7 +67,7 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
                         f"{this_d} vs {d}")
                 d = this_d
                 all_1d = False
-                parts.append(_tp_interleave_tensor(t, tp, d))
+                parts.append(tp_interleave_tensor(t, tp, d))
             else:
                 # 1-D tensors (bias): simple concat
                 parts.append(t)
@@ -84,6 +83,17 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
 
     return Linear(tensors=fused_tensors, weight_format=first.weight_format,
                   data_format=first.data_format)
+
+
+def fuse_qkv_conv1d(t: torch.Tensor, qkv_split: tuple[int, int, int],
+                     tp: int) -> torch.Tensor:
+    """Split conv1d into Q/K/V parts, TP-interleave each, concatenate back."""
+    q_dim, k_dim, v_dim = qkv_split
+    d_conv = t.shape[0]
+    q_part = tp_interleave_tensor(t[:, :q_dim], tp, 1)
+    k_part = tp_interleave_tensor(t[:, q_dim:q_dim + k_dim], tp, 1)
+    v_part = tp_interleave_tensor(t[:, q_dim + k_dim:], tp, 1)
+    return torch.cat([q_part, k_part, v_part], dim=2).reshape(d_conv, -1).contiguous()
 
 
 # ---------------------------------------------------------------------------
@@ -120,33 +130,12 @@ class DeltaNetBuilder(Builder):
         if dt_bias is not None:
             self._commit_tensor("dt_bias", dt_bias, split_side=SplitSide.OUTPUT)
 
-    def add_conv1d(self, conv1d, qkv_split=None):
-        """Transpose HF layout to TM layout, TP-reshape if needed, commit.
-
-        HF stores conv1d as [conv_dim, d_conv]; TM kernel expects
-        [d_conv, conv_dim].  When tp > 1 and *qkv_split* is provided,
-        the Q/K/V sub-dims are TP-interleaved.
-        """
-        if conv1d is None:
-            return
-        # Squeeze leading singleton dim if present
+    def add_conv1d(self, conv1d, qkv_split):
+        """Transpose HF layout to TM layout, TP-interleave Q/K/V, commit."""
         if conv1d.ndim == 3 and conv1d.shape[1] == 1:
             conv1d = conv1d.squeeze(1)
-        # Transpose: HF [conv_dim, d_conv] -> TM [d_conv, conv_dim]
         conv1d = conv1d.t().contiguous()
-        # TP Q/K/V interleaving
-        if self._tp > 1 and qkv_split is not None:
-            q_dim, k_dim, v_dim = qkv_split
-            d_conv = conv1d.shape[0]
-            tp = self._tp
-            q_part = conv1d[:, :q_dim]
-            k_part = conv1d[:, q_dim:q_dim + k_dim]
-            v_part = conv1d[:, q_dim + k_dim:]
-            conv1d = torch.cat([
-                q_part.reshape(d_conv, tp, q_dim // tp),
-                k_part.reshape(d_conv, tp, k_dim // tp),
-                v_part.reshape(d_conv, tp, v_dim // tp),
-            ], dim=2).reshape(d_conv, -1).contiguous()
+        conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self._tp)
         self._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
 
     def add_norm(self, norm_weight, data_type):
