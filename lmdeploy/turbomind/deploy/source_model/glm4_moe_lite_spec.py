@@ -9,8 +9,6 @@ Demonstrates the composable-ops pipeline with:
 """
 from __future__ import annotations
 
-import os
-
 import torch
 
 from ..builder import (
@@ -216,12 +214,9 @@ class Glm4MoeLiteInputModel(BaseInputModel):
         size_per_head = q_head_dim
         v_head_dim = cfg['v_head_dim']
         softmax_scale = 0.0
-        disable_mla_fold = os.getenv('LMDEPLOY_MLA_FOLD', '1').lower() in ('0', 'false', 'no')
-        if kv_lora_rank and kv_lora_rank != qk_nope_dim and not disable_mla_fold:
+        if kv_lora_rank and kv_lora_rank != qk_nope_dim:
             size_per_head = kv_lora_rank + qk_rope_dim
             v_head_dim = kv_lora_rank
-            softmax_scale = q_head_dim**(-0.5)
-        elif kv_lora_rank and kv_lora_rank != qk_nope_dim:
             softmax_scale = q_head_dim**(-0.5)
 
         # --- RoPE (dim = qk_rope_dim for MLA) ---
