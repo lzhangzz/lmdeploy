@@ -3,8 +3,48 @@ from __future__ import annotations
 
 import torch
 
+import _turbomind as _tm
+
 from ..linear import Linear
 from ._base import Builder, SplitSide
+
+# ---------------------------------------------------------------------------
+# Config factory
+# ---------------------------------------------------------------------------
+
+
+def make_mla_config(mc, *, tp_size, tp_rank=0, dtype, window_size=0,
+                    qk_nope_dim=0):
+    """Build C++ AttentionConfig for MLA from ModelConfig."""
+    qk_rope_dim = mc.qk_rope_dim or 0
+    kv_lora_rank = mc.kv_lora_rank or 0
+    v_head_dim = mc.v_head_dim or 0
+    size_per_head = qk_nope_dim + qk_rope_dim
+    if kv_lora_rank and kv_lora_rank != qk_nope_dim:
+        size_per_head = kv_lora_rank + qk_rope_dim
+        v_head_dim = kv_lora_rank
+
+    cfg = _tm.AttentionConfig()
+    cfg.hidden_dim = mc.hidden_units
+    cfg.head_dim = size_per_head
+    cfg.head_num = mc.head_num
+    cfg.kv_head_num = mc.kv_head_num
+    cfg.kv_lora_rank = kv_lora_rank
+    cfg.q_lora_rank = mc.q_lora_rank or 0
+    cfg.qk_rope_dim = qk_rope_dim
+    cfg.qk_nope_dim = qk_nope_dim
+    cfg.v_head_dim = v_head_dim
+    cfg.tp_size = tp_size
+    cfg.tp_rank = tp_rank
+    cfg.data_type = dtype
+    cfg.window_size = window_size
+    cfg.has_bias = False
+    cfg.qk_norm = False
+    cfg.attn_sink = False
+    cfg.attn_output_gate = False
+    cfg.rope_dim = 0
+    return cfg
+
 
 # ---------------------------------------------------------------------------
 # MLA fold+pad pipeline (standalone functions)
