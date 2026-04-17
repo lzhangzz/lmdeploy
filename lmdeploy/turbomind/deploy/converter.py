@@ -9,6 +9,7 @@ from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
 from .source_model.base import INPUT_MODELS
+from .source_model.utils import load_model_config
 from .target_model.base import BaseOutputModel
 
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
@@ -122,21 +123,10 @@ def get_tm_config(model_path,
                   chat_template_name,
                   engine_config: TurbomindEngineConfig,
                   group_size: int = None):
-    """Compute finalized TurbomindModelConfig.
-
-    Args:
-        model_path (str): the path of the input model, which is supposed
-            to be a local path, or huggingface hub repo_id, or modelscope
-            hub repo_id
-        model_name (str): user customized model name
-        chat_template_name (str): the name of the chat template of
-            the input model
-        engine_config(TurbomindEngineConfig): user input engine config
-        group_size(int): refers to the group_size if the input model
-            is a grouped quantized model
+    """Compute finalized TurbomindModelConfig and the TextModelSpec.
 
     Returns:
-        tuple: (input_model, tm_cfg)
+        tuple: (spec, tm_cfg, model_path)
     """
     _, cfg = get_model_arch(model_path)
     quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
@@ -179,17 +169,21 @@ def get_tm_config(model_path,
 
     input_model_name = get_input_model_registered_name(model_path, engine_config.model_format)
 
-    fp8_quant = (engine_config.model_format == 'fp8' and not quant_config)
-    _model_cls = INPUT_MODELS.get(input_model_name)
-    input_model = _model_cls(model_path=model_path,
-                             tokenizer_path=model_path,
-                             fp8_quant=fp8_quant,
-                             model_format=engine_config.model_format)
-
     output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
                                                                             model_format=engine_config.model_format,
                                                                             dtype=engine_config.dtype,
                                                                             group_size=group_size)
+
+    engine_config.dtype = tm_cfg.model_config.data_type
+    engine_config.model_format = tm_cfg.model_config.model_format
+    if engine_config.session_len is None:
+        engine_config.session_len = tm_cfg.model_config.session_len
+    if engine_config.attn_tp_size is None:
+        engine_config.attn_tp_size = 1
+    if engine_config.attn_cp_size is None:
+        engine_config.attn_cp_size = 1
+    if engine_config.mlp_tp_size is None:
+        engine_config.mlp_tp_size = 1
 
     tm_cfg.model_config.chat_template = chat_template_name
     tm_cfg.model_config.model_name = model_name
@@ -201,6 +195,10 @@ def get_tm_config(model_path,
     if engine_config.mlp_tp_size is not None:
         tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
-    BaseOutputModel.finalize_config(input_model, tm_cfg)
+    hf_cfg = load_model_config(model_path)
+    spec_cls = INPUT_MODELS.get(input_model_name)
+    spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
 
-    return input_model, tm_cfg
+    BaseOutputModel.finalize_config(spec, tm_cfg)
+
+    return spec, tm_cfg, model_path
