@@ -38,6 +38,13 @@ class TextModelSpec(ABC):
     _layer_pattern: str = ''
     _loader_mappings: list = []
 
+    # If True, the subclass's __init__ has pinned _layer_prefix / _embed_key /
+    # _norm_key to fixed values; set_params() will NOT re-detect from params.
+    # Subclasses that need on-load detection (e.g. multimodal wrappers where
+    # the decoder lives under model.language_model.*) leave this False and
+    # let the base class re-detect when weights arrive.
+    _pin_layer_prefix: bool = False
+
     # ------------------------------------------------------------------
     # Construction / parsing
     # ------------------------------------------------------------------
@@ -115,9 +122,11 @@ class TextModelSpec(ABC):
 
     def set_params(self, params: dict):
         self.params = params
-        # Redetect layer prefix now that we have weights; spec may override.
-        self._layer_prefix, self._embed_key, self._norm_key = \
-            detect_layer_prefix(params, self.hf_cfg)
+        # Re-detect layer prefix from the actual checkpoint keys, unless the
+        # subclass has pinned its prefix (class-level _pin_layer_prefix = True).
+        if not self._pin_layer_prefix:
+            self._layer_prefix, self._embed_key, self._norm_key = \
+                detect_layer_prefix(params, self.hf_cfg)
 
     # ------------------------------------------------------------------
     # YAML export — mechanical copy from C++ configs + scalars
@@ -185,8 +194,12 @@ class TextModelSpec(ABC):
         """Copy per-layer lists. Default covers only inter_size.
 
         Subclasses override to emit window_size / layer_types / etc.
+        Every subclass MUST set self._inter_sizes_padded during __init__;
+        we use direct attribute access so a missing assignment fails fast
+        with AttributeError at to_legacy_config() time rather than silently
+        emitting inter_size=[].
         """
-        mc.inter_size = getattr(self, '_inter_sizes_padded', [])
+        mc.inter_size = self._inter_sizes_padded
 
     def _build_attention_config(self) -> AttentionConfig:
         return AttentionConfig(
