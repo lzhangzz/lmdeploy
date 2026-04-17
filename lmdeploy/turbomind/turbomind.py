@@ -231,10 +231,9 @@ class TurboMind:
                                           'Plz try pytorch engine instead.')
 
         from .deploy.converter import get_tm_config
-        from .deploy.text_model_loader import TextModelLoader
         from .deploy.target_model.base import OUTPUT_MODELS
 
-        input_model, tm_cfg = get_tm_config(
+        spec, tm_cfg, model_path = get_tm_config(
             model_path, self.model_name, self.chat_template_name, engine_config)
 
         self._postprocess_config(tm_cfg, engine_config)
@@ -244,11 +243,11 @@ class TurboMind:
         self._create_weight(model_comm)
 
         self._tm_model = OUTPUT_MODELS.get('tm')(
-            input_model=input_model,
+            spec=spec,
             cfg=tm_cfg,
-            model_cls=TextModelLoader,
             model_comm=model_comm,
-            gpu_count=self.gpu_count)
+            gpu_count=self.gpu_count,
+            model_path=model_path)
         return model_comm
 
     def sleep(self, level: int = 1):
@@ -287,7 +286,9 @@ class TurboMind:
         if not hasattr(self, '_export_iter'):
             que = Queue()
             tm_model = self._tm_model
-            tm_model.input_model.model_path = que
+            # update_params replaces the on-disk checkpoint source with a Queue; the
+            # OutputModel now owns model_path directly (input_model was removed).
+            tm_model.model_path = que
             self._update_params_que = que
             self._export_iter = tm_model.export_iter()
 
