@@ -11,8 +11,39 @@ from __future__ import annotations
 
 import torch
 
+import _turbomind as _tm
+
 from ..linear import Linear, pad_out_dim
 from ._base import Builder, SplitSide, _dequant_linear
+
+# ---------------------------------------------------------------------------
+# Config factory
+# ---------------------------------------------------------------------------
+
+
+def make_attention_config(mc, *, tp_size, tp_rank=0, dtype, window_size=0,
+                         rope_dim=0):
+    """Build C++ AttentionConfig from ModelConfig."""
+    cfg = _tm.AttentionConfig()
+    cfg.hidden_dim = mc.hidden_units
+    cfg.head_dim = mc.size_per_head
+    cfg.head_num = mc.head_num
+    cfg.kv_head_num = mc.kv_head_num
+    cfg.kv_lora_rank = mc.kv_lora_rank or 0
+    cfg.q_lora_rank = mc.q_lora_rank or 0
+    cfg.qk_rope_dim = mc.qk_rope_dim or 0
+    cfg.v_head_dim = mc.v_head_dim or 0
+    cfg.has_bias = mc.attn_bias
+    cfg.qk_norm = mc.qk_norm
+    cfg.tp_size = tp_size
+    cfg.tp_rank = tp_rank
+    cfg.data_type = dtype
+    cfg.window_size = window_size
+    cfg.attn_sink = mc.attn_sink
+    cfg.attn_output_gate = mc.attn_output_gate
+    cfg.rope_dim = rope_dim
+    return cfg
+
 
 # ---------------------------------------------------------------------------
 # TP split rules (attention)
