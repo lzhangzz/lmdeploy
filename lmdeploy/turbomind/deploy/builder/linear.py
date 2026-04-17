@@ -1,5 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import _turbomind as _tm
+
 from ._base import Builder, SplitSide
+
+
+def make_linear_config(*, input_dim, output_dim, data_type, has_bias=False):
+    cfg = _tm.LinearConfig()
+    cfg.input_dim = input_dim
+    cfg.output_dim = output_dim
+    cfg.data_type = data_type
+    cfg.has_bias = has_bias
+    return cfg
 
 
 class LinearBuilder(Builder):
