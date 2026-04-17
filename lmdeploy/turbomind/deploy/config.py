@@ -67,19 +67,7 @@ class ModelConfig:
     attn_cp_size: int = 1
     mlp_tp_size: int = 1
     model_format: str = 'hf'
-    expert_num: list[int] = field(default_factory=list)
-    expert_router_bias: bool = False
-    expert_inter_size: int = 0
-    experts_per_token: int = 0
     activation_type: str = ''
-    moe_shared_gate: bool = False
-    norm_topk_prob: bool = False
-    routed_scale: float = 1.0
-    topk_group: int = 1
-    topk_method: str = 'greedy'
-    moe_group_num: int = 1
-    scoring_func: str = 'softmax'
-    router_n_groups: int = -1
     # MLA
     q_lora_rank: int = 0
     kv_lora_rank: int = 0
