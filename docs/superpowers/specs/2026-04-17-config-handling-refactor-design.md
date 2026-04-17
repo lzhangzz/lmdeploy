@@ -523,3 +523,21 @@ Validation criteria per run:
   the YAML wire format and read the typed C++ configs directly.
 - Simplify `pad_for_tp` in `attention.py` to trust `ModelConfig.kv_head_num`
   again now that it isn't mutated (currently derives from tensor shapes).
+
+## Corrections
+
+### 1. MoE fields are NOT dead on `ModelConfig` (2026-04-17, post-Task-14)
+
+The "Narrow `ModelConfig`" subsection above (under "Design > ModelConfig narrowing") claims the 12 MoE fields can be removed because `turbomind.cc` does not read them from YAML. **That claim is wrong.** During Task 14 validation the refactored pipeline crashed at engine creation with `RuntimeError: invalid node; first invalid key: "moe_shared_gate"`.
+
+`src/turbomind/turbomind.cc:420-434` reads all 12 fields from YAML unconditionally. Three of them use `.as<bool>()` without a default and therefore throw on missing keys:
+
+- `moe_shared_gate`
+- `norm_topk_prob`
+- `expert_router_bias`
+
+The remaining nine (`experts_per_token`, `expert_inter_size`, `routed_scale`, `topk_group`, `topk_method`, `moe_group_num`, `scoring_func`, `router_n_groups`, `expert_num`) have defaults but are still read.
+
+**Fix shipped in commit `5c37df34`:** all 12 fields restored on `ModelConfig`. The new `TextModelSpec._copy_template_fields` populates them from `self._moe_cfg` (the C++ `_tm.MoeConfig` template) and `self._expert_nums` / `self._expert_inter_size_padded` (spec-level state) when the spec has MoE. Non-MoE specs leave the fields at their dataclass defaults, which `turbomind.cc` consumes without throwing. Name mismatches (Python ↔ C++) are mapped in the copy block: `expert_router_bias ↔ router_bias`, `moe_group_num ↔ n_group`.
+
+**Lesson for future narrowing passes:** `turbomind.cc` has two YAML-read blocks, at lines 300-400 (orchestration / attention / quant) and lines 420-434 (MoE). A partial-file audit that only reads the first block will miss MoE-related fields. Always grep `model\[.*\]\.as` across the whole file before claiming a ModelConfig field is dead.
