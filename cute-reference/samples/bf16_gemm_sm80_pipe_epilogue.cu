@@ -705,8 +705,7 @@ void benchmark_size(int m, int n, int k,
 
   int ldA = k, ldB = k, ldC = m;
 
-  thrust::device_vector<bf16_t> d_A(m * k), d_B(n * k);
-  thrust::device_vector<float>  d_C(m * n);
+  thrust::device_vector<bf16_t> d_A(m * k), d_B(n * k), d_C(m * n);
   thrust::host_vector<bf16_t> h_A(m * k), h_B(n * k);
   for (int i = 0; i < m * k; ++i) h_A[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
   for (int i = 0; i < n * k; ++i) h_B[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
@@ -750,7 +749,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM80, cp.async 3-stage, tile 256x128x64, 256 threads)\n\n");
+  printf("BF16 GEMM (SM80, cp.async 3-stage, tile 256x128x64, 256 threads, STSM BF16 epilogue)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
@@ -761,13 +760,13 @@ int main(int argc, char** argv)
     int ldA = k, ldB = k, ldC = m;
 
     thrust::host_vector<bf16_t> h_A(m * k), h_B(n * k);
-    thrust::host_vector<float>  h_C(m * n);
+    thrust::host_vector<bf16_t> h_C(m * n);
     for (int i = 0; i < m * k; ++i) h_A[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
     for (int i = 0; i < n * k; ++i) h_B[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
-    for (int i = 0; i < m * n; ++i) h_C[i] = -1.0f;
+    for (int i = 0; i < m * n; ++i) h_C[i] = static_cast<bf16_t>(-1.0f);
 
     thrust::device_vector<bf16_t> d_A = h_A, d_B = h_B;
-    thrust::device_vector<float>  d_C = h_C;
+    thrust::device_vector<bf16_t> d_C = h_C;
 
     bf16_gemm_tn(m, n, k, alpha,
                  d_A.data().get(), ldA,
@@ -776,7 +775,7 @@ int main(int argc, char** argv)
                  d_C.data().get(), ldC);
     CUTE_CHECK_LAST();
 
-    thrust::host_vector<float> h_result = d_C;
+    thrust::host_vector<bf16_t> h_result = d_C;
 
     // CPU reference: C[m,n] = alpha * sum_k A[m,k] * B[n,k] + beta * C[m,n]
     thrust::host_vector<float> h_ref(m * n, 0.0f);
@@ -785,15 +784,17 @@ int main(int argc, char** argv)
         float sum = 0.0f;
         for (int l = 0; l < k; ++l)
           sum += float(h_A[i * k + l]) * float(h_B[j * k + l]);
-        h_ref[i + j * ldC] = alpha * sum + beta * h_C[i + j * ldC];
+        h_ref[i + j * ldC] = alpha * sum + beta * float(h_C[i + j * ldC]);
       }
 
     float max_err = 0.0f;
     for (int i = 0; i < m * n; ++i)
-      max_err = std::max(max_err, std::abs(h_result[i] - h_ref[i]));
+      max_err = std::max(max_err, std::abs(float(h_result[i]) - h_ref[i]));
 
-    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.01f ? "PASS" : "FAIL");
-    if (max_err >= 0.01f) return 1;
+    // BF16 has ~3 decimal digits of precision, so tolerance is larger than F32.
+    // With beta=0, the error comes from BF16 input quantization + tensor core rounding.
+    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.1f ? "PASS" : "FAIL");
+    if (max_err >= 0.1f) return 1;
   }
 
   // ---- Benchmark ----
