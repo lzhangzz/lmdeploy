@@ -25,6 +25,7 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     moe_param_.router_n_groups = cfg.router_n_groups;
     moe_param_.expert_num.assign(1, cfg.expert_num);
     hidden_dim_ = cfg.hidden_dim;
+    inter_size_ = cfg.inter_size / cfg.tp_size;
     mlp_bias_ = cfg.mlp_bias;
     data_type_ = cfg.data_type;
     tp_size_ = cfg.tp_size;

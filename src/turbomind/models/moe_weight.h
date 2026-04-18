@@ -72,10 +72,13 @@ public:
     MoeParam::Method method() const { return moe_param_.method; }
     const MoeParam& moe_param() const { return moe_param_; }
 
+    // --- Config fields (public for runtime access) ---
+    int hidden_dim_{};
+    int inter_size_{};
+
 private:
     int            layer_id_{};
     MoeParam       moe_param_{};
-    int            hidden_dim_{};
     bool           mlp_bias_{};
     DataType       data_type_{};
     int            tp_size_{};
