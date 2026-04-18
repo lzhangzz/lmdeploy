@@ -129,6 +129,8 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // Smem layouts must be static (compile-time known) for shared memory addressing.
   // Note: The PIPE dimension is included in the smem layout, so size<0>/size<1> still
   // correctly capture BLK_M/BLK_K and BLK_N/BLK_K — the PIPE dim is size<2>.
+  // Note: size<2> of smem layouts is the pipeline depth bP — not checked here as
+  // it's an internal design choice unrelated to cta_tiler.
   static_assert(is_static<ASmemLayout>::value);
   static_assert(is_static<BSmemLayout>::value);
 
@@ -235,6 +237,9 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   int k_tile_count = size<3>(tAgA);  // total K-tiles
   int k_tile_next  = 0;
 
+  // Note: if K < (bP-1)*bK, the last valid K-tile is loaded redundantly into multiple
+  // stages. Still correct — same data computed, just extra work.
+  // Benchmark assertions ensure K >= bK.
   CUTE_UNROLL
   for (int k_pipe = 0; k_pipe < K_PIPE_MAX - 1; ++k_pipe) {
     copy(g2s_copy_a, tAgA(_,_,_,k_tile_next), tAsA(_,_,_,k_pipe));
@@ -527,7 +532,7 @@ bf16_gemm_tn(int m, int n, int k,
   //   - This matches the uint128_t atom: 8 x bf16 = 128 bits
   //
   // Total per-thread copy: (128/16, 64/(8*8)) = (8, 1) elements per K-tile.
-  // Wait, that's not quite right: the TiledCopy tiles the copy across the full shape,
+  // The TiledCopy tiles the copy across the full shape,
   // so each thread handles a subset of (BLK_M, BLK_K) determined by the tile.
 
   auto g2s_copy_a = make_tiled_copy(
@@ -723,7 +728,7 @@ int main(int argc, char** argv)
     for (int i = 0; i < m * n; ++i)
       max_err = std::max(max_err, std::abs(h_result[i] - h_ref[i]));
 
-    printf("Correctness (1024^3): max error %e -- %s\n\n", max_err, max_err < 0.01f ? "PASS" : "FAIL");
+    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.01f ? "PASS" : "FAIL");
     if (max_err >= 0.01f) return 1;
   }
 
