@@ -8,26 +8,6 @@
 
 namespace turbomind::core {
 
-struct FfnConfig: ModuleConfig {
-    FfnConfig(): ModuleConfig{"FfnWeight"} {}
-
-    #define FFN_FIELDS(X) \
-        X(int,      hidden_dim) \
-        X(int,      inter_size) \
-        X(bool,     has_bias) \
-        X(int,      tp_size) \
-        X(int,      tp_rank) \
-        X(DataType, data_type) \
-        X(int,      act_type) \
-        X(bool,     fuse_silu) \
-        X(bool,     fused_moe)
-
-    FFN_FIELDS(TM_MEMBER)
-    TM_FOR_EACH(FfnConfig, FFN_FIELDS)
-
-    #undef FFN_FIELDS
-};
-
 struct MoeConfig: ModuleConfig {
     MoeConfig(): ModuleConfig{"MoeWeight"} {}
 
