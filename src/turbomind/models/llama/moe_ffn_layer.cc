@@ -33,7 +33,7 @@ void MoeFfnLayer::Init(ForwardParam& p)
     const int   expert_num       = p.weights->num_experts();
     const int   experts_per_token = moe_param.experts_per_token;
 
-    h_offsets_ = {expert_num + 1, kCPUpinned};
+    h_offsets_ = {expert_num + 1, kCPU};
 
     const int pad_token_num =
         (max_token_num_ + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
