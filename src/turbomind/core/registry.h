@@ -5,12 +5,12 @@
 #include <map>
 #include <memory>
 #include <string>
-
-#include "src/turbomind/core/module_config.h"
+#include <string_view>
 
 namespace turbomind::core {
 
-// Forward declaration — full definition in module.h.
+// Forward declarations — full definitions in module.h.
+struct ModuleConfig;
 class Module;
 
 /// Module type registry. Maps type name strings to factory functions.

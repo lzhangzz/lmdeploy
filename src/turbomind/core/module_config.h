@@ -1,36 +1,12 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
-#include <string>
+// Transitional header — config structs pending migration to their _weight.h files.
+// Infrastructure (TM_MEMBER, TM_PTR, TM_FOR_EACH, ModuleConfig, ModuleListConfig) lives in module.h.
 
-#include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/module.h"
 
 namespace turbomind::core {
-
-// ======================================================================
-// X-macro config field infrastructure
-// ======================================================================
-
-#define TM_MEMBER(Type, name, ...) Type name{__VA_ARGS__};
-#define TM_PTR(Type, name, ...)    visitor(#name, &Config::name);
-#define TM_FOR_EACH(ClassName, field_list) \
-    template<typename Visitor> \
-    static void for_each(Visitor&& visitor) { \
-        using Config = ClassName; \
-        field_list(TM_PTR) \
-    }
-
-// ======================================================================
-// ModuleConfig — plain base
-// ======================================================================
-
-struct ModuleConfig {
-    std::string_view module_type;
-};
-
-// ======================================================================
-// Config structs — X-macro field lists + for_each
-// ======================================================================
 
 struct LinearConfig: ModuleConfig {
     LinearConfig(): ModuleConfig{"LinearWeight"} {}
@@ -148,12 +124,6 @@ struct DeltaNetConfig: ModuleConfig {
     TM_FOR_EACH(DeltaNetConfig, DELTANET_FIELDS)
 
     #undef DELTANET_FIELDS
-};
-
-struct ModuleListConfig: ModuleConfig {
-    ModuleListConfig(): ModuleConfig{"ModuleList"} {}
-    template<typename Visitor>
-    static void for_each(Visitor&&) {}
 };
 
 struct NormConfig: ModuleConfig {

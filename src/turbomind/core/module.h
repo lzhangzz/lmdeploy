@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -12,11 +13,37 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/tensor.h"
 
 namespace turbomind::core {
+
+// ======================================================================
+// X-macro config field infrastructure
+// ======================================================================
+
+#define TM_MEMBER(Type, name, ...) Type name{__VA_ARGS__};
+#define TM_PTR(Type, name, ...)    visitor(#name, &Config::name);
+#define TM_FOR_EACH(ClassName, field_list) \
+    template<typename Visitor> \
+    static void for_each(Visitor&& visitor) { \
+        using Config = ClassName; \
+        field_list(TM_PTR) \
+    }
+
+// ======================================================================
+// ModuleConfig — plain base for typed config structs
+// ======================================================================
+
+struct ModuleConfig {
+    std::string_view module_type;
+};
+
+struct ModuleListConfig: ModuleConfig {
+    ModuleListConfig(): ModuleConfig{"ModuleList"} {}
+    template<typename Visitor>
+    static void for_each(Visitor&&) {}
+};
 
 // ======================================================================
 // X-macro expansion macros for Module-derived classes
