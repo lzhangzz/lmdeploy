@@ -56,7 +56,9 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
         std::make_unique<UnifiedAttentionLayer>(model, attn, engine, attn_tp_size_, ctx, phases, (bool)moe_ffn_layer_);
 
     if (std::find(model.layer_types.begin(), model.layer_types.end(), 1) != model.layer_types.end()) {
-        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(model, attn, engine, attn_tp_size_, ctx, phases);
+        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
+            model.norm_eps, model.linear_state_dtype, model.layer_types,
+            engine, ctx, phases);
     }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
