@@ -110,7 +110,7 @@ cute-reference/samples/build_and_run.sh       # compile & run script
 
 ```bash
 CUTLASS_INC=/path/to/build/_deps/repo-cutlass-src/include
-nvcc -std=c++17 -arch=sm_80 \
+nvcc -std=c++17 -arch=sm_90a \
      -I${CUTLASS_INC} \
      cute-reference/samples/bf16_gemm_sm80.cu \
      -o bf16_gemm_sm80
