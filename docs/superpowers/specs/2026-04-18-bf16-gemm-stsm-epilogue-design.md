@@ -52,7 +52,7 @@ for (int i = 0; i < size(tCrC); ++i) {
 
 **Stage 3: Vectorized S2G (BF16 smem → BF16 global)**
 - S2G TiledCopy: `make_tiled_copy(AutoVec128, thread_layout, value_layout)`
-- Thread layout: `Layout<Shape<_32, _8>, Stride<_8, _1>>` — 32 threads M, 8 threads N
+- Thread layout: `Layout<Shape<_32, _8>, Stride<_1, _32>>` — 32 threads M, 8 threads N
 - Value layout: `Layout<Shape<_8, _1>>` — 8 bf16 per store (128 bits), contiguous in M
 - Coverage per copy-tile: (256, 8). Loops 16 times in N.
 - Partition sC as source and gC as destination
@@ -63,7 +63,7 @@ for (int i = 0; i < size(tCrC); ++i) {
 1. **C pointer type**: `float* C` → `bf16_t* C`
 2. **sC layout**: now actually used (was unused placeholder)
 3. **R2S TiledCopy**: `make_tiled_copy_C(Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{}, mma)`
-4. **S2G TiledCopy**: `make_tiled_copy(AutoVec128, Layout<Shape<_32, _8>, Stride<_8, _1>>{}, Layout<Shape<_8, _1>>{})`
+4. **S2G TiledCopy**: `make_tiled_copy(AutoVec128, Layout<Shape<_32, _8>, Stride<_1, _32>>{}, Layout<Shape<_8, _1>>{})`
 5. **sC smem layout**: `make_layout(make_shape(bM, bN))` — (256, 128) column-major, 64 KB
 6. **Template parameters**: kernel gains R2S and S2G TiledCopy parameters, loses CSmemLayout unused placeholder
 
@@ -105,15 +105,21 @@ No additional smem allocation. Occupancy unchanged (1 block/SM × 256 threads).
 
 ## S2G Vectorized Store Details
 
-Thread layout `Layout<Shape<_32, _8>, Stride<_8, _1>>`:
+Thread layout `Layout<Shape<_32, _8>, Stride<_1, _32>>`:
 - 32 threads in M dimension, 8 threads in N dimension = 256 threads total
-- Coordinate (m, n) → thread index = m * 8 + n
-- Thread (m, n) covers logical position m in M and position n in N
+- Coordinate (m, n) → thread index = m + n * 32
 - Value layout `Layout<Shape<_8, _1>>`: each thread stores 8 contiguous bf16 along M (128 bits)
+- Thread (m, n) covers M = [m×8 .. m×8+7], N = n
 
 Coverage per copy-tile: M = 32 × 8 = 256, N = 8 × 1 = 8. Loops 128/8 = 16 times in N.
 
-Each thread stores 8 consecutive bf16 values along M (stride-1 in column-major smem/gmem),
+Coalescing analysis (column-major C, stride-1 in M):
+- With Stride<_1, _32>: warp 0 (threads 0-31) all have n=0, m=0..31
+  - Thread i: M=[i×8 .. i×8+7], N=0 → gmem addresses i×8 .. i×8+7
+  - Warp writes addresses 0..255 — 256 contiguous bf16, perfectly coalesced
+- Compare with Stride<_8, _1>: warp 0 would have m=0..3, n=0..7 — scattered across 8 N columns, no coalescing
+
+The Stride<_1, _32> layout ensures each warp writes a contiguous 512-byte stripe along M,
 producing coalesced 128-bit global memory stores.
 
 ## Register Pressure Analysis
