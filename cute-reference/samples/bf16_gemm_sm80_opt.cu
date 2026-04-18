@@ -17,7 +17,10 @@
  * Compared to bf16_gemm_sm80.cu (plain sample):
  *   - Smem layouts: plain → swizzled (Swizzle<3,3,3>)
  *   - smem→regs copy: scalar → LDSM (SM75_U32x4_LDSM_N)
- *   - Everything else unchanged (MMA atom, CTA tile, gmem→smem, epilogue)
+ *   - bK: 32 → 64 (swizzle base layout has K-dim 64; bK must be a multiple)
+ *   - TiledMMA: added Tile<_32,_32,_16> override (LDSM needs 4 vals/thread;
+ *     the default MMA tiling only gives 2)
+ *   - Everything else unchanged (MMA atom, bM, bN, gmem→smem, epilogue)
  **************************************************************************************************/
 #include <cstdlib>
 #include <cstdio>
@@ -290,7 +293,7 @@ bf16_gemm_tn(int m, int n, int k,
   auto bM = Int<128>{};
   auto bN = Int<128>{};
   auto bK = Int<64>{};
-  auto cta_tiler = make_shape(bM, bN, bK);                              // (128, 128, 32)
+  auto cta_tiler = make_shape(bM, bN, bK);                              // (128, 128, 64)
 
   // Smem layouts (static, swizzled)
   //
