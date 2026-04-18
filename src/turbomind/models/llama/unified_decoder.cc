@@ -49,7 +49,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     is_warm_up_{*ctx.is_warm_up}
 {
     if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
-        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(model, moe, engine, ctx);
+        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx);
     }
 
     attn_layer_ =
@@ -62,7 +62,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     }
 
     if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
-        ffn_layer_ = std::make_unique<LlamaFfnLayer>(model, ctx);
+        ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
     }
 }
 
