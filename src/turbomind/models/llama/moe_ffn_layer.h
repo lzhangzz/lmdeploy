@@ -12,7 +12,7 @@ namespace turbomind {
 
 class MoeFfnLayer {
 public:
-    MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx);
+    MoeFfnLayer(const EngineParam& engine, const Context& ctx);
 
     struct ForwardParam {
         Tensor              input;
@@ -27,21 +27,21 @@ public:
     void Combine(ForwardParam& p);
 
 private:
+    void Init(ForwardParam& p);
+
     Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
 
     void dump_logits(int token_num, int layer_id, int expert_num);
 
-    const int inter_size_;
-    const int hidden_dim_;
     const int tp_size_;
-
-    const MoeParam param_;
-
-    int& is_warm_up_;
+    const int max_token_num_;
+    int&      is_warm_up_;
 
     LlamaLinear& linear_;
 
     std::unique_ptr<LlamaFfnLayer> expert_ffn_;
+
+    bool initialized_ = false;
 
     ///////////////////////////////////////////////////////
     /// runtime states

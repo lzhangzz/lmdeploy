@@ -18,37 +18,35 @@
 
 namespace turbomind {
 
-MoeFfnLayer::MoeFfnLayer(const ModelParam& model, const MoeParam& param, const EngineParam& engine, const Context& ctx):
-    inter_size_(param.inter_size / engine.mlp_tp_size),
-    hidden_dim_(model.hidden_units),
+MoeFfnLayer::MoeFfnLayer(const EngineParam& engine, const Context& ctx):
     tp_size_(engine.mlp_tp_size),
-    param_(param),
-    is_warm_up_{*ctx.is_warm_up},
-    linear_(*ctx.linear)
+    max_token_num_(engine.max_forward_token_num * engine.attn_dp_size),
+    is_warm_up_(*ctx.is_warm_up),
+    linear_(*ctx.linear),
+    expert_ffn_(std::make_unique<LlamaFfnLayer>(ctx))
 {
-    TM_CHECK(!param.expert_num.empty());
+}
 
-    const int max_expert_num = *std::max_element(param.expert_num.begin(), param.expert_num.end());
+void MoeFfnLayer::Init(ForwardParam& p)
+{
+    const auto& moe_param        = p.weights->moe_param();
+    const int   expert_num       = p.weights->num_experts();
+    const int   experts_per_token = moe_param.experts_per_token;
 
-    if (param_.method == MoeParam::kFused) {
-        // pass
-    }
-    else {
-        expert_ffn_ = std::make_unique<LlamaFfnLayer>(model, ctx);
-    }
+    h_offsets_ = {expert_num + 1, kCPUpinned};
 
-    h_offsets_ = {max_expert_num + 1, kCPUpinned};
+    const int pad_token_num =
+        (max_token_num_ + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
-    const int max_token_num = engine.max_forward_token_num * engine.attn_dp_size;
-    const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
+    masks_   = {expert_num * pad_token_num, kDEVICE};
+    f2n_     = {experts_per_token * max_token_num_, kDEVICE};
+    f2E_     = {experts_per_token * max_token_num_, kDEVICE};
+    en2f_    = {experts_per_token * max_token_num_, kDEVICE};
+    scales_  = {experts_per_token * max_token_num_, kDEVICE};
+    offsets_ = {expert_num + 1, kDEVICE};
+    accum_   = {expert_num * kMoeGateMaxTiles, kDEVICE};
 
-    masks_   = {max_expert_num * pad_token_num, kDEVICE};
-    f2n_     = {param_.experts_per_token * max_token_num, kDEVICE};
-    f2E_     = {param_.experts_per_token * max_token_num, kDEVICE};
-    en2f_    = {param_.experts_per_token * max_token_num, kDEVICE};
-    scales_  = {param_.experts_per_token * max_token_num, kDEVICE};
-    offsets_ = {max_expert_num + 1, kDEVICE};
-    accum_   = {max_expert_num * kMoeGateMaxTiles, kDEVICE};
+    initialized_ = true;
 }
 
 Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
@@ -65,6 +63,14 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LinearWeight& gate)
 
 void MoeFfnLayer::Forward(ForwardParam& p)
 {
+    if (!initialized_) {
+        Init(p);
+    }
+
+    const auto& moe_param  = p.weights->moe_param();
+    const int   hidden_dim = p.weights->hidden_dim_;
+    const int   inter_size = p.weights->inter_size_;
+
     const int   tokens = p.input.shape(0);
     const auto& moe    = *p.weights;
 
@@ -79,10 +85,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     const auto st = core::Context::stream().handle();
 
-    if (param_.topk_method == "noaux_tc") {
+    if (moe_param.topk_method == "noaux_tc") {
         // invokeMoeGate_NoAuxTC clears accum and masks internally
-        TM_CHECK_EQ(param_.n_group, 1);
-        TM_CHECK_EQ(param_.topk_group, 1);
+        TM_CHECK_EQ(moe_param.n_group, 1);
+        TM_CHECK_EQ(moe_param.topk_group, 1);
         const float* correction_bias = nullptr;
         if (moe.score_correction_bias) {
             correction_bias = moe.score_correction_bias.size() > 0 ? moe.score_correction_bias.data<float>() : nullptr;
@@ -99,10 +105,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                               tokens,
                               padded,
                               expert_num,
-                              param_.experts_per_token,
-                              param_.norm_topk_prob,
-                              param_.routed_scale,
-                              param_.scoring_func == "sigmoid",
+                              moe_param.experts_per_token,
+                              moe_param.norm_topk_prob,
+                              moe_param.routed_scale,
+                              moe_param.scoring_func == "sigmoid",
                               st);
     }
     else {
@@ -110,9 +116,9 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         check_cuda_error(cudaMemsetAsync(accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
 
         bool softmax = true;
-        if (param_.topk_method == "group_limited_greedy") {
+        if (moe_param.topk_method == "group_limited_greedy") {
             invokeMoeSoftmaxMaskTopKGroups(
-                logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st);
+                logits.data(), tokens, expert_num, expert_num / moe_param.n_group, moe_param.topk_group, st);
             sync_check_cuda_error();
             softmax = false;
         }
@@ -129,17 +135,17 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                          tokens,
                          padded,
                          expert_num,
-                         param_.experts_per_token,
+                         moe_param.experts_per_token,
                          softmax,
-                         param_.norm_topk_prob,
-                         param_.routed_scale,
+                         moe_param.norm_topk_prob,
+                         moe_param.routed_scale,
                          st);
     }
     sync_check_cuda_error();
 
     if (is_warm_up_) {
         std::mt19937     g;
-        const auto       expert_ids = SampleUniform(tokens, expert_num, param_.experts_per_token, g);
+        const auto       expert_ids = SampleUniform(tokens, expert_num, moe_param.experts_per_token, g);
         std::vector<int> cnt(expert_num);
         for (const auto& x : expert_ids) {
             ++cnt[x];
@@ -152,11 +158,11 @@ void MoeFfnLayer::Forward(ForwardParam& p)
             cudaMemcpyAsync(offsets_.data(), h_offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, st));
     }
 
-    temp_ = Tensor{{param_.experts_per_token * tokens, hidden_dim_}, p.input.dtype(), p.input.device()};
+    temp_ = Tensor{{moe_param.experts_per_token * tokens, hidden_dim}, p.input.dtype(), p.input.device()};
 
-    if (param_.method == MoeParam::kNaive) {
+    if (moe_param.method == MoeParam::kNaive) {
 
-        invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, st);
+        invokeMoeDispatch(temp_, p.input, f2n_.data(), moe_param.experts_per_token, st);
         sync_check_cuda_error();
 
         check_cuda_error(
@@ -164,7 +170,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         check_cuda_error(cudaStreamSynchronize(st));
 
-        TM_CHECK_EQ(h_offsets_[expert_num], tokens * param_.experts_per_token);
+        TM_CHECK_EQ(h_offsets_[expert_num], tokens * moe_param.experts_per_token);
 
         for (int i = 0; i < expert_num; ++i) {
             if (int count = h_offsets_[i + 1] - h_offsets_[i]) {
@@ -177,7 +183,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         auto* block = moe.block();
 
-        auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
+        auto indices = f2n_.slice(0, tokens * moe_param.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
         if (block->w1w3 && block->w1w3->weight) {
@@ -190,7 +196,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
                 sync_check_cuda_error();
             }
 
-            linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), *block->w2, {}, offsets, temp_);
+            linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block->w2, {}, offsets, temp_);
             sync_check_cuda_error();
         }
         else {
@@ -216,7 +222,8 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
-    auto& moe = *p.weights;
+    auto&       moe       = *p.weights;
+    const auto& moe_param = p.weights->moe_param();
 
     const Tensor& block_bias = moe.block() && moe.block()->w2 ? moe.block()->w2->bias : Tensor{};
 
@@ -227,7 +234,7 @@ void MoeFfnLayer::Combine(ForwardParam& p)
                      en2f_.data(),
                      f2E_.data(),
                      shared_scales_.data_or((float*)nullptr),
-                     param_.experts_per_token,
+                     moe_param.experts_per_token,
                      1.f / tp_size_,
                      p.scale,
                      core::Context::stream().handle());
