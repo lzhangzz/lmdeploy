@@ -130,6 +130,8 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   CUTE_STATIC_ASSERT_V(congruent(select<0,2>(shape_MNK), dA));
   CUTE_STATIC_ASSERT_V(congruent(select<1,2>(shape_MNK), dB));
   CUTE_STATIC_ASSERT_V(congruent(select<0,1>(shape_MNK), dC));
+  CUTE_STATIC_ASSERT_V(size(r2s_copy) == size(mma));                    // NumThreads
+  CUTE_STATIC_ASSERT_V(size(s2g_copy) == size(mma));                    // NumThreads
 
   // ---- Step 1: Global memory tensors ----
   //
@@ -273,6 +275,11 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // Zero the accumulators before the MMA loop.
   clear(tCrC);
 
+  // ---- Step 4c: Epilogue tensor setup ----
+
+  ThrCopy thr_r2s = r2s_copy.get_slice(threadIdx.x);
+  ThrCopy thr_s2g = s2g_copy.get_slice(threadIdx.x);
+
   // ---- Step 4b: S2R (smem->register) copy setup ----
   //
   // Same make_tiled_copy_A/B pattern as the non-pipelined version, but now sA and sB
@@ -414,10 +421,39 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
   // ---- Step 6: Epilogue ----
   //
-  // Write accumulators to global memory: C = alpha * accum + beta * C
-  // axpby does: dst = alpha * src + beta * dst (element-wise)
+  // STSM pipeline: F32 accumulators -> BF16 smem -> BF16 gmem
+  //
+  // Stage 1: Element-wise alpha/beta scaling.
+  // Load existing C (BF16) from gmem via tCgC, convert to F32 inline, blend with accumulators.
+  // This avoids allocating a full F32 register tensor for loaded C, keeping peak at ~148 regs.
+  CUTE_UNROLL
+  for (int i = 0; i < size(tCrC); ++i) {
+    tCrC(i) = alpha * tCrC(i) + beta * static_cast<float>(tCgC(i));
+  }
 
-  axpby(alpha, tCrC, beta, tCgC);
+  // Stage 2: Convert F32 -> BF16, write to smem via STSM.
+  // Reuse sA's smem buffer (64 KB fits in 96 KB). sC is column-major (stride-1 in M).
+  Tensor sC = make_tensor(
+      make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
+      make_layout(make_shape(bM, bN)));
+
+  Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
+  CUTE_UNROLL
+  for (int i = 0; i < size(tCrC); ++i) {
+    tCrC_bf16(i) = static_cast<bf16_t>(tCrC(i));
+  }
+
+  Tensor tRS_rAcc = thr_r2s.retile_S(tCrC_bf16);
+  Tensor tRS_sC   = thr_r2s.partition_D(sC);
+
+  copy(r2s_copy, tRS_rAcc, tRS_sC);
+  __syncthreads();
+
+  // Stage 3: Vectorized S2G copy (128-bit coalesced stores along M).
+  Tensor tSG_sC = thr_s2g.partition_S(sC);
+  Tensor tSG_gC = thr_s2g.partition_D(gC);
+
+  copy(s2g_copy, tSG_sC, tSG_gC);
 }
 
 // ================================================================================================
