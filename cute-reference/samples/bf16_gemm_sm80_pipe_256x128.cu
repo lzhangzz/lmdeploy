@@ -40,10 +40,10 @@
  *   | Blocks/SM (192KB)   | 2                   | 1                          |
  *   | Threads/SM          | 256                 | 256 (identical)            |
  *
- * Why Tile<_, _64, _> instead of Tile<_32, _32, _16>:
+ * Why Tile<Underscore, _64, Underscore> instead of Tile<_32, _32, _16>:
  *   With Layout<Shape<_4, _2>>, the MMA atom (16×8) is arranged as 4 atoms in M and 2 in N.
  *   Within a (32, 32) sub-tile, the atom creates (2, 4) repeats, but zipped_divide cannot
- *   split (2, 4) by the atom layout (4, 2) since 2 < 4 in M. Tile<_, _64, _> uses default
+ *   split (2, 4) by the atom layout (4, 2) since 2 < 4 in M. Tile<Underscore, _64, Underscore> uses default
  *   M (= 16×4 = 64) and explicit N = 64, giving valid sub-tiles (64, 64) with (4, 8) repeats
  *   that zipped_divide correctly splits by (4, 2).
  *
@@ -577,7 +577,7 @@ bf16_gemm_tn(int m, int n, int k,
   //   - 2 atoms in N covers 2*8  = 16 N positions (expanded to 64 by Tile override)
   //   - Doubled in M from Layout<Shape<_2,_2>> to distribute the wider (256) tile
   //
-  // Tile<_, _64, _> override:
+  // Tile<Underscore, _64, Underscore> override:
   //   - M: default = 16 * 4 = 64 (atom_M * atoms_in_M)
   //   - N: explicit 64, expands from 16 (2 atoms of 8) to 64 (8 atoms of 8)
   //   - K: default = 16 * 1 = 16 (atom_K * atoms_in_K)
@@ -586,12 +586,12 @@ bf16_gemm_tn(int m, int n, int k,
   // Note: Tile<_32, _32, _16> from the 128-thread version does NOT work here.
   //   With Layout<Shape<_4, _2>>, a (32, 32) sub-tile creates (2, 4) atom repeats
   //   (from 32/16=2 in M, 32/8=4 in N). zipped_divide cannot split (2, 4) by the
-  //   atom layout (4, 2) since 2 < 4 in M. Using Tile<_, _64, _> gives (64, 64)
+  //   atom layout (4, 2) since 2 < 4 in M. Using Tile<Underscore, _64, Underscore> gives (64, 64)
   //   sub-tiles with (4, 8) repeats, which correctly divides by (4, 2).
   TiledMMA mma = make_tiled_mma(
       SM80_16x8x16_F32BF16BF16F32_TN{},
       Layout<Shape<_4, _2>>{},
-      Tile<_, _64, _>{});
+      Tile<Underscore, _64, Underscore>{});
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
 
