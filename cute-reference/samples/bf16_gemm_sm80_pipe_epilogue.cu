@@ -433,6 +433,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
   // Stage 2: Convert F32 -> BF16, write to smem via STSM.
   // Reuse sA's smem buffer (64 KB fits in 96 KB). sC is column-major (stride-1 in M).
+  // bM/bN are not in kernel scope, so extract tile dimensions from cta_tiler.
   Tensor sC = make_tensor(
       make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
       make_layout(make_shape(size<0>(cta_tiler), size<1>(cta_tiler))));
