@@ -314,6 +314,15 @@ void bind_config(py::module_& m, const char* name) {
     cls.def("clone", [](const Config& c) { return Config(c); });
 }
 
+template<typename T>
+void bind_struct(py::module_& m, const char* name) {
+    py::class_<T> cls(m, name);
+    cls.def(py::init<>());
+    T::for_each([&](const char* fname, auto member_ptr) {
+        cls.def_readwrite(fname, member_ptr);
+    });
+}
+
 PYBIND11_MODULE(_turbomind, m)
 {
     py::class_<ft::RequestMetrics, std::shared_ptr<ft::RequestMetrics>>(m, "RequestMetrics")
@@ -437,6 +446,7 @@ PYBIND11_MODULE(_turbomind, m)
         });
 
     bind_config<turbomind::core::LinearConfig>(m, "LinearConfig");
+    bind_struct<turbomind::core::RopeConfig>(m, "RopeConfig");
     bind_config<turbomind::core::AttentionConfig>(m, "AttentionConfig");
     bind_config<turbomind::core::FfnConfig>(m, "FfnConfig");
     bind_config<turbomind::core::MoeConfig>(m, "MoeConfig");

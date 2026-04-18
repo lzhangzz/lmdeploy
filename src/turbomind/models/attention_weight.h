@@ -1,6 +1,8 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include <array>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/linear_weight.h"
@@ -8,6 +10,53 @@
 #include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind::core {
+
+using MropeSection = std::array<int, 3>;
+
+struct RopeConfig {
+    #define ROPE_FIELDS(X) \
+        X(int,            type, 0) \
+        X(float,          base, 10000.f) \
+        X(int,            dim, 0) \
+        X(float,          factor, 1.f) \
+        X(int,            max_position_embeddings, 0) \
+        X(float,          yarn_attention_factor, 1.f) \
+        X(float,          yarn_beta_fast, 32.f) \
+        X(float,          yarn_beta_slow, 1.f) \
+        X(float,          llama3_low_freq_factor, 1.f) \
+        X(float,          llama3_high_freq_factor, 4.f) \
+        X(int,            llama3_original_max_position_embeddings, 0) \
+        X(MropeSection,   mrope_section, {})
+
+    ROPE_FIELDS(TM_MEMBER)
+    TM_FOR_EACH(RopeConfig, ROPE_FIELDS)
+
+    #undef ROPE_FIELDS
+};
+
+inline RopeConfig to_rope_config(const ::turbomind::RopeParam& p) {
+    using ::turbomind::RopeType;
+    RopeConfig cfg;
+    cfg.type                    = static_cast<int>(p.type);
+    cfg.base                    = p.base;
+    cfg.dim                     = p.dim;
+    cfg.factor                  = p.factor;
+    cfg.max_position_embeddings = p.max_position_embeddings;
+    if (p.type == RopeType::kYarn) {
+        cfg.yarn_attention_factor = p.yarn.attention_factor;
+        cfg.yarn_beta_fast        = p.yarn.beta_fast;
+        cfg.yarn_beta_slow        = p.yarn.beta_slow;
+    }
+    else if (p.type == RopeType::kLlama3) {
+        cfg.llama3_low_freq_factor                  = p.llama3.low_freq_factor;
+        cfg.llama3_high_freq_factor                 = p.llama3.high_freq_factor;
+        cfg.llama3_original_max_position_embeddings = p.llama3.original_max_position_embeddings;
+    }
+    else if (p.type == RopeType::kMrope) {
+        cfg.mrope_section = {p.mrope.section.x, p.mrope.section.y, p.mrope.section.z};
+    }
+    return cfg;
+}
 
 struct AttentionConfig: ModuleConfig {
     AttentionConfig(): ModuleConfig{"AttentionWeight"} {}
@@ -29,12 +78,11 @@ struct AttentionConfig: ModuleConfig {
         X(int,      window_size, -1) \
         X(bool,     attn_sink) \
         X(bool,     attn_output_gate) \
-        X(int,      rope_dim) \
+        X(RopeConfig, rope, {}) \
         X(int,      repeat_kv) \
         X(int,      qk_nope_dim) \
         X(float,    softmax_scale, 0.f) \
-        X(bool,     use_logn_attn, false) \
-        X(int,      max_position_embeddings, 0)
+        X(bool,     use_logn_attn, false)
 
     ATTENTION_FIELDS(TM_MEMBER)
     TM_FOR_EACH(AttentionConfig, ATTENTION_FIELDS)
@@ -45,6 +93,9 @@ struct AttentionConfig: ModuleConfig {
 }  // namespace turbomind::core
 
 namespace turbomind {
+
+struct RopeKernelParam;
+void init_rope_kernel_param(const core::RopeConfig& rope, RopeKernelParam& rope_kernel);
 
 class AttentionWeight: public core::Module {
 public:
@@ -92,7 +143,7 @@ public:
     bool     attn_output_gate_{};
     float    softmax_scale_{};
     bool     use_logn_attn_{};
-    int      max_position_embeddings_{};
+    core::RopeConfig rope_{};
 };
 
 }  // namespace turbomind
