@@ -483,7 +483,7 @@ bf16_gemm_tn(int m, int n, int k,
              bf16_t const* A, int ldA,
              bf16_t const* B, int ldB,
              Beta beta,
-             float* C, int ldC,
+             bf16_t* C, int ldC,
              cudaStream_t stream = 0)
 {
   using namespace cute;
@@ -537,7 +537,33 @@ bf16_gemm_tn(int m, int n, int k,
 
   auto sA = tile_to_shape(swizzle_atom, make_shape(bM, bK, bP));         // (256, 64, 3) swizzled
   auto sB = tile_to_shape(swizzle_atom, make_shape(bN, bK, bP));         // (128, 64, 3) swizzled
-  auto sC = make_layout(make_shape(bM, bN));                             // (256, 128) — unused in kernel
+  // R2S (register-to-smem) TiledCopy — SM90 STSM for BF16 C epilogue
+  //
+  // SM90_U16x8_STSM_T: transposed stmatrix for column-major output.
+  //   - 32 threads (1 warp) write a transposed 8x8 BF16 matrix to smem
+  //   - Each thread provides 4 x uint32 (8 bf16 values)
+  //   - Selected because sizeof(bf16_t)==2 and C has stride-1 in M (column-major)
+  //
+  // make_tiled_copy_C bridges MMA get_layoutC_TV() with STSM register layout.
+
+  auto r2s_copy = make_tiled_copy_C(
+      Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{},
+      mma);
+
+  // S2G (smem-to-global) TiledCopy — 128-bit vectorized BF16 stores
+  //
+  // Thread layout Layout<Shape<_32, _8>, Stride<_1, _32>>:
+  //   - 32 threads in M, 8 in N = 256 threads
+  //   - tid = m + n*32: warp 0 (tid 0-31) all n=0, m=0..31
+  //   - Each warp writes contiguous 512-byte stripe along M — perfectly coalesced
+  //
+  // Value layout Layout<Shape<_8, _1>>: 8 bf16 contiguous in M (128 bits per store).
+  // Coverage per copy-tile: (256, 8). Loops 128/8 = 16 times in N.
+
+  auto s2g_copy = make_tiled_copy(
+      Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, bf16_t>{},
+      Layout<Shape<_32, _8>, Stride<_1, _32>>{},
+      Layout<Shape<_8, _1>>{});
 
   // G2S (gmem->smem) TiledCopy (static)
   //
@@ -630,7 +656,8 @@ bf16_gemm_tn(int m, int n, int k,
       decltype(prob_shape), decltype(cta_tiler),
       bf16_t, decltype(dA), decltype(sA), decltype(g2s_copy_a), decltype(s2r_atom_a),
       bf16_t, decltype(dB), decltype(sB), decltype(g2s_copy_b), decltype(s2r_atom_b),
-      float, decltype(dC), decltype(sC), decltype(mma),
+      bf16_t, decltype(dC),                        decltype(mma),
+      decltype(r2s_copy), decltype(s2g_copy),
       Alpha, Beta>;
 
   // Set the maximum dynamic shared memory size for this kernel.
@@ -654,7 +681,8 @@ bf16_gemm_tn(int m, int n, int k,
       prob_shape, cta_tiler,
       A, dA, sA, g2s_copy_a, s2r_atom_a,
       B, dB, sB, g2s_copy_b, s2r_atom_b,
-      C, dC, sC, mma,
+      C, dC,            mma,
+      r2s_copy, s2g_copy,
       alpha, beta);
 }
 
