@@ -37,8 +37,6 @@ private:
 
     const int attn_tp_group_;
 
-    const float rmsnorm_eps_;
-
     comm::DeviceCommImpl* const d_comm_;
 
     const int tune_layer_num_;
@@ -54,6 +52,7 @@ private:
                                   Tensor&       residual,
                                   const Tensor& bias,
                                   const Tensor& weight,
+                                  float         eps,
                                   int           token_num,
                                   int           t0,
                                   int           t1,

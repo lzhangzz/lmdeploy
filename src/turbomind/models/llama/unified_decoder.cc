@@ -43,7 +43,6 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
     attn_tp_group_(ctx.comm.d_tp_group),
-    rmsnorm_eps_(model.norm_eps),
     d_comm_(ctx.comm.d_comm),
     tune_layer_num_(model.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
@@ -53,7 +52,6 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
     }
 
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
-        model.norm_eps,
         model.quant_policy,
         model.layer_types,
         model.layer_num,
@@ -66,7 +64,7 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
 
     if (std::find(model.layer_types.begin(), model.layer_types.end(), 1) != model.layer_types.end()) {
         linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
-            model.norm_eps, model.linear_state_dtype, model.layer_types,
+            model.linear_state_dtype, model.layer_types,
             engine, ctx, phases);
     }
 
@@ -79,6 +77,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               Tensor&       residual,
                                               const Tensor& bias,
                                               const Tensor& weight,
+                                              float         eps,
                                               int           token_num,
                                               int           group0,
                                               int           group1,
@@ -94,7 +93,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                                 residual.data_or((void*)nullptr),
                                                 bias.data_or((void*)nullptr),
                                                 weight.raw_data(),
-                                                rmsnorm_eps_,
+                                                eps,
                                                 hidden_units_,
                                                 dtype,
                                                 group0,
@@ -108,7 +107,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               residual.data_or((void*)nullptr),
                                               bias.data_or((void*)nullptr),
                                               weight.raw_data(),
-                                              rmsnorm_eps_,
+                                              eps,
                                               hidden_units_,
                                               token_num,
                                               dtype,
@@ -124,7 +123,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   dtype,
                                   hidden_units_,
                                   token_num,
-                                  rmsnorm_eps_,
+                                  eps,
                                   stream);
         sync_check_cuda_error();
     }
@@ -194,7 +193,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight, rmsnorm_eps_, stream);
+    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight, weights.at(0)->attention_norm->norm_eps_, stream);
 
     sync_check_cuda_error();
 
@@ -244,6 +243,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  local_residual,
                                  out_bias,
                                  weights.at(layer)->ffn_norm->weight,
+                                 weights.at(layer)->ffn_norm->norm_eps_,
                                  local_token_num,
                                  attn_tp_group_,
                                  0,
@@ -285,6 +285,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  local_residual,
                                  {},
                                  scale_weight,
+                                 weights.at(layer)->ffn_norm->norm_eps_,
                                  local_token_num,
                                  0,
                                  attn_tp_group_,

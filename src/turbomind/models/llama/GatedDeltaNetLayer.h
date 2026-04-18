@@ -19,8 +19,7 @@ public:
         int                        layer_id;
     };
 
-    GatedDeltaNetLayer(float                   norm_eps,
-                       DataType                state_dtype,
+    GatedDeltaNetLayer(DataType                state_dtype,
                        const std::vector<int>& layer_types,
                        const EngineParam&      engine,
                        const Context&          ctx,
@@ -39,7 +38,6 @@ private:
     int              tp_size_;
     int              num_linear_layers_;
     std::vector<int> layer_types_;
-    float            norm_eps_;
     DataType         state_dtype_;
 
     LlamaLinear& linear_;

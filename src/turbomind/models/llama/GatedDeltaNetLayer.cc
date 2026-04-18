@@ -9,15 +9,13 @@
 
 namespace turbomind {
 
-GatedDeltaNetLayer::GatedDeltaNetLayer(float                   norm_eps,
-                                       DataType                state_dtype,
+GatedDeltaNetLayer::GatedDeltaNetLayer(DataType                state_dtype,
                                        const std::vector<int>& layer_types,
                                        const EngineParam&      engine,
                                        const Context&          ctx,
                                        int                     phases):
     tp_size_(engine.attn_tp_size),
     num_linear_layers_(0),
-    norm_eps_(norm_eps),
     state_dtype_(state_dtype),
     linear_(*ctx.linear)
 {
@@ -312,7 +310,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // Gate (z) lives at column conv_dim of all_proj with row-stride all_col.
         Tensor gate        = all_proj.slice({0, conv_dim}, {-1, value_dim});
         Tensor hidden_view = attn_out.view({token_num * num_v_heads, value_head_dim});
-        invokeRMSNormGated(hidden_view, gate, weights.norm->weight, norm_eps_, stream);
+        invokeRMSNormGated(hidden_view, gate, weights.norm->weight, weights.norm->norm_eps_, stream);
         sync_check_cuda_error();
 
         // =================================================================

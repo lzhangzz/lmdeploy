@@ -53,8 +53,7 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(float                   norm_eps,
-                          int                     quant_policy,
+    UnifiedAttentionLayer(int                     quant_policy,
                           const std::vector<int>& layer_types,
                           int                     layer_num,
                           const RopeParam&        rope,
@@ -82,7 +81,6 @@ private:
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
-    const float         norm_eps_;
     const int           quant_policy_;
     const RopeParam     rope_;
     const int           cache_block_seq_len_;
