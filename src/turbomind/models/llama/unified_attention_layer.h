@@ -53,19 +53,24 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(const ModelParam&     model,
-                          const AttentionParam& attn,
-                          const EngineParam&    engine,
-                          int                   tp_size,
-                          const Context&        context,
-                          int                   phases,
-                          bool                  init);
+    UnifiedAttentionLayer(float                   norm_eps,
+                          int                     quant_policy,
+                          const std::vector<int>& layer_types,
+                          int                     layer_num,
+                          const RopeParam&        rope,
+                          int                     cache_block_seq_len,
+                          const EngineParam&      engine,
+                          const Context&          context,
+                          int                     phases,
+                          bool                    init);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
     void Forward(ForwardParam p);
 
 private:
+    void Init(const ForwardParam& p);
+
     void Setup(int phase, TensorMap& env);
 
     Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
@@ -77,19 +82,15 @@ private:
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
-    const int head_num_;
-    const int kv_head_num_;
-    const int size_per_head_;
-    const int hidden_units_;
-    const int local_head_num_;
-    const int local_kv_head_num_;
-
-    const AttentionParam param_;
-    const EngineParam    engine_param_;
-    const ModelParam     model_param_;
-    const Context&       context_;
-
-    int& is_warm_up_;
+    const float         norm_eps_;
+    const int           quant_policy_;
+    const RopeParam     rope_;
+    const int           cache_block_seq_len_;
+    const EngineParam   engine_param_;
+    const Context&      context_;
+    int&                is_warm_up_;
+    const bool          init_;
+    bool                initialized_ = false;
 
     LlamaLinear& linear_;
     const int    arch_{};
@@ -107,7 +108,7 @@ private:
     std::vector<int> cache_layer_ids_;
 
     ///////////////////////////////////////////////////////
-    /// temp runtime buffers
+    /// temp runtime buffers (lazily allocated in Init)
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
