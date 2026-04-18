@@ -138,6 +138,11 @@ signature for this purpose.
 ### TMA Atom Creation
 
 ```cpp
+// Smem layouts — GMMA atoms (TMA-compatible Swizzle<3,4,3>)
+auto sA = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bM, bK, bP));
+auto sB = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bN, bK, bP));
+auto sC_layout = tile_to_shape(GMMA::Layout_MN_SW128_Atom<bf16_t>{}, make_shape(bM, bN));
+
 // TMA load for A
 Copy_Atom tmaA = make_tma_atom(SM90_TMA_LOAD{}, mA, sA(_,_,0), make_shape(bM, bK));
 // TMA load for B
@@ -163,30 +168,75 @@ cutlass::launch_kernel_on_cluster(params, kernel_ptr,
 
 ## Smem Layout Compatibility
 
-### A and B (TMA Load)
+### Swizzle<3,3,3> is NOT TMA-compatible — must switch to GMMA layouts
 
-Current smem uses `Swizzle<3,3,3>` XOR pattern. TMA hardware supports specific swizzle
-modes (SW128, SW64, SW32, SW-none). `Swizzle<3,3,3>` maps to SW64, which TMA supports.
+The current smem uses `Swizzle<3,3,3>` which has M=3. TMA hardware only supports swizzles
+with M=4 (SW128/SW64/SW32/DISABLE), M=5, or M=6. `Swizzle<3,3,3>` triggers:
 
-`make_tma_atom` inspects the smem layout and automatically encodes the swizzle into
-the TMA descriptor. No smem layout changes needed for A and B.
+```
+static_assert(M < 0, "Unsupported layout swizzle.")
+```
 
-The LDSM S2R stage (`SM75_U32x4_LDSM_N`) continues to work with `Swizzle<3,3,3>` smem
-since it reads from the swizzled smem addresses — the swizzle is transparent to LDSM
-as long as the layout is consistent.
+in `detail::get_tma_swizzle_bits`. This is a compile-time failure.
 
-### C (TMA Store)
+**Solution:** Switch to GMMA layout atoms, which use `Swizzle<B,4,3>` (M=4, TMA-compatible).
 
-The sC smem layout is simple column-major `make_layout(make_shape(bM, bN))` — no swizzle.
-TMA store doesn't need bank-conflict avoidance since the data is written once and read
-once by TMA hardware. The sC buffer reuses sA's space (64 KB fits in 96 KB).
+### A and B (TMA Load — K-major GMMA layout)
+
+Both A and B are K-contiguous (stride-1 in K). The TMA-compatible K-major layout for bf16:
+
+```
+GMMA::Layout_K_SW128_Atom<bf16_t>
+  = Swizzle<3,4,3> o Layout<Shape<_8,_64>, Stride<_64,_1>>    (after upcast for bf16)
+```
+
+Host setup:
+```cpp
+auto sA = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bM, bK, bP));
+auto sB = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bN, bK, bP));
+```
+
+Layout shape math:
+- Atom covers (8, 64) = 512 bf16 per swizzle tile
+- sA: (256, 64, 3) → 256/8=32 atoms in M, 64/64=1 in K → 32 atoms per stage, 3 stages
+- sB: (128, 64, 3) → 128/8=16 atoms in N, 64/64=1 in K → 16 atoms per stage, 3 stages
+
+LDSM compatibility: `make_tiled_copy_A(SM75_U32x4_LDSM_N, mma)` partitions the swizzled
+smem layout automatically. The swizzle is transparent to LDSM — CuTe's partitioning handles
+the address mapping. The atom shape (8, 64) is compatible with LDSM's 8-row reads.
+
+### C (TMA Store — MN-major GMMA layout)
+
+C is column-major (stride-1 in M). The TMA-compatible MN-major layout for bf16:
+
+```
+GMMA::Layout_MN_SW128_Atom<bf16_t>
+  = Swizzle<3,4,3> o Layout<Shape<_64,_8>, Stride<_1,_64>>    (after upcast for bf16)
+```
+
+Host setup:
+```cpp
+auto sC_layout = tile_to_shape(GMMA::Layout_MN_SW128_Atom<bf16_t>{}, make_shape(bM, bN));
+```
+
+Layout shape math:
+- Atom covers (64, 8) = 512 bf16 per swizzle tile
+- sC: (256, 128) → 256/64=4 atoms in M, 128/8=16 in N → 64 atoms total = 32768 bf16 = 64 KB
+
+The sC buffer still reuses sA's smem (64 KB fits in 96 KB). The swizzle pattern differs
+from A/B (MN-major vs K-major), but this is fine — sC is only used after MMA completes.
+
+Note: The STSM R2S copy (`make_tiled_copy_C(SM90_U16x8_STSM_T, mma)`) writes to sC, and
+TMA store reads from sC. Both operations see the same swizzled smem addresses. The STSM
+writes column-major data into the swizzled layout, and TMA store reads it back using the
+same swizzle descriptor. Consistency is maintained because both use CuTe's layout system.
 
 ## Smem Usage
 
 | Buffer | Size | Notes |
 |--------|------|-------|
-| sA (3 stages) | ~96 KB | Swizzle<3,3,3>, reused by sC after MMA |
-| sB (3 stages) | ~48 KB | Swizzle<3,3,3> |
+| sA (3 stages) | ~96 KB | GMMA::Layout_K_SW128 (Swizzle<3,4,3>), reused by sC after MMA |
+| sB (3 stages) | ~48 KB | GMMA::Layout_K_SW128 (Swizzle<3,4,3>) |
 | tma_barrier | 24 bytes | 3 × 8-byte mbarriers |
 | **Total** | ~144 KB | Same as baseline |
 
@@ -207,7 +257,7 @@ register pressure.
 - Pipeline depth: 3 stages
 - S2R atoms: `SM75_U32x4_LDSM_N`
 - S2R tiled copy: `make_tiled_copy_A/B` (bridges LDSM with MMA)
-- Swizzle: `Swizzle<3,3,3>` for sA, sB
+- Smem swizzle: `Swizzle<3,4,3>` (GMMA layout atoms) for sA, sB, sC — TMA-compatible
 - F32 accumulators, alpha/beta scaling, F32→BF16 conversion
 - Element-wise inline load of existing C for beta blending
 - Grid: `dim3(ceil_div(M,bM), ceil_div(N,bN))`
