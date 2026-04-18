@@ -5,7 +5,6 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include <string>
 
 namespace turbomind::core {
 
