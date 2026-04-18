@@ -56,7 +56,7 @@ public:
     UnifiedAttentionLayer(int                     quant_policy,
                           const std::vector<int>& layer_types,
                           int                     layer_num,
-                          const RopeParam&        rope,
+                          const core::RopeConfig& rope,
                           int                     cache_block_seq_len,
                           const EngineParam&      engine,
                           const Context&          context,
@@ -82,7 +82,7 @@ private:
 
 private:
     const int           quant_policy_;
-    const RopeParam     rope_;
+    const core::RopeConfig rope_;
     const int           cache_block_seq_len_;
     const EngineParam   engine_param_;
     const Context&      context_;

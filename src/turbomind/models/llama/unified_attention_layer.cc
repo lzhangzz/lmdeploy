@@ -94,7 +94,7 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
 UnifiedAttentionLayer::UnifiedAttentionLayer(int                     quant_policy,
                                              const std::vector<int>& layer_types,
                                              int                     layer_num,
-                                             const RopeParam&        rope,
+                                             const core::RopeConfig& rope,
                                              int                     cache_block_seq_len,
                                              const EngineParam&      engine,
                                              const Context&          ctx,
@@ -186,7 +186,7 @@ void UnifiedAttentionLayer::Init(const ForwardParam& p)
     initialized_ = true;
 }
 
-static void init_dynamic_ntk(RequestCache& cache, const RopeParam& rope)
+static void init_dynamic_ntk(RequestCache& cache, const core::RopeConfig& rope)
 {
     cache.rope_base = rope.base;
     if (auto scaling_factor = rope.factor; scaling_factor > 1.f) {
@@ -522,7 +522,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
         // logn attn
         params.use_logn_attn           = weights.use_logn_attn_;
-        params.max_position_embeddings = weights.max_position_embeddings_;
+        params.max_position_embeddings = weights.rope_.max_position_embeddings;
 
         // Decoding use only for now
         params.split_cnt   = split_cnt_.data();
