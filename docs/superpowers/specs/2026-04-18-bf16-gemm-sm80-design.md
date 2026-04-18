@@ -69,7 +69,7 @@ clear(tCrC)
 for k_tile in 0..K_TILE_MAX:
     copy(tAgA(_,_,k_tile), tAsA)    // gmem → smem
     copy(tBgB(_,_,k_tile), tBsB)
-    cp_async_fence(); cp_async_wait<0>(); __syncthreads()
+    __syncthreads()
 
     copy(tCsA, tCrA)                 // smem → regs
     copy(tCsB, tCrB)
