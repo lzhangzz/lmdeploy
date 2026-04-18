@@ -285,9 +285,11 @@ bf16_gemm_tn(int m, int n, int k,
   auto dC = make_stride(Int<1>{}, ldC);
 
   // CTA tile sizes (static)
+  // bK=64 required by the swizzle pattern: the Swizzle<3,3,3> base layout has
+  // K-dimension 64, so tile_to_shape needs bK to be a multiple of 64.
   auto bM = Int<128>{};
   auto bN = Int<128>{};
-  auto bK = Int<32>{};
+  auto bK = Int<64>{};
   auto cta_tiler = make_shape(bM, bN, bK);                              // (128, 128, 32)
 
   // Smem layouts (static, swizzled)
@@ -319,16 +321,26 @@ bf16_gemm_tn(int m, int n, int k,
   auto sC = make_layout(make_shape(bM, bN));                            // (128, 128) — unused in kernel
 
   // Thread layouts for gmem -> smem copy (static)
-  // (32, 4) = 128 threads. Each thread copies (128/32, 32/4) = (4, 8) elements.
+  // (32, 4) = 128 threads. Each thread copies (128/32, bK/4) elements.
   auto tA = make_layout(make_shape(Int<32>{}, Int<4>{}));
   auto tB = make_layout(make_shape(Int<32>{}, Int<4>{}));
 
   // TiledMMA (static)
+  //
   // Atom: SM80_16x8x16_F32BF16BF16F32_TN — 16x8x16 BF16*BF16->F32, 32 threads
   // Atom layout: 2x2 in (M, N) -> 128 threads total (4 warps)
+  //
+  // Tile<_32, _32, _16> override expands the MMA tile to (32, 32, 16):
+  //   - N expands from 16 (2 atoms of 8) to 32 (4 atoms of 8)
+  //   - This gives each thread 4 values in the B partition instead of 2
+  //   - Required for SM75_U32x4_LDSM_N which needs 4 values per thread
+  //
+  // The CTA tile (128, 128, 64) divides evenly by the MMA tile (32, 32, 16):
+  //   4 MMA tiles in M, 4 in N, 4 in K.
   TiledMMA mma = make_tiled_mma(
       SM80_16x8x16_F32BF16BF16F32_TN{},
-      Layout<Shape<_2, _2>>{});
+      Layout<Shape<_2, _2>>{},
+      Tile<_32, _32, _16>{});
 
   static_assert(decltype(size(mma))::value == 128, "Expected 128 threads");
 
@@ -366,6 +378,7 @@ bf16_gemm_tn(int m, int n, int k,
 
 int main(int argc, char** argv)
 {
+  using namespace cute;
   int m = 1024;
   if (argc >= 2) sscanf(argv[1], "%d", &m);
 
@@ -377,10 +390,10 @@ int main(int argc, char** argv)
 
   printf("BF16 GEMM (SM80 tensor cores, swizzle+LDSM): M=%d, N=%d, K=%d\n", m, n, k);
 
-  // Alignment: M, N should be multiples of 128; K should be a multiple of 32
+  // Alignment: M, N should be multiples of 128; K should be a multiple of 64
   assert(m % 128 == 0 && "M must be a multiple of 128");
   assert(n % 128 == 0 && "N must be a multiple of 128");
-  assert(k % 32 == 0   && "K must be a multiple of 32");
+  assert(k % 64 == 0   && "K must be a multiple of 64");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
