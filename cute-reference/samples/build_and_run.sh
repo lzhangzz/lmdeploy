@@ -35,3 +35,15 @@ echo ""
 echo "=== Running pipelined sample (cp.async 3-stage) ==="
 echo "--- 1024x1024x1024 ---"
 ./bf16_gemm_sm80_pipe 1024 1024 1024
+
+echo ""
+echo "Compiling bf16_gemm_sm80_pipe_256x128.cu (256x128 tile, 256 threads) ..."
+nvcc -std=c++17 -arch=sm_90a \
+     -I${CUTLASS_INC} \
+     bf16_gemm_sm80_pipe_256x128.cu \
+     -o bf16_gemm_sm80_pipe_256x128
+
+echo ""
+echo "=== Running 256x128 tile sample (256 threads) ==="
+echo "--- 1024x1024x1024 ---"
+./bf16_gemm_sm80_pipe_256x128 1024 1024 1024
