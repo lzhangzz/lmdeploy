@@ -89,6 +89,8 @@ class Glm4MoeLiteSpec(TextModelSpec):
         self._attn_cfg.window_size     = 0
         self._attn_cfg.tp_size         = engine_cfg.attn_tp_size
         self._attn_cfg.data_type       = dtype
+        self._attn_cfg.softmax_scale          = self._softmax_scale
+        self._attn_cfg.max_position_embeddings = self._max_position_embeddings
 
         # ---- FFN template ----
         self._ffn_cfg = _tm.FfnConfig()
