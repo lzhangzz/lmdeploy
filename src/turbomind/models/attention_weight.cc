@@ -21,6 +21,9 @@ AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg)
     , window_size_(cfg.window_size)
     , sink_(cfg.attn_sink)
     , attn_output_gate_(cfg.attn_output_gate)
+    , softmax_scale_(cfg.softmax_scale)
+    , use_logn_attn_(cfg.use_logn_attn)
+    , max_position_embeddings_(cfg.max_position_embeddings)
 {
 }
 

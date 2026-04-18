@@ -31,7 +31,10 @@ struct AttentionConfig: ModuleConfig {
         X(bool,     attn_output_gate) \
         X(int,      rope_dim) \
         X(int,      repeat_kv) \
-        X(int,      qk_nope_dim)
+        X(int,      qk_nope_dim) \
+        X(float,    softmax_scale, 0.f) \
+        X(bool,     use_logn_attn, false) \
+        X(int,      max_position_embeddings, 0)
 
     ATTENTION_FIELDS(TM_MEMBER)
     TM_FOR_EACH(AttentionConfig, ATTENTION_FIELDS)
@@ -71,10 +74,9 @@ public:
 
     TM_MODULE_DECLARE(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 
-    int  window_size() const { return window_size_; }
     bool is_mla() const { return mla_.kv_lora_rank > 0; }
 
-private:
+    // --- Config fields (public for runtime access) ---
     int      hidden_dim_{};
     int      head_dim_{};
     int      head_num_{};
@@ -88,6 +90,9 @@ private:
     int      window_size_{};
     bool     sink_{};
     bool     attn_output_gate_{};
+    float    softmax_scale_{};
+    bool     use_logn_attn_{};
+    int      max_position_embeddings_{};
 };
 
 }  // namespace turbomind
