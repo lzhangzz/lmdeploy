@@ -144,7 +144,11 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
   ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
 
-  // Partition smem for MMA input
+  // Partition smem for MMA input.
+  // These define the MMA's view into smem and provide the shape for make_fragment_A/B.
+  // In the plain sample, tCsA/tCsB were used directly for smem→regs copy.
+  // Here they're only used to allocate register fragments; the actual copy uses
+  // the LDSM-partitioned views (tXsA/tXsB) set up in Step 4b below.
   Tensor tCsA = thr_mma.partition_A(sA);                                // (MMA, MMA_M, MMA_K)
   Tensor tCsB = thr_mma.partition_B(sB);                                // (MMA, MMA_N, MMA_K)
 
@@ -294,7 +298,7 @@ bf16_gemm_tn(int m, int n, int k,
   // so that logically-adjacent rows map to different banks.
   //
   // Swizzle<3,3,3> means: 3-bit XOR, base position 3, shift 3.
-  //   XORs bit group [5:3] with bit group [8:6] in the byte address.
+  //   XORs bit group [5:3] with bit group [8:6] in the element offset.
   //   This is a 128-byte swizzle — the standard pattern for 16-bit element GMMA/LDSM.
   //
   // The base layout is 8 x (8 x 8) with strides (8, (1, 64)):
