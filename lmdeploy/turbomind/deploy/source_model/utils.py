@@ -28,6 +28,20 @@ def load_model_config(model_path: str) -> dict:
     return model_config
 
 
+_ROPE_TYPE_MAP = {
+    'default': 1,
+    'linear': 2,
+    'dynamic': 3,
+    'yarn': 4,
+    'llama3': 5,
+    'mrope': 6,
+}
+
+
+def rope_type_to_int(type_str: str) -> int:
+    return _ROPE_TYPE_MAP[type_str]
+
+
 def parse_rope_param(cfg: dict, head_dim: int) -> tuple[RopeParam, int]:
     """Parse RoPE configuration from a model config dict.
 

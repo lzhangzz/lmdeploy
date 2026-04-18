@@ -16,7 +16,7 @@ from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, reorder_rotary_emb_linear
+from .utils import _pad_inter_size, reorder_rotary_emb_linear, rope_type_to_int
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -57,12 +57,25 @@ class GptOssSpec(TextModelSpec):
         self._attn_cfg.kv_head_num = self._kv_head_num_padded
         self._attn_cfg.has_bias    = int(hf_cfg['attention_bias'])
         self._attn_cfg.attn_sink   = True
-        self._attn_cfg.rope_dim    = self._rope.dim
+        self._attn_cfg.rope.type = rope_type_to_int(self._rope.type)
+        self._attn_cfg.rope.base = self._rope.base
+        self._attn_cfg.rope.dim  = self._rope.dim
+        self._attn_cfg.rope.factor = self._rope.factor
+        self._attn_cfg.rope.max_position_embeddings = self._max_position_embeddings
+        if self._rope.type == 'yarn':
+            self._attn_cfg.rope.yarn_attention_factor = self._rope.attention_factor
+            self._attn_cfg.rope.yarn_beta_fast = self._rope.beta_fast
+            self._attn_cfg.rope.yarn_beta_slow = self._rope.beta_slow
+        elif self._rope.type == 'llama3':
+            self._attn_cfg.rope.llama3_low_freq_factor = self._rope.low_freq_factor
+            self._attn_cfg.rope.llama3_high_freq_factor = self._rope.high_freq_factor
+            self._attn_cfg.rope.llama3_original_max_position_embeddings = self._rope.original_max_position_embeddings
+        elif self._rope.type == 'mrope':
+            self._attn_cfg.rope.mrope_section = self._rope.mrope_section
         self._attn_cfg.window_size = 0
         self._attn_cfg.tp_size     = engine_cfg.attn_tp_size
         self._attn_cfg.data_type   = dtype
         self._attn_cfg.softmax_scale          = self._softmax_scale
-        self._attn_cfg.max_position_embeddings = self._max_position_embeddings
 
         # ---- FFN template ----
         self._ffn_cfg = _tm.FfnConfig()
