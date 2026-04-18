@@ -131,7 +131,7 @@ class GptOssSpec(TextModelSpec):
     def output_norm(self, key):
         from ..builder import NormBuilder, make_norm_config
         w = self._get(key)
-        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m

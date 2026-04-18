@@ -167,7 +167,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
     def output_norm(self, key):
         from ..builder import NormBuilder, make_norm_config
         w = self._get(key)
-        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
@@ -198,6 +198,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
             q_a_norm=self._get(f'{pfx}.q_a_layernorm.weight'),
             kv_a_norm=self._get(f'{pfx}.kv_a_layernorm.weight'),
             data_type=self._cpp_dtype(),
+            norm_eps=self._norm_eps,
         )
         return builder
 

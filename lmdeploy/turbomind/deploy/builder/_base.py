@@ -474,7 +474,7 @@ class Builder:
                 dst.copy_from(shard)
 
     def _add_norm_child(self, name: str, tensor: torch.Tensor,
-                        data_type=None):
+                        data_type=None, *, norm_eps):
         """Create a NormConfig child and commit weight tensor.
 
         Parameters
@@ -485,12 +485,14 @@ class Builder:
             The norm weight tensor.
         data_type : C++ DataType value | None
             Compute dtype for the norm.  Defaults to FP32 if not set.
+        norm_eps : float
+            RMS norm epsilon.  Required.
         """
         self._ensure_handles()
         from .norm import make_norm_config
         if data_type is None:
             data_type = _tm.DataType.TYPE_FP32
-        norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type)
+        norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type, norm_eps=norm_eps)
 
         for i, handle in enumerate(self._handles):
             with self._contexts[i]:

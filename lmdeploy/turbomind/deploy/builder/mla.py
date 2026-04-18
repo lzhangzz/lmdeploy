@@ -100,9 +100,9 @@ class MLABuilder(Builder):
             self._commit_linear(name, lin, split_side=side,
                                 model_dtype=model_dtype)
 
-    def add_norms(self, *, q_a_norm, kv_a_norm, data_type):
+    def add_norms(self, *, q_a_norm, kv_a_norm, data_type, norm_eps):
         """Create norm children for q_a_layernorm and kv_a_layernorm."""
         self._add_norm_child('q_a_layernorm', q_a_norm,
-                             data_type=data_type)
+                             data_type=data_type, norm_eps=norm_eps)
         self._add_norm_child('kv_a_layernorm', kv_a_norm,
-                             data_type=data_type)
+                             data_type=data_type, norm_eps=norm_eps)

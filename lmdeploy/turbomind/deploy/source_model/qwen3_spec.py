@@ -124,7 +124,7 @@ class Qwen3TextSpec(TextModelSpec):
     def output_norm(self, key):
         from ..builder import NormBuilder, make_norm_config
         w = self._get(key)
-        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype())
+        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(w)
         return m
@@ -158,7 +158,7 @@ class Qwen3TextSpec(TextModelSpec):
         k_norm = self._get(f'{pfx}.k_norm.weight')
         q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope.dim)
         k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope.dim)
-        attn.add_qk_norm(q_norm, k_norm)
+        attn.add_qk_norm(q_norm, k_norm, norm_eps=self._norm_eps)
 
         return attn
 
