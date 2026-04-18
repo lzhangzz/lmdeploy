@@ -8,21 +8,6 @@
 
 namespace turbomind::core {
 
-struct LinearConfig: ModuleConfig {
-    LinearConfig(): ModuleConfig{"LinearWeight"} {}
-
-    #define LINEAR_FIELDS(X) \
-        X(int,      input_dim) \
-        X(int,      output_dim) \
-        X(DataType, data_type) \
-        X(bool,     has_bias)
-
-    LINEAR_FIELDS(TM_MEMBER)
-    TM_FOR_EACH(LinearConfig, LINEAR_FIELDS)
-
-    #undef LINEAR_FIELDS
-};
-
 struct AttentionConfig: ModuleConfig {
     AttentionConfig(): ModuleConfig{"AttentionWeight"} {}
 

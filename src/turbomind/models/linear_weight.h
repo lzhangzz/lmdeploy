@@ -4,8 +4,26 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/kernels/gemm/types.h"
+
+namespace turbomind::core {
+
+struct LinearConfig: ModuleConfig {
+    LinearConfig(): ModuleConfig{"LinearWeight"} {}
+
+    #define LINEAR_FIELDS(X) \
+        X(int,      input_dim) \
+        X(int,      output_dim) \
+        X(DataType, data_type) \
+        X(bool,     has_bias)
+
+    LINEAR_FIELDS(TM_MEMBER)
+    TM_FOR_EACH(LinearConfig, LINEAR_FIELDS)
+
+    #undef LINEAR_FIELDS
+};
+
+}  // namespace turbomind::core
 
 namespace turbomind {
 
