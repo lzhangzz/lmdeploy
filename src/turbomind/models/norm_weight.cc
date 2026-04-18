@@ -2,7 +2,6 @@
 
 #include "src/turbomind/models/norm_weight.h"
 
-#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/utils/memory_utils.h"
 

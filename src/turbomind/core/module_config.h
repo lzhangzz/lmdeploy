@@ -8,19 +8,6 @@
 
 namespace turbomind::core {
 
-struct NormConfig: ModuleConfig {
-    NormConfig(): ModuleConfig{"NormWeight"} {}
-
-    #define NORM_FIELDS(X) \
-        X(int,      dim) \
-        X(DataType, data_type)
-
-    NORM_FIELDS(TM_MEMBER)
-    TM_FOR_EACH(NormConfig, NORM_FIELDS)
-
-    #undef NORM_FIELDS
-};
-
 struct DecoderLayerConfig: ModuleConfig {
     DecoderLayerConfig(): ModuleConfig{"DecoderLayerWeight"} {}
     template<typename Visitor>

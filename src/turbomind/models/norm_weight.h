@@ -3,7 +3,23 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/core/module_config.h"
+
+namespace turbomind::core {
+
+struct NormConfig: ModuleConfig {
+    NormConfig(): ModuleConfig{"NormWeight"} {}
+
+    #define NORM_FIELDS(X) \
+        X(int,      dim) \
+        X(DataType, data_type)
+
+    NORM_FIELDS(TM_MEMBER)
+    TM_FOR_EACH(NormConfig, NORM_FIELDS)
+
+    #undef NORM_FIELDS
+};
+
+}  // namespace turbomind::core
 
 namespace turbomind {
 
