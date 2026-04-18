@@ -738,6 +738,7 @@ int main(int argc, char** argv)
   benchmark_size(1024, 1024, 1024, alpha, beta, 0);
   benchmark_size(2048, 2048, 2048, alpha, beta, 0);
   benchmark_size(4096, 4096, 4096, alpha, beta, 0);
+  benchmark_size(8192, 8192, 8192, alpha, beta, 0);
 
   return 0;
 }
