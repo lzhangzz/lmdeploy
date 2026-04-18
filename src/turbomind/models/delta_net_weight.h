@@ -57,7 +57,7 @@ public:
 
     TM_MODULE_DECLARE(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)
 
-private:
+    // --- Config fields (public for runtime access) ---
     int      hidden_dim_{};
     int      num_k_heads_{};
     int      num_v_heads_{};
