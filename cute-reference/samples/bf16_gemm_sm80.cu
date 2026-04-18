@@ -281,92 +281,36 @@ bf16_gemm_tn(int m, int n, int k,
 // Main — allocate, run, verify, benchmark
 // ================================================================================================
 
-int main(int argc, char** argv)
+// Run benchmark at a single size (no verification)
+void benchmark_size(int m, int n, int k,
+                    float alpha, float beta,
+                    cudaStream_t stream)
 {
-  int m = 1024;
-  if (argc >= 2) sscanf(argv[1], "%d", &m);
+  using namespace cute;
 
-  int n = 1024;
-  if (argc >= 3) sscanf(argv[2], "%d", &n);
+  assert(m % 128 == 0 && n % 128 == 0 && k % 32 == 0);
 
-  int k = 1024;
-  if (argc >= 4) sscanf(argv[3], "%d", &k);
+  int ldA = k, ldB = k, ldC = m;
 
-  printf("BF16 GEMM (SM80 tensor cores): M=%d, N=%d, K=%d\n", m, n, k);
-
-  // Alignment: M, N should be multiples of 128; K should be a multiple of 32
-  assert(m % 128 == 0 && "M must be a multiple of 128");
-  assert(n % 128 == 0 && "N must be a multiple of 128");
-  assert(k % 32 == 0   && "K must be a multiple of 32");
-
-  float alpha = 1.0f;
-  float beta  = 0.0f;
-
-  // TN layout leading dimensions
-  int ldA = k;    // A is M x K row-major
-  int ldB = k;    // B is N x K K-contiguous
-  int ldC = m;    // C is M x N column-major
-
-  // Allocate host tensors
-  thrust::host_vector<bf16_t> h_A(m * k);
-  thrust::host_vector<bf16_t> h_B(n * k);
-  thrust::host_vector<float>  h_C(m * n);
-
-  // Fill A, B with random bf16 in [-1, 1]; C with -1
+  thrust::device_vector<bf16_t> d_A(m * k), d_B(n * k);
+  thrust::device_vector<float>  d_C(m * n);
+  thrust::host_vector<bf16_t> h_A(m * k), h_B(n * k);
   for (int i = 0; i < m * k; ++i) h_A[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
   for (int i = 0; i < n * k; ++i) h_B[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
-  for (int i = 0; i < m * n; ++i) h_C[i] = -1.0f;
+  d_A = h_A; d_B = h_B;
 
-  // Allocate device tensors and copy data
-  thrust::device_vector<bf16_t> d_A = h_A;
-  thrust::device_vector<bf16_t> d_B = h_B;
-  thrust::device_vector<float>  d_C = h_C;
-
-  // ---- Run kernel ----
-  bf16_gemm_tn(m, n, k, alpha,
-               d_A.data().get(), ldA,
-               d_B.data().get(), ldB,
-               beta,
-               d_C.data().get(), ldC);
-  CUTE_CHECK_LAST();
-
-  // Download result
-  thrust::host_vector<float> h_result = d_C;
-
-  // ---- CPU reference GEMM ----
-  //
-  // C[m, n] = alpha * sum_k A[m, k] * B[n, k] + beta * C[m, n]
-  // A: row-major, A[m, k] = h_A[m * K + k]
-  // B: K-contiguous, B[n, k] = h_B[n * K + k]
-  // C: column-major, C[m, n] = h_ref[m + n * M]
-
-  thrust::host_vector<float> h_ref(m * n, 0.0f);
-  for (int i = 0; i < m; ++i) {
-    for (int j = 0; j < n; ++j) {
-      float sum = 0.0f;
-      for (int l = 0; l < k; ++l) {
-        sum += float(h_A[i * k + l]) * float(h_B[j * k + l]);
-      }
-      h_ref[i + j * ldC] = alpha * sum + beta * h_C[i + j * ldC];
-    }
-  }
-
-  // ---- Verify ----
-  float max_err = 0.0f;
-  for (int i = 0; i < m * n; ++i) {
-    float err = std::abs(h_result[i] - h_ref[i]);
-    if (err > max_err) max_err = err;
-  }
-  printf("Max error: %e\n", max_err);
-
-  bool passed = (max_err < 0.01f);
-  printf("%s\n", passed ? "PASS" : "FAIL");
-
-  // ---- Benchmark ----
   const int timing_iterations = 100;
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
+
+  // Warmup
+  bf16_gemm_tn(m, n, k, alpha,
+               d_A.data().get(), ldA,
+               d_B.data().get(), ldB,
+               beta,
+               d_C.data().get(), ldC, stream);
+  CUTE_CHECK_LAST();
 
   cudaEventRecord(start);
   for (int i = 0; i < timing_iterations; ++i) {
@@ -374,7 +318,7 @@ int main(int argc, char** argv)
                  d_A.data().get(), ldA,
                  d_B.data().get(), ldB,
                  beta,
-                 d_C.data().get(), ldC);
+                 d_C.data().get(), ldC, stream);
   }
   cudaEventRecord(stop);
   cudaEventSynchronize(stop);
@@ -383,10 +327,68 @@ int main(int argc, char** argv)
   cudaEventElapsedTime(&total_ms, start, stop);
   double avg_ms = total_ms / timing_iterations;
   double gflops = (2.0 * m * n * k) * 1e-9;
-  printf("Performance: %.1f GFLOP/s (%.4f ms per GEMM)\n", gflops / (avg_ms * 1e-3), avg_ms);
+  printf("  %dx%dx%d: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
+}
 
-  return passed ? 0 : 1;
+int main(int argc, char** argv)
+{
+  using namespace cute;
+
+  printf("BF16 GEMM (SM80 tensor cores, plain)\n\n");
+
+  float alpha = 1.0f;
+  float beta  = 0.0f;
+
+  // ---- Verify correctness once at 1024^3 ----
+  {
+    int m = 1024, n = 1024, k = 1024;
+    int ldA = k, ldB = k, ldC = m;
+
+    thrust::host_vector<bf16_t> h_A(m * k), h_B(n * k);
+    thrust::host_vector<float>  h_C(m * n);
+    for (int i = 0; i < m * k; ++i) h_A[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
+    for (int i = 0; i < n * k; ++i) h_B[i] = static_cast<bf16_t>(2.0 * (rand() / double(RAND_MAX)) - 1.0);
+    for (int i = 0; i < m * n; ++i) h_C[i] = -1.0f;
+
+    thrust::device_vector<bf16_t> d_A = h_A, d_B = h_B;
+    thrust::device_vector<float>  d_C = h_C;
+
+    bf16_gemm_tn(m, n, k, alpha,
+                 d_A.data().get(), ldA,
+                 d_B.data().get(), ldB,
+                 beta,
+                 d_C.data().get(), ldC);
+    CUTE_CHECK_LAST();
+
+    thrust::host_vector<float> h_result = d_C;
+
+    // CPU reference: C[m,n] = alpha * sum_k A[m,k] * B[n,k] + beta * C[m,n]
+    thrust::host_vector<float> h_ref(m * n, 0.0f);
+    for (int i = 0; i < m; ++i)
+      for (int j = 0; j < n; ++j) {
+        float sum = 0.0f;
+        for (int l = 0; l < k; ++l)
+          sum += float(h_A[i * k + l]) * float(h_B[j * k + l]);
+        h_ref[i + j * ldC] = alpha * sum + beta * h_C[i + j * ldC];
+      }
+
+    float max_err = 0.0f;
+    for (int i = 0; i < m * n; ++i)
+      max_err = std::max(max_err, std::abs(h_result[i] - h_ref[i]));
+
+    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.01f ? "PASS" : "FAIL");
+    if (max_err >= 0.01f) return 1;
+  }
+
+  // ---- Benchmark ----
+  printf("Benchmark (100 iterations each):\n");
+  benchmark_size(512,  512,  512,  alpha, beta, 0);
+  benchmark_size(1024, 1024, 1024, alpha, beta, 0);
+  benchmark_size(2048, 2048, 2048, alpha, beta, 0);
+  benchmark_size(4096, 4096, 4096, alpha, beta, 0);
+
+  return 0;
 }
