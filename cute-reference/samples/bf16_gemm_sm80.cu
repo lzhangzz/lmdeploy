@@ -137,7 +137,24 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // Partition gmem for MMA output
   Tensor tCgC = thr_mma.partition_C(gC);                                // (MMA, MMA_M, MMA_N)
 
-  // Allocate register fragments (hardware-aligned register layouts)
+  // Allocate register fragments.
+  //
+  // make_fragment_A/B creates a register tensor with the same logical shape as
+  // the smem partition (tCsA/tCsB), but with a register layout that matches what
+  // the MMA hardware instruction expects. This is the key correctness mechanism:
+  //
+  //   partition_A gives a smem layout — where data sits in shared memory
+  //   make_fragment_A gives a register layout — which register holds which (m,k) value
+  //
+  // Both share the same logical coordinate space (MMA, MMA_M, MMA_K), so
+  // copy(tCsA, tCrA) maps each logical element to the correct register.
+  // The copy iterates over logical coordinates, not physical addresses —
+  // it reads tCsA(v,m,k) from smem and writes to tCrA(v,m,k) in the register
+  // that the MMA expects for that (m,k) position.
+  //
+  // Tradeoff: without a dedicated smem→regs copy atom (e.g. SM75_U32x4_LDSM_N),
+  // the copy generates scalar loads. Correct but slow. The production path uses
+  // make_tiled_copy_A(s2r_atom, mma) to vectorize this step.
   Tensor tCrA = thr_mma.make_fragment_A(tCsA);                         // (MMA, MMA_M, MMA_K) in regs
   Tensor tCrB = thr_mma.make_fragment_B(tCsB);                         // (MMA, MMA_N, MMA_K) in regs
   Tensor tCrC = thr_mma.make_fragment_C(tCgC);                         // (MMA, MMA_M, MMA_N) accum
@@ -163,7 +180,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     copy(tBgB(_,_,k_tile), tBsB);
     __syncthreads();
 
-    // smem -> registers
+    // smem -> registers (see make_fragment_A/B comment above for why this works)
     copy(tCsA, tCrA);
     copy(tCsB, tCrB);
 
