@@ -1,28 +1,26 @@
 /***************************************************************************************************
- * BF16 GEMM using SM80 tensor cores with CuTe — STSM Epilogue, BF16 Output
+ * BF16 GEMM using SM80 tensor cores with CuTe — TMA Load + Bulk Copy Store
  *
- * A variant of bf16_gemm_sm80_pipe_256x128.cu that adds an SM90 STSM epilogue:
- *   - C output is BF16 instead of F32
- *   - Accumulators (F32) are scaled, converted to BF16, then staged through shared memory
- *     using SM90 stmatrix instructions before vectorized 128-bit global stores
+ * A variant of bf16_gemm_sm80_pipe_epilogue.cu that replaces:
+ *   - cp.async G2S with SM90 TMA load (1 thread issues bulk tensor copy via descriptor)
+ *   - Vectorized S2G epilogue with SM90 bulk copy store
  *
- * Epilogue data flow:
- *   1. Element-wise: F32 accum = alpha * accum + beta * BF16_C_from_gmem (F32 math)
- *   2. Convert F32 -> BF16 in registers
- *   3. STSM: stmatrix.sync writes BF16 to smem (reuses sA buffer, 64 KB fits in 96 KB)
- *   4. Vectorized 128-bit stores: smem -> gmem (coalesced along M for column-major C)
+ * The kernel keeps SM80 HMMA tensor cores + LDSM S2R unchanged.
  *
- * All MMA pipeline features are identical to bf16_gemm_sm80_pipe_256x128.cu:
- *   - (256, 128, 64) CTA tile, 256 threads (8 warps)
- *   - cp.async 3-stage pipeline
- *   - Swizzled smem layouts for bank conflict avoidance
+ * Key differences from pipe_epilogue:
+ *   - Smem layouts use GMMA atoms (Swizzle<3,4,3>) instead of Swizzle<3,3,3>
+ *     (Swizzle<3,3,3> is not TMA-compatible — TMA requires M=4 swizzle)
+ *   - TMA descriptors encode gmem strides, so A/B strides are not passed to kernel
+ *   - ClusterTransactionBarrier replaces cp_async_fence/wait for pipeline sync
+ *   - Launched via cutlass::launch_kernel_on_cluster (required for TMA)
+ *   - Epilogue: STSM to smem (unchanged) + bulk copy store (replaces vectorized S2G)
  *
  * C = alpha * A * B^T + beta * C
  *   A: bf16, M x K, row-major (TN layout)
  *   B: bf16, K x N, stored as (N, K) in CuTe with K-contiguous stride
  *   C: bf16, M x N, column-major
  *
- * Target: SM90 (uses SM80 tensor cores + SM90 stmatrix for epilogue)
+ * Target: SM90 (uses SM80 tensor cores + SM90 TMA for gmem↔smem transfers)
  **************************************************************************************************/
 #include <cstdlib>
 #include <cstdio>
@@ -34,32 +32,31 @@
 
 #include <cute/tensor.hpp>
 
+#include "cutlass/cluster_launch.hpp"
+#include "cutlass/arch/barrier.h"
+#include "cutlass/device_kernel.h"
+#include <iostream>
+
 using bf16_t = cute::bfloat16_t;
 
 // ================================================================================================
 // SharedStorage struct
 // ================================================================================================
 //
-// Encapsulates shared memory allocation for both A and B matrices.
+// Encapsulates shared memory allocation for both A and B matrices plus TMA barriers.
 // Uses CuTe's ArrayEngine which provides properly aligned storage for the layout's elements.
-// cosize_v<SmemLayout> computes the total number of elements the layout addresses,
-// including any padding introduced by swizzle patterns.
-//
-// This struct is used with dynamic shared memory (extern __shared__ char[]) and is
-// reinterpret_cast'd into place. This is the standard CuTe/CUTLASS pattern for
-// pipelined kernels that need explicit control over shared memory layout.
-//
-// The SharedStorage approach has two advantages over static __shared__ arrays:
-//   1. Supports 3D pipelined layouts where the third dimension (PIPE) requires
-//      multiple back-to-back copies of the 2D tile.
-//   2. Allows cudaFuncSetAttribute to query/set the exact shared memory requirement,
-//      which is critical for kernels that need >48KB of shared memory.
+// The tma_barrier array holds one ClusterTransactionBarrier per pipeline stage — TMA thread
+// arrives, hardware signals completion via transaction bytes.
 
 template <class ElementA, class ElementB, class SmemLayoutA, class SmemLayoutB>
 struct SharedStorage
 {
-  cute::ArrayEngine<ElementA, cute::cosize_v<SmemLayoutA>> A;
-  cute::ArrayEngine<ElementB, cute::cosize_v<SmemLayoutB>> B;
+  alignas(128) cute::ArrayEngine<ElementA, cute::cosize_v<SmemLayoutA>> A;
+  alignas(128) cute::ArrayEngine<ElementB, cute::cosize_v<SmemLayoutB>> B;
+
+  // TMA load barriers — one per pipeline stage
+  // ClusterTransactionBarrier: TMA thread arrives, hardware signals completion via Tx bytes
+  uint64_t tma_barrier[cute::size<2>(SmemLayoutA{})];
 };
 
 // ================================================================================================
@@ -70,373 +67,230 @@ struct SharedStorage
 // The K dimension is processed in chunks of BLK_K using a 3-stage pipeline.
 //
 // Data flow (pipelined, per K-tile):
-//   1. cp.async issues async gmem -> smem copy for the NEXT pipe stage
-//      (overlaps with MMA compute on the CURRENT pipe stage)
-//   2. cp_async_fence() commits pending async copies
-//   3. cp_async_wait<N>() + __syncthreads() ensures the target pipe stage is ready
-//   4. LDSM vectorized smem -> register copy for the CURRENT pipe stage
-//   5. Tensor core MMA on registers
-//   6. Pipe indices rotate: read advances, write takes the slot just freed by MMA
+//   1. TMA thread (threadIdx.x == 0) issues bulk tensor load via mbarrier
+//   2. ClusterTransactionBarrier::wait ensures TMA load completes
+//   3. LDSM vectorized smem -> register copy for the CURRENT pipe stage
+//   4. Tensor core MMA on registers
+//   5. Pipe indices rotate: read advances, write takes the slot just freed by MMA
 //
-// Template parameters follow the sgemm_sm80.cu canonical pattern:
-//   - AG2SCopy/BG2SCopy: TiledCopy objects for async gmem->smem (replaces thread layouts)
-//   - S2RCopyAtomA/B: LDSM copy atoms for smem->register (moved after their G2S counterpart)
+// Epilogue:
+//   1. Element-wise alpha/beta scaling
+//   2. F32->BF16 conversion, STSM to smem
+//   3. TMA store: thread 0 issues bulk smem->gmem copy
 
 template <class ProblemShape, class CtaTiler,
-          class TA, class AStride, class ASmemLayout, class AG2SCopy, class S2RCopyAtomA,
-          class TB, class BStride, class BSmemLayout, class BG2SCopy, class S2RCopyAtomB,
-          class TC, class CStride, class TiledMma,
-          class R2SCopy, class S2GCopy,
+          class TA, class SmemLayoutA, class TmaA, class S2RCopyAtomA,
+          class TB, class SmemLayoutB, class TmaB, class S2RCopyAtomB,
+          class TC, class SmemLayoutC, class R2SCopy, class CStride, class TiledMma,
           class Alpha, class Beta>
 __global__ static
 __launch_bounds__(decltype(size(TiledMma{}))::value)
 void
 bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
-                 TA const* A, AStride dA, ASmemLayout sA_layout, AG2SCopy g2s_copy_a, S2RCopyAtomA s2r_atom_a,
-                 TB const* B, BStride dB, BSmemLayout sB_layout, BG2SCopy g2s_copy_b, S2RCopyAtomB s2r_atom_b,
-                 TC      * C, CStride dC,                        TiledMma mma,
-                 R2SCopy r2s_copy, S2GCopy s2g_copy,
+                 TA const* A, CUTLASS_GRID_CONSTANT TmaA const tma_a, S2RCopyAtomA s2r_atom_a,
+                 TB const* B, CUTLASS_GRID_CONSTANT TmaB const tma_b, S2RCopyAtomB s2r_atom_b,
+                 TC      * C, SmemLayoutC,
+                 R2SCopy r2s_copy, CStride dC, TiledMma mma,
                  Alpha alpha, Beta beta)
 {
   using namespace cute;
 
   // ---- Preconditions ----
-  //
-  // These compile-time checks verify that the kernel parameters are consistent.
-  // CUTE_STATIC_ASSERT_V works on dynamic values (runtime-known tensor dimensions).
-  // static_assert works on types only (compile-time-known layout properties).
 
-  CUTE_STATIC_ASSERT_V(rank(shape_MNK) == Int<3>{});                   // (M, N, K)
-  CUTE_STATIC_ASSERT_V(rank(cta_tiler) == Int<3>{});                   // (BLK_M, BLK_N, BLK_K)
+  CUTE_STATIC_ASSERT_V(rank(shape_MNK) == Int<3>{});
+  CUTE_STATIC_ASSERT_V(rank(cta_tiler) == Int<3>{});
 
-  // The TiledCopy for gmem->smem must involve the same number of threads as the TiledMMA.
-  // This ensures the kernel launches with the correct number of threads.
-  // (Replaces the old size(tA) == size(mma) check for thread layouts.)
-  CUTE_STATIC_ASSERT_V(size(g2s_copy_a) == size(mma));                 // NumThreads
-  CUTE_STATIC_ASSERT_V(size(g2s_copy_b) == size(mma));                 // NumThreads
+  static_assert(is_static<SmemLayoutA>::value);
+  static_assert(is_static<SmemLayoutB>::value);
 
-  // Smem layouts must be static (compile-time known) for shared memory addressing.
-  // Note: The PIPE dimension is included in the smem layout, so size<0>/size<1> still
-  // correctly capture BLK_M/BLK_K and BLK_N/BLK_K — the PIPE dim is size<2>.
-  // Note: size<2> of smem layouts is the pipeline depth bP — not checked here as
-  // it's an internal design choice unrelated to cta_tiler.
-  static_assert(is_static<ASmemLayout>::value);
-  static_assert(is_static<BSmemLayout>::value);
+  CUTE_STATIC_ASSERT_V(size<0>(SmemLayoutA{}) == size<0>(cta_tiler));    // BLK_M
+  CUTE_STATIC_ASSERT_V(size<1>(SmemLayoutA{}) == size<2>(cta_tiler));    // BLK_K
+  CUTE_STATIC_ASSERT_V(size<0>(SmemLayoutB{}) == size<1>(cta_tiler));    // BLK_N
+  CUTE_STATIC_ASSERT_V(size<1>(SmemLayoutB{}) == size<2>(cta_tiler));    // BLK_K
 
-  CUTE_STATIC_ASSERT_V(size<0>(sA_layout) == size<0>(cta_tiler));      // BLK_M
-  CUTE_STATIC_ASSERT_V(size<1>(sA_layout) == size<2>(cta_tiler));      // BLK_K
-  CUTE_STATIC_ASSERT_V(size<0>(sB_layout) == size<1>(cta_tiler));      // BLK_N
-  CUTE_STATIC_ASSERT_V(size<1>(sB_layout) == size<2>(cta_tiler));      // BLK_K
-  CUTE_STATIC_ASSERT_V(congruent(select<0,2>(shape_MNK), dA));
-  CUTE_STATIC_ASSERT_V(congruent(select<1,2>(shape_MNK), dB));
-  CUTE_STATIC_ASSERT_V(congruent(select<0,1>(shape_MNK), dC));
-  CUTE_STATIC_ASSERT_V(size(r2s_copy) == size(mma));                    // NumThreads
-  CUTE_STATIC_ASSERT_V(size(s2g_copy) == size(mma));                    // NumThreads
+  CUTE_STATIC_ASSERT_V(congruent(select<0,1>(shape_MNK), dC));           // dC for MN
+  CUTE_STATIC_ASSERT_V(size(r2s_copy) == size(mma));                      // NumThreads
 
   // ---- Step 1: Global memory tensors ----
-  //
-  // make_tensor wraps a raw pointer with shape and stride information.
-  // select<0,2>(shape_MNK) extracts (M, K) from (M, N, K).
-  //
-  // local_tile extracts this CTA's subtensor from the full tensor.
-  //   Step<_1, X, _1> means "tile M and K dimensions, skip N"
-  //   Step< X,_1, _1> means "skip M, tile N and K dimensions"
-  //   Step<_1,_1,  X> means "tile M and N, skip K"
-  //
-  // gA and gB have a third mode "k" representing the number of K-tiles to process.
 
-  Tensor mA = make_tensor(make_gmem_ptr(A), select<0,2>(shape_MNK), dA); // (M, K)
-  Tensor mB = make_tensor(make_gmem_ptr(B), select<1,2>(shape_MNK), dB); // (N, K)
-  Tensor mC = make_tensor(make_gmem_ptr(C), select<0,1>(shape_MNK), dC); // (M, N)
+  auto [M, N, K] = shape_MNK;
+  Tensor mA = tma_a.get_tma_tensor(make_shape(M, K));                    // (M,K) TMA Tensor
+  Tensor mB = tma_b.get_tma_tensor(make_shape(N, K));                    // (N,K) TMA Tensor
+  Tensor mC = make_tensor(make_gmem_ptr(C), make_shape(M, N), dC);       // (M,N) regular gmem for beta load + store
 
   auto cta_coord = make_coord(blockIdx.x, blockIdx.y, _);
-  Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X, _1>{});  // (BLK_M, BLK_K, k)
-  Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step<X, _1, _1>{});  // (BLK_N, BLK_K, k)
-  Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1, X>{});  // (BLK_M, BLK_N)
+  Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X, _1>{});   // (BLK_M,BLK_K,k)
+  Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step< X,_1, _1>{});   // (BLK_N,BLK_K,k)
+  Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1, X>{});   // (BLK_M,BLK_N)
 
-  // ---- Step 2: Shared memory tensors (dynamic, 3D with pipeline dimension) ----
-  //
-  // Unlike the non-pipelined version which uses static __shared__ arrays,
-  // the pipelined kernel uses dynamic shared memory via extern __shared__ char[].
-  //
-  // The SharedStorage struct provides two ArrayEngine members for A and B.
-  // The smem layouts are now 3D: (BLK_M, BLK_K, bP) where bP=3 is the pipeline depth.
-  // This means shared memory holds 3 copies of each tile — one being loaded,
-  // one being consumed by MMA, and one as a buffer.
-  //
-  // make_smem_ptr creates a CuTe tensor pointer into shared memory with proper
-  // alignment guarantees. The swizzle in the layout is transparent to all users.
+  // ---- Step 2: Shared memory tensors ----
 
   extern __shared__ char shared_memory[];
-  using SharedStorage = SharedStorage<TA, TB, ASmemLayout, BSmemLayout>;
+  using SharedStorage = SharedStorage<TA, TB, SmemLayoutA, SmemLayoutB>;
   SharedStorage& smem = *reinterpret_cast<SharedStorage*>(shared_memory);
-  Tensor sA = make_tensor(make_smem_ptr(smem.A.begin()), sA_layout);   // (BLK_M, BLK_K, bP)
-  Tensor sB = make_tensor(make_smem_ptr(smem.B.begin()), sB_layout);   // (BLK_N, BLK_K, bP)
+  Tensor sA = make_tensor(make_smem_ptr(smem.A.begin()), SmemLayoutA{});  // (BLK_M,BLK_K,PIPE)
+  Tensor sB = make_tensor(make_smem_ptr(smem.B.begin()), SmemLayoutB{});  // (BLK_N,BLK_K,PIPE)
 
-  // ---- Step 3: gmem -> smem copy partitioning (async via TiledCopy) ----
+  // ---- Step 3: TMA partitioning for gmem -> smem ----
   //
-  // The non-pipelined version used local_partition with thread layouts for synchronous copy.
-  // Here we use TiledCopy objects (g2s_copy_a, g2s_copy_b) which encapsulate:
-  //   - The copy atom: SM80_CP_ASYNC_CACHEALWAYS<uint128_t> — async 128-bit copy
-  //   - Thread layout: how threads map to the tile
-  //   - Value layout: how many values each thread copies per instruction
+  // tma_partition returns (gmem_view, smem_view) pair:
+  //   tAgA: (TMA, k) — TMA coord tensor + K-tile index
+  //   tAsA: (TMA, PIPE) — SMEM view + pipeline stage
   //
-  // get_slice(threadIdx.x) gives this thread's view of the TiledCopy.
-  // partition_S(gA) partitions the source (global memory) tensor among threads.
-  // partition_D(sA) partitions the destination (shared memory) tensor among threads.
-  //
-  // Resulting shapes:
-  //   tAgA: (CPY, CPY_M, CPY_K, k) — 4D: copy mode, M tiles, K tiles, K-pipeline
-  //   tAsA: (CPY, CPY_M, CPY_K, PIPE) — 4D: same but 4th dim is pipe stage, not K-tile index
-  //
-  // The async copy instruction (cp.async) will write to the pipe stage indicated by the
-  // 4th dimension of tAsA, and read from the K-tile indicated by the 4th dim of tAgA.
+  // group_modes<0,2> transforms (X,Y,Z) -> ((X,Y),Z) so TMA handles the 2D tile
+  // as mode-0 and the rest (k or PIPE) as mode-1.
 
-  ThrCopy thr_g2s_a = g2s_copy_a.get_slice(threadIdx.x);
-  Tensor tAgA = thr_g2s_a.partition_S(gA);   // (CPY, CPY_M, CPY_K, k)
-  Tensor tAsA = thr_g2s_a.partition_D(sA);   // (CPY, CPY_M, CPY_K, PIPE)
+  auto [tAgA, tAsA] = tma_partition(tma_a, Int<0>{}, Layout<_1>{},
+                                     group_modes<0,2>(sA), group_modes<0,2>(gA));
 
-  ThrCopy thr_g2s_b = g2s_copy_b.get_slice(threadIdx.x);
-  Tensor tBgB = thr_g2s_b.partition_S(gB);   // (CPY, CPY_N, CPY_K, k)
-  Tensor tBsB = thr_g2s_b.partition_D(sB);   // (CPY, CPY_N, CPY_K, PIPE)
+  auto [tBgB, tBsB] = tma_partition(tma_b, Int<0>{}, Layout<_1>{},
+                                     group_modes<0,2>(sB), group_modes<0,2>(gB));
 
-  // Verify that the source and destination partition shapes match in M/N and K dimensions.
-  // The 4th dimension differs: k (total tiles) vs PIPE (3 stages).
-  CUTE_STATIC_ASSERT_V(size<1>(tAgA) == size<1>(tAsA));                // CPY_M
-  CUTE_STATIC_ASSERT_V(size<2>(tAgA) == size<2>(tAsA));                // CPY_K
-  CUTE_STATIC_ASSERT_V(size<1>(tBgB) == size<1>(tBsB));                // CPY_N
-  CUTE_STATIC_ASSERT_V(size<2>(tBgB) == size<2>(tBsB));                // CPY_K
+  // TMA transaction bytes: how many bytes one TMA instruction transfers per tile
+  constexpr int tma_transaction_bytes = sizeof(make_tensor_like(tensor<0>(tAsA)))
+                                      + sizeof(make_tensor_like(tensor<0>(tBsB)));
 
-  // ---- Step 3b: Prefetch phase — fill pipeline stages before MMA starts ----
-  //
-  // Before the MMA loop begins, we need data already in shared memory.
-  // We launch K_PIPE_MAX - 1 = 2 async copies to fill pipeline stages 0 and 1.
-  //
-  // cp_async_fence() acts as a barrier for async copies — it ensures all cp.async
-  // instructions issued before the fence complete before any after the fence.
-  // This is needed because cp.async is non-blocking; the GPU schedules the actual
-  // memory transfer independently of the issuing thread.
-  //
-  // k_tile_count tracks remaining K-tiles to process (decremented as we schedule loads).
-  // k_tile_next tracks which K-tile in gmem to load next.
-  //
-  // After this loop:
-  //   - pipe[0] and pipe[1] have async copies in flight
-  //   - The main loop will wait for pipe[0], process it, and keep the pipeline full
+  // ---- Step 3b: Barrier init and TMA prefetch ----
 
-  auto K_PIPE_MAX = size<3>(tAsA);   // = bP = 3
-  int k_tile_count = size<3>(tAgA);  // total K-tiles
+  auto K_PIPE_MAX = size<1>(tAsA);   // = bP = 3
+  int k_tile_count = size<1>(tAgA);  // total K-tiles
   int k_tile_next  = 0;
 
-  // Note: if K < (bP-1)*bK, the last valid K-tile is loaded redundantly into multiple
-  // stages. Still correct — same data computed, just extra work.
-  // Benchmark assertions ensure K >= bK.
+  // Initialize TMA barriers
+  using ProducerBarType = cutlass::arch::ClusterTransactionBarrier;
+  uint64_t* producer_mbar = smem.tma_barrier;
+
+  if (threadIdx.x == 0) {
+    CUTE_UNROLL
+    for (int pipe = 0; pipe < K_PIPE_MAX; ++pipe) {
+      ProducerBarType::init(&producer_mbar[pipe], 1);  // 1 = single TMA thread arrives
+    }
+  }
+  __syncthreads();
+
+  // Prefetch K_PIPE_MAX - 1 stages (leave last pipe free for first main-loop write)
   CUTE_UNROLL
-  for (int k_pipe = 0; k_pipe < K_PIPE_MAX - 1; ++k_pipe) {
-    copy(g2s_copy_a, tAgA(_,_,_,k_tile_next), tAsA(_,_,_,k_pipe));
-    copy(g2s_copy_b, tBgB(_,_,_,k_tile_next), tBsB(_,_,_,k_pipe));
-    cp_async_fence();
+  for (int k_pipe = 0; k_pipe < K_PIPE_MAX - 1; ++k_pipe)
+  {
+    if (threadIdx.x == 0) {
+      ProducerBarType::arrive_and_expect_tx(&producer_mbar[k_pipe], tma_transaction_bytes);
+      copy(tma_a.with(producer_mbar[k_pipe]), tAgA(_,k_tile_next), tAsA(_,k_pipe));
+      copy(tma_b.with(producer_mbar[k_pipe]), tBgB(_,k_tile_next), tBsB(_,k_pipe));
+    }
     --k_tile_count;
     if (k_tile_count > 0) { ++k_tile_next; }
   }
 
   // ---- Step 4: TiledMMA setup and register allocation ----
-  //
-  // ThrMMA (mma.get_thread_slice) gives this specific thread's view of the TiledMMA.
-  //
-  // Key difference from the non-pipelined version:
-  //   - partition_fragment_A/B is used instead of make_fragment_A/B.
-  //   - partition_fragment_A takes a *slice* of smem (sA(_,_,0)) — i.e., one pipe stage.
-  //     This is because make_fragment_A/B expects a 2D smem view, but our smem is now 3D.
-  //     Slicing with (_,_,0) gives the 2D view for one pipeline stage.
-  //   - partition_fragment_A allocates registers matching the MMA partition shape
-  //     without needing to go through partition_A first (which would give a 3D view
-  //     with the PIPE dimension, confusing the register allocation).
-  //
-  // tCrA, tCrB are register tensors organized as (MMA, MMA_M, MMA_K) where:
-  //   - MMA mode: values that the MMA instruction processes simultaneously
-  //   - MMA_M, MMA_K: logical coordinates within the MMA tile
-  // The MMA atom processes K in sub-tiles of K_BLOCK_MAX iterations.
 
   ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
 
-  // Partition gmem for MMA output
-  Tensor tCgC = thr_mma.partition_C(gC);                                // (MMA, MMA_M, MMA_N)
-
-  // Allocate register fragments using partition_fragment_A/B.
-  // We slice sA and sB to remove the PIPE dimension (take pipe stage 0).
-  // This gives a 2D view that partition_fragment_A/B can work with.
-  Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));  // (MMA, MMA_M, MMA_K) in regs
-  Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));  // (MMA, MMA_N, MMA_K) in regs
-
-  // Allocate the accumulator registers — same logical shape as the gmem output partition.
-  Tensor tCrC = thr_mma.make_fragment_C(tCgC);                         // (MMA, MMA_M, MMA_N) accum
-
-  // Zero the accumulators before the MMA loop.
+  Tensor tCgC = thr_mma.partition_C(gC);                                 // (MMA, MMA_M, MMA_N)
+  Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));                  // (MMA, MMA_M, MMA_K)
+  Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));                  // (MMA, MMA_N, MMA_K)
+  Tensor tCrC = thr_mma.make_fragment_C(tCgC);                           // (MMA, MMA_M, MMA_N)
   clear(tCrC);
 
-  // ---- Step 4c: Epilogue tensor setup ----
+  // ---- Step 4c: Epilogue R2S setup ----
 
   ThrCopy thr_r2s = r2s_copy.get_slice(threadIdx.x);
-  ThrCopy thr_s2g = s2g_copy.get_slice(threadIdx.x);
 
   // ---- Step 4b: S2R (smem->register) copy setup ----
-  //
-  // Same make_tiled_copy_A/B pattern as the non-pipelined version, but now sA and sB
-  // are 3D tensors (BLK_M, BLK_K, PIPE). The partition_S will preserve the PIPE dimension:
-  //   tXsA: (CPY, MMA_M, MMA_K, PIPE) — 4D with PIPE dimension
-  //   tXrA: (CPY, MMA_M, MMA_K) — 3D without PIPE (retile_D works on tCrA which is 3D)
-  //
-  // In the main loop, we'll slice tXsA along the PIPE dimension to select which
-  // pipeline stage to read from: tXsA(_,_,_,smem_pipe_read).
-  //
-  // make_tiled_copy_A bridges the LDSM instruction with the MMA:
-  //   - Takes an LDSM copy atom (SM75_U32x4_LDSM_N — the hardware instruction)
-  //   - Takes the TiledMMA (which knows the thread-value layout)
-  //   - Produces a TiledCopy whose thread mapping matches the MMA's expectations
-  //
-  // retile_D reshapes the MMA register fragment to match the LDSM destination layout.
-  // No data movement — just a layout reinterpretation.
 
   TiledCopy s2r_copy_a = make_tiled_copy_A(s2r_atom_a, mma);
   ThrCopy  thr_s2r_a   = s2r_copy_a.get_slice(threadIdx.x);
-  Tensor tXsA = thr_s2r_a.partition_S(sA);                              // (CPY, MMA_M, MMA_K, PIPE)
-  Tensor tXrA = thr_s2r_a.retile_D(tCrA);                              // (CPY, MMA_M, MMA_K)
+  Tensor tXsA = thr_s2r_a.partition_S(sA);                               // (CPY, MMA_M, MMA_K, PIPE)
+  Tensor tXrA = thr_s2r_a.retile_D(tCrA);                               // (CPY, MMA_M, MMA_K)
 
   TiledCopy s2r_copy_b = make_tiled_copy_B(s2r_atom_b, mma);
   ThrCopy  thr_s2r_b   = s2r_copy_b.get_slice(threadIdx.x);
-  Tensor tXsB = thr_s2r_b.partition_S(sB);                              // (CPY, MMA_N, MMA_K, PIPE)
-  Tensor tXrB = thr_s2r_b.retile_D(tCrB);                              // (CPY, MMA_N, MMA_K)
+  Tensor tXsB = thr_s2r_b.partition_S(sB);                               // (CPY, MMA_N, MMA_K, PIPE)
+  Tensor tXrB = thr_s2r_b.retile_D(tCrB);                               // (CPY, MMA_N, MMA_K)
 
   // ---- Step 5: Pipelined main loop ----
   //
-  // This is the heart of the pipelined kernel. The loop implements a circular buffer
-  // over shared memory pipeline stages:
+  // Producer-consumer pipeline:
+  //   Producer: TMA thread (threadIdx.x == 0) issues bulk tensor loads via mbarrier
+  //   Consumer: All threads read from smem via LDSM, then execute MMA
   //
-  //   smem_pipe_read:  which pipe stage we're currently reading from (for smem->regs)
-  //   smem_pipe_write: which pipe stage we're currently writing to (for gmem->smem)
-  //
-  // The pipeline operates as a producer-consumer system:
-  //   Producer: cp.async loads data from gmem into smem at smem_pipe_write
-  //   Consumer: LDSM loads data from smem at smem_pipe_read into registers, then MMA
-  //
-  // After each K-tile is processed:
-  //   - smem_pipe_write takes the value of smem_pipe_read (the stage MMA just finished with
-  //     is now free to be overwritten)
-  //   - smem_pipe_read advances circularly: (read + 1) % K_PIPE_MAX
-  //
-  // The loop condition k_tile_count > -(K_PIPE_MAX - 1) accounts for the drain phase:
-  //   After the last gmem load is issued, we still need K_PIPE_MAX - 1 more iterations
-  //   to process the remaining pipeline stages. The count goes negative during drain.
-  //
-  // K_BLOCK_MAX is the number of register sub-tiles within each smem K-tile.
-  //   This corresponds to the MMA_K dimension of tCrA/tCrB. For our configuration
-  //   (BLK_K=64, MMA tile K=16), K_BLOCK_MAX = 4.
-  //   The inner loop over k_block further overlaps smem->regs with MMA:
-  //     - At k_block == K_BLOCK_MAX - 1: wait for the next pipe stage, update smem pointers
-  //     - At k_block == 0: issue async gmem->smem copy for the next K-tile
-  //     - Load k_block+1 while computing on k_block (double-buffering within registers)
+  // smem_pipe_read/write track circular buffer positions.
+  // The mbarrier tracks both arrival (TMA thread signals load) and transaction bytes
+  // (hardware confirms bytes written to smem).
 
   int smem_pipe_read  = 0;
   int smem_pipe_write = K_PIPE_MAX - 1;
+  uint32_t read_phase = 0;
 
-  // Pipe slice: tXsA_p and tXsB_p point to the current pipe stage for reading.
-  // Updated each iteration to select the correct stage from the 4D tensor.
   Tensor tXsA_p = tXsA(_,_,_,smem_pipe_read);
   Tensor tXsB_p = tXsB(_,_,_,smem_pipe_read);
 
-  // Number of register sub-tiles in the K dimension.
-  auto K_BLOCK_MAX = size<2>(tCrA);   // = 4
+  auto K_BLOCK_MAX = size<2>(tCrA);
 
-  // Prefetch the first register block from the first pipeline stage.
-  // cp_async_wait<K_PIPE_MAX - 2> waits until at least K_PIPE_MAX - 2 = 1 async
-  // copies have completed. Since we prefetched 2 stages, at least stage 0 is ready.
-  // __syncthreads() ensures all threads in the block see the completed smem writes.
+  // Wait for first stage before MMA starts
   if (K_BLOCK_MAX > 1) {
-    cp_async_wait<K_PIPE_MAX - 2>();
+    ProducerBarType::wait(&producer_mbar[smem_pipe_read], read_phase);
     __syncthreads();
     copy(s2r_atom_a, tXsA_p(_,_,Int<0>{}), tXrA(_,_,Int<0>{}));
     copy(s2r_atom_b, tXsB_p(_,_,Int<0>{}), tXrB(_,_,Int<0>{}));
   }
 
-  // CUTE_NO_UNROLL prevents the compiler from unrolling the outer while loop.
-  // This is intentional: the loop body is already unrolled (CUTE_UNROLL on k_block),
-  // and unrolling the outer loop would exponentially increase code size for large K.
   CUTE_NO_UNROLL
   while (k_tile_count > -(K_PIPE_MAX - 1))
   {
     CUTE_UNROLL
     for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block)
     {
-      // On the last k_block of the inner loop:
-      //   - The current smem pipe stage is about to be fully consumed.
-      //   - Prepare for the next pipe stage: update smem pointers and wait for it.
       if (k_block == K_BLOCK_MAX - 1)
       {
-        // Point to the next pipe stage we'll read from.
         tXsA_p = tXsA(_,_,_,smem_pipe_read);
         tXsB_p = tXsB(_,_,_,smem_pipe_read);
 
-        // Wait until the async copy into this pipe stage is complete.
-        // cp_async_wait<N> blocks until at most N async copies are still pending.
-        // K_PIPE_MAX - 2 = 1 means "wait until at most 1 async copy is in flight."
-        // __syncthreads() ensures all threads see the same shared memory state.
-        cp_async_wait<K_PIPE_MAX - 2>();
+        // Wait for TMA load to complete on the next pipe stage
+        ProducerBarType::wait(&producer_mbar[smem_pipe_read], read_phase);
         __syncthreads();
       }
 
-      // Load the NEXT k_block's data from smem to registers while we compute on the current.
-      // k_block_next wraps around via modular arithmetic (Int<1>{} ensures compile-time eval).
-      // This is the register-level double-buffering: load k_block+1 while MMA works on k_block.
-      auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;      // static
+      auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
       copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
       copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
 
-      // On the first k_block of the inner loop:
-      //   - Issue the async gmem->smem copy for the NEXT K-tile.
-      //   - This copy will write to smem_pipe_write (the pipe stage MMA just finished with).
-      //   - Advance pipe indices for the next outer loop iteration.
       if (k_block == 0)
       {
-        copy(g2s_copy_a, tAgA(_,_,_,k_tile_next), tAsA(_,_,_,smem_pipe_write));
-        copy(g2s_copy_b, tBgB(_,_,_,k_tile_next), tBsB(_,_,_,smem_pipe_write));
-        cp_async_fence();
+        // TMA thread issues load for next K-tile
+        if (threadIdx.x == 0) {
+          ProducerBarType::arrive_and_expect_tx(&producer_mbar[smem_pipe_write], tma_transaction_bytes);
+          copy(tma_a.with(producer_mbar[smem_pipe_write]), tAgA(_,k_tile_next), tAsA(_,smem_pipe_write));
+          copy(tma_b.with(producer_mbar[smem_pipe_write]), tBgB(_,k_tile_next), tBsB(_,smem_pipe_write));
+        }
 
-        // Advance the gmem tile index.
         --k_tile_count;
         if (k_tile_count > 0) { ++k_tile_next; }
 
-        // Rotate pipe indices circularly.
-        // write takes read's slot (MMA just finished consuming it, so it's free).
-        // read advances to the next stage in the circular buffer.
+        // Advance pipe indices with phase tracking
         smem_pipe_write = smem_pipe_read;
-        smem_pipe_read = (smem_pipe_read == K_PIPE_MAX - 1) ? 0 : smem_pipe_read + 1;
+        ++smem_pipe_read;
+        if (smem_pipe_read == K_PIPE_MAX) {
+          smem_pipe_read = 0;
+          read_phase ^= 1;
+        }
       }
 
-      // Tensor core MMA: tCrC += tCrA[:,:,k_block] * tCrB[:,:,k_block]
-      // This operates on the register fragment for the current k_block.
       gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
     }
   }
 
   // ---- Step 6: Epilogue ----
   //
-  // STSM pipeline: F32 accumulators -> BF16 smem -> BF16 gmem
-  //
-  // Stage 1: Element-wise alpha/beta scaling.
-  // Load existing C (BF16) from gmem via tCgC, convert to F32 inline, blend with accumulators.
-  // This avoids allocating a full F32 register tensor for loaded C, keeping peak at ~148 regs.
+  // Stage 1: Element-wise alpha/beta scaling
   CUTE_UNROLL
   for (int i = 0; i < size(tCrC); ++i) {
     tCrC(i) = alpha * tCrC(i) + beta * static_cast<float>(tCgC(i));
   }
 
-  // Stage 2: Convert F32 -> BF16, write to smem via STSM.
-  // Reuse sA's smem buffer (64 KB fits in 96 KB). sC is column-major (stride-1 in M).
-  // bM/bN are not in kernel scope, so extract tile dimensions from cta_tiler.
+  // Stage 2: Convert F32 -> BF16, STSM to smem (plain column-major layout)
   Tensor sC = make_tensor(
       make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
-      make_layout(make_shape(size<0>(cta_tiler), size<1>(cta_tiler))));
+      SmemLayoutC{});
 
   Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
   CUTE_UNROLL
@@ -450,32 +304,17 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   copy(r2s_copy, tRS_rAcc, tRS_sC);
   __syncthreads();
 
-  // Stage 3: Vectorized S2G copy (128-bit coalesced stores along M).
-  Tensor tSG_sC = thr_s2g.partition_S(sC);
-  Tensor tSG_gC = thr_s2g.partition_D(gC);
-
-  copy(s2g_copy, tSG_sC, tSG_gC);
+  // Stage 3: Bulk copy store (smem -> gmem)
+  // Uses SM90_BULK_COPY_AUTO for reliable smem->gmem transfer.
+  auto blkcp = Copy_Traits<SM90_BULK_COPY_AUTO>{};
+  copy(blkcp, sC, gC);
+  tma_store_arrive();
+  tma_store_wait<0>();
 }
 
 // ================================================================================================
 // Host Function — configure and launch the kernel
 // ================================================================================================
-//
-// This function sets up all the parameters for the pipelined BF16 GEMM:
-//   - Problem shape and strides (dynamic, from arguments)
-//   - CTA tile sizes (static: 256 x 128 x 64)
-//   - Smem layouts (static, swizzled with Swizzle<3,3,3>, 3D with PIPE dimension)
-//   - TiledCopy for async gmem->smem (static, cp.async 128-bit)
-//   - TiledMMA (static, wraps SM80 BF16 tensor core atom)
-//   - S2R copy atoms (static, SM75_U32x4_LDSM_N)
-//
-// Key changes from the non-pipelined host function:
-//   - bP = Int<3>{} added for pipeline depth
-//   - Smem layouts are 3D: tile_to_shape(swizzle_atom, make_shape(bM, bK, bP))
-//   - Thread layouts (tA, tB) replaced by TiledCopy (g2s_copy_a, g2s_copy_b)
-//   - S2R atoms are constructed locally (not template parameters of the host function)
-//   - Dynamic shared memory size computed and set via cudaFuncSetAttribute
-//   - L1 cache carveout set to 100% shared memory (maximizes smem capacity)
 
 template <class Alpha, class Beta>
 void
@@ -489,107 +328,50 @@ bf16_gemm_tn(int m, int n, int k,
 {
   using namespace cute;
 
-  // Problem shape (dynamic)
+  // Problem shape
   auto M = int(m);
   auto N = int(n);
   auto K = int(k);
-  auto prob_shape = make_shape(M, N, K);                                // (M, N, K)
+  auto prob_shape = make_shape(M, N, K);
 
-  // TN strides (mixed static/dynamic)
-  // A: (M, K) row-major — stride (ldA, 1)
-  // B: (N, K) K-contiguous — stride (ldB, 1)
-  // C: (M, N) column-major — stride (1, ldC)
-  auto dA = make_stride(ldA, Int<1>{});
-  auto dB = make_stride(ldB, Int<1>{});
-  auto dC = make_stride(Int<1>{}, ldC);
+  // TN strides (for TMA descriptor creation)
+  auto dA = make_stride(ldA, Int<1>{});                                   // (dM, dK)
+  auto dB = make_stride(ldB, Int<1>{});                                   // (dN, dK)
+  auto dC = make_stride(Int<1>{}, ldC);                                   // (dM, dN)
 
   // CTA tile sizes (static)
-  // bK=64 required by the swizzle pattern: the Swizzle<3,3,3> base layout has
-  // K-dimension 64, so tile_to_shape needs bK to be a multiple of 64.
   auto bM = Int<256>{};
   auto bN = Int<128>{};
   auto bK = Int<64>{};
-  auto cta_tiler = make_shape(bM, bN, bK);                              // (256, 128, 64)
+  auto cta_tiler = make_shape(bM, bN, bK);
 
-  // Pipeline depth (static)
-  // 3 stages: one being consumed by MMA, one being loaded by cp.async, one buffer.
-  // This is a tunable parameter; 3 is a good balance between overlap and smem usage.
+  // Pipeline depth
   auto bP = Int<3>{};
 
-  // Smem layouts (static, swizzled, 3D with pipeline dimension)
+  // Smem layouts — GMMA atoms with Swizzle<3,4,3> (TMA-compatible)
   //
-  // XOR swizzle eliminates shared memory bank conflicts.
-  // Swizzle<3,3,3>: 3-bit XOR, base position 3, shift 3.
+  // GMMA::Layout_K_SW128_Atom<bf16_t>: K-contiguous, SW128 swizzle
+  //   Atom shape: (8, 64) in bf16 elements
+  //   Swizzle<3,4,3> maps to TMA B128 mode
   //
-  // The base layout is 8 x (8 x 8) with strides (8, (1, 64)):
-  //   - Outer dimension: 8 rows of swizzle tiles
-  //   - Inner (8, 8): 8 rows x 8 columns per tile, column-major within each tile
-  //   - Stride (1, 64): column-major inner, 64-element gap between inner tile groups
-  //
-  // tile_to_shape now takes a 3D shape: (bM, bK, bP) for A and (bN, bK, bP) for B.
-  // This creates 3 back-to-back copies of the 2D swizzled layout in shared memory.
-  // The PIPE dimension is contiguous, so pipe stage p starts at offset p * BLK_M * BLK_K
-  // (adjusted for swizzle padding).
+  // GMMA::Layout_MN_SW128_Atom<bf16_t>: M-contiguous (column-major), SW128 swizzle
+  //   Atom shape: (64, 8) in bf16 elements
 
-  auto swizzle_atom = composition(
-      Swizzle<3, 3, 3>{},
-      Layout<Shape <_8, Shape<_8, _8>>,
-             Stride<_8, Stride<_1, _64>>>{});
+  auto sA = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bM, bK, bP));
+  auto sB = tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16_t>{}, make_shape(bN, bK, bP));
+  auto sC_layout = make_layout(make_shape(bM, bN), make_stride(Int<1>{}, bM));  // column-major, plain
 
-  auto sA = tile_to_shape(swizzle_atom, make_shape(bM, bK, bP));         // (256, 64, 3) swizzled
-  auto sB = tile_to_shape(swizzle_atom, make_shape(bN, bK, bP));         // (128, 64, 3) swizzled
+  // TMA load atoms for A and B
+  //
+  // make_tma_atom inspects the gmem tensor and smem layout to create a TMA descriptor
+  // that encodes strides, swizzle, and tile dimensions.
+  Tensor mA = make_tensor(A, make_shape(M, K), dA);                       // (M,K) for TMA inspection
+  Tensor mB = make_tensor(B, make_shape(N, K), dB);                       // (N,K) for TMA inspection
 
-  // G2S (gmem->smem) TiledCopy (static)
-  //
-  // Replaces the synchronous thread layouts (tA, tB) from the non-pipelined version.
-  //
-  // Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bf16_t>:
-  //   - SM80_CP_ASYNC_CACHEALWAYS: async copy from global to shared memory, always cache in L2
-  //   - uint128_t: each copy operation moves 128 bits = 8 x bf16 values at once
-  //   - bf16_t: the element type
-  //
-  // Thread layout Layout<Shape<_32, _8>, Stride<_8, _1>>{}:
-  //   - 32 threads in M dimension, 8 threads in K dimension = 256 threads total
-  //   - Stride <_8, _1>: K-contiguous (threads are packed along K)
-  //   - Doubled from Layout<Shape<_16, _8>> to match the 256-thread MMA
-  //
-  // Value layout Layout<Shape<_1, _8>>{}:
-  //   - Each thread copies 1 value in M, 8 values in K per instruction
-  //   - This matches the uint128_t atom: 8 x bf16 = 128 bits
-  //
-  // Coverage per copy-tile: (32, 64) in (M, K).
-  // For A (256, 64): loops 256/32 = 8 times in M.
-  // For B (128, 64): loops 128/32 = 4 times in N.
+  Copy_Atom tmaA = make_tma_atom(SM90_TMA_LOAD{}, mA, sA(_,_,0), make_shape(bM, bK));
+  Copy_Atom tmaB = make_tma_atom(SM90_TMA_LOAD{}, mB, sB(_,_,0), make_shape(bN, bK));
 
-  auto g2s_copy_a = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bf16_t>{},
-      Layout<Shape<_32, _8>, Stride<_8, _1>>{},
-      Layout<Shape<_1, _8>>{});
-
-  auto g2s_copy_b = make_tiled_copy(
-      Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, bf16_t>{},
-      Layout<Shape<_32, _8>, Stride<_8, _1>>{},
-      Layout<Shape<_1, _8>>{});
-
-  // TiledMMA (static)
-  //
-  // Atom: SM80_16x8x16_F32BF16BF16F32_TN — 16x8x16 BF16*BF16->F32, 32 threads
-  // Atom layout: 4x2 in (M, N) -> 256 threads total (8 warps)
-  //   - 4 atoms in M covers 4*16 = 64 M positions (matches default Tile M)
-  //   - 2 atoms in N covers 2*8  = 16 N positions (expanded to 64 by Tile override)
-  //   - Doubled in M from Layout<Shape<_2,_2>> to distribute the wider (256) tile
-  //
-  // Tile<Underscore, _64, Underscore> override:
-  //   - M: default = 16 * 4 = 64 (atom_M * atoms_in_M)
-  //   - N: explicit 64, expands from 16 (2 atoms of 8) to 64 (8 atoms of 8)
-  //   - K: default = 16 * 1 = 16 (atom_K * atoms_in_K)
-  //   - Required for SM75_U32x4_LDSM_N which needs 4 values per thread
-  //
-  // Note: Tile<_32, _32, _16> from the 128-thread version does NOT work here.
-  //   With Layout<Shape<_4, _2>>, a (32, 32) sub-tile creates (2, 4) atom repeats
-  //   (from 32/16=2 in M, 32/8=4 in N). zipped_divide cannot split (2, 4) by the
-  //   atom layout (4, 2) since 2 < 4 in M. Using Tile<Underscore, _64, Underscore> gives (64, 64)
-  //   sub-tiles with (4, 8) repeats, which correctly divides by (4, 2).
+  // TiledMMA (unchanged)
   TiledMMA mma = make_tiled_mma(
       SM80_16x8x16_F32BF16BF16F32_TN{},
       Layout<Shape<_4, _2>>{},
@@ -597,105 +379,61 @@ bf16_gemm_tn(int m, int n, int k,
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
 
-  // R2S (register-to-smem) TiledCopy — SM90 STSM for BF16 C epilogue
-  //
-  // SM90_U16x8_STSM_T: transposed stmatrix for column-major output.
-  //   - 32 threads (1 warp) write a transposed 8x8 BF16 matrix to smem
-  //   - Each thread provides 4 x uint32 (8 bf16 values)
-  //   - Selected because sizeof(bf16_t)==2 and C has stride-1 in M (column-major)
-  //
-  // make_tiled_copy_C bridges MMA get_layoutC_TV() with STSM register layout.
-
+  // R2S (register-to-smem) TiledCopy — SM90 STSM (unchanged)
   auto r2s_copy = make_tiled_copy_C(
       Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{},
       mma);
 
-  // S2G (smem-to-global) TiledCopy — 128-bit vectorized BF16 stores
-  //
-  // Thread layout Layout<Shape<_32, _8>, Stride<_1, _32>>:
-  //   - 32 threads in M, 8 in N = 256 threads
-  //   - tid = m + n*32: warp 0 (tid 0-31) all n=0, m=0..31
-  //   - Each warp writes contiguous 512-byte stripe along M — perfectly coalesced
-  //
-  // Value layout Layout<Shape<_8, _1>>: 8 bf16 contiguous in M (128 bits per store).
-  // Coverage per copy-tile: (256, 8). Loops 128/8 = 16 times in N.
-
-  auto s2g_copy = make_tiled_copy(
-      Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, bf16_t>{},
-      Layout<Shape<_32, _8>, Stride<_1, _32>>{},
-      Layout<Shape<_8, _1>>{});
-
-  // S2R (smem->register) copy atoms (static)
-  //
-  // SM75_U32x4_LDSM_N wraps the ldmatrix.sync.aligned.x4.m8n8.shared.b16 PTX instruction.
-  // One warp (32 threads) cooperatively loads a 8x8 matrix of 16-bit values (128 bytes)
-  // from smem into registers. Each thread receives 4 x 32-bit = 128 bits.
-  //
-  // _N suffix: normal (non-transposing) layout. Our smem is K-contiguous, and the
-  // MMA atom (SM80_16x8x16_F32BF16BF16F32_TN) expects TN layout, so no transpose needed.
-  //
-  // These are constructed inside the host function (not as template parameters)
-  // because the host function template only needs Alpha and Beta.
-
+  // S2R (smem->register) copy atoms (unchanged)
   Copy_Atom<SM75_U32x4_LDSM_N, bf16_t> s2r_atom_a;
   Copy_Atom<SM75_U32x4_LDSM_N, bf16_t> s2r_atom_b;
 
   // Grid and block dimensions
   dim3 dimBlock(size(mma));
+  dim3 dimCluster(1, 1, 1);
   dim3 dimGrid(size(ceil_div(M, bM)), size(ceil_div(N, bN)));
 
-  // Compute shared memory requirement.
-  // The SharedStorage struct sizes itself based on the smem layouts, which now include
-  // the PIPE dimension. For sA (256, 64, 3) ≈ 96 KB and sB (128, 64, 3) ≈ 48 KB,
-  // total is approximately ~144 KB. The exact size may be larger due to swizzle padding.
-  // This limits occupancy to 1 block per SM on GPUs with 192 KB shared memory.
+  // Shared memory
   int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, decltype(sA), decltype(sB)>));
 
-  // Get the kernel function pointer for cudaFuncSetAttribute.
-  // This is needed because cudaFuncSetAttribute requires a function pointer, not a
-  // triple-chevron launch. We must spell out all template arguments explicitly.
-  auto kernel_fptr = bf16_gemm_device<
+  // Kernel function pointer
+  auto* kernel_ptr = &bf16_gemm_device<
       decltype(prob_shape), decltype(cta_tiler),
-      bf16_t, decltype(dA), decltype(sA), decltype(g2s_copy_a), decltype(s2r_atom_a),
-      bf16_t, decltype(dB), decltype(sB), decltype(g2s_copy_b), decltype(s2r_atom_b),
-      bf16_t, decltype(dC),                        decltype(mma),
-      decltype(r2s_copy), decltype(s2g_copy),
+      bf16_t, decltype(sA), decltype(tmaA), decltype(s2r_atom_a),
+      bf16_t, decltype(sB), decltype(tmaB), decltype(s2r_atom_b),
+      bf16_t, decltype(sC_layout), decltype(r2s_copy), decltype(dC), decltype(mma),
       Alpha, Beta>;
 
-  // Set the maximum dynamic shared memory size for this kernel.
-  // Required when shared memory exceeds the default (usually 48 KB).
-  // The driver uses this hint to reserve enough shared memory for the kernel.
-  cudaFuncSetAttribute(
-      kernel_fptr,
-      cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+  // Set shared memory attributes
+  CUTE_CHECK_ERROR(cudaFuncSetAttribute(
+      (void const*)kernel_ptr,
+      cudaFuncAttributeMaxDynamicSharedMemorySize,
+      smem_size));
 
-  // Set L1 cache carveout to 100% shared memory.
-  // This tells the hardware to maximize shared memory capacity at the expense of L1 cache.
-  // Critical for our kernel which uses ~144 KB of shared memory (well above the 48 KB default).
-  cudaFuncSetAttribute(
-      kernel_fptr,
-      cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+  CUTE_CHECK_ERROR(cudaFuncSetAttribute(
+      (void const*)kernel_ptr,
+      cudaFuncAttributePreferredSharedMemoryCarveout,
+      100));
 
-  // Launch kernel with dynamic shared memory size.
-  // The third argument to <<<>>> is the number of bytes of dynamic shared memory to allocate.
-  // This is what the extern __shared__ char shared_memory[] in the kernel will receive.
-  kernel_fptr<<<dimGrid, dimBlock, smem_size, stream>>>(
+  // Launch via cluster launch API (required for TMA, even with single-CTA cluster)
+  cutlass::ClusterLaunchParams params = {dimGrid, dimBlock, dimCluster, smem_size};
+
+  cutlass::Status status = cutlass::launch_kernel_on_cluster(params, (void const*)kernel_ptr,
       prob_shape, cta_tiler,
-      A, dA, sA, g2s_copy_a, s2r_atom_a,
-      B, dB, sB, g2s_copy_b, s2r_atom_b,
-      C, dC,            mma,
-      r2s_copy, s2g_copy,
+      A, tmaA, s2r_atom_a,
+      B, tmaB, s2r_atom_b,
+      C, sC_layout, r2s_copy, dC, mma,
       alpha, beta);
+
+  CUTE_CHECK_LAST();
+  if (status != cutlass::Status::kSuccess) {
+    std::cerr << "Error: Failed at kernel Launch" << std::endl;
+  }
 }
 
 // ================================================================================================
 // Main — allocate, run, verify, benchmark
 // ================================================================================================
-
-// Run benchmark at a single size (no verification)
-//
-// No template parameters needed for bf16_gemm_tn — the S2R atoms are created internally.
-// This simplifies the benchmark code compared to the non-pipelined version.
 
 void benchmark_size(int m, int n, int k,
                     float alpha, float beta,
@@ -751,7 +489,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM80, cp.async 3-stage, tile 256x128x64, 256 threads, STSM BF16 epilogue)\n\n");
+  printf("BF16 GEMM (SM80 HMMA + SM90 TMA load, tile 256x128x64, 256 threads, STSM+BulkStore epilogue)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
@@ -793,9 +531,6 @@ int main(int argc, char** argv)
     for (int i = 0; i < m * n; ++i)
       max_err = std::max(max_err, std::abs(float(h_result[i]) - h_ref[i]));
 
-    // BF16 output quantization: the GPU writes BF16, but the CPU reference is F32.
-    // For K=1024, sums reach ~sqrt(1024)=32, and BF16 epsilon ~0.008, so max error
-    // scales as ~|sum| * bf16_epsilon ≈ 0.125. Tolerance 0.5f accounts for this.
     printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.5f ? "PASS" : "FAIL");
     if (max_err >= 0.5f) return 1;
   }
