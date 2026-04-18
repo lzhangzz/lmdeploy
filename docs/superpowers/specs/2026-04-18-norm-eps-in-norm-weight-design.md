@@ -50,7 +50,7 @@ Two paths create NormConfig instances from Python. Both need to set `norm_eps`.
 Add `norm_eps` parameter:
 
 ```python
-def make_norm_config(*, dim, data_type, norm_eps=0.):
+def make_norm_config(*, dim, data_type, norm_eps):
     cfg = _tm.NormConfig()
     cfg.dim = dim
     cfg.data_type = data_type
@@ -60,10 +60,10 @@ def make_norm_config(*, dim, data_type, norm_eps=0.):
 
 **Path B: `_add_norm_child()` in `lmdeploy/turbomind/deploy/builder/_base.py`**
 
-Add `norm_eps` parameter and set it on the config:
+Add `norm_eps` as a required keyword argument:
 
 ```python
-def _add_norm_child(self, name, tensor, data_type=None, norm_eps=0.):
+def _add_norm_child(self, name, tensor, data_type=None, *, norm_eps):
     ...
     norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type, norm_eps=norm_eps)
     ...
