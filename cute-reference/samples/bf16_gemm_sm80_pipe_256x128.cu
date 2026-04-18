@@ -573,8 +573,8 @@ bf16_gemm_tn(int m, int n, int k,
   //
   // Atom: SM80_16x8x16_F32BF16BF16F32_TN — 16x8x16 BF16*BF16->F32, 32 threads
   // Atom layout: 4x2 in (M, N) -> 256 threads total (8 warps)
-  //   - 4 atoms in M covers 4*16 = 64 M positions per MMA call
-  //   - 2 atoms in N covers 2*8  = 16 N positions per MMA call
+  //   - 4 atoms in M covers 4*16 = 64 M positions (matches default Tile M)
+  //   - 2 atoms in N covers 2*8  = 16 N positions (expanded to 64 by Tile override)
   //   - Doubled in M from Layout<Shape<_2,_2>> to distribute the wider (256) tile
   //
   // Tile<_, _64, _> override:
