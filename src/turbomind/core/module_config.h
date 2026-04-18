@@ -8,27 +8,6 @@
 
 namespace turbomind::core {
 
-struct DeltaNetConfig: ModuleConfig {
-    DeltaNetConfig(): ModuleConfig{"DeltaNetWeight"} {}
-
-    #define DELTANET_FIELDS(X) \
-        X(int,      hidden_dim) \
-        X(int,      num_k_heads) \
-        X(int,      num_v_heads) \
-        X(int,      key_head_dim) \
-        X(int,      value_head_dim) \
-        X(int,      d_conv, 4) \
-        X(bool,     has_bias) \
-        X(int,      tp_size) \
-        X(int,      tp_rank) \
-        X(DataType, data_type)
-
-    DELTANET_FIELDS(TM_MEMBER)
-    TM_FOR_EACH(DeltaNetConfig, DELTANET_FIELDS)
-
-    #undef DELTANET_FIELDS
-};
-
 struct NormConfig: ModuleConfig {
     NormConfig(): ModuleConfig{"NormWeight"} {}
 
