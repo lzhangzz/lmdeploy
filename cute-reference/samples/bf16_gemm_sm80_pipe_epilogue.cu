@@ -435,7 +435,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // Reuse sA's smem buffer (64 KB fits in 96 KB). sC is column-major (stride-1 in M).
   Tensor sC = make_tensor(
       make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
-      make_layout(make_shape(bM, bN)));
+      make_layout(make_shape(size<0>(cta_tiler), size<1>(cta_tiler))));
 
   Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
   CUTE_UNROLL
@@ -537,33 +537,6 @@ bf16_gemm_tn(int m, int n, int k,
 
   auto sA = tile_to_shape(swizzle_atom, make_shape(bM, bK, bP));         // (256, 64, 3) swizzled
   auto sB = tile_to_shape(swizzle_atom, make_shape(bN, bK, bP));         // (128, 64, 3) swizzled
-  // R2S (register-to-smem) TiledCopy — SM90 STSM for BF16 C epilogue
-  //
-  // SM90_U16x8_STSM_T: transposed stmatrix for column-major output.
-  //   - 32 threads (1 warp) write a transposed 8x8 BF16 matrix to smem
-  //   - Each thread provides 4 x uint32 (8 bf16 values)
-  //   - Selected because sizeof(bf16_t)==2 and C has stride-1 in M (column-major)
-  //
-  // make_tiled_copy_C bridges MMA get_layoutC_TV() with STSM register layout.
-
-  auto r2s_copy = make_tiled_copy_C(
-      Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{},
-      mma);
-
-  // S2G (smem-to-global) TiledCopy — 128-bit vectorized BF16 stores
-  //
-  // Thread layout Layout<Shape<_32, _8>, Stride<_1, _32>>:
-  //   - 32 threads in M, 8 in N = 256 threads
-  //   - tid = m + n*32: warp 0 (tid 0-31) all n=0, m=0..31
-  //   - Each warp writes contiguous 512-byte stripe along M — perfectly coalesced
-  //
-  // Value layout Layout<Shape<_8, _1>>: 8 bf16 contiguous in M (128 bits per store).
-  // Coverage per copy-tile: (256, 8). Loops 128/8 = 16 times in N.
-
-  auto s2g_copy = make_tiled_copy(
-      Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, bf16_t>{},
-      Layout<Shape<_32, _8>, Stride<_1, _32>>{},
-      Layout<Shape<_8, _1>>{});
 
   // G2S (gmem->smem) TiledCopy (static)
   //
@@ -622,6 +595,34 @@ bf16_gemm_tn(int m, int n, int k,
       Tile<Underscore, _64, Underscore>{});
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
+
+  // R2S (register-to-smem) TiledCopy — SM90 STSM for BF16 C epilogue
+  //
+  // SM90_U16x8_STSM_T: transposed stmatrix for column-major output.
+  //   - 32 threads (1 warp) write a transposed 8x8 BF16 matrix to smem
+  //   - Each thread provides 4 x uint32 (8 bf16 values)
+  //   - Selected because sizeof(bf16_t)==2 and C has stride-1 in M (column-major)
+  //
+  // make_tiled_copy_C bridges MMA get_layoutC_TV() with STSM register layout.
+
+  auto r2s_copy = make_tiled_copy_C(
+      Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{},
+      mma);
+
+  // S2G (smem-to-global) TiledCopy — 128-bit vectorized BF16 stores
+  //
+  // Thread layout Layout<Shape<_32, _8>, Stride<_1, _32>>:
+  //   - 32 threads in M, 8 in N = 256 threads
+  //   - tid = m + n*32: warp 0 (tid 0-31) all n=0, m=0..31
+  //   - Each warp writes contiguous 512-byte stripe along M — perfectly coalesced
+  //
+  // Value layout Layout<Shape<_8, _1>>: 8 bf16 contiguous in M (128 bits per store).
+  // Coverage per copy-tile: (256, 8). Loops 128/8 = 16 times in N.
+
+  auto s2g_copy = make_tiled_copy(
+      Copy_Atom<AutoVectorizingCopyWithAssumedAlignment<128>, bf16_t>{},
+      Layout<Shape<_32, _8>, Stride<_1, _32>>{},
+      Layout<Shape<_8, _1>>{});
 
   // S2R (smem->register) copy atoms (static)
   //
@@ -791,10 +792,11 @@ int main(int argc, char** argv)
     for (int i = 0; i < m * n; ++i)
       max_err = std::max(max_err, std::abs(float(h_result[i]) - h_ref[i]));
 
-    // BF16 has ~3 decimal digits of precision, so tolerance is larger than F32.
-    // With beta=0, the error comes from BF16 input quantization + tensor core rounding.
-    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.1f ? "PASS" : "FAIL");
-    if (max_err >= 0.1f) return 1;
+    // BF16 output quantization: the GPU writes BF16, but the CPU reference is F32.
+    // For K=1024, sums reach ~sqrt(1024)=32, and BF16 epsilon ~0.008, so max error
+    // scales as ~|sum| * bf16_epsilon ≈ 0.125. Tolerance 0.5f accounts for this.
+    printf("Correctness (1024^3): max error %e — %s\n\n", max_err, max_err < 0.5f ? "PASS" : "FAIL");
+    if (max_err >= 0.5f) return 1;
   }
 
   // ---- Benchmark ----
