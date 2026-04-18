@@ -2,7 +2,16 @@
 #pragma once
 
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/core/module_config.h"
+
+namespace turbomind::core {
+
+struct DecoderLayerConfig: ModuleConfig {
+    DecoderLayerConfig(): ModuleConfig{"DecoderLayerWeight"} {}
+    template<typename Visitor>
+    static void for_each(Visitor&&) {}
+};
+
+}  // namespace turbomind::core
 
 namespace turbomind {
 
