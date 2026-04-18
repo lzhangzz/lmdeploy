@@ -3,10 +3,43 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/core/module_config.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/models/llama/llama_params.h"
+
+namespace turbomind::core {
+
+struct AttentionConfig: ModuleConfig {
+    AttentionConfig(): ModuleConfig{"AttentionWeight"} {}
+
+    #define ATTENTION_FIELDS(X) \
+        X(int,      hidden_dim) \
+        X(int,      head_dim) \
+        X(int,      head_num) \
+        X(int,      kv_head_num) \
+        X(int,      kv_lora_rank) \
+        X(int,      q_lora_rank) \
+        X(int,      qk_rope_dim) \
+        X(int,      v_head_dim) \
+        X(bool,     has_bias) \
+        X(bool,     qk_norm) \
+        X(int,      tp_size) \
+        X(int,      tp_rank) \
+        X(DataType, data_type) \
+        X(int,      window_size, -1) \
+        X(bool,     attn_sink) \
+        X(bool,     attn_output_gate) \
+        X(int,      rope_dim) \
+        X(int,      repeat_kv) \
+        X(int,      qk_nope_dim)
+
+    ATTENTION_FIELDS(TM_MEMBER)
+    TM_FOR_EACH(AttentionConfig, ATTENTION_FIELDS)
+
+    #undef ATTENTION_FIELDS
+};
+
+}  // namespace turbomind::core
 
 namespace turbomind {
 
