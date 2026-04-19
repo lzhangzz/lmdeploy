@@ -1,7 +1,6 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
-#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
@@ -11,16 +10,17 @@
 
 namespace turbomind {
 
+class ModelWeight;
+class DecoderLayerWeight;
+
 class UnifiedDecoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(const ModelParam&                        model,
-                   const EngineParam&                       engine,
-                   const MoeParam&                          moe,
-                   const Context&                           ctx,
-                   int                                      phases,
-                   const std::vector<DecoderLayerWeight*>&  layer_weights);
+    UnifiedDecoder(const EngineParam&  engine,
+                   const Context&      ctx,
+                   int                 phases,
+                   const ModelWeight&  model_weight);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

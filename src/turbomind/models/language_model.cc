@@ -159,7 +159,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
 
     input_processor_.emplace(engine, weights_.hidden_units_, weights_.data_type_, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, moe, ctx, phases, weights_.layers_list());
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
 
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,

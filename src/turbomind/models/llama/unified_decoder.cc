@@ -13,6 +13,8 @@
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -30,50 +32,66 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(const ModelParam&                        model,
-                               const EngineParam&                       engine,
-                               const MoeParam&                          moe,
-                               const Context&                           ctx,
-                               int                                      phases,
-                               const std::vector<DecoderLayerWeight*>&  layer_weights):
-    layer_num_(model.layer_num),
-    hidden_units_(model.hidden_units),
+UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
+                               const Context&      ctx,
+                               int                 phases,
+                               const ModelWeight&  model_weight):
+    layer_num_(model_weight.num_layer_),
+    hidden_units_(model_weight.hidden_units_),
     attn_tp_size_(engine.attn_tp_size),
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
     mlp_tp_size_(engine.mlp_tp_size),
     attn_tp_group_(ctx.comm.d_tp_group),
     d_comm_(ctx.comm.d_comm),
-    tune_layer_num_(model.tune_layer_num),
+    tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
 {
-    if (std::accumulate(moe.expert_num.begin(), moe.expert_num.end(), 0LL)) {
+    bool has_moe = false;
+    for (int i = 0; i < model_weight.num_layer_; ++i) {
+        if (model_weight.layer(i)->moe_ffn) {
+            has_moe = true;
+            break;
+        }
+    }
+    if (has_moe) {
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx);
     }
 
     std::vector<AttentionWeight*> attn_weights;
-    attn_weights.reserve(layer_weights.size());
-    for (auto* lw : layer_weights) {
-        attn_weights.push_back(lw->attention.get());
+    attn_weights.reserve(model_weight.num_layer_);
+    for (int i = 0; i < model_weight.num_layer_; ++i) {
+        attn_weights.push_back(model_weight.layer(i)->attention.get());
     }
 
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
-        model.quant_policy,
-        model.layer_types,
-        model.layer_num,
+        engine.quant_policy,
+        model_weight.layer_types_,
+        model_weight.num_layer_,
         attn_weights,
         engine,
         ctx,
         phases,
         (bool)moe_ffn_layer_);
 
-    if (std::find(model.layer_types.begin(), model.layer_types.end(), 1) != model.layer_types.end()) {
+    bool has_linear_attn = false;
+    for (auto t : model_weight.layer_types_) {
+        if (t == 1) { has_linear_attn = true; break; }
+    }
+    if (has_linear_attn) {
         linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
-            model.linear_state_dtype, model.layer_types,
+            model_weight.data_type_, model_weight.layer_types_,
             engine, ctx, phases);
     }
 
-    if (std::accumulate(model.inter_size.begin(), model.inter_size.end(), 0LL)) {
+    bool has_ffn = false;
+    for (int i = 0; i < model_weight.num_layer_; ++i) {
+        if (model_weight.layer(i)->feed_forward) {
+            has_ffn = true;
+            break;
+        }
+    }
+    if (has_ffn) {
         ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
     }
 }
