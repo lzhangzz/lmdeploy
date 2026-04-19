@@ -23,13 +23,20 @@ def tp_interleave_tensor(t: torch.Tensor, tp: int, d: int) -> torch.Tensor:
 def split_qkv(linear: Linear,
               qkv_split: tuple[int, int, int]) -> tuple[Linear, Linear, Linear]:
     """Split combined QKV linear into Q, K, V linears along output dim."""
+    wfmt = linear.weight_format
+    block_out = (wfmt.block_out or 0) if wfmt is not None else 0
     new_linears = []
     offset = 0
     for dim in qkv_split:
         tensors = {}
         for kind, t in linear.tensors.items():
             out_dim = t.dim() - 1
-            tensors[kind] = t.narrow(out_dim, offset, dim).contiguous()
+            if kind in ("scales", "zeros") and block_out > 0:
+                block_offset = offset // block_out
+                block_len = dim // block_out
+                tensors[kind] = t.narrow(out_dim, block_offset, block_len).contiguous()
+            else:
+                tensors[kind] = t.narrow(out_dim, offset, dim).contiguous()
         new_linears.append(Linear(tensors=tensors,
                                   weight_format=linear.weight_format,
                                   data_format=linear.data_format))

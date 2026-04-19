@@ -87,7 +87,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         self._attn_cfg.attn_output_gate = False
         self._attn_cfg.rope.type = rope_type_to_int(self._rope.type)
         self._attn_cfg.rope.base = self._rope.base
-        self._attn_cfg.rope.dim  = 0  # MLA handles rope separately
+        self._attn_cfg.rope.dim  = self._rope.dim
         self._attn_cfg.rope.factor = self._rope.factor
         self._attn_cfg.rope.max_position_embeddings = self._max_position_embeddings
         if self._rope.type == 'yarn':
