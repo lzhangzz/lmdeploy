@@ -12,25 +12,25 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 {
     layer_id_ = cfg.layer_id;
     method_ = static_cast<MoeMethod>(cfg.method);
-    experts_per_token_ = cfg.experts_per_token;
-    norm_topk_prob_ = cfg.norm_topk_prob;
-    shared_gate_ = cfg.shared_gate;
-    routed_scale_ = static_cast<float>(cfg.routed_scale);
-    router_bias_ = cfg.router_bias;
-    topk_group_ = cfg.topk_group;
-    topk_method_ = cfg.topk_method;
-    n_group_ = cfg.n_group;
-    scoring_func_ = cfg.scoring_func;
-    router_n_groups_ = cfg.router_n_groups;
-    hidden_dim_ = cfg.hidden_dim;
-    inter_size_ = cfg.inter_size / cfg.tp_size;
+    experts_per_token = cfg.experts_per_token;
+    norm_topk_prob = cfg.norm_topk_prob;
+    use_shared_gate = cfg.shared_gate;
+    routed_scale = static_cast<float>(cfg.routed_scale);
+    router_bias = cfg.router_bias;
+    topk_group = cfg.topk_group;
+    topk_method = cfg.topk_method;
+    n_group = cfg.n_group;
+    scoring_func = cfg.scoring_func;
+    router_n_groups = cfg.router_n_groups;
+    hidden_dim = cfg.hidden_dim;
+    inter_size = cfg.inter_size / cfg.tp_size;
     mlp_bias_ = cfg.mlp_bias;
     data_type_ = cfg.data_type;
     tp_size_ = cfg.tp_size;
     tp_rank_ = cfg.tp_rank;
     act_type_ = static_cast<ActivationType>(cfg.act_type);
     fuse_silu_act_ = cfg.fuse_silu;
-    expert_num_ = cfg.expert_num;
+    expert_num = cfg.expert_num;
 }
 
 // Adapted from LinkExperts for LinearWeight
@@ -96,10 +96,10 @@ void MoeWeight::prepare()
     Module::prepare();
 
     // Create batched block view for fused MoE path
-    if (expert_num_ > 0 && method() == MoeMethod::kFused) {
+    if (expert_num > 0 && method() == MoeMethod::kFused) {
         core::FfnConfig block_cfg;
-        block_cfg.hidden_dim = hidden_dim_;
-        block_cfg.inter_size = inter_size_ * tp_size_;
+        block_cfg.hidden_dim = hidden_dim;
+        block_cfg.inter_size = inter_size * tp_size_;
         block_cfg.has_bias   = mlp_bias_;
         block_cfg.tp_size    = tp_size_;
         block_cfg.tp_rank    = tp_rank_;
@@ -129,23 +129,23 @@ void MoeWeight::prepare()
         if (get_expert_w1w3(0)) {
             // Fused w1w3 path: experts have a single fused gate+up projection
             block_->add_child("w1w3", std::make_unique<LinearWeight>());
-            LinkLinearExperts(get_expert_w1w3, expert_num_, *block_->w1w3);
+            LinkLinearExperts(get_expert_w1w3, expert_num, *block_->w1w3);
         }
         else {
             // Separate w1/w3 path: link individually
             block_->add_child("w1", std::make_unique<LinearWeight>());
             block_->add_child("w3", std::make_unique<LinearWeight>());
             if (get_expert_w1(0)) {
-                LinkLinearExperts(get_expert_w1, expert_num_, *block_->w1);
+                LinkLinearExperts(get_expert_w1, expert_num, *block_->w1);
             }
             if (get_expert_w3(0)) {
-                LinkLinearExperts(get_expert_w3, expert_num_, *block_->w3);
+                LinkLinearExperts(get_expert_w3, expert_num, *block_->w3);
             }
         }
 
         block_->add_child("w2", std::make_unique<LinearWeight>());
         if (get_expert_w2(0)) {
-            LinkLinearExperts(get_expert_w2, expert_num_, *block_->w2);
+            LinkLinearExperts(get_expert_w2, expert_num, *block_->w2);
         }
 
         // Propagate the actual fused-silu state from the first expert to

@@ -61,7 +61,7 @@ public:
     MoeWeight(const core::MoeConfig& cfg);
 
     void prepare() override;
-    int num_experts() const { return expert_num_; }
+    int num_experts() const { return expert_num; }
 
     // --- X-macro child members ---
 #define MOE_WEIGHT_CHILDREN(X)           \
@@ -80,19 +80,20 @@ public:
     MoeMethod method() const { return method_; }
 
     // --- Config fields (public for runtime access) ---
-    int  hidden_dim_{};
-    int  inter_size_{};
-    int  experts_per_token_{};
-    bool norm_topk_prob_{};
-    bool shared_gate_{};
-    float routed_scale_{};
-    bool router_bias_{};
-    int  topk_group_{};
-    std::string topk_method_;
-    int  n_group_{};
-    std::string scoring_func_;
-    int  router_n_groups_{};
-    int  expert_num_{};
+    int  hidden_dim{};
+    int  inter_size{};
+    int  experts_per_token{};
+    bool norm_topk_prob{};
+    /// From cfg.shared_gate; cannot be named `shared_gate` (child LinearWeight).
+    bool use_shared_gate{};
+    float routed_scale{};
+    bool router_bias{};
+    int  topk_group{};
+    std::string topk_method;
+    int  n_group{};
+    std::string scoring_func;
+    int  router_n_groups{};
+    int  expert_num{};
 
 private:
     int            layer_id_{};
