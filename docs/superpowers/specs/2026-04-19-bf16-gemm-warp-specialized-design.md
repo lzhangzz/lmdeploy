@@ -135,6 +135,7 @@ Total smem: ~144 KB (same as baseline — pipeline barriers add only ~192 bytes)
 
 ```cpp
 dim3 dimBlock(384);  // was 256
+// __launch_bounds__ changes from 256 to 384
 // Everything else unchanged: TMA descriptors, smem layouts, MMA layout, STSM epilogue
 ```
 
@@ -214,21 +215,42 @@ __global__ void bf16_gemm_ws_device(...) {
 
         // Prologue: wait for first stage, LDSM first k_block
         pipeline.consumer_wait(smem_pipe_read);
+        if (K_BLOCK_MAX > 1) {
+            // LDSM k_block 0 from first stage
+            copy(s2r_atom_a, tXsA(_,_,0,smem_pipe_read.index()), tXrA(_,_,0));
+            copy(s2r_atom_b, tXsB(_,_,0,smem_pipe_read.index()), tXrB(_,_,0));
+        }
 
-        // Main loop
+        // Main loop — adapted from current kernel's inner loop
+        // Key changes from non-specialized version:
+        //   - Replace ProducerBarType::wait with pipeline.consumer_wait
+        //   - Replace TMA load (threadIdx.x==0) with pipeline.consumer_release
+        //   - Remove __syncthreads (pipeline barriers replace it)
         CUTE_NO_UNROLL
-        for (int k_tile = k_tile_count; k_tile > -(K_PIPE_MAX - 1); --k_tile) {
+        for (int k_tile_count = ...; k_tile_count > -(K_PIPE_MAX - 1); --k_tile_count)
+        {
             CUTE_UNROLL
-            for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block) {
-                // Wait for next stage at boundary
-                if (k_block == K_BLOCK_MAX - 1) {
+            for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block)
+            {
+                if (k_block == K_BLOCK_MAX - 1)
+                {
+                    // Wait for next pipe stage (TMA load complete)
                     pipeline.consumer_wait(smem_pipe_read);
                 }
-                // LDSM + MMA (same inner loop as current kernel)
-                if (k_block == 0) {
+
+                // Prefetch next k_block via LDSM
+                auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
+                copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
+                copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
+
+                if (k_block == 0)
+                {
+                    // Release previous stage so producer can reuse it
                     pipeline.consumer_release(smem_pipe_release);
                     ++smem_pipe_release;
                 }
+
+                // MMA on current k_block
                 gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
             }
             ++smem_pipe_read;
@@ -256,7 +278,7 @@ __global__ void bf16_gemm_ws_device(...) {
 |--------|------|-------|
 | sA (3 stages) | ~96 KB | GMMA::Layout_K_SW128, reused by sC after MMA |
 | sB (3 stages) | ~48 KB | GMMA::Layout_K_SW128 |
-| PipelineTmaAsync storage | ~192 B | 3 × (full_barrier + empty_barrier) |
+| PipelineTmaAsync storage | ~48 B | 3 × (full_barrier + empty_barrier), each 8 bytes |
 | sC (epilogue) | 64 KB | Plain column-major, reuses sA's smem |
 | **Total** | ~144 KB | Same as baseline |
 
