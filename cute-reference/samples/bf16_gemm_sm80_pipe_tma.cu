@@ -13,7 +13,7 @@
  *   - TMA descriptors encode gmem strides, so A/B strides are not passed to kernel
  *   - ClusterTransactionBarrier replaces cp_async_fence/wait for pipeline sync
  *   - Launched via cutlass::launch_kernel_on_cluster (required for TMA)
- *   - Epilogue: element-wise F32->BF16 to plain smem + TMA store (replaces vectorized S2G)
+ *   - Epilogue: STSM F32->BF16 to plain smem + TMA store (replaces vectorized S2G)
  *
  * C = alpha * A * B^T + beta * C
  *   A: bf16, M x K, row-major (TN layout)
@@ -75,14 +75,14 @@ struct SharedStorage
 //
 // Epilogue:
 //   1. Element-wise alpha/beta scaling
-//   2. F32->BF16 conversion, element-wise write to smem
+//   2. F32->BF16 conversion, STSM write to smem
 //   3. TMA store: thread 0 issues bulk smem->gmem copy via TMA descriptor
 
 template <class ProblemShape, class CtaTiler,
           class TA, class SmemLayoutA, class TmaA, class S2RCopyAtomA,
           class TB, class SmemLayoutB, class TmaB, class S2RCopyAtomB,
           class TC, class SmemLayoutC,
-          class TmaStoreC, class CStride, class TiledMma,
+          class TmaStoreC, class R2SCopy, class CStride, class TiledMma,
           class Alpha, class Beta>
 __global__ static
 __launch_bounds__(decltype(size(TiledMma{}))::value)
@@ -92,7 +92,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
                  TB const* B, CUTLASS_GRID_CONSTANT TmaB const tma_b, S2RCopyAtomB s2r_atom_b,
                  TC      * C, SmemLayoutC,
                  CUTLASS_GRID_CONSTANT TmaStoreC const tma_store_c,
-                 CStride dC, TiledMma mma,
+                 R2SCopy r2s_copy, CStride dC, TiledMma mma,
                  Alpha alpha, Beta beta)
 {
   using namespace cute;
@@ -204,6 +204,10 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   Tensor tXsB = thr_s2r_b.partition_S(sB);                               // (CPY, MMA_N, MMA_K, PIPE)
   Tensor tXrB = thr_s2r_b.retile_D(tCrB);                               // (CPY, MMA_N, MMA_K)
 
+  // ---- Step 4c: R2S (register->smem) STSM copy setup ----
+
+  ThrCopy thr_r2s = r2s_copy.get_slice(threadIdx.x);
+
   // ---- Step 5: Pipelined main loop ----
   //
   // Producer-consumer pipeline:
@@ -284,9 +288,10 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     tCrC(i) = alpha * tCrC(i) + beta * static_cast<float>(tCgC(i));
   }
 
-  // Stage 2: Convert F32 -> BF16, write to smem via element-wise copy
-  auto sC_base_ptr = make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin()));
-  Tensor sC = make_tensor(sC_base_ptr, SmemLayoutC{});
+  // Stage 2: Convert F32 -> BF16, write to smem via STSM
+  Tensor sC = make_tensor(
+      make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
+      SmemLayoutC{});
 
   Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
   CUTE_UNROLL
@@ -294,9 +299,10 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     tCrC_bf16(i) = static_cast<bf16_t>(tCrC(i));
   }
 
-  // Direct element-wise copy from register to smem
-  Tensor tCsC = thr_mma.partition_C(sC);
-  copy(tCrC_bf16, tCsC);
+  // STSM: retile BF16 registers for stmatrix layout, partition smem, copy
+  Tensor tRS_rAcc = thr_r2s.retile_S(tCrC_bf16);
+  Tensor tRS_sC   = thr_r2s.partition_D(sC);
+  copy(r2s_copy, tRS_rAcc, tRS_sC);
   __syncthreads();
 
   // Stage 3: TMA store (smem -> gmem)
@@ -396,10 +402,10 @@ bf16_gemm_tn(int m, int n, int k,
   Copy_Atom tmaB = make_tma_atom(SM90_TMA_LOAD{}, mB, sB(_,_,0), make_shape(bN, bK));
 
   // TMA store TiledCopy for C
-  // Uses a plain column-major smem layout. Data is written to smem via element-wise copy
-  // (not STSM), so no hardware swizzle is applied. TMA store reads from plain smem.
-  Tensor mC_for_tma = make_tensor(C, make_shape(M, N), dC);                 // (M,N) for TMA inspection
-  auto tma_store_c = make_tma_copy(SM90_TMA_STORE{}, mC_for_tma, sC_layout, make_shape(bM, bN), Int<1>{});
+  // Uses a plain column-major smem layout. STSM writes to plain smem (no hardware swizzle).
+  // TMA store reads from the same plain smem with no swizzle conflicts.
+  Tensor mC = make_tensor(C, make_shape(M, N), dC);                         // (M,N) for TMA inspection
+  auto tma_store_c = make_tma_copy(SM90_TMA_STORE{}, mC, sC_layout, make_shape(bM, bN), Int<1>{});
 
   // TiledMMA (unchanged)
   TiledMMA mma = make_tiled_mma(
@@ -408,6 +414,11 @@ bf16_gemm_tn(int m, int n, int k,
       Tile<Underscore, _64, Underscore>{});
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
+
+  // R2S TiledCopy for STSM register->smem (same as pipe_epilogue.cu)
+  auto r2s_copy = make_tiled_copy_C(
+      Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{},
+      mma);
 
   // S2R (smem->register) copy atoms (unchanged)
   Copy_Atom<SM75_U32x4_LDSM_N, bf16_t> s2r_atom_a;
@@ -427,7 +438,7 @@ bf16_gemm_tn(int m, int n, int k,
       bf16_t, decltype(sA), decltype(tmaA), decltype(s2r_atom_a),
       bf16_t, decltype(sB), decltype(tmaB), decltype(s2r_atom_b),
       bf16_t, decltype(sC_layout),
-      decltype(tma_store_c), decltype(dC), decltype(mma),
+      decltype(tma_store_c), decltype(r2s_copy), decltype(dC), decltype(mma),
       Alpha, Beta>;
 
   // Set shared memory attributes
@@ -448,7 +459,7 @@ bf16_gemm_tn(int m, int n, int k,
       prob_shape, cta_tiler,
       A, tmaA, s2r_atom_a,
       B, tmaB, s2r_atom_b,
-      C, sC_layout, tma_store_c, dC, mma,
+      C, sC_layout, tma_store_c, r2s_copy, dC, mma,
       alpha, beta);
 
   CUTE_CHECK_LAST();
@@ -515,7 +526,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM80 HMMA + SM90 TMA load/store, tile 256x128x64, 256 threads, TMAStore epilogue)\n\n");
+  printf("BF16 GEMM (SM80 HMMA + SM90 TMA load/store, tile 256x128x64, 256 threads, STSM+TMAStore epilogue)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
