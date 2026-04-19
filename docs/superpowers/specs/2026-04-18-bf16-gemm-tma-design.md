@@ -28,33 +28,28 @@ Kernel changes:
 - Replace `cp_async_fence/wait` with `ClusterTransactionBarrier` arrive/wait
 - Add barrier arrays to SharedStorage
 
-### S2G: AutoVec → TMA Store
+### S2G: STSM + AutoVec → STSM + TMA Store
 
 The current epilogue has 3 stages: element-wise scaling → STSM to smem → vectorized S2G.
-The new epilogue replaces all three with: element-wise scaling → element-wise register→smem
-write → TMA store.
+The new epilogue keeps the first two stages and replaces only the final S2G with TMA store.
 
 The TMA store replaces the per-thread vectorized 128-bit global stores with a single bulk
 tensor copy from smem to gmem, issued by 1 thread.
 
-**Why not STSM + TMA store:** STSM (`stmatrix`) applies hardware swizzle to smem addresses.
-TMA store reads from smem using a logical layout interpretation. In a single-role (non-warp-
-specialized) kernel, these two address mappings conflict, producing garbage output. Two
-independent implementation attempts confirmed this. CUTLASS's production kernels that combine
-STSM + TMA store use warp-specialized epilogue pipelines with separate producer/consumer
-threads and coordinated barrier sync, which resolves the conflict. Our simple single-role
-kernel uses element-wise register→smem copy with a plain column-major sC layout, which is
-TMA-compatible without swizzle conflicts.
+**STSM + plain sC + TMA store:** The epilogue uses `make_tiled_copy_C(SM90_U16x8_STSM_T, mma)`
+for register→smem writes, a plain column-major sC layout (no swizzle), and `make_tma_copy`
+for smem→gmem TMA store. This combination is proven: STSM + plain sC is demonstrated in
+`pipe_epilogue.cu`, and TMA store reads from plain smem with no swizzle conflicts.
 
 Host changes:
 - Create TMA store TiledCopy via `make_tma_copy(SM90_TMA_STORE{}, gC, sC_layout, cta_tile_mn, Int<1>{})`
 - sC layout: plain column-major `make_layout(make_shape(bM, bN), make_stride(Int<1>{}, bM))`
-- Remove R2S TiledCopy (replaced by element-wise copy)
-- Remove S2G TiledCopy (replaced by TMA store)
+- Keep R2S TiledCopy (`make_tiled_copy_C(SM90_U16x8_STSM_T, mma)`) for register→smem
+- Remove S2G TiledCopy (`make_tiled_copy(AutoVectorizingCopy...)`) — replaced by TMA store
 
 Kernel epilogue:
 1. Element-wise alpha/beta scaling (unchanged)
-2. F32→BF16 conversion, element-wise register→smem write via `thr_mma.partition_C(sC)` + `copy()`
+2. F32→BF16 conversion, STSM to smem via `make_tiled_copy_C` (same as pipe_epilogue.cu)
 3. `__syncthreads()`, then thread 0 issues TMA store with fence/arrive/wait:
 ```cpp
 if (threadIdx.x == 0) {
@@ -110,7 +105,7 @@ New template parameters:
 ProblemShape, CtaTiler,
 TA, SmemLayoutA, TmaA, S2RCopyAtomA,
 TB, SmemLayoutB, TmaB, S2RCopyAtomB,
-TC, SmemLayoutC, TmaStoreC, CStride, TiledMma,
+TC, SmemLayoutC, TmaStoreC, R2SCopy, CStride, TiledMma,
 Alpha, Beta
 ```
 
@@ -118,7 +113,7 @@ Key differences:
 - `AStride`/`BStride` removed (TMA encodes strides in the descriptor)
 - `AG2SCopy`/`BG2SCopy` removed (replaced by `TmaA`/`TmaB`)
 - `S2GCopy` removed (replaced by `TmaStoreC`)
-- `R2SCopy` removed (element-wise copy replaces STSM for register→smem)
+- `R2SCopy` kept (STSM register→smem for epilogue)
 - `SmemLayoutA`/`SmemLayoutB` renamed (were `ASmemLayout`/`BSmemLayout`)
 - `SmemLayoutC` added (for sC tensor in kernel)
 - `TmaA`/`TmaB` use `CUTLASS_GRID_CONSTANT` annotation
@@ -157,8 +152,12 @@ auto sC_layout = make_layout(make_shape(bM, bN), make_stride(Int<1>{}, bM));  //
 Copy_Atom tmaA = make_tma_atom(SM90_TMA_LOAD{}, mA, sA(_,_,0), make_shape(bM, bK));
 // TMA load for B
 Copy_Atom tmaB = make_tma_atom(SM90_TMA_LOAD{}, mB, sB(_,_,0), make_shape(bN, bK));
-// TMA store for C (TiledCopy, not Copy_Atom)
-auto tma_store_c = make_tma_copy(SM90_TMA_STORE{}, mC_for_tma, sC_layout, make_shape(bM, bN), Int<1>{});
+// TMA store for C (TiledCopy)
+Tensor mC = make_tensor(C, make_shape(M, N), dC);  // (M,N) column-major for TMA inspection
+auto tma_store_c = make_tma_copy(SM90_TMA_STORE{}, mC, sC_layout, make_shape(bM, bN), Int<1>{});
+
+// R2S TiledCopy for STSM register→smem (same as pipe_epilogue.cu)
+auto r2s_copy = make_tiled_copy_C(Copy_Atom<SM90_U16x8_STSM_T, bf16_t>{}, mma);
 ```
 
 ### Kernel Launch
@@ -172,7 +171,7 @@ cutlass::launch_kernel_on_cluster(params, kernel_ptr,
     prob_shape, cta_tiler,
     A, tmaA, s2r_atom_a,
     B, tmaB, s2r_atom_b,
-    C, sC_layout, tma_store_c, dC, mma,
+    C, sC_layout, tma_store_c, r2s_copy, dC, mma,
     alpha, beta);
 ```
 
@@ -215,7 +214,7 @@ LDSM compatibility: `make_tiled_copy_A(SM75_U32x4_LDSM_N, mma)` partitions the s
 smem layout automatically. The swizzle is transparent to LDSM — CuTe's partitioning handles
 the address mapping. The atom shape (8, 64) is compatible with LDSM's 8-row reads.
 
-### C (TMA Store — plain column-major layout)
+### C (STSM + TMA Store — plain column-major layout)
 
 C is column-major (stride-1 in M). The sC layout uses plain column-major (no swizzle):
 
@@ -231,10 +230,16 @@ auto sC_layout = make_layout(make_shape(bM, bN), make_stride(Int<1>{}, bM));  //
 Layout shape math:
 - sC: (256, 128) = 32768 bf16 = 64 KB
 
-The sC buffer reuses sA's smem (64 KB fits in 96 KB). Since the epilogue uses element-wise
-register→smem copy (not STSM), no hardware swizzle is applied. TMA store reads from plain
-smem using the TiledCopy descriptor, which encodes the column-major layout. This avoids the
-STSM/TMA store swizzle conflict described in the S2G section above.
+The sC buffer reuses sA's smem (64 KB fits in 96 KB). The STSM writes to plain smem
+(no hardware swizzle applied by the layout), and TMA store reads from the same plain
+smem. Both STSM and TMA store see the same column-major addresses, ensuring consistency.
+
+STSM coverage: `make_tiled_copy_C(SM90_U16x8_STSM_T, mma)` tiles at (64, 64) MMA sub-tile
+granularity. `zipped_divide(sC, (64,64))` produces 4 sub-tiles in M × 2 in N = 8 iterations,
+with 256 threads × 128 bf16/thread covering the full (256, 128) tile.
+
+TMA store box: (256, 128) bf16 = 64KB, both dimensions within the 256-per-dimension hardware
+limit. No swizzle mode needed.
 
 ## Smem Usage
 
@@ -266,8 +271,7 @@ register pressure.
 - Smem swizzle: `Swizzle<3,4,3>` (GMMA layout atoms) for sA, sB — TMA-compatible
 - sC: plain column-major layout (no swizzle)
 - F32 accumulators, alpha/beta scaling, F32→BF16 conversion
-- Element-wise register→smem copy for epilogue (replaces STSM)
-- Element-wise inline load of existing C for beta blending
+- STSM register→smem copy for epilogue (`make_tiled_copy_C(SM90_U16x8_STSM_T, mma)`)
 - Element-wise inline load of existing C for beta blending
 - Grid: `dim3(ceil_div(M,bM), ceil_div(N,bN))`
 - Block: `dim3(256)`
