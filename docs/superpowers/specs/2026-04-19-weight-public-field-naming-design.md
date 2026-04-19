@@ -105,7 +105,8 @@ Known areas include:
 - `models/attention_weight.cc`, `models/delta_net_weight.cc`,
   `models/linear_weight.cc` — constructors, `prepare()`, `copy_metadata_to`.
 - `models/llama/moe_ffn_layer.cc` — reads MoE config fields from `p.weights`.
-- `models/model_weight.cc` — reads attention fields from the first layer.
+- `models/model_weight.cc` — reads attention fields into **ModelWeight**’s own
+  public derived fields (see errata below).
 - `models/llama/unified_attention_layer.cc` — `rope` and related config.
 - `models/llama/GatedDeltaNetLayer.cc`, `engine/engine.cc` — DeltaNet fields.
 - `models/llama/LlamaLinear.cu` — `policy` quant fields.
@@ -114,10 +115,27 @@ New references may appear after rebases; the authoritative check is **zero**
 matches for the old public names on the types above (while private `*_` names
 elsewhere remain valid).
 
+## Errata — `ModelWeight` public fields
+
+An earlier draft listed all of `ModelWeight` as out of scope. In the current
+codebase, `ModelWeight` exposes **public** derived/runtime fields with a trailing
+underscore (same convention issue):
+
+`data_type_`, `hidden_units_`, `vocab_size_`, `vocab_size_padded_`,
+`embedding_size_`, `num_layer_`, `head_dim_`, `kv_head_num_`, `tp_size_`,
+`tp_rank_`.
+
+(`layer_types_` is already suffix-free.) These public members should be renamed
+the same way. **Private** `ModelWeight` members (`stream_`, `alloca_`,
+`layers_cache_`) stay unchanged. Call sites include `unified_decoder.cc`,
+`engine.cc`, `language_model.cc`, and `turbomind.cc`. See **Task 6** in
+`docs/superpowers/plans/2026-04-19-weight-public-field-naming.md`.
+
 ## Out of scope
 
 - **Private** fields on any weight class (including `FfnWeight`, `NormWeight`,
-  `ModelWeight`, and private sections of the classes above).
+  `ModelWeight`’s `stream_` / `alloca_` / `layers_cache_`, and private sections of
+  the classes above).
 - Python deploy / binding code unless it directly references these C++ member
   names (unlikely).
 - Broader style refactors (e.g. replacing public data with getters) beyond this
