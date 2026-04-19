@@ -20,10 +20,7 @@ public:
 
     ModelWeight() = default;
 
-    ModelWeight(DataType          data_type,
-                const ModelParam&  model_param,
-                const EngineParam& engine_param,
-                const MoeParam&    moe_param);
+    explicit ModelWeight(const EngineParam& engine_param);
 
     void                    prepare() override;
     bool                    verify(std::vector<std::string>& missing) override;
@@ -50,33 +47,23 @@ public:
     // --- Accessors ---
     DecoderLayerWeight*               layer(int i) const;
     std::vector<DecoderLayerWeight*>  layers_list() const;
-    int                               num_layers() const { return num_layer_; }
 
-    // --- Lifecycle (same as old LlamaWeight) ---
-    bool is_initialized() const { return initialized_; }
+    // --- Derived in prepare() from children -- public for direct access ---
+    DataType    data_type_{};
+    int         hidden_units_{};
+    int         vocab_size_{};
+    int         vocab_size_padded_{};
+    int         embedding_size_{};
+    int         num_layer_{};
+    int         head_dim_{};
+    int         kv_head_num_{};
+    std::vector<int> layer_types_;
 
-    // --- Model config accessors for LanguageModel ---
-    int   hidden_units() const { return hidden_units_; }
-    int   vocab_size_padded() const { return vocab_size_padded_; }
-    int   tp_size() const { return tp_size_; }
+    // --- From EngineParam at construction ---
+    int         tp_size_{};
+    int         tp_rank_{};
 
 private:
-    DataType    data_type_{};
-    ModelParam  model_param_{};
-    EngineParam engine_param_{};
-    MoeParam    moe_param_{};
-
-    size_t hidden_units_{};
-    size_t vocab_size_{};
-    size_t vocab_size_padded_{};
-    size_t embedding_size_{};
-    size_t num_layer_{};
-
-    int  tp_size_{};
-    int  tp_rank_{};
-
-    bool initialized_{false};
-
     core::Stream    stream_{};
     core::Allocator alloca_{};
 
