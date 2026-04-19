@@ -129,7 +129,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // ---- Step 2: Shared memory tensors ----
 
   extern __shared__ char shared_memory[];
-  using SharedStorage = SharedStorage<TA, TB, SmemLayoutA, SmemLayoutB>;
+  using SharedStorage = SharedStorage<TA, TB, SmemLayoutA, SmemLayoutB, cute::size<2>(SmemLayoutA{})>;
   SharedStorage& smem = *reinterpret_cast<SharedStorage*>(shared_memory);
   Tensor sA = make_tensor(make_smem_ptr(smem.A.begin()), SmemLayoutA{});  // (BLK_M,BLK_K,PIPE)
   Tensor sB = make_tensor(make_smem_ptr(smem.B.begin()), SmemLayoutB{});  // (BLK_N,BLK_K,PIPE)
