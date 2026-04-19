@@ -98,6 +98,9 @@ struct EngineParam {
     int session_len;
     int step_length;
 
+    int   quant_policy   = 0;
+    int   tune_layer_num = 1;
+
     // cache params
     float cache_max_block_count;
     int   cache_chunk_size;

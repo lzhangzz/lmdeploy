@@ -236,12 +236,13 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.embedding_size     = model["embedding_size"].as<int>();
     model_param_.norm_eps           = model["norm_eps"].as<float>();
     model_param_.tune_layer_num     = model["tune_layer_num"].as<int>(1);
+    engine_param_.tune_layer_num    = model["tune_layer_num"].as<int>(1);
     model_param_.mla.q_lora_rank    = model["q_lora_rank"].as<int>();
     model_param_.mla.kv_lora_rank   = model["kv_lora_rank"].as<int>();
     model_param_.mla.qk_rope_dim    = model["qk_rope_dim"].as<int>();
     model_param_.mla.v_head_dim     = model["v_head_dim"].as<int>();
     engine_param_.cache_block_seq_len = attention["cache_block_seq_len"].as<int>(0);
-    model_param_.quant_policy       = engine["quant_policy"].as<int>(0);
+    engine_param_.quant_policy      = engine["quant_policy"].as<int>(0);
 
     auto inter_size = model["inter_size"];
     for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
