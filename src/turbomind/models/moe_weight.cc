@@ -12,19 +12,16 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 {
     layer_id_ = cfg.layer_id;
     method_ = static_cast<MoeMethod>(cfg.method);
-    moe_param_.method = static_cast<MoeParam::Method>(cfg.method);
-    moe_param_.experts_per_token = cfg.experts_per_token;
-    moe_param_.inter_size = cfg.inter_size;
-    moe_param_.norm_topk_prob = cfg.norm_topk_prob;
-    moe_param_.shared_gate = cfg.shared_gate;
-    moe_param_.routed_scale = static_cast<float>(cfg.routed_scale);
-    moe_param_.router_bias = cfg.router_bias;
-    moe_param_.topk_group = cfg.topk_group;
-    moe_param_.topk_method = cfg.topk_method;
-    moe_param_.n_group = cfg.n_group;
-    moe_param_.scoring_func = cfg.scoring_func;
-    moe_param_.router_n_groups = cfg.router_n_groups;
-    moe_param_.expert_num.assign(1, cfg.expert_num);
+    experts_per_token_ = cfg.experts_per_token;
+    norm_topk_prob_ = cfg.norm_topk_prob;
+    shared_gate_ = cfg.shared_gate;
+    routed_scale_ = static_cast<float>(cfg.routed_scale);
+    router_bias_ = cfg.router_bias;
+    topk_group_ = cfg.topk_group;
+    topk_method_ = cfg.topk_method;
+    n_group_ = cfg.n_group;
+    scoring_func_ = cfg.scoring_func;
+    router_n_groups_ = cfg.router_n_groups;
     hidden_dim_ = cfg.hidden_dim;
     inter_size_ = cfg.inter_size / cfg.tp_size;
     mlp_bias_ = cfg.mlp_bias;
@@ -33,8 +30,6 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     tp_rank_ = cfg.tp_rank;
     act_type_ = static_cast<ActivationType>(cfg.act_type);
     fuse_silu_act_ = cfg.fuse_silu;
-    // The expert_num vector always has 1 element for per-layer instances,
-    // so always use index 0 regardless of layer_id.
     expert_num_ = cfg.expert_num;
 }
 
@@ -104,7 +99,7 @@ void MoeWeight::prepare()
     if (expert_num_ > 0 && method() == MoeMethod::kFused) {
         core::FfnConfig block_cfg;
         block_cfg.hidden_dim = hidden_dim_;
-        block_cfg.inter_size = moe_param_.inter_size;
+        block_cfg.inter_size = inter_size_ * tp_size_;
         block_cfg.has_bias   = mlp_bias_;
         block_cfg.tp_size    = tp_size_;
         block_cfg.tp_rank    = tp_rank_;

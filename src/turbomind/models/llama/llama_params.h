@@ -3,94 +3,9 @@
 #pragma once
 
 #include <cstddef>
-#include <map>
-#include <regex>
-#include <string>
-
-#include "src/turbomind/core/data_type.h"
-#include "src/turbomind/kernels/activation.h"
+#include <vector>
 
 namespace turbomind {
-
-struct MLAParam {
-    int q_lora_rank;
-    int kv_lora_rank;
-    int qk_rope_dim;
-    int v_head_dim;
-};
-
-struct ModelParam {
-    size_t   head_num;
-    size_t   head_dim;
-    size_t   kv_head_num;
-    size_t   hidden_units;
-    size_t   layer_num;
-    size_t   vocab_size;
-    size_t   embedding_size;
-    float    norm_eps;
-    int      quant_policy;
-    bool     attn_bias;
-    bool     attn_sink;
-    bool     mlp_bias;
-    DataType data_type;
-
-    int      group_size;
-    MLAParam mla;
-    bool     qk_norm;
-    int      tune_layer_num;
-
-    ActivationType act_type;
-
-    std::vector<int> window_size;
-    std::vector<int> inter_size;
-    std::vector<int> layer_types;
-
-    // Qwen3.5 Gated DeltaNet linear attention params
-    int linear_key_head_dim    = 0;
-    int linear_value_head_dim  = 0;
-    int linear_conv_kernel_dim = 0;
-    int linear_num_key_heads   = 0;
-    int linear_num_value_heads = 0;
-
-    DataType linear_state_dtype = {};
-
-    bool attn_output_gate = false;  // Qwen3.5: doubles Q projection in full-attention layers
-};
-
-inline bool HasLinearAttention(const ModelParam& model_param)
-{
-    for (int type : model_param.layer_types) {
-        if (type == 1) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// TODO: rename all `gate` in the context of MoE router to `router`
-struct MoeParam {
-    enum Method
-    {
-        kNaive,
-        kFused
-    } method;
-
-    int   experts_per_token;
-    int   inter_size;
-    bool  norm_topk_prob;
-    bool  shared_gate;
-    float routed_scale;
-
-    bool router_bias;
-
-    int         topk_group;
-    std::string topk_method;
-    int         n_group;
-    std::string scoring_func;
-    int         router_n_groups;
-
-    std::vector<int> expert_num;
-};
 
 struct EngineParam {
     // batch params

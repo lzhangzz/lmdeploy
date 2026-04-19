@@ -4,7 +4,6 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/ffn_weight.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 
@@ -79,23 +78,31 @@ public:
     FfnWeight*    expert(int i) const;
     FfnWeight*    block() const { return block_.get(); }
     MoeMethod method() const { return method_; }
-    const MoeParam& moe_param() const { return moe_param_; }
 
     // --- Config fields (public for runtime access) ---
-    int hidden_dim_{};
-    int inter_size_{};
+    int  hidden_dim_{};
+    int  inter_size_{};
+    int  experts_per_token_{};
+    bool norm_topk_prob_{};
+    bool shared_gate_{};
+    float routed_scale_{};
+    bool router_bias_{};
+    int  topk_group_{};
+    std::string topk_method_;
+    int  n_group_{};
+    std::string scoring_func_;
+    int  router_n_groups_{};
+    int  expert_num_{};
 
 private:
     int            layer_id_{};
     MoeMethod      method_{MoeMethod::kFused};
-    MoeParam       moe_param_{};
     bool           mlp_bias_{};
     DataType       data_type_{};
     int            tp_size_{};
     int            tp_rank_{};
     ActivationType act_type_{};
     bool           fuse_silu_act_{};
-    int            expert_num_{};
 
     mutable std::unique_ptr<FfnWeight> block_;
 };

@@ -17,7 +17,6 @@
 #include "src/turbomind/engine/model_request.h"
 
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -37,30 +36,6 @@ using std::vector;
 using std::string;
 using std::shared_ptr;
 using std::unique_ptr;
-
-static std::optional<MoeMethod> get_moe_method()
-{
-    static const auto value = []() -> std::optional<MoeMethod> {
-        const auto p = std::getenv("TM_MOE_METHOD");
-        if (p) {
-            std::string str(p);
-            for (auto& x : str) {
-                x = std::tolower(x);
-            }
-            if (str == "naive") {
-                return MoeMethod::kNaive;
-            }
-            else if (str == "fused") {
-                return MoeMethod::kFused;
-            }
-            else {
-                std::cerr << "[WARNING] unrecognised MoE method: " << str << "\n";
-            }
-        }
-        return {};
-    }();
-    return value;
-}
 
 static DataType data_type_from_string(std::string str)
 {
@@ -91,8 +66,6 @@ static DataType data_type_from_string(std::string str)
 
 struct TurboMind::Impl {
     DataType       data_type_;
-    ModelParam     model_param_;
-    MoeParam       moe_param_;
     EngineParam    engine_param_;
     size_t         comm_size_;
 
@@ -113,7 +86,6 @@ struct TurboMind::Impl {
     vector<shared_ptr<Context>>     contexts_;
     vector<Engine>                  engines_;
 
-    string model_name_;
     string model_dir_;
 
     vector<int> queue_id_;
@@ -204,7 +176,7 @@ TurboMind::Impl::~Impl()
 }
 
 TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory):
-    data_type_{}, model_param_{}, moe_param_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
+    data_type_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
 {
     TM_CHECK(!config.empty());
 
@@ -217,91 +189,27 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     }
 
     /// TODO: move config parsing to suitable place
-    const auto model     = node["model_config"];
     const auto attention = node["attention_config"];
     const auto engine    = node["engine_config"];
 
-    data_type_ = model_param_.data_type = data_type_from_string(model["data_type"].as<std::string>());
+    data_type_ = data_type_from_string(engine["dtype"].as<std::string>());
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
 
-    model_name_                     = model["model_name"].as<std::string>();
-    model_param_.head_num           = model["head_num"].as<int>();
-    model_param_.head_dim           = model["size_per_head"].as<int>();
-    model_param_.kv_head_num        = model["kv_head_num"].as<int>(0);
-    model_param_.hidden_units       = model["hidden_units"].as<int>();
-    model_param_.layer_num          = model["num_layer"].as<int>();
-    model_param_.vocab_size         = model["vocab_size"].as<int>();
-    model_param_.embedding_size     = model["embedding_size"].as<int>();
-    model_param_.norm_eps           = model["norm_eps"].as<float>();
-    model_param_.tune_layer_num     = model["tune_layer_num"].as<int>(1);
-    engine_param_.tune_layer_num    = model["tune_layer_num"].as<int>(1);
-    model_param_.mla.q_lora_rank    = model["q_lora_rank"].as<int>();
-    model_param_.mla.kv_lora_rank   = model["kv_lora_rank"].as<int>();
-    model_param_.mla.qk_rope_dim    = model["qk_rope_dim"].as<int>();
-    model_param_.mla.v_head_dim     = model["v_head_dim"].as<int>();
     engine_param_.cache_block_seq_len = attention["cache_block_seq_len"].as<int>(0);
-    engine_param_.quant_policy      = engine["quant_policy"].as<int>(0);
-
-    auto inter_size = model["inter_size"];
-    for (auto it = inter_size.begin(); it != inter_size.end(); ++it) {
-        model_param_.inter_size.push_back(it->as<int>());
-    }
-
-    if (auto layer_types = model["layer_types"]) {
-        for (auto it = layer_types.begin(); it != layer_types.end(); ++it) {
-            auto type_str = it->as<std::string>("");
-            if (type_str == "linear_attention") {
-                model_param_.layer_types.push_back(1);
-            }
-            else if (type_str == "full_attention" || type_str.empty()) {
-                model_param_.layer_types.push_back(0);
-            }
-            else {
-                TM_LOG_WARNING("[TM] Unknown layer_type '%s', treating as full_attention.", type_str.c_str());
-                model_param_.layer_types.push_back(0);
-            }
-        }
-    }
-
-    // Qwen3.5 Gated DeltaNet linear attention parameters
-    model_param_.linear_key_head_dim    = model["linear_key_head_dim"].as<int>(0);
-    model_param_.linear_value_head_dim  = model["linear_value_head_dim"].as<int>(0);
-    model_param_.linear_conv_kernel_dim = model["linear_conv_kernel_dim"].as<int>(0);
-    model_param_.linear_num_key_heads   = model["linear_num_key_heads"].as<int>(0);
-    model_param_.linear_num_value_heads = model["linear_num_value_heads"].as<int>(0);
-    model_param_.attn_output_gate       = model["attn_output_gate"].as<bool>(false);
-    model_param_.linear_state_dtype     = data_type_;
-
-    model_param_.attn_sink = model["attn_sink"].as<bool>();
-    model_param_.mlp_bias  = model["mlp_bias"].as<bool>();
-    if (model["activation_type"].as<std::string>("") == "gpt-oss") {
-        model_param_.act_type = ActivationType::kSiluGptOss;
-    }
-
-    auto window_size = model["window_size"];
-    for (auto it = window_size.begin(); it != window_size.end(); ++it) {
-        model_param_.window_size.push_back(it->as<int>());
-    }
-
-    model_param_.attn_bias  = model["attn_bias"].as<int>(0);
-    model_param_.qk_norm    = model["qk_norm"].as<bool>();
-    model_param_.group_size = model["group_size"].as<int>(0);
+    engine_param_.quant_policy        = engine["quant_policy"].as<int>(0);
+    engine_param_.tune_layer_num      = engine["tune_layer_num"].as<int>(1);
 
     engine_param_.max_batch_size = engine["max_batch_size"].as<int>(0);
     auto max_forward_token_num   = engine["max_prefill_token_num"].as<int>(0);
     max_forward_token_num += engine_param_.max_batch_size;
 
     engine_param_.max_context_token_num = engine["max_context_token_num"].as<int>(0);
-    engine_param_.session_len           = model["session_len"].as<int>(0);
+    engine_param_.session_len           = engine["session_len"].as<int>(0);
 
     engine_param_.cache_max_block_count = engine["cache_max_entry_count"].as<float>(0);
     engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
     engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
     engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
-
-    if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
-        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
-    }
 
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
     engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);
@@ -332,36 +240,11 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
 
     communicator_type_ = engine["communicator"].as<std::string>();
 
-    moe_param_.experts_per_token = model["experts_per_token"].as<int>(0);
-    moe_param_.inter_size        = model["expert_inter_size"].as<int>(0);
-    moe_param_.shared_gate       = model["moe_shared_gate"].as<bool>();
-    moe_param_.norm_topk_prob    = model["norm_topk_prob"].as<bool>();
-    moe_param_.routed_scale      = model["routed_scale"].as<float>(1.f);
-    moe_param_.topk_group        = model["topk_group"].as<int>(1);
-    moe_param_.topk_method       = model["topk_method"].as<std::string>("greedy");
-    moe_param_.n_group           = model["moe_group_num"].as<int>(1);
-    moe_param_.scoring_func      = model["scoring_func"].as<std::string>("softmax");
-    moe_param_.router_n_groups   = model["router_n_groups"].as<int>(-1);
-    moe_param_.router_bias       = model["expert_router_bias"].as<bool>();
-    YAML::Node expert_num        = model["expert_num"];
-    for (auto it = expert_num.begin(); it != expert_num.end(); ++it) {
-        moe_param_.expert_num.push_back(it->as<int>());
-    }
-
     HandleMissingParams();
 
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
-
-    auto data_type_str = model["data_type"].as<std::string>();
-
-    if (auto method = get_moe_method()) {
-        moe_param_.method = static_cast<MoeParam::Method>(*method);
-    }
-    else {
-        moe_param_.method = MoeParam::kFused;
-    }
 
     // NOTE: This runs on Python main thread
     group_id_ = comm::CreateHostGroupId((engine_param_.nnodes == 1) ? "" : "hybrid");
