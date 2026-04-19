@@ -36,8 +36,8 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
                                const Context&      ctx,
                                int                 phases,
                                const ModelWeight&  model_weight):
-    layer_num_(model_weight.num_layer_),
-    hidden_units_(model_weight.hidden_units_),
+    layer_num_(model_weight.num_layer),
+    hidden_units_(model_weight.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
     attn_dp_size_(engine.attn_dp_size),
     attn_dp_rank_(engine.attn_dp_rank),
@@ -48,7 +48,7 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
     is_warm_up_{*ctx.is_warm_up}
 {
     bool has_moe = false;
-    for (int i = 0; i < model_weight.num_layer_; ++i) {
+    for (int i = 0; i < model_weight.num_layer; ++i) {
         if (model_weight.layer(i)->moe_ffn) {
             has_moe = true;
             break;
@@ -59,8 +59,8 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
     }
 
     std::vector<AttentionWeight*> attn_weights;
-    attn_weights.reserve(model_weight.num_layer_);
-    for (int i = 0; i < model_weight.num_layer_; ++i) {
+    attn_weights.reserve(model_weight.num_layer);
+    for (int i = 0; i < model_weight.num_layer; ++i) {
         if (auto* attn = model_weight.layer(i)->attention.get()) {
             attn_weights.push_back(attn);
         }
@@ -68,8 +68,8 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
 
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
         engine.quant_policy,
-        model_weight.layer_types_,
-        model_weight.num_layer_,
+        model_weight.layer_types,
+        model_weight.num_layer,
         attn_weights,
         engine,
         ctx,
@@ -77,17 +77,17 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
         (bool)moe_ffn_layer_);
 
     bool has_linear_attn = false;
-    for (auto t : model_weight.layer_types_) {
+    for (auto t : model_weight.layer_types) {
         if (t == 1) { has_linear_attn = true; break; }
     }
     if (has_linear_attn) {
         linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
-            model_weight.data_type_, model_weight.layer_types_,
+            model_weight.data_type, model_weight.layer_types,
             engine, ctx, phases);
     }
 
     bool has_ffn = false;
-    for (int i = 0; i < model_weight.num_layer_; ++i) {
+    for (int i = 0; i < model_weight.num_layer; ++i) {
         if (model_weight.layer(i)->feed_forward) {
             has_ffn = true;
             break;
