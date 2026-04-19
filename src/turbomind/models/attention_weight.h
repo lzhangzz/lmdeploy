@@ -7,7 +7,6 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/norm_weight.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind::core {
 
@@ -101,14 +100,17 @@ public:
 
     TM_MODULE_DECLARE(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 
-    bool is_mla() const { return mla_.kv_lora_rank > 0; }
+    bool is_mla() const { return kv_lora_rank_ > 0; }
 
     // --- Config fields (public for runtime access) ---
     int      hidden_dim_{};
     int      head_dim_{};
     int      head_num_{};
     int      kv_head_num_{};
-    MLAParam mla_{};
+    int kv_lora_rank_{};
+    int q_lora_rank_{};
+    int qk_rope_dim_{};
+    int v_head_dim_{};
     bool     bias_{};
     bool     qk_norm_{};
     int      tp_size_{};
