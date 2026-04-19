@@ -14,9 +14,9 @@ Based on `bf16_gemm_sm80_pipe_tma.cu`. New file: `bf16_gemm_sm80_pipe_tma_ws.cu`
 |---|---|---|---|
 | WG 0 (consumer) | 0–127 | 0–3 | SM80 HMMA + LDSM S2R + epilogue |
 | WG 1 (consumer) | 128–255 | 4–7 | SM80 HMMA + LDSM S2R + epilogue |
-| WG 2 (producer) | 256–383 | 8–11 | TMA load (1 warp via elect_one_sync) |
+| WG 2 (producer) | 256–383 | 8–11 | TMA load (1 thread, warp_group_thread_idx==0) |
 
-The 256 consumer threads use `threadIdx.x % 256` as the MMA thread index, mapping 0–255 directly to the existing 256-thread HMMA layout. No MMA partitioning changes needed.
+The 256 consumer threads use `threadIdx.x` directly as the MMA thread index (range 0–255 maps directly to the existing 256-thread HMMA layout). No MMA partitioning changes needed.
 
 Register allocation:
 - Producer WG: `warpgroup_reg_dealloc<40>` — only TMA descriptor handling
@@ -38,24 +38,24 @@ if (warp_group_idx == 2) {
 
 ### Producer Warp Group (wg_idx == 2)
 
-One warp (warp 8, threads 256–287) issues TMA loads via `elect_one_sync()`. The other 3 warps in the producer WG are idle during TMA operations but participate in barrier init and `tma_store_wait<0>()` at kernel exit.
+One thread (thread 256, `warp_group_thread_idx == 0`) issues all TMA loads. The other 127 producer threads do not participate in the load loop — they wait at `tma_store_wait<0>()` at kernel exit. This matches the CUTLASS warp-specialized pattern where only the elected leader thread (`params.is_leader`) runs the producer state machine.
 
-Producer flow:
-1. Barrier init (all 384 threads participate)
+Producer flow (thread 256 only):
+1. Barrier init (all 384 threads participate via PipelineTmaAsync constructor)
 2. `__syncthreads()` after init
-3. `warpgroup_reg_dealloc<40>()`
-4. Prologue: issue `min(Stages, k_tile_count)` TMA loads
-5. Main loop: `producer_acquire` → TMA load A + B → advance pipe → `producer_commit`
+3. `warpgroup_reg_dealloc<40>()` (all 128 producer threads)
+4. `make_producer_start_state()` — returns phase=1 (inverted, since buffers start empty)
+5. Main loop: `producer_acquire` → TMA load A + B → advance pipe
 6. Tail: `producer_tail` to drain remaining stages
-7. Wait at `tma_store_wait<0>()` until consumer finishes epilogue
+7. All 128 producer threads wait at `tma_store_wait<0>()` until consumer finishes epilogue
 
 ### Consumer Warp Groups (wg_idx 0, 1)
 
-Both consumer warp groups together form the 256-thread MMA. Each thread computes its MMA partition via `threadIdx.x % 256` (WG0 maps to MMA threads 0–127, WG1 maps to MMA threads 128–255). The MMA layout `Layout<Shape<_4, _2>>` assigns warps 0–3 to threads 0–127 and warps 4–7 to threads 128–255, so the consumer threads map directly without remapping.
+Both consumer warp groups together form the 256-thread MMA. Since consumer threadIdx range is 0–255, `threadIdx.x % 256 == threadIdx.x` — no remapping needed. The MMA layout `Layout<Shape<_4, _2>>` assigns warps 0–3 (WG0) to MMA threads 0–127 and warps 4–7 (WG1) to MMA threads 128–255, so the consumer threads map directly.
 
 Consumer flow:
 1. `warpgroup_reg_alloc<232>()`
-2. Setup ThrMMA, LDSM copies, STSM copy — using `threadIdx.x % 256` as the MMA thread index
+2. Setup ThrMMA, LDSM copies, STSM copy — using `threadIdx.x` as the MMA thread index (consumers are threads 0–255)
 3. Wait for first stage via `consumer_wait`
 4. Main loop: `consumer_wait` → LDSM S2R → MMA → `consumer_release` → advance pipe
 5. MMA tail: drain remaining pipeline stages
@@ -79,11 +79,15 @@ if (warp_group_idx == 2) {
 } else {
     pipeline_params.role = MainloopPipeline::ThreadCategory::Consumer;
 }
-pipeline_params.is_leader = (warp_group_thread_idx == 0);
-pipeline_params.num_consumers = 256;  // total consumer threads
-pipeline_params.num_producers = 1;    // single TMA thread
+pipeline_params.is_leader = (warp_group_thread_idx == 0);  // thread 0 of each WG
+pipeline_params.num_consumers = 256;  // total consumer threads (both WGs)
+pipeline_params.num_producers = 1;    // only thread 256 issues TMA loads
 pipeline_params.transaction_bytes = tma_transaction_bytes;
 ```
+
+Note: `is_leader = warp_group_thread_idx == 0` means:
+- In the producer WG: thread 256 is the leader (issues `arrive_and_expect_tx` inside `producer_acquire`)
+- In consumer WGs: threads 0 and 128 are leaders for their respective WGs (but consumers don't use `is_leader`)
 
 Barrier init (called by the constructor with `cute::true_type{}`):
 - `full_barrier_` (ClusterTransactionBarrier): initialized with `num_producers = 1`
@@ -129,7 +133,7 @@ The `PipelineTmaAsync::SharedStorage` contains:
 - `full_barrier_[Stages]`: ClusterTransactionBarrier array (producer barrier)
 - `empty_barrier_[Stages]`: ClusterBarrier array (consumer barrier)
 
-Total smem: ~144 KB (same as baseline — pipeline barriers add only ~192 bytes).
+Total smem: ~144 KB (same as baseline — pipeline barriers add ~48 bytes vs current kernel's ~24 bytes for tma_barrier).
 
 ### Host Function Changes
 
@@ -176,39 +180,44 @@ __global__ void bf16_gemm_ws_device(...) {
     __syncthreads();
 
     if (warp_group_idx == 2) {
-        // ---- Producer ----
+        // ---- Producer (all 128 threads) ----
         warpgroup_reg_dealloc<40>();
-        int lane_predicate = elect_one_sync();
 
-        auto smem_pipe_write = make_producer_start_state<MainloopPipeline>();
+        // Only thread 256 (warp_group_thread_idx == 0) runs the producer loop.
+        // It is the is_leader for the pipeline, so producer_acquire internally
+        // calls arrive_and_expect_tx on the full barrier.
+        if (warp_group_thread_idx == 0) {
+            auto smem_pipe_write = make_producer_start_state<MainloopPipeline>();
 
-        // Prologue + Main loop
-        CUTE_NO_UNROLL
-        for (int k_tile = 0; k_tile < k_tile_count; ++k_tile) {
-            pipeline.producer_acquire(smem_pipe_write);
-            if (lane_predicate) {
-                copy(tma_a.with(pipeline.producer_get_barrier(smem_pipe_write)),
-                     tAgA(_,k_tile_next), tAsA(_,smem_pipe_write.index()));
-                copy(tma_b.with(pipeline.producer_get_barrier(smem_pipe_write)),
-                     tBgB(_,k_tile_next), tBsB(_,smem_pipe_write.index()));
+            // Main loop: acquire → TMA load A+B → advance pipe
+            CUTE_NO_UNROLL
+            for (int k_tile = 0; k_tile < k_tile_count; ++k_tile) {
+                pipeline.producer_acquire(smem_pipe_write);
+
+                using BarrierType = typename MainloopPipeline::ProducerBarrierType;
+                BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
+                copy(tma_a.with(*tma_barrier), tAgA(_,k_tile_next), tAsA(_,smem_pipe_write.index()));
+                copy(tma_b.with(*tma_barrier), tBgB(_,k_tile_next), tBsB(_,smem_pipe_write.index()));
+
+                ++smem_pipe_write;
+                ++k_tile_next;
             }
-            ++smem_pipe_write;
-            ++k_tile_next;
+
+            // Tail drain: wait for consumers to release all remaining stages
+            pipeline.producer_tail(smem_pipe_write);
         }
 
-        // Tail drain
-        pipeline.producer_tail(smem_pipe_write);
-
-        // Wait for epilogue TMA store
+        // All 128 producer threads wait for epilogue TMA store to complete
         tma_store_wait<0>();
 
     } else {
         // ---- Consumer (wg 0 or 1) ----
         warpgroup_reg_alloc<232>();
 
-        int consumer_tid = threadIdx.x % 256;  // 0-255 for both WGs
-        ThrMMA thr_mma = mma.get_thread_slice(consumer_tid);
-        // Setup LDSM, STSM, accumulators using consumer_tid (same as current kernel)
+        // Consumer threadIdx range is 0-255, so % 256 is identity.
+        // Explicitly using threadIdx.x (not % 256) since consumers ARE threads 0-255.
+        ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
+        // Setup LDSM, STSM, accumulators using threadIdx.x (same as current kernel)
 
         PipelineState smem_pipe_read;
         PipelineState smem_pipe_release;
@@ -221,11 +230,14 @@ __global__ void bf16_gemm_ws_device(...) {
             copy(s2r_atom_b, tXsB(_,_,0,smem_pipe_read.index()), tXrB(_,_,0));
         }
 
-        // Main loop — adapted from current kernel's inner loop
+        // Main loop — adapted from current kernel's inner loop.
         // Key changes from non-specialized version:
         //   - Replace ProducerBarType::wait with pipeline.consumer_wait
         //   - Replace TMA load (threadIdx.x==0) with pipeline.consumer_release
         //   - Remove __syncthreads (pipeline barriers replace it)
+        //   - smem_pipe_read advances at k_block==K_BLOCK_MAX-1 (before wait),
+        //     matching non-WS kernel where smem_pipe_read advances at k_block==0
+        //     (which precedes k_block==K_BLOCK_MAX-1 in the next iteration)
         CUTE_NO_UNROLL
         for (int k_tile_count = ...; k_tile_count > -(K_PIPE_MAX - 1); --k_tile_count)
         {
@@ -234,8 +246,11 @@ __global__ void bf16_gemm_ws_device(...) {
             {
                 if (k_block == K_BLOCK_MAX - 1)
                 {
-                    // Wait for next pipe stage (TMA load complete)
+                    // Advance read to NEXT stage, then wait for its TMA load
+                    ++smem_pipe_read;
                     pipeline.consumer_wait(smem_pipe_read);
+                    tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
+                    tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
                 }
 
                 // Prefetch next k_block via LDSM
@@ -245,7 +260,9 @@ __global__ void bf16_gemm_ws_device(...) {
 
                 if (k_block == 0)
                 {
-                    // Release previous stage so producer can reuse it
+                    // Release previous stage so producer can reuse it.
+                    // Safe because all k_blocks of the released stage have
+                    // been prefetched into registers (LDSM is synchronous).
                     pipeline.consumer_release(smem_pipe_release);
                     ++smem_pipe_release;
                 }
@@ -253,7 +270,6 @@ __global__ void bf16_gemm_ws_device(...) {
                 // MMA on current k_block
                 gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
             }
-            ++smem_pipe_read;
         }
 
         // Epilogue (consumer-only, same as current kernel)
@@ -261,8 +277,8 @@ __global__ void bf16_gemm_ws_device(...) {
         cutlass::arch::NamedBarrier consumer_sync(256, 6);
         consumer_sync.sync();  // consumer-only: all 256 consumer threads
 
-        // TMA store (thread 0 of consumers)
-        if (consumer_tid == 0) {
+        // TMA store (thread 0 of consumers = thread 0 globally)
+        if (threadIdx.x == 0) {
             tma_store_fence();
             copy(tma_store_c, tSsC, tSgC);
             tma_store_arrive();
