@@ -224,11 +224,11 @@ void Engine::Impl::CreateSequenceManager()
     for (int i = 0; i < weights_.num_layer_; ++i) {
         if (auto* dn = weights_.layer(i)->linear_attn.get()) {
             has_linear_attention    = true;
-            linear_key_head_dim     = dn->key_head_dim_;
-            linear_value_head_dim   = dn->value_head_dim_;
-            linear_conv_kernel_dim  = dn->d_conv_;
-            linear_num_key_heads    = dn->num_k_heads_ * param_.attn_tp_size;
-            linear_num_value_heads  = dn->num_v_heads_ * param_.attn_tp_size;
+            linear_key_head_dim     = dn->key_head_dim;
+            linear_value_head_dim   = dn->value_head_dim;
+            linear_conv_kernel_dim  = dn->d_conv;
+            linear_num_key_heads    = dn->num_k_heads * param_.attn_tp_size;
+            linear_num_value_heads  = dn->num_v_heads * param_.attn_tp_size;
             break;
         }
     }

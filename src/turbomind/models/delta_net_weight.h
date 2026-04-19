@@ -58,16 +58,16 @@ public:
     TM_MODULE_DECLARE(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)
 
     // --- Config fields (public for runtime access) ---
-    int      hidden_dim_{};
-    int      num_k_heads_{};
-    int      num_v_heads_{};
-    int      key_head_dim_{};
-    int      value_head_dim_{};
-    int      d_conv_{};
-    bool     bias_{};
-    int      tp_size_{};
-    int      tp_rank_{};
-    DataType data_type_{};
+    int      hidden_dim{};
+    int      num_k_heads{};
+    int      num_v_heads{};
+    int      key_head_dim{};
+    int      value_head_dim{};
+    int      d_conv{};
+    bool     bias{};
+    int      tp_size{};
+    int      tp_rank{};
+    DataType data_type{};
 };
 
 }  // namespace turbomind

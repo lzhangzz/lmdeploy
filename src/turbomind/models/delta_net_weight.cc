@@ -8,16 +8,16 @@
 namespace turbomind {
 
 DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg)
-    : hidden_dim_{cfg.hidden_dim}
-    , num_k_heads_{cfg.num_k_heads}
-    , num_v_heads_{cfg.num_v_heads}
-    , key_head_dim_{cfg.key_head_dim}
-    , value_head_dim_{cfg.value_head_dim}
-    , d_conv_{cfg.d_conv}
-    , bias_{cfg.has_bias}
-    , tp_size_{cfg.tp_size}
-    , tp_rank_{cfg.tp_rank}
-    , data_type_{cfg.data_type}
+    : hidden_dim(cfg.hidden_dim)
+    , num_k_heads(cfg.num_k_heads)
+    , num_v_heads(cfg.num_v_heads)
+    , key_head_dim(cfg.key_head_dim)
+    , value_head_dim(cfg.value_head_dim)
+    , d_conv(cfg.d_conv)
+    , bias(cfg.has_bias)
+    , tp_size(cfg.tp_size)
+    , tp_rank(cfg.tp_rank)
+    , data_type(cfg.data_type)
 {
 }
 
@@ -25,9 +25,9 @@ void DeltaNetWeight::prepare()
 {
     Module::prepare();
 
-    EnsureFloatDtype(A_log, data_type_);
-    EnsureFloatDtype(dt_bias, data_type_);
-    EnsureFloatDtype(conv1d, data_type_);
+    EnsureFloatDtype(A_log, data_type);
+    EnsureFloatDtype(dt_bias, data_type);
+    EnsureFloatDtype(conv1d, data_type);
 }
 
 namespace {

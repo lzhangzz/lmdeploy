@@ -140,11 +140,11 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         using T = decltype(t);
 
         const auto& w             = *p.weights;
-        const int   num_k_heads   = w.num_k_heads_ / tp_size_;
-        const int   num_v_heads   = w.num_v_heads_ / tp_size_;
-        const int   key_head_dim  = w.key_head_dim_;
-        const int   value_head_dim = w.value_head_dim_;
-        const int   d_conv        = w.d_conv_;
+        const int   num_k_heads   = w.num_k_heads / tp_size_;
+        const int   num_v_heads   = w.num_v_heads / tp_size_;
+        const int   key_head_dim  = w.key_head_dim;
+        const int   value_head_dim = w.value_head_dim;
+        const int   d_conv        = w.d_conv;
         const int   key_dim       = num_k_heads * key_head_dim;
         const int   value_dim     = num_v_heads * value_head_dim;
         const int   conv_dim      = key_dim * 2 + value_dim;
