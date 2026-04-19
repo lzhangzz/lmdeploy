@@ -11,7 +11,7 @@ from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, get_yarn_params, parse_rope_param, rope_type_to_int
+from .utils import _pad_inter_size, _pad_kv_head, get_yarn_params, parse_rope_param, rope_type_to_int
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -52,7 +52,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         # Override _parse_base defaults for MLA geometry
         self._head_dim = size_per_head
         self._kv_head_num = 1
-        self._kv_head_num_padded = 1   # MLA never padded to tp
+        self._kv_head_num_padded = _pad_kv_head(1, engine_cfg.attn_tp_size)
         # RoPE dim = qk_rope_dim for MLA (not head_dim)
         self._rope, self._max_position_embeddings = parse_rope_param(
             hf_cfg, qk_rope_dim)
