@@ -179,7 +179,7 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   pipeline_params.transaction_bytes = tma_transaction_bytes;
 
   // Constructor initializes barriers (warp 0) + fence_barrier_init
-  MainloopPipeline pipeline(smem.pipeline, pipeline_params, cute::Layout<cute::_1>{});
+  MainloopPipeline pipeline(smem.pipeline, pipeline_params, cute::make_layout(cute::make_shape(cute::_1{}, cute::_1{})));
   __syncthreads();
 
   if (warp_group_idx == 2) {
@@ -246,63 +246,45 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     // ---- Step 5: Pipelined main loop ----
     //
     // Consumer pipeline: wait for TMA load -> LDSM prefetch -> MMA -> release stage.
-    // smem_pipe_read and smem_pipe_release track pipeline state with Phase.
-    // smem_pipe_release lags behind smem_pipe_read — release happens at k_block==0
-    // of the NEXT k_tile, after all k_blocks of the current stage are in registers.
+    // The loop does exactly k_tile_count consumer_waits, matching the producer's
+    // k_tile_count TMA loads. Each iteration waits for one stage, processes all
+    // k_blocks via LDSM+MMA, then releases the stage back to the producer.
 
     typename MainloopPipeline::PipelineState smem_pipe_read;
     typename MainloopPipeline::PipelineState smem_pipe_release;
 
-    Tensor tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
-    Tensor tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
-
     auto K_BLOCK_MAX = size<2>(tCrA);
 
-    // Prologue: wait for first stage, prefetch k_block 0
-    pipeline.consumer_wait(smem_pipe_read);
-    if (K_BLOCK_MAX > 1) {
+    CUTE_NO_UNROLL
+    for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter)
+    {
+      // Wait for this stage's TMA load to complete
+      pipeline.consumer_wait(smem_pipe_read);
+
+      Tensor tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
+      Tensor tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
+
+      // Prefetch k_block 0 before the MMA loop
       copy(s2r_atom_a, tXsA_p(_,_,Int<0>{}), tXrA(_,_,Int<0>{}));
       copy(s2r_atom_b, tXsB_p(_,_,Int<0>{}), tXrB(_,_,Int<0>{}));
-    }
 
-    // Adjust k_tile_count for pipeline depth. In the non-WS kernel, the prologue
-    // loaded K_PIPE_MAX-1 stages and decremented k_tile_count by K_PIPE_MAX-1.
-    // Here the producer handles all loads, but the consumer still needs the same
-    // accounting: total k_tiles - (K_PIPE_MAX-1) real iterations + K_PIPE_MAX-1
-    // tail drain = total k_tiles main loop iterations.
-    k_tile_count -= (K_PIPE_MAX - 1);
-
-    // Main loop — same structure as non-WS kernel but with pipeline barriers
-    // replacing manual ClusterTransactionBarrier + __syncthreads
-    CUTE_NO_UNROLL
-    while (k_tile_count > -(K_PIPE_MAX - 1))
-    {
       CUTE_UNROLL
       for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block)
       {
-        if (k_block == K_BLOCK_MAX - 1)
-        {
-          // Advance to next stage, then wait for its TMA load to complete
-          ++smem_pipe_read;
-          pipeline.consumer_wait(smem_pipe_read);
-          tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
-          tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
-        }
-
+        // Prefetch next k_block (wraps at K_BLOCK_MAX-1 to load k_block 0 for next tile)
         auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
-        copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
-        copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
-
-        if (k_block == 0)
-        {
-          // Release previous stage — safe because all k_blocks are in registers
-          pipeline.consumer_release(smem_pipe_release);
-          ++smem_pipe_release;
+        if (k_block < K_BLOCK_MAX - 1) {
+          copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
+          copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
         }
 
         gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
       }
-      --k_tile_count;
+
+      // Release this stage after all k_blocks are processed
+      pipeline.consumer_release(smem_pipe_release);
+      ++smem_pipe_read;
+      ++smem_pipe_release;
     }
 
     // ---- Step 6: Epilogue ----
