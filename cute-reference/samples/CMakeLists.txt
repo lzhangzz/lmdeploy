@@ -1,14 +1,14 @@
 # CuTe reference GEMM sample kernels
-cmake_minimum_required(VERSION 3.11)
+# Built via: cmake -B build -DBUILD_CUTE_SAMPLES=ON && ninja -C build
 
 set(CUTE_GEMM_SAMPLES
-    bf16_gemm_sm80
-    bf16_gemm_sm80_opt
-    bf16_gemm_sm80_pipe
-    bf16_gemm_sm80_pipe_256x128
-    bf16_gemm_sm80_pipe_epilogue
-    bf16_gemm_sm80_pipe_tma
-    bf16_gemm_sm80_pipe_tma_ws
+    01_bf16_gemm_sm80
+    02_bf16_gemm_sm80_opt
+    03_bf16_gemm_sm80_pipe
+    04_bf16_gemm_sm80_pipe_256x128
+    05_bf16_gemm_sm80_pipe_epilogue
+    06_bf16_gemm_sm80_pipe_tma
+    07_bf16_gemm_sm80_pipe_tma_ws
 )
 
 foreach(sample ${CUTE_GEMM_SAMPLES})
