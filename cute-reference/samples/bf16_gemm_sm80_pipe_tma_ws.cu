@@ -305,66 +305,57 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       --k_tile_count;
     }
 
-  // ---- Step 6: Epilogue ----
-  //
-  // Stage 1: Element-wise alpha/beta scaling
-  CUTE_UNROLL
-  for (int i = 0; i < size(tCrC); ++i) {
-    tCrC(i) = alpha * tCrC(i) + beta * static_cast<float>(tCgC(i));
-  }
+    // ---- Step 6: Epilogue ----
+    //
+    // Consumer-only epilogue. Producer threads are waiting at tma_store_wait<0>().
 
-  // Stage 2: Convert F32 -> BF16, write to smem via STSM
-  Tensor sC = make_tensor(
-      make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
-      SmemLayoutC{});
+    // Stage 1: Element-wise alpha/beta scaling
+    CUTE_UNROLL
+    for (int i = 0; i < size(tCrC); ++i) {
+      tCrC(i) = alpha * tCrC(i) + beta * static_cast<float>(tCgC(i));
+    }
 
-  Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
-  CUTE_UNROLL
-  for (int i = 0; i < size(tCrC); ++i) {
-    tCrC_bf16(i) = static_cast<bf16_t>(tCrC(i));
-  }
+    // Stage 2: Convert F32 -> BF16, write to smem via STSM
+    Tensor sC = make_tensor(
+        make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
+        SmemLayoutC{});
 
-  // STSM: retile BF16 registers for stmatrix layout, partition smem, copy
-  Tensor tRS_rAcc = thr_r2s.retile_S(tCrC_bf16);
-  Tensor tRS_sC   = thr_r2s.partition_D(sC);
-  copy(r2s_copy, tRS_rAcc, tRS_sC);
-  __syncthreads();
+    Tensor tCrC_bf16 = make_tensor<bf16_t>(tCrC.layout());
+    CUTE_UNROLL
+    for (int i = 0; i < size(tCrC); ++i) {
+      tCrC_bf16(i) = static_cast<bf16_t>(tCrC(i));
+    }
 
-  // Stage 3: TMA store (smem -> gmem)
-  //
-  // The TMA store uses the testbed pattern:
-  //   1. get_tma_tensor creates a TMA coord tensor for the FULL gmem
-  //   2. flat_divide tiles it by the CTA tile size
-  //   3. get_slice(Int<0>{}) partitions for single-CTA TMA
-  //   4. partition_S/partition_D create the src/dst views
-  //   5. copy issues the TMA store
-  //
-  // IMPORTANT: Unlike the testbed which iterates over REST modes, we select the
-  // specific tile for this CTA using the CTA coord from blockIdx.
-  auto cta_tile_mn = product_each(shape(SmemLayoutC{}));
-  Tensor mC_tma = tma_store_c.get_tma_tensor(make_shape(M, N));
-  Tensor gC_tma_full = flat_divide(mC_tma, cta_tile_mn);
+    Tensor tRS_rAcc = thr_r2s.retile_S(tCrC_bf16);
+    Tensor tRS_sC   = thr_r2s.partition_D(sC);
+    copy(r2s_copy, tRS_rAcc, tRS_sC);
 
-  auto cta_tma_store = tma_store_c.get_slice(Int<0>{});
-  Tensor tSsC_x = cta_tma_store.partition_S(sC);
-  Tensor tSgC_x = cta_tma_store.partition_D(gC_tma_full);
+    // Consumer-only sync after STSM writes — NamedBarrier(256 threads, id=6)
+    // Replaces __syncthreads() which requires all 384 threads.
+    cutlass::arch::NamedBarrier consumer_sync(256, 6);
+    consumer_sync.sync();
 
-  // Group the REST modes (tiles beyond the first)
-  Tensor tSgC = group_modes<1, rank(tSgC_x)>(tSgC_x);
-  Tensor tSsC = group_modes<1, rank(tSsC_x)>(tSsC_x);
+    // Stage 3: TMA store (smem -> gmem)
+    auto cta_tile_mn = product_each(shape(SmemLayoutC{}));
+    Tensor mC_tma = tma_store_c.get_tma_tensor(make_shape(M, N));
+    Tensor gC_tma_full = flat_divide(mC_tma, cta_tile_mn);
 
-  // Select the tile for this CTA
-  // flat_divide creates (TILE_M, TILE_N, REST_M, REST_N) from the full gmem tensor.
-  // After partition_D + group_modes, tSgC has shape (TMA, REST) where REST = REST_M * REST_N.
-  // The linear REST index for this CTA is blockIdx.x + blockIdx.y * gridDim.x.
-  int rest_idx = blockIdx.x + blockIdx.y * gridDim.x;
+    auto cta_tma_store = tma_store_c.get_slice(Int<0>{});
+    Tensor tSsC_x = cta_tma_store.partition_S(sC);
+    Tensor tSgC_x = cta_tma_store.partition_D(gC_tma_full);
 
-  if (threadIdx.x == 0) {
-    tma_store_fence();
-    copy(tma_store_c, tSsC(_, 0), tSgC(_, rest_idx));
-    tma_store_arrive();
-  }
-  tma_store_wait<0>();
+    Tensor tSgC = group_modes<1, rank(tSgC_x)>(tSgC_x);
+    Tensor tSsC = group_modes<1, rank(tSsC_x)>(tSsC_x);
+
+    int rest_idx = blockIdx.x + blockIdx.y * gridDim.x;
+
+    if (threadIdx.x == 0) {
+      tma_store_fence();
+      copy(tma_store_c, tSsC(_, 0), tSgC(_, rest_idx));
+      tma_store_arrive();
+    }
+    tma_store_wait<0>();  // all 384 threads participate (producer is also waiting)
+  }  // end consumer else-branch
 }
 
 // ================================================================================================
