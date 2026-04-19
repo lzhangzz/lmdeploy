@@ -157,7 +157,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
         d.generating      = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_.emplace(engine, param_, phases);
+    input_processor_.emplace(engine, weights_.hidden_units_, weights_.data_type_, phases);
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, moe, ctx, phases, weights_.layers_list());
 
@@ -189,7 +189,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
         max_logits_len_ = std::max<int>(max_fwd_tokens * model.hidden_units / vocab_size, engine.max_batch_size);
     }
 
-    output_processor_.emplace(param_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
+    output_processor_.emplace(weights_.vocab_size_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
         return PostEmbedding(hstate, symm_buf_);
     });
 }
