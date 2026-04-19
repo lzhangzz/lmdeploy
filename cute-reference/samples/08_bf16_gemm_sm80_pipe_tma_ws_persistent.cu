@@ -152,16 +152,15 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     if (warp_group_thread_idx == 0) {
       using BarrierType = typename MainloopPipeline::ProducerBarrierType;
 
-      while (true) {
+      while (linear_idx < total_tiles) {
         int m_idx = linear_idx / n_tiles;
         int n_idx = linear_idx % n_tiles;
-        if (m_idx >= m_tiles) break;
 
         // Compute gmem tensors for this tile
         Tensor gA = local_tile(mA, cta_tiler, make_coord(m_idx, n_idx, _), Step<_1, X, _1>{});
         Tensor gB = local_tile(mB, cta_tiler, make_coord(m_idx, n_idx, _), Step< X,_1, _1>{});
 
-        // TMA partition for this tile
+        // TMA partition for this tile (smem side is pure layout, cheap to recompute)
         auto [tAgA, tAsA] = tma_partition(tma_a, Int<0>{}, Layout<_1>{},
                                            group_modes<0,2>(sA), group_modes<0,2>(gA));
         auto [tBgB, tBsB] = tma_partition(tma_b, Int<0>{}, Layout<_1>{},
@@ -245,10 +244,9 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
     // ---- Persistent while loop over tiles ----
 
-    while (true) {
+    while (linear_idx < total_tiles) {
       int m_idx = linear_idx / n_tiles;
       int n_idx = linear_idx % n_tiles;
-      if (m_idx >= m_tiles) break;
 
       // Compute gC for this tile
       Tensor gC = local_tile(mC, cta_tiler, make_coord(m_idx, n_idx, _), Step<_1, _1, X>{});
