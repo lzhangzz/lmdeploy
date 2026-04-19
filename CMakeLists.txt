@@ -345,6 +345,11 @@ link_directories(
 
 add_subdirectory(src)
 
+option(BUILD_CUTE_SAMPLES "Build CuTe reference GEMM samples" OFF)
+if(BUILD_CUTE_SAMPLES)
+  add_subdirectory(cute-reference/samples)
+endif()
+
 # if(BUILD_TEST)
 #     add_subdirectory(tests/csrc)
 # endif()
