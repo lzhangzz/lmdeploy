@@ -9,7 +9,6 @@
 
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/activation.h"
-#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 
@@ -93,16 +92,6 @@ struct MoeParam {
     std::vector<int> expert_num;
 };
 
-struct AttentionParam {
-    float softmax_scale;
-    int   cache_block_seq_len;
-    // logn attention
-    bool use_logn_attn;
-    int  max_position_embeddings;
-    // rotary embedding
-    RopeParam rope;
-};
-
 struct EngineParam {
     // batch params
     int max_batch_size;
@@ -112,6 +101,7 @@ struct EngineParam {
     // cache params
     float cache_max_block_count;
     int   cache_chunk_size;
+    int   cache_block_seq_len;
     bool  enable_prefix_caching;
     bool  enable_metrics;
 

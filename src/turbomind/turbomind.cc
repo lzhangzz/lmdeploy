@@ -61,82 +61,6 @@ static std::optional<MoeParam::Method> get_moe_method()
     return value;
 }
 
-/// TODO: move config parsing to suitable place
-static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    param.base = node["base"].as<float>();
-    param.dim  = node["dim"].as<int>();
-    if (param.base == 0.f || param.dim == 0) {
-        TM_LOG_ERROR("invalid rope param: base = %f, dim = %d", param.base, param.dim);
-        FT_CHECK(0);
-    }
-}
-
-static void parse_linear_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    parse_default_rope_param(node, param);
-    param.factor = node["factor"].as<float>();
-}
-
-static void parse_dynamic_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    parse_linear_rope_param(node, param);
-    param.max_position_embeddings = node["max_position_embeddings"].as<int>();
-}
-
-static void parse_yarn_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    parse_dynamic_rope_param(node, param);
-    param.yarn.attention_factor = node["attention_factor"].as<float>();
-    param.yarn.beta_fast        = node["beta_fast"].as<float>();
-    param.yarn.beta_slow        = node["beta_slow"].as<float>();
-}
-
-static void parse_llama3_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    parse_linear_rope_param(node, param);
-    param.llama3.low_freq_factor                  = node["low_freq_factor"].as<float>();
-    param.llama3.high_freq_factor                 = node["high_freq_factor"].as<float>();
-    param.llama3.original_max_position_embeddings = node["original_max_position_embeddings"].as<int>();
-}
-
-static void parse_mrope_rope_param(const YAML::Node& node, RopeParam& param)
-{
-    parse_default_rope_param(node, param);
-    auto mrope_section = node["mrope_section"].as<std::vector<int>>();
-    FT_CHECK(mrope_section.size() == 3);
-    param.mrope.section = {mrope_section[0], mrope_section[1], mrope_section[2]};
-}
-
-static void parse_rope_param(const YAML::Node& node, RopeParam& rope)
-{
-    rope.type = GetRoPEType(node["type"].as<std::string>());
-
-    switch (rope.type) {
-        case RopeType::kDefault:
-            parse_default_rope_param(node, rope);
-            break;
-        case RopeType::kLinear:
-            parse_linear_rope_param(node, rope);
-            break;
-        case RopeType::kDynamic:
-            parse_dynamic_rope_param(node, rope);
-            break;
-        case RopeType::kYarn:
-            parse_yarn_rope_param(node, rope);
-            break;
-        case RopeType::kLlama3:
-            parse_llama3_rope_param(node, rope);
-            break;
-        case RopeType::kMrope:
-            parse_mrope_rope_param(node, rope);
-            break;
-        default:
-            FT_CHECK(0);
-            break;
-    }
-}
-
 static DataType data_type_from_string(std::string str)
 {
     if (str == "fp16" || str == "float16") {
@@ -167,7 +91,6 @@ static DataType data_type_from_string(std::string str)
 struct TurboMind::Impl {
     DataType       data_type_;
     ModelParam     model_param_;
-    AttentionParam attn_param_;
     MoeParam       moe_param_;
     EngineParam    engine_param_;
     size_t         comm_size_;
@@ -283,7 +206,7 @@ TurboMind::Impl::~Impl()
 }
 
 TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory):
-    data_type_{}, model_param_{}, attn_param_{}, moe_param_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
+    data_type_{}, model_param_{}, moe_param_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
 {
     TM_CHECK(!config.empty());
 
@@ -317,7 +240,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.mla.kv_lora_rank   = model["kv_lora_rank"].as<int>();
     model_param_.mla.qk_rope_dim    = model["qk_rope_dim"].as<int>();
     model_param_.mla.v_head_dim     = model["v_head_dim"].as<int>();
-    attn_param_.cache_block_seq_len = attention["cache_block_seq_len"].as<int>(0);
+    engine_param_.cache_block_seq_len = attention["cache_block_seq_len"].as<int>(0);
     model_param_.quant_policy       = engine["quant_policy"].as<int>(0);
 
     auto inter_size = model["inter_size"];
@@ -364,13 +287,6 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     model_param_.attn_bias  = model["attn_bias"].as<int>(0);
     model_param_.qk_norm    = model["qk_norm"].as<bool>();
     model_param_.group_size = model["group_size"].as<int>(0);
-
-    attn_param_.softmax_scale = attention["softmax_scale"].as<float>(0);
-    // logn attn for qwen model
-    attn_param_.use_logn_attn           = attention["use_logn_attn"].as<int>(0);
-    attn_param_.max_position_embeddings = attention["max_position_embeddings"].as<int>(0);
-    // rotary embedding parameters
-    parse_rope_param(attention["rope_param"], attn_param_.rope);
 
     engine_param_.max_batch_size = engine["max_batch_size"].as<int>(0);
     auto max_forward_token_num   = engine["max_prefill_token_num"].as<int>(0);
@@ -549,7 +465,6 @@ void TurboMind::Impl::CreateEngine(int index)
     LanguageModel model{data_type_,  //
                         model_param_,
                         param,
-                        attn_param_,
                         moe_param_,
                         ctx,
                         *weights_[index],

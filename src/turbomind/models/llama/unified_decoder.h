@@ -15,12 +15,12 @@ class UnifiedDecoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(const ModelParam&     model,
-                   const EngineParam&    engine,
-                   const AttentionParam& attn,
-                   const MoeParam&       moe,
-                   const Context&        ctx,
-                   int                   phases);
+    UnifiedDecoder(const ModelParam&                        model,
+                   const EngineParam&                       engine,
+                   const MoeParam&                          moe,
+                   const Context&                           ctx,
+                   int                                      phases,
+                   const std::vector<DecoderLayerWeight*>&  layer_weights);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

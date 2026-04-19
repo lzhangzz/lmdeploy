@@ -30,12 +30,12 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
-                               const EngineParam&    engine,
-                               const AttentionParam& attn,
-                               const MoeParam&       moe,
-                               const Context&        ctx,
-                               int                   phases):
+UnifiedDecoder::UnifiedDecoder(const ModelParam&                        model,
+                               const EngineParam&                       engine,
+                               const MoeParam&                          moe,
+                               const Context&                           ctx,
+                               int                                      phases,
+                               const std::vector<DecoderLayerWeight*>&  layer_weights):
     layer_num_(model.layer_num),
     hidden_units_(model.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
@@ -51,12 +51,17 @@ UnifiedDecoder::UnifiedDecoder(const ModelParam&     model,
         moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx);
     }
 
+    std::vector<AttentionWeight*> attn_weights;
+    attn_weights.reserve(layer_weights.size());
+    for (auto* lw : layer_weights) {
+        attn_weights.push_back(lw->attention.get());
+    }
+
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
         model.quant_policy,
         model.layer_types,
         model.layer_num,
-        core::to_rope_config(attn.rope),
-        attn.cache_block_seq_len,
+        attn_weights,
         engine,
         ctx,
         phases,

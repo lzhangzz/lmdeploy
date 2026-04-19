@@ -91,18 +91,16 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(int                     quant_policy,
-                                             const std::vector<int>& layer_types,
-                                             int                     layer_num,
-                                             const core::RopeConfig& rope,
-                                             int                     cache_block_seq_len,
-                                             const EngineParam&      engine,
-                                             const Context&          ctx,
-                                             int                     phases,
-                                             bool                    init):
+UnifiedAttentionLayer::UnifiedAttentionLayer(int                               quant_policy,
+                                             const std::vector<int>&           layer_types,
+                                             int                               layer_num,
+                                             std::vector<AttentionWeight*>     attn_weights,
+                                             const EngineParam&                engine,
+                                             const Context&                    ctx,
+                                             int                               phases,
+                                             bool                              init):
     quant_policy_{quant_policy},
-    rope_{rope},
-    cache_block_seq_len_{cache_block_seq_len},
+    rope_{attn_weights[0]->rope_},
     engine_param_{engine},
     cp_fn_ctx_{ctx.comm.d_comm, ctx.comm.d_cp_group},
     is_warm_up_{*ctx.is_warm_up},
@@ -111,6 +109,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                     quant_polic
     linear_(*ctx.linear),
     arch_{getSMVersion()}
 {
+    TM_CHECK(!attn_weights.empty()) << "attn_weights must not be empty";
+    TM_CHECK(attn_weights[0]) << "attn_weights[0] must not be null";
+
     check_cuda_error(cudaStreamCreateWithFlags(&aux_stream_, cudaStreamNonBlocking));
     check_cuda_error(cudaEventCreateWithFlags(&qkv_event_, cudaEventDisableTiming));
     check_cuda_error(cudaEventCreateWithFlags(&aux_event_, cudaEventDisableTiming));
@@ -138,7 +139,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                     quant_polic
         mrope_position_delta_buf_ = {bsz, kCPUpinned};
         mrope_length_buf_         = {bsz, kCPUpinned};
     }
-    const int max_blocks = bsz * cdiv(engine.session_len, cache_block_seq_len_);
+    const int max_blocks = bsz * cdiv(engine.session_len, engine_param_.cache_block_seq_len);
     for (int i = 0; i < phases; ++i) {
         auto& d               = data_.emplace_back(std::make_shared<AttentionData>());
         d->block_ptrs         = {max_blocks + 16, kDEVICE};
@@ -154,36 +155,34 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                     quant_polic
             rope_param_.mrope.stride = d->mrope_position_ids.stride(0);
         }
     }
-}
 
-void UnifiedAttentionLayer::Init(const ForwardParam& p)
-{
-    const auto& w = *p.weights;
-    const int   tp_size         = w.tp_size_;
-    const int   local_head_num  = w.head_num_ / tp_size;
-    const int   local_kv_head_num = w.kv_head_num_ / tp_size;
-    const int   size_per_head   = w.head_dim_;
+    // Eagerly initialize workspace buffers (was previously lazy in Init())
+    {
+        const auto& w = *attn_weights[0];
+        const int   tp_size        = w.tp_size_;
+        const int   local_head_num = w.head_num_ / tp_size;
+        const int   size_per_head  = w.head_dim_;
 
-    TM_CHECK_EQ(w.head_num_ % tp_size, 0) << w.head_num_ << " " << tp_size;
-    TM_CHECK_EQ(w.head_num_ % w.kv_head_num_, 0) << w.head_num_ << " " << w.kv_head_num_;
+        TM_CHECK_EQ(w.head_num_ % tp_size, 0) << w.head_num_ << " " << tp_size;
+        TM_CHECK_EQ(w.head_num_ % w.kv_head_num_, 0) << w.head_num_ << " " << w.kv_head_num_;
 
-    ssize_t   workspace_tokens = kMaxWorkspaceTokens;
-    Allocator alloc            = core::Context::device_alloc();
-    if (engine_param_.attn_cp_size > 1) {
-        alloc = GetSymmAllocator(context_.comm.d_comm);
-        workspace_tokens += engine_param_.max_forward_token_num;
+        ssize_t   workspace_tokens = kMaxWorkspaceTokens;
+        Allocator alloc            = core::Context::device_alloc();
+        if (engine_param_.attn_cp_size > 1) {
+            alloc = GetSymmAllocator(context_.comm.d_comm);
+            workspace_tokens += engine_param_.max_forward_token_num;
+        }
+
+        partial_O_  = Tensor_<float>({workspace_tokens, local_head_num, size_per_head}, kDEVICE);
+        partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num, 2}, alloc);
+        split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
+        if (init_) {
+            const int dim = local_head_num * size_per_head;
+            tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, w.data_type_, kDEVICE};
+        }
+
+        Clear(split_cnt_.buffer());
     }
-
-    partial_O_  = Tensor_<float>({workspace_tokens, local_head_num, size_per_head}, kDEVICE);
-    partial_ML_ = Tensor_<float>({engine_param_.attn_cp_size, workspace_tokens, local_head_num, 2}, alloc);
-    split_cnt_  = Tensor_<int>({workspace_tokens}, kDEVICE);
-    if (init_) {
-        const int dim = local_head_num * size_per_head;
-        tmp_attn_     = Tensor{{engine_param_.max_forward_token_num, dim}, w.data_type_, kDEVICE};
-    }
-
-    Clear(split_cnt_.buffer());
-    initialized_ = true;
 }
 
 static void init_dynamic_ntk(RequestCache& cache, const core::RopeConfig& rope)
@@ -320,10 +319,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
     const auto& weights = *p.weights;
 
     TM_LOG_DEBUG("layer=%d, token_num=%d", layer_id, token_num);
-
-    if (!initialized_) {
-        Init(p);
-    }
 
     Tensor qkv;
 
@@ -466,7 +461,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         params.block_iter_params = BlockIteratorParams{(char**)d.block_ptrs.data(),  //
                                                        d.block_ptrs_offsets.data() + offset,
                                                        cache_layer_id,
-                                                       cache_block_seq_len_};
+                                                       engine_param_.cache_block_seq_len};
 
         // prefill only
         if (is_mla) {

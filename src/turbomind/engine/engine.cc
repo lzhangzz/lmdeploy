@@ -205,14 +205,14 @@ Engine::Impl::Impl(DataType      dtype,
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
     const ssize_t max_batch_block_num =
-        param.max_batch_size * cdiv(session_len_trunc_, model_.attn_param().cache_block_seq_len);
+        param.max_batch_size * cdiv(session_len_trunc_, param_.cache_block_seq_len);
     block_ptrs_buf_         = {max_batch_block_num, kCPUpinned};
     block_ptrs_offsets_buf_ = {param.max_batch_size + 1, kCPUpinned};
 }
 
 void Engine::Impl::CreateSequenceManager()
 {
-    const auto cache_block_seq_len = model_.attn_param().cache_block_seq_len;
+    const auto cache_block_seq_len = param_.cache_block_seq_len;
 
     const auto& model_param = model_.model_param();
 

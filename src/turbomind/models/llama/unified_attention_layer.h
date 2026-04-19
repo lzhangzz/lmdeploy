@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <vector>
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/batch.h"
@@ -31,6 +32,7 @@
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 
@@ -53,23 +55,20 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(int                     quant_policy,
-                          const std::vector<int>& layer_types,
-                          int                     layer_num,
-                          const core::RopeConfig& rope,
-                          int                     cache_block_seq_len,
-                          const EngineParam&      engine,
-                          const Context&          context,
-                          int                     phases,
-                          bool                    init);
+    UnifiedAttentionLayer(int                               quant_policy,
+                          const std::vector<int>&           layer_types,
+                          int                               layer_num,
+                          std::vector<AttentionWeight*>     attn_weights,
+                          const EngineParam&                engine,
+                          const Context&                    context,
+                          int                               phases,
+                          bool                              init);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
     void Forward(ForwardParam p);
 
 private:
-    void Init(const ForwardParam& p);
-
     void Setup(int phase, TensorMap& env);
 
     Tensor forward_mla(const Tensor& hidden_state, const WeightType& weights);
@@ -83,12 +82,10 @@ private:
 private:
     const int           quant_policy_;
     const core::RopeConfig rope_;
-    const int           cache_block_seq_len_;
     const EngineParam   engine_param_;
     const Context&      context_;
     int&                is_warm_up_;
     const bool          init_;
-    bool                initialized_ = false;
 
     LlamaLinear& linear_;
     const int    arch_{};
@@ -106,7 +103,7 @@ private:
     std::vector<int> cache_layer_ids_;
 
     ///////////////////////////////////////////////////////
-    /// temp runtime buffers (lazily allocated in Init)
+    /// temp runtime buffers (allocated in constructor)
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;

@@ -35,7 +35,6 @@ using std::shared_ptr;
 struct LanguageModel::Impl {
     const DataType       dtype_;
     const ModelParam     param_;
-    const AttentionParam attn_param_;
     const Communicators& comm_;
     const ModelWeight&   weights_;
     LlamaLinear&         linear_;
@@ -105,7 +104,6 @@ struct LanguageModel::Impl {
     Impl(DataType              dtype,
          const ModelParam&     model,
          const EngineParam&    engine,
-         const AttentionParam& attn,
          const MoeParam&       moe,
          const Context&        ctx,
          const ModelWeight&    weights,
@@ -124,14 +122,12 @@ struct LanguageModel::Impl {
 LanguageModel::Impl::Impl(DataType              dtype,
                           const ModelParam&     model,
                           const EngineParam&    engine,
-                          const AttentionParam& attn,
                           const MoeParam&       moe,
                           const Context&        ctx,
                           const ModelWeight&    weights,
                           int                   phases):
     dtype_{dtype},
     param_{model},
-    attn_param_{attn},
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -163,7 +159,7 @@ LanguageModel::Impl::Impl(DataType              dtype,
 
     input_processor_.emplace(engine, param_, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, attn, moe, ctx, phases);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(model, engine, moe, ctx, phases, weights_.layers_list());
 
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,
@@ -495,13 +491,12 @@ LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 LanguageModel::LanguageModel(DataType              dtype,
                              const ModelParam&     model,
                              const EngineParam&    engine,
-                             const AttentionParam& attn,
                              const MoeParam&       moe,
                              const Context&        ctx,
                              const ModelWeight&    weights,
                              int                   phases)
 {
-    impl_ = std::make_unique<Impl>(dtype, model, engine, attn, moe, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(dtype, model, engine, moe, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)
@@ -512,11 +507,6 @@ void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)
 const ModelParam& LanguageModel::model_param() const noexcept
 {
     return TM_CHECK_NOTNULL(impl_)->param_;
-}
-
-const AttentionParam& LanguageModel::attn_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->attn_param_;
 }
 
 }  // namespace turbomind

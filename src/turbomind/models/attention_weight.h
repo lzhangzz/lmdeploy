@@ -34,30 +34,6 @@ struct RopeConfig {
     #undef ROPE_FIELDS
 };
 
-inline RopeConfig to_rope_config(const ::turbomind::RopeParam& p) {
-    using ::turbomind::RopeType;
-    RopeConfig cfg;
-    cfg.type                    = static_cast<int>(p.type);
-    cfg.base                    = p.base;
-    cfg.dim                     = p.dim;
-    cfg.factor                  = p.factor;
-    cfg.max_position_embeddings = p.max_position_embeddings;
-    if (p.type == RopeType::kYarn) {
-        cfg.yarn_attention_factor = p.yarn.attention_factor;
-        cfg.yarn_beta_fast        = p.yarn.beta_fast;
-        cfg.yarn_beta_slow        = p.yarn.beta_slow;
-    }
-    else if (p.type == RopeType::kLlama3) {
-        cfg.llama3_low_freq_factor                  = p.llama3.low_freq_factor;
-        cfg.llama3_high_freq_factor                 = p.llama3.high_freq_factor;
-        cfg.llama3_original_max_position_embeddings = p.llama3.original_max_position_embeddings;
-    }
-    else if (p.type == RopeType::kMrope) {
-        cfg.mrope_section = {p.mrope.section.x, p.mrope.section.y, p.mrope.section.z};
-    }
-    return cfg;
-}
-
 struct AttentionConfig: ModuleConfig {
     AttentionConfig(): ModuleConfig{"AttentionWeight"} {}
 

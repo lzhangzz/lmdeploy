@@ -27,7 +27,6 @@ public:
     LanguageModel(DataType              dtype,
                   const ModelParam&     model,
                   const EngineParam&    engine,
-                  const AttentionParam& attn,
                   const MoeParam&       moe,
                   const Context&        ctx,
                   const ModelWeight&    weights,
@@ -35,8 +34,7 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
-    const ModelParam&     model_param() const noexcept;
-    const AttentionParam& attn_param() const noexcept;
+    const ModelParam& model_param() const noexcept;
 
 private:
     struct Impl;
