@@ -6,6 +6,15 @@
 #include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
+namespace turbomind {
+
+enum class MoeMethod {
+    kNaive,
+    kFused,
+};
+
+}  // namespace turbomind
+
 namespace turbomind::core {
 
 struct MoeConfig: ModuleConfig {
@@ -69,7 +78,7 @@ public:
     // --- Typed accessors ---
     FfnWeight*    expert(int i) const;
     FfnWeight*    block() const { return block_.get(); }
-    MoeParam::Method method() const { return moe_param_.method; }
+    MoeMethod method() const { return method_; }
     const MoeParam& moe_param() const { return moe_param_; }
 
     // --- Config fields (public for runtime access) ---
@@ -78,6 +87,7 @@ public:
 
 private:
     int            layer_id_{};
+    MoeMethod      method_{MoeMethod::kFused};
     MoeParam       moe_param_{};
     bool           mlp_bias_{};
     DataType       data_type_{};

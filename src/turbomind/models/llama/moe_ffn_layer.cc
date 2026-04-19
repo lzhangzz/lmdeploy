@@ -8,6 +8,7 @@
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 
@@ -160,7 +161,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     temp_ = Tensor{{moe_param.experts_per_token * tokens, hidden_dim}, p.input.dtype(), p.input.device()};
 
-    if (moe_param.method == MoeParam::kNaive) {
+    if (p.weights->method() == MoeMethod::kNaive) {
 
         invokeMoeDispatch(temp_, p.input, f2n_.data(), moe_param.experts_per_token, st);
         sync_check_cuda_error();

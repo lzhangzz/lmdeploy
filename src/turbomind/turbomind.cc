@@ -17,6 +17,7 @@
 #include "src/turbomind/engine/model_request.h"
 
 #include "src/turbomind/models/language_model.h"
+#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -37,9 +38,9 @@ using std::string;
 using std::shared_ptr;
 using std::unique_ptr;
 
-static std::optional<MoeParam::Method> get_moe_method()
+static std::optional<MoeMethod> get_moe_method()
 {
-    static const auto value = []() -> std::optional<MoeParam::Method> {
+    static const auto value = []() -> std::optional<MoeMethod> {
         const auto p = std::getenv("TM_MOE_METHOD");
         if (p) {
             std::string str(p);
@@ -47,10 +48,10 @@ static std::optional<MoeParam::Method> get_moe_method()
                 x = std::tolower(x);
             }
             if (str == "naive") {
-                return MoeParam::kNaive;
+                return MoeMethod::kNaive;
             }
             else if (str == "fused") {
-                return MoeParam::kFused;
+                return MoeMethod::kFused;
             }
             else {
                 std::cerr << "[WARNING] unrecognised MoE method: " << str << "\n";
@@ -359,7 +360,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     auto data_type_str = model["data_type"].as<std::string>();
 
     if (auto method = get_moe_method()) {
-        moe_param_.method = *method;
+        moe_param_.method = static_cast<MoeParam::Method>(*method);
     }
     else {
         moe_param_.method = MoeParam::kFused;

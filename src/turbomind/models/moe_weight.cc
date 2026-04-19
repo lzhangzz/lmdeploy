@@ -11,6 +11,7 @@ namespace turbomind {
 MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 {
     layer_id_ = cfg.layer_id;
+    method_ = static_cast<MoeMethod>(cfg.method);
     moe_param_.method = static_cast<MoeParam::Method>(cfg.method);
     moe_param_.experts_per_token = cfg.experts_per_token;
     moe_param_.inter_size = cfg.inter_size;
@@ -100,7 +101,7 @@ void MoeWeight::prepare()
     Module::prepare();
 
     // Create batched block view for fused MoE path
-    if (expert_num_ > 0 && method() == MoeParam::kFused) {
+    if (expert_num_ > 0 && method() == MoeMethod::kFused) {
         core::FfnConfig block_cfg;
         block_cfg.hidden_dim = hidden_dim_;
         block_cfg.inter_size = moe_param_.inter_size;
