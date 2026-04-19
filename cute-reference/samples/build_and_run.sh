@@ -59,3 +59,15 @@ echo ""
 echo "=== Running STSM epilogue sample (BF16 output) ==="
 echo "--- 1024x1024x1024 ---"
 ./bf16_gemm_sm80_pipe_epilogue 1024 1024 1024
+
+echo ""
+echo "Compiling bf16_gemm_sm80_pipe_tma.cu (TMA load/store) ..."
+nvcc -std=c++17 -arch=sm_90a \
+     -I${CUTLASS_INC} \
+     bf16_gemm_sm80_pipe_tma.cu \
+     -o bf16_gemm_sm80_pipe_tma
+
+echo ""
+echo "=== Running TMA load/store sample ==="
+echo "--- 1024x1024x1024 ---"
+./bf16_gemm_sm80_pipe_tma 1024 1024 1024
