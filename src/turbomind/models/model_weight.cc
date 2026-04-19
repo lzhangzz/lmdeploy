@@ -8,8 +8,8 @@
 namespace turbomind {
 
 ModelWeight::ModelWeight(const EngineParam& engine_param)
-    : tp_size_(engine_param.attn_tp_size * engine_param.attn_cp_size)
-    , tp_rank_(engine_param.attn_tp_rank)
+    : tp_size(engine_param.attn_tp_size * engine_param.attn_cp_size)
+    , tp_rank(engine_param.attn_tp_rank)
 {
     // Initialize GPU stream and allocator for tensor allocation during weight loading.
     // The CUDA device is already set by CudaDeviceGuard in TurboMind::CreateWeights.
@@ -34,19 +34,19 @@ void ModelWeight::prepare()
         }
     }
     TM_CHECK(attn_layer) << "No full-attention layer found";
-    data_type_    = attn_layer->attention->data_type;
-    hidden_units_ = attn_layer->attention->hidden_dim;
-    head_dim_     = attn_layer->attention->head_dim;
-    kv_head_num_  = attn_layer->attention->kv_head_num;
+    data_type    = attn_layer->attention->data_type;
+    hidden_units = attn_layer->attention->hidden_dim;
+    head_dim     = attn_layer->attention->head_dim;
+    kv_head_num  = attn_layer->attention->kv_head_num;
 
-    vocab_size_        = tok_embeddings->weight.shape(0);
-    embedding_size_    = vocab_size_;
-    num_layer_         = layers->size();
-    vocab_size_padded_ = round_up((size_t)vocab_size_, (size_t)tp_size_);
+    vocab_size        = tok_embeddings->weight.shape(0);
+    embedding_size    = vocab_size;
+    num_layer         = layers->size();
+    vocab_size_padded = round_up((size_t)vocab_size, (size_t)tp_size);
 
-    layer_types_.resize(num_layer_);
-    for (int i = 0; i < num_layer_; ++i) {
-        layer_types_[i] = layer(i)->linear_attn ? 1 : 0;
+    layer_types.resize(num_layer);
+    for (int i = 0; i < num_layer; ++i) {
+        layer_types[i] = layer(i)->linear_attn ? 1 : 0;
     }
 }
 

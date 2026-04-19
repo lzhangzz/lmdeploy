@@ -49,19 +49,19 @@ public:
     std::vector<DecoderLayerWeight*>  layers_list() const;
 
     // --- Derived in prepare() from children -- public for direct access ---
-    DataType    data_type_{};
-    int         hidden_units_{};
-    int         vocab_size_{};
-    int         vocab_size_padded_{};
-    int         embedding_size_{};
-    int         num_layer_{};
-    int         head_dim_{};
-    int         kv_head_num_{};
-    std::vector<int> layer_types_;
+    DataType    data_type{};
+    int         hidden_units{};
+    int         vocab_size{};
+    int         vocab_size_padded{};
+    int         embedding_size{};
+    int         num_layer{};
+    int         head_dim{};
+    int         kv_head_num{};
+    std::vector<int> layer_types;
 
     // --- From EngineParam at construction ---
-    int         tp_size_{};
-    int         tp_rank_{};
+    int         tp_size{};
+    int         tp_rank{};
 
 private:
     core::Stream    stream_{};

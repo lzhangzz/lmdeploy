@@ -221,7 +221,7 @@ void Engine::Impl::CreateSequenceManager()
     bool has_linear_attention = false;
     int linear_key_head_dim = 0, linear_value_head_dim = 0;
     int linear_conv_kernel_dim = 0, linear_num_key_heads = 0, linear_num_value_heads = 0;
-    for (int i = 0; i < weights_.num_layer_; ++i) {
+    for (int i = 0; i < weights_.num_layer; ++i) {
         if (auto* dn = weights_.layer(i)->linear_attn.get()) {
             has_linear_attention    = true;
             linear_key_head_dim     = dn->key_head_dim;
@@ -244,13 +244,13 @@ void Engine::Impl::CreateSequenceManager()
     };
 
     seq_mgr_ = std::make_unique<SequenceManager>(
-        weights_.head_dim_,
-        weights_.kv_head_num_ / param_.attn_tp_size,
-        weights_.num_layer_,
-        weights_.layer_types_,
+        weights_.head_dim,
+        weights_.kv_head_num / param_.attn_tp_size,
+        weights_.num_layer,
+        weights_.layer_types,
         param_.quant_policy,
-        weights_.data_type_,
-        weights_.data_type_,   // runtime_dtype = data_type
+        weights_.data_type,
+        weights_.data_type,   // runtime_dtype = data_type
         linear_key_head_dim,
         linear_value_head_dim,
         linear_conv_kernel_dim,
@@ -281,7 +281,7 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
     std::pmr::unordered_map<uint64_t, int> occur(&mbr);
 
     bool has_linear_attention = false;
-    for (auto t : weights_.layer_types_) {
+    for (auto t : weights_.layer_types) {
         if (t == 1) { has_linear_attention = true; break; }
     }
 

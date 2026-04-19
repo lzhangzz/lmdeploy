@@ -103,8 +103,8 @@ struct TurboMind::Impl {
         return std::make_unique<ModelRequest>(gateway_.get(),  //
                                               data_type_,
                                               engine_param_.session_len,
-                                              weights_[0]->vocab_size_,
-                                              weights_[0]->hidden_units_);
+                                              weights_[0]->vocab_size,
+                                              weights_[0]->hidden_units);
     }
 
     void CreateWeights(int index)
@@ -434,7 +434,7 @@ void TurboMind::Impl::WarmUp(int index)
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
             Buffer_<int>                       input_ids(max_bs, kCPU);
             std::mt19937                       g{};
-            std::uniform_int_distribution<int> d{0, (int)weights_[index]->vocab_size_ - 1};
+            std::uniform_int_distribution<int> d{0, (int)weights_[index]->vocab_size - 1};
             for (auto& x : input_ids) {
                 x = d(g);
             }

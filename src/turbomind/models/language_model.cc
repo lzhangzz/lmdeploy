@@ -147,7 +147,7 @@ LanguageModel::Impl::Impl(const EngineParam&    engine,
         d.generating      = {engine.max_batch_size, kCPU};
     }
 
-    input_processor_.emplace(engine, weights_.hidden_units_, weights_.data_type_, phases);
+    input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
 
@@ -156,7 +156,7 @@ LanguageModel::Impl::Impl(const EngineParam&    engine,
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,
                                                engine.session_len,
-                                               weights_.vocab_size_,
+                                               weights_.vocab_size,
                                                vocab_size,
                                                comm_.h_tp_group,
                                                phases);
@@ -169,18 +169,18 @@ LanguageModel::Impl::Impl(const EngineParam&    engine,
         TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
 
         ssize_t bytes{};
-        bytes = std::max(bytes, byte_size(weights_.data_type_, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units_));
-        bytes = std::max(bytes, byte_size(weights_.data_type_, engine.max_batch_size * vocab_size));
+        bytes = std::max(bytes, byte_size(weights_.data_type, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units));
+        bytes = std::max(bytes, byte_size(weights_.data_type, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
         // Compute max logits length based on symm buffer size
-        max_logits_len_ = symm_buf_.view(weights_.data_type_).size() / vocab_size;
+        max_logits_len_ = symm_buf_.view(weights_.data_type).size() / vocab_size;
     }
     else {
-        max_logits_len_ = std::max<int>(max_fwd_tokens * weights_.hidden_units_ / vocab_size, engine.max_batch_size);
+        max_logits_len_ = std::max<int>(max_fwd_tokens * weights_.hidden_units / vocab_size, engine.max_batch_size);
     }
 
-    output_processor_.emplace(weights_.vocab_size_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
+    output_processor_.emplace(weights_.vocab_size, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
         return PostEmbedding(hstate, symm_buf_);
     });
 }
@@ -189,14 +189,14 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 {
     const auto st = core::Context::stream().handle();
 
-    const int hidden_units = weights_.hidden_units_;
+    const int hidden_units = weights_.hidden_units;
 
     const auto& embedding_table = weights_.tok_embeddings->weight;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
 
-    Tensor input_embeds{{token_num, hidden_units}, weights_.data_type_, kDEVICE};
+    Tensor input_embeds{{token_num, hidden_units}, weights_.data_type, kDEVICE};
 
     if (token_num == 0) {
         return input_embeds;
@@ -209,7 +209,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(weights_.data_type_), {token_num, tp_size_, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
@@ -232,13 +232,13 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(weights_.data_type_), {tp_size_, token_num, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
 
-        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), weights_.data_type_, comm_.d_tp_group, st);
+        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
         sync_check_cuda_error();
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
@@ -265,18 +265,18 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const int vocab_size       = local_vocab_size * tp_size_;
 
     if (bsz == 0) {
-        return Tensor{{0, vocab_size}, weights_.data_type_, kDEVICE};
+        return Tensor{{0, vocab_size}, weights_.data_type, kDEVICE};
     }
 
     if (tp_size_ == 1) {
-        Tensor logits{{bsz, vocab_size}, weights_.data_type_, kDEVICE};
+        Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
         linear_.Forward(features, *weights_.output, logits);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
-        Tensor logits{symm_buf.view(weights_.data_type_), {bsz, tp_size_, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
         linear_.Forward(features, *weights_.output, local.squeeze(1));
         sync_check_cuda_error();
@@ -294,7 +294,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         return logits.view({bsz, -1});
     }
     else {
-        Tensor logits{symm_buf.view(weights_.data_type_), {tp_size_, bsz, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
         linear_.Forward(features, *weights_.output, local.squeeze(0));
         sync_check_cuda_error();
