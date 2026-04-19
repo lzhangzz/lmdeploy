@@ -149,138 +149,161 @@ bf16_gemm_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   auto [tBgB, tBsB] = tma_partition(tma_b, Int<0>{}, Layout<_1>{},
                                      group_modes<0,2>(sB), group_modes<0,2>(gB));
 
-  // TMA transaction bytes: how many bytes one TMA instruction transfers per tile
-  constexpr int tma_transaction_bytes = sizeof(make_tensor_like(tensor<0>(tAsA)))
-                                      + sizeof(make_tensor_like(tensor<0>(tBsB)));
-
-  // ---- Step 3b: Barrier init and TMA prefetch ----
+  // ---- Step 3b: Pipeline setup and warp group dispatch ----
+  //
+  // PipelineTmaAsync replaces the manual ClusterTransactionBarrier + phase tracking.
+  // All 384 threads construct the pipeline (barrier init happens in constructor for warp 0).
+  // The role (Producer/Consumer) is set based on warp_group_idx.
 
   auto K_PIPE_MAX = size<1>(tAsA);   // = bP = 3
   int k_tile_count = size<1>(tAgA);  // total K-tiles
   int k_tile_next  = 0;
 
-  // Initialize TMA barriers
-  using ProducerBarType = cutlass::arch::ClusterTransactionBarrier;
-  uint64_t* producer_mbar = smem.tma_barrier;
+  constexpr int tma_transaction_bytes = sizeof(make_tensor_like(tensor<0>(tAsA)))
+                                      + sizeof(make_tensor_like(tensor<0>(tBsB)));
 
-  if (threadIdx.x == 0) {
-    CUTE_UNROLL
-    for (int pipe = 0; pipe < K_PIPE_MAX; ++pipe) {
-      ProducerBarType::init(&producer_mbar[pipe], 1);  // 1 = single TMA thread arrives
-    }
+  int warp_group_idx = cutlass::canonical_warp_group_idx();        // 0, 1, or 2
+  int warp_group_thread_idx = threadIdx.x % cutlass::NumThreadsPerWarpGroup;
+
+  // Pipeline params — role depends on warp group
+  using MainloopPipeline = cutlass::PipelineTmaAsync<cute::size<2>(SmemLayoutA{})>;
+  typename MainloopPipeline::Params pipeline_params;
+  if (warp_group_idx == 2) {
+    pipeline_params.role = MainloopPipeline::ThreadCategory::Producer;
+  } else {
+    pipeline_params.role = MainloopPipeline::ThreadCategory::Consumer;
   }
+  pipeline_params.is_leader = (warp_group_thread_idx == 0);
+  pipeline_params.num_consumers = 256;   // both consumer WGs
+  pipeline_params.num_producers = 1;     // single TMA thread
+  pipeline_params.transaction_bytes = tma_transaction_bytes;
+
+  // Constructor initializes barriers (warp 0) + fence_barrier_init
+  MainloopPipeline pipeline(smem.pipeline, pipeline_params, cute::Layout<cute::_1>{});
   __syncthreads();
 
-  // Prefetch K_PIPE_MAX - 1 stages (leave last pipe free for first main-loop write)
-  CUTE_UNROLL
-  for (int k_pipe = 0; k_pipe < K_PIPE_MAX - 1; ++k_pipe)
-  {
-    if (threadIdx.x == 0) {
-      ProducerBarType::arrive_and_expect_tx(&producer_mbar[k_pipe], tma_transaction_bytes);
-      copy(tma_a.with(producer_mbar[k_pipe]), tAgA(_,k_tile_next), tAsA(_,k_pipe));
-      copy(tma_b.with(producer_mbar[k_pipe]), tBgB(_,k_tile_next), tBsB(_,k_pipe));
+  if (warp_group_idx == 2) {
+    // ==================================================================
+    // Producer warp group — TMA loads
+    // ==================================================================
+    cutlass::arch::warpgroup_reg_dealloc<40>();
+
+    // Only the leader thread (warp_group_thread_idx == 0) runs the producer loop.
+    if (warp_group_thread_idx == 0) {
+      auto smem_pipe_write = cutlass::make_producer_start_state<MainloopPipeline>();
+      using BarrierType = typename MainloopPipeline::ProducerBarrierType;
+
+      CUTE_NO_UNROLL
+      for (int k_tile = 0; k_tile < k_tile_count; ++k_tile) {
+        pipeline.producer_acquire(smem_pipe_write);
+
+        BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
+        copy(tma_a.with(*tma_barrier), tAgA(_,k_tile_next), tAsA(_,smem_pipe_write.index()));
+        copy(tma_b.with(*tma_barrier), tBgB(_,k_tile_next), tBsB(_,smem_pipe_write.index()));
+
+        ++smem_pipe_write;
+        ++k_tile_next;
+      }
+
+      pipeline.producer_tail(smem_pipe_write);
     }
-    --k_tile_count;
-    if (k_tile_count > 0) { ++k_tile_next; }
-  }
 
-  // ---- Step 4: TiledMMA setup and register allocation ----
+    // All 128 producer threads wait for epilogue TMA store to complete
+    cute::tma_store_wait<0>();
 
-  ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
+  } else {
+    // ==================================================================
+    // Consumer warp groups (wg 0 and 1) — LDSM + MMA + epilogue
+    // ==================================================================
+    cutlass::arch::warpgroup_reg_alloc<232>();
 
-  Tensor tCgC = thr_mma.partition_C(gC);                                 // (MMA, MMA_M, MMA_N)
-  Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));                  // (MMA, MMA_M, MMA_K)
-  Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));                  // (MMA, MMA_N, MMA_K)
-  Tensor tCrC = thr_mma.make_fragment_C(tCgC);                           // (MMA, MMA_M, MMA_N)
-  clear(tCrC);
+    // ---- Step 4: TiledMMA setup and register allocation ----
 
-  // ---- Step 4b: S2R (smem->register) copy setup ----
+    ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
 
-  TiledCopy s2r_copy_a = make_tiled_copy_A(s2r_atom_a, mma);
-  ThrCopy  thr_s2r_a   = s2r_copy_a.get_slice(threadIdx.x);
-  Tensor tXsA = thr_s2r_a.partition_S(sA);                               // (CPY, MMA_M, MMA_K, PIPE)
-  Tensor tXrA = thr_s2r_a.retile_D(tCrA);                               // (CPY, MMA_M, MMA_K)
+    Tensor tCgC = thr_mma.partition_C(gC);                                 // (MMA, MMA_M, MMA_N)
+    Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));                  // (MMA, MMA_M, MMA_K)
+    Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));                  // (MMA, MMA_N, MMA_K)
+    Tensor tCrC = thr_mma.make_fragment_C(tCgC);                           // (MMA, MMA_M, MMA_N)
+    clear(tCrC);
 
-  TiledCopy s2r_copy_b = make_tiled_copy_B(s2r_atom_b, mma);
-  ThrCopy  thr_s2r_b   = s2r_copy_b.get_slice(threadIdx.x);
-  Tensor tXsB = thr_s2r_b.partition_S(sB);                               // (CPY, MMA_N, MMA_K, PIPE)
-  Tensor tXrB = thr_s2r_b.retile_D(tCrB);                               // (CPY, MMA_N, MMA_K)
+    // ---- Step 4b: S2R (smem->register) copy setup ----
 
-  // ---- Step 4c: R2S (register->smem) STSM copy setup ----
+    TiledCopy s2r_copy_a = make_tiled_copy_A(s2r_atom_a, mma);
+    ThrCopy  thr_s2r_a   = s2r_copy_a.get_slice(threadIdx.x);
+    Tensor tXsA = thr_s2r_a.partition_S(sA);                               // (CPY, MMA_M, MMA_K, PIPE)
+    Tensor tXrA = thr_s2r_a.retile_D(tCrA);                               // (CPY, MMA_M, MMA_K)
 
-  ThrCopy thr_r2s = r2s_copy.get_slice(threadIdx.x);
+    TiledCopy s2r_copy_b = make_tiled_copy_B(s2r_atom_b, mma);
+    ThrCopy  thr_s2r_b   = s2r_copy_b.get_slice(threadIdx.x);
+    Tensor tXsB = thr_s2r_b.partition_S(sB);                               // (CPY, MMA_N, MMA_K, PIPE)
+    Tensor tXrB = thr_s2r_b.retile_D(tCrB);                               // (CPY, MMA_N, MMA_K)
 
-  // ---- Step 5: Pipelined main loop ----
-  //
-  // Producer-consumer pipeline:
-  //   Producer: TMA thread (threadIdx.x == 0) issues bulk tensor loads via mbarrier
-  //   Consumer: All threads read from smem via LDSM, then execute MMA
-  //
-  // smem_pipe_read/write track circular buffer positions.
-  // The mbarrier tracks both arrival (TMA thread signals load) and transaction bytes
-  // (hardware confirms bytes written to smem).
+    // ---- Step 4c: R2S (register->smem) STSM copy setup ----
 
-  int smem_pipe_read  = 0;
-  int smem_pipe_write = K_PIPE_MAX - 1;
-  uint32_t read_phase = 0;
+    ThrCopy thr_r2s = r2s_copy.get_slice(threadIdx.x);
 
-  Tensor tXsA_p = tXsA(_,_,_,smem_pipe_read);
-  Tensor tXsB_p = tXsB(_,_,_,smem_pipe_read);
+    // ---- Step 5: Pipelined main loop ----
+    //
+    // Consumer pipeline: wait for TMA load -> LDSM prefetch -> MMA -> release stage.
+    // smem_pipe_read and smem_pipe_release track pipeline state with Phase.
+    // smem_pipe_release lags behind smem_pipe_read — release happens at k_block==0
+    // of the NEXT k_tile, after all k_blocks of the current stage are in registers.
 
-  auto K_BLOCK_MAX = size<2>(tCrA);
+    typename MainloopPipeline::PipelineState smem_pipe_read;
+    typename MainloopPipeline::PipelineState smem_pipe_release;
 
-  // Wait for first stage before MMA starts
-  if (K_BLOCK_MAX > 1) {
-    ProducerBarType::wait(&producer_mbar[smem_pipe_read], read_phase);
-    __syncthreads();
-    copy(s2r_atom_a, tXsA_p(_,_,Int<0>{}), tXrA(_,_,Int<0>{}));
-    copy(s2r_atom_b, tXsB_p(_,_,Int<0>{}), tXrB(_,_,Int<0>{}));
-  }
+    Tensor tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
+    Tensor tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
 
-  CUTE_NO_UNROLL
-  while (k_tile_count > -(K_PIPE_MAX - 1))
-  {
-    CUTE_UNROLL
-    for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block)
+    auto K_BLOCK_MAX = size<2>(tCrA);
+
+    // Prologue: wait for first stage, prefetch k_block 0
+    pipeline.consumer_wait(smem_pipe_read);
+    if (K_BLOCK_MAX > 1) {
+      copy(s2r_atom_a, tXsA_p(_,_,Int<0>{}), tXrA(_,_,Int<0>{}));
+      copy(s2r_atom_b, tXsB_p(_,_,Int<0>{}), tXrB(_,_,Int<0>{}));
+    }
+
+    // Adjust k_tile_count for pipeline depth. In the non-WS kernel, the prologue
+    // loaded K_PIPE_MAX-1 stages and decremented k_tile_count by K_PIPE_MAX-1.
+    // Here the producer handles all loads, but the consumer still needs the same
+    // accounting: total k_tiles - (K_PIPE_MAX-1) real iterations + K_PIPE_MAX-1
+    // tail drain = total k_tiles main loop iterations.
+    k_tile_count -= (K_PIPE_MAX - 1);
+
+    // Main loop — same structure as non-WS kernel but with pipeline barriers
+    // replacing manual ClusterTransactionBarrier + __syncthreads
+    CUTE_NO_UNROLL
+    while (k_tile_count > -(K_PIPE_MAX - 1))
     {
-      if (k_block == K_BLOCK_MAX - 1)
+      CUTE_UNROLL
+      for (int k_block = 0; k_block < K_BLOCK_MAX; ++k_block)
       {
-        tXsA_p = tXsA(_,_,_,smem_pipe_read);
-        tXsB_p = tXsB(_,_,_,smem_pipe_read);
-
-        // Wait for TMA load to complete on the next pipe stage
-        ProducerBarType::wait(&producer_mbar[smem_pipe_read], read_phase);
-        __syncthreads();
-      }
-
-      auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
-      copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
-      copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
-
-      if (k_block == 0)
-      {
-        // TMA thread issues load for next K-tile
-        if (threadIdx.x == 0) {
-          ProducerBarType::arrive_and_expect_tx(&producer_mbar[smem_pipe_write], tma_transaction_bytes);
-          copy(tma_a.with(producer_mbar[smem_pipe_write]), tAgA(_,k_tile_next), tAsA(_,smem_pipe_write));
-          copy(tma_b.with(producer_mbar[smem_pipe_write]), tBgB(_,k_tile_next), tBsB(_,smem_pipe_write));
+        if (k_block == K_BLOCK_MAX - 1)
+        {
+          // Advance to next stage, then wait for its TMA load to complete
+          ++smem_pipe_read;
+          pipeline.consumer_wait(smem_pipe_read);
+          tXsA_p = tXsA(_,_,_,smem_pipe_read.index());
+          tXsB_p = tXsB(_,_,_,smem_pipe_read.index());
         }
 
-        --k_tile_count;
-        if (k_tile_count > 0) { ++k_tile_next; }
+        auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
+        copy(s2r_atom_a, tXsA_p(_,_,k_block_next), tXrA(_,_,k_block_next));
+        copy(s2r_atom_b, tXsB_p(_,_,k_block_next), tXrB(_,_,k_block_next));
 
-        // Advance pipe indices with phase tracking
-        smem_pipe_write = smem_pipe_read;
-        ++smem_pipe_read;
-        if (smem_pipe_read == K_PIPE_MAX) {
-          smem_pipe_read = 0;
-          read_phase ^= 1;
+        if (k_block == 0)
+        {
+          // Release previous stage — safe because all k_blocks are in registers
+          pipeline.consumer_release(smem_pipe_release);
+          ++smem_pipe_release;
         }
-      }
 
-      gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
+        gemm(mma, tCrA(_,_,k_block), tCrB(_,_,k_block), tCrC);
+      }
+      --k_tile_count;
     }
-  }
 
   // ---- Step 6: Epilogue ----
   //
