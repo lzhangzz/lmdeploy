@@ -122,12 +122,17 @@ codebase, `ModelWeight` exposes **public** derived/runtime fields with a trailin
 underscore (same convention issue):
 
 `data_type_`, `hidden_units_`, `vocab_size_`, `vocab_size_padded_`,
-`embedding_size_`, `num_layer_`, `head_dim_`, `kv_head_num_`, `tp_size_`,
-`tp_rank_`.
+`embedding_size_`, `num_layer_`, `head_dim_`, `kv_head_num_`, `layer_types_`,
+`tp_size_`, `tp_rank_`.
 
-(`layer_types_` is already suffix-free.) These public members should be renamed
-the same way. **Private** `ModelWeight` members (`stream_`, `alloca_`,
-`layers_cache_`) stay unchanged. Call sites include `unified_decoder.cc`,
+The name `layer_types_` ends with the usual Google-style **member** suffix `_`
+(not “suffix-free”); rename it to `layer_types` like the other public fields.
+Do **not** confuse this with `GatedDeltaNetLayer`'s **private** `layer_types_`,
+which is a different type and out of scope for this rename.
+
+These public members should be renamed as above. **Private** `ModelWeight`
+members (`stream_`, `alloca_`, `layers_cache_`) stay unchanged. Call sites
+include `unified_decoder.cc`,
 `engine.cc`, `language_model.cc`, and `turbomind.cc`. See **Task 6** in
 `docs/superpowers/plans/2026-04-19-weight-public-field-naming.md`.
 

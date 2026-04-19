@@ -35,10 +35,9 @@
 | `src/turbomind/models/llama/unified_decoder.cc` | **Task 6:** `model_weight.*` public fields |
 | `src/turbomind/models/language_model.cc` | **Task 6:** `weights_.*` |
 | `src/turbomind/turbomind.cc` | **Task 6:** `weights_[i]->vocab_size_` / `hidden_units_` |
-| `src/turbomind/engine/engine.cc` | **Task 3:** `DeltaNetWeight*`; **Task 6:** `weights_.head_dim_` etc. |
+| `src/turbomind/engine/engine.cc` | **Task 3:** `dn->…` (`DeltaNetWeight*`); **Task 6:** `weights_.…` (`ModelWeight`) |
 | `src/turbomind/models/delta_net_weight.h` | Public field declarations |
 | `src/turbomind/models/delta_net_weight.cc` | ctor + `prepare()` |
-| `src/turbomind/engine/engine.cc` | reads `DeltaNetWeight*` fields |
 | `src/turbomind/models/llama/GatedDeltaNetLayer.cc` | reads `DeltaNetWeight` fields |
 | `src/turbomind/models/linear_weight.h` | `format` / `policy` + `input_dtype()` / `output_dtype()` |
 | `src/turbomind/models/linear_weight.cc` | `configure`, `copy_metadata_to`, `set_weight_spec` |
@@ -263,6 +262,8 @@ git add src/turbomind/models/linear_weight.h \
 git commit -m "refactor(weights): rename LinearWeight format_/policy_ to format/policy"
 ```
 
+*(There is no Task 5; numbering jumps to 6 so it stays aligned with the amended doc history.)*
+
 ---
 
 ### Task 6: `ModelWeight` public derived fields
@@ -278,7 +279,7 @@ git commit -m "refactor(weights): rename LinearWeight format_/policy_ to format/
 - Modify: `src/turbomind/models/language_model.cc`
 - Modify: `src/turbomind/turbomind.cc`
 
-**Mapping** (`layer_types_` is already suffix-free):
+**Mapping**
 
 | Current | New |
 |---------|-----|
@@ -290,8 +291,11 @@ git commit -m "refactor(weights): rename LinearWeight format_/policy_ to format/
 | `num_layer_` | `num_layer` |
 | `head_dim_` | `head_dim` |
 | `kv_head_num_` | `kv_head_num` |
+| `layer_types_` | `layer_types` |
 | `tp_size_` | `tp_size` |
 | `tp_rank_` | `tp_rank` |
+
+**Do not** rename `GatedDeltaNetLayer`'s private `layer_types_` — different class, out of scope.
 
 - [ ] **Step 1: Update `model_weight.h`** — public block uses the new names; **private** `stream_`, `alloca_`, `layers_cache_` unchanged.
 
@@ -316,7 +320,7 @@ Ctor initializer: `tp_size(...)`, `tp_rank(...)`. In `prepare()`, rename **both*
     }
 ```
 
-- [ ] **Step 3: Update call sites** — `unified_decoder.cc` (`model_weight.num_layer_` → `num_layer`, etc.), `engine.cc` (`weights_.num_layer_` → `weights_.num_layer`, …), `language_model.cc`, `turbomind.cc` (`weights_[i]->vocab_size_` → `vocab_size`, …). Re-grep for `model_weight\.[a-z_]+_` and `weights_\.[a-z_]+_` under `src/turbomind` until only **private** `ModelWeight` members or unrelated types match.
+- [ ] **Step 3: Update call sites** — `unified_decoder.cc` (`model_weight.num_layer_` → `num_layer`, `model_weight.layer_types_` → `model_weight.layer_types`, etc.), `engine.cc` (`weights_.layer_types_` → `weights_.layer_types`, …), `language_model.cc`, `turbomind.cc` (`weights_[i]->vocab_size_` → `vocab_size`, …). Re-grep for stale `model_weight\.\w+_` / `weights_\.\w+_` on **`ModelWeight`** fields until clean (ignore `Engine::Impl::tp_rank_` and other non-`ModelWeight` members).
 
 - [ ] **Step 4: Commit**
 
@@ -341,8 +345,8 @@ Run (from repo root):
 rg 'p\.weights->[a-z_]+_' src/turbomind/models/llama/moe_ffn_layer.cc || true
 rg 'attn_weights\[0\]->rope_' src/turbomind || true
 rg '\b(policy_|format_)\b' src/turbomind/models/linear_weight.h src/turbomind/models/linear_weight.cc src/turbomind/models/llama/LlamaLinear.cu || true
-rg 'model_weight\.(data_type_|hidden_units_|vocab_size_|vocab_size_padded_|embedding_size_|num_layer_|head_dim_|kv_head_num_|tp_size_|tp_rank_)' src/turbomind || true
-rg 'weights_\.(data_type_|hidden_units_|vocab_size_|vocab_size_padded_|embedding_size_|num_layer_|head_dim_|kv_head_num_|tp_size_|tp_rank_)' src/turbomind || true
+rg 'model_weight\.(data_type_|hidden_units_|vocab_size_|vocab_size_padded_|embedding_size_|num_layer_|head_dim_|kv_head_num_|layer_types_|tp_size_|tp_rank_)' src/turbomind || true
+rg 'weights_\.(data_type_|hidden_units_|vocab_size_|vocab_size_padded_|embedding_size_|num_layer_|head_dim_|kv_head_num_|layer_types_|tp_size_|tp_rank_)' src/turbomind || true
 rg 'weights_\[[0-9]+\]->(vocab_size_|hidden_units_)' src/turbomind/turbomind.cc || true
 ```
 
