@@ -461,18 +461,15 @@ void TurboMind::Impl::CreateEngine(int index)
     ctx.comm.h_comm->Sync();
 
     // create model
-    LanguageModel model{data_type_,  //
-                        model_param_,
-                        param,
-                        moe_param_,
+    LanguageModel model{param,
                         ctx,
                         *weights_[index],
                         phases_};
 
     // create engine
-    engines_[index] = Engine{data_type_,  //
-                             param,
+    engines_[index] = Engine{param,
                              std::move(model),
+                             *weights_[index],
                              ctx,
                              *gateway_,
                              engine_param_.devices[index],

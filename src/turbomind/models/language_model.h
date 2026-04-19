@@ -24,17 +24,12 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    LanguageModel(DataType              dtype,
-                  const ModelParam&     model,
-                  const EngineParam&    engine,
-                  const MoeParam&       moe,
+    LanguageModel(const EngineParam&    engine,
                   const Context&        ctx,
                   const ModelWeight&    weights,
                   int                   phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
-
-    const ModelParam& model_param() const noexcept;
 
 private:
     struct Impl;

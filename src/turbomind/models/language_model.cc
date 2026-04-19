@@ -33,8 +33,6 @@ using std::unique_ptr;
 using std::shared_ptr;
 
 struct LanguageModel::Impl {
-    const DataType       dtype_;
-    const ModelParam     param_;
     const Communicators& comm_;
     const ModelWeight&   weights_;
     LlamaLinear&         linear_;
@@ -101,10 +99,7 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(DataType              dtype,
-         const ModelParam&     model,
-         const EngineParam&    engine,
-         const MoeParam&       moe,
+    Impl(const EngineParam&    engine,
          const Context&        ctx,
          const ModelWeight&    weights,
          int                   phases);
@@ -119,15 +114,10 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(DataType              dtype,
-                          const ModelParam&     model,
-                          const EngineParam&    engine,
-                          const MoeParam&       moe,
+LanguageModel::Impl::Impl(const EngineParam&    engine,
                           const Context&        ctx,
                           const ModelWeight&    weights,
                           int                   phases):
-    dtype_{dtype},
-    param_{model},
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -161,15 +151,16 @@ LanguageModel::Impl::Impl(DataType              dtype,
 
     unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
 
+    const int vocab_size = weights_.output->output_dim * tp_size_;
+
     generation_ = std::make_unique<Generation>(kFloat32,
                                                engine.max_batch_size,
                                                engine.session_len,
-                                               model.vocab_size,
-                                               weights.output->output_dim * tp_size_,
+                                               weights_.vocab_size_,
+                                               vocab_size,
                                                comm_.h_tp_group,
                                                phases);
 
-    const int     vocab_size     = weights_.output->output_dim * tp_size_;
     const ssize_t max_fwd_tokens = engine.max_forward_token_num;
 
     if (ctx.comm.d_comm) {
@@ -178,15 +169,15 @@ LanguageModel::Impl::Impl(DataType              dtype,
         TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
 
         ssize_t bytes{};
-        bytes = std::max(bytes, byte_size(dtype_, max_fwd_tokens * engine.attn_dp_size * model.hidden_units));
-        bytes = std::max(bytes, byte_size(dtype_, engine.max_batch_size * vocab_size));
+        bytes = std::max(bytes, byte_size(weights_.data_type_, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units_));
+        bytes = std::max(bytes, byte_size(weights_.data_type_, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
         // Compute max logits length based on symm buffer size
-        max_logits_len_ = symm_buf_.view(dtype_).size() / vocab_size;
+        max_logits_len_ = symm_buf_.view(weights_.data_type_).size() / vocab_size;
     }
     else {
-        max_logits_len_ = std::max<int>(max_fwd_tokens * model.hidden_units / vocab_size, engine.max_batch_size);
+        max_logits_len_ = std::max<int>(max_fwd_tokens * weights_.hidden_units_ / vocab_size, engine.max_batch_size);
     }
 
     output_processor_.emplace(weights_.vocab_size_, max_logits_len_, tp_rank_, phases, [this](const Tensor& hstate) {
@@ -198,14 +189,14 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
 {
     const auto st = core::Context::stream().handle();
 
-    const int hidden_units = param_.hidden_units;
+    const int hidden_units = weights_.hidden_units_;
 
     const auto& embedding_table = weights_.tok_embeddings->weight;
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 
     const int token_num = input_ids.size();
 
-    Tensor input_embeds{{token_num, hidden_units}, dtype_, kDEVICE};
+    Tensor input_embeds{{token_num, hidden_units}, weights_.data_type_, kDEVICE};
 
     if (token_num == 0) {
         return input_embeds;
@@ -218,7 +209,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type_), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
@@ -241,13 +232,13 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     else {
         const auto local_hidden_units = embedding_table.shape(1);
 
-        Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
+        Tensor temp{symm_buf.view(weights_.data_type_), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
 
-        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_.d_tp_group, st);
+        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), weights_.data_type_, comm_.d_tp_group, st);
         sync_check_cuda_error();
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
@@ -274,18 +265,18 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     const int vocab_size       = local_vocab_size * tp_size_;
 
     if (bsz == 0) {
-        return Tensor{{0, vocab_size}, dtype_, kDEVICE};
+        return Tensor{{0, vocab_size}, weights_.data_type_, kDEVICE};
     }
 
     if (tp_size_ == 1) {
-        Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
+        Tensor logits{{bsz, vocab_size}, weights_.data_type_, kDEVICE};
         linear_.Forward(features, *weights_.output, logits);
         sync_check_cuda_error();
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
-        Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type_), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
         linear_.Forward(features, *weights_.output, local.squeeze(1));
         sync_check_cuda_error();
@@ -303,7 +294,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
         return logits.view({bsz, -1});
     }
     else {
-        Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
+        Tensor logits{symm_buf.view(weights_.data_type_), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
         linear_.Forward(features, *weights_.output, local.squeeze(0));
         sync_check_cuda_error();
@@ -488,25 +479,17 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(DataType              dtype,
-                             const ModelParam&     model,
-                             const EngineParam&    engine,
-                             const MoeParam&       moe,
+LanguageModel::LanguageModel(const EngineParam&    engine,
                              const Context&        ctx,
                              const ModelWeight&    weights,
                              int                   phases)
 {
-    impl_ = std::make_unique<Impl>(dtype, model, engine, moe, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)
 {
     return TM_CHECK_NOTNULL(impl_)->Run(op, phase, env);
-}
-
-const ModelParam& LanguageModel::model_param() const noexcept
-{
-    return TM_CHECK_NOTNULL(impl_)->param_;
 }
 
 }  // namespace turbomind
