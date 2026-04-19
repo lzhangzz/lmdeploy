@@ -441,12 +441,12 @@ bf16_gemm_tn(int m, int n, int k,
   Copy_Atom<SM75_U32x4_LDSM_N, bf16_t> s2r_atom_b;
 
   // Grid and block dimensions
-  dim3 dimBlock(size(mma));
+  dim3 dimBlock(size(mma) * 3 / 2);  // 384 threads: 256 MMA + 128 producer
   dim3 dimCluster(1, 1, 1);
   dim3 dimGrid(size(ceil_div(M, bM)), size(ceil_div(N, bN)));
 
   // Shared memory
-  int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, decltype(sA), decltype(sB)>));
+  int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, decltype(sA), decltype(sB), cute::size<2>(decltype(sA){})>));
 
   // Kernel function pointer
   auto* kernel_ptr = &bf16_gemm_device<
