@@ -122,8 +122,8 @@ struct LlamaLinear::Impl {
         Operation op{};
         op.dispatch  = dispatch_policy_;
         op.epilogue  = weight.epilogue;
-        op.quant_a   = weight.policy_.input_quant;
-        op.quant_b   = weight.policy_.weight_quant;
+        op.quant_a   = weight.policy.input_quant;
+        op.quant_b   = weight.policy.weight_quant;
         op.batch_dim = 0;
 
         auto&& [A, desc_A, U, desc_U] = GetOperandA(weight, input, indices, offsets);

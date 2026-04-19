@@ -68,8 +68,8 @@ void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, 
     has_bias_         = has_bias;
     // Default policy for trivial (non-quantized) weights.
     // Overridden by ResolveLinearPolicy in set_weight_spec for quantized formats.
-    policy_.input_dtype  = data_type;
-    policy_.output_dtype = data_type;
+    policy.input_dtype  = data_type;
+    policy.output_dtype = data_type;
 }
 
 void LinearWeight::copy_metadata_to(LinearWeight& dst) const
@@ -79,8 +79,8 @@ void LinearWeight::copy_metadata_to(LinearWeight& dst) const
     dst.group_size    = group_size;
     dst.data_type     = data_type;
     dst.weight_format = weight_format;
-    dst.format_       = format_;
-    dst.policy_       = policy_;
+    dst.format       = format;
+    dst.policy       = policy;
     dst.epilogue      = epilogue;
     dst.has_bias_     = has_bias_;
     dst.is_grouped_   = is_grouped_;
@@ -100,8 +100,8 @@ void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
     }
     weight_format = weight_dtype;
     this->group_size = group_size;
-    format_ = MakeLinearWeightFormat(data_type, weight_format, group_size);
-    policy_ = ResolveLinearPolicy(format_, data_type, getSMVersion());
+    format = MakeLinearWeightFormat(data_type, weight_format, group_size);
+    policy = ResolveLinearPolicy(format, data_type, getSMVersion());
 }
 
 // ======================================================================

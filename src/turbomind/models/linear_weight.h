@@ -78,11 +78,11 @@ public:
     DataType weight_format{};   // checkpoint weight storage format, set in do_allocate()
 
     // --- Derived (computed once in do_allocate via ResolveLinearPolicy) ---
-    DataFormat    format_{};
-    LinearPolicy  policy_{};
+    DataFormat    format{};
+    LinearPolicy  policy{};
 
-    DataType input_dtype() const  { return policy_.input_dtype; }
-    DataType output_dtype() const { return policy_.output_dtype; }
+    DataType input_dtype() const  { return policy.input_dtype; }
+    DataType output_dtype() const { return policy.output_dtype; }
 
     Epilogue    epilogue{};
 
