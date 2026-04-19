@@ -36,7 +36,7 @@
 
 #include "cutlass/cluster_launch.hpp"
 #include "cutlass/arch/barrier.h"
-#include "cutlass/arch/reg_reconfig.hpp"
+#include "cutlass/arch/reg_reconfig.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 #include "cutlass/device_kernel.h"
 #include <iostream>
