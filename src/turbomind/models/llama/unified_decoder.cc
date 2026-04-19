@@ -61,7 +61,9 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
     std::vector<AttentionWeight*> attn_weights;
     attn_weights.reserve(model_weight.num_layer_);
     for (int i = 0; i < model_weight.num_layer_; ++i) {
-        attn_weights.push_back(model_weight.layer(i)->attention.get());
+        if (auto* attn = model_weight.layer(i)->attention.get()) {
+            attn_weights.push_back(attn);
+        }
     }
 
     attn_layer_ = std::make_unique<UnifiedAttentionLayer>(

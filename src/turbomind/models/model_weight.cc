@@ -23,12 +23,21 @@ void ModelWeight::prepare()
         if (child) child->prepare();
     });
 
-    auto* layer0 = layer(0);
-    TM_CHECK(layer0 && layer0->attention);
-    data_type_    = layer0->attention->data_type_;
-    hidden_units_ = layer0->attention->hidden_dim_;
-    head_dim_     = layer0->attention->head_dim_;
-    kv_head_num_  = layer0->attention->kv_head_num_;
+    auto* l0 = layer(0);
+    TM_CHECK(l0);
+    // Find first full-attention layer (linear-attn layers have no attention child)
+    DecoderLayerWeight* attn_layer = nullptr;
+    for (int i = 0; i < (int)layers->size(); ++i) {
+        if (layer(i)->attention) {
+            attn_layer = layer(i);
+            break;
+        }
+    }
+    TM_CHECK(attn_layer) << "No full-attention layer found";
+    data_type_    = attn_layer->attention->data_type_;
+    hidden_units_ = attn_layer->attention->hidden_dim_;
+    head_dim_     = attn_layer->attention->head_dim_;
+    kv_head_num_  = attn_layer->attention->kv_head_num_;
 
     vocab_size_        = tok_embeddings->weight.shape(0);
     embedding_size_    = vocab_size_;
