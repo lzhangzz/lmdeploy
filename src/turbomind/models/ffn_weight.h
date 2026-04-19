@@ -5,7 +5,6 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/models/linear_weight.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind::core {
 

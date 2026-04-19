@@ -218,17 +218,23 @@ void Engine::Impl::CreateSequenceManager()
     const auto cache_block_seq_len = param_.cache_block_seq_len;
 
     // Derive DeltaNet fields if linear attention exists
+    bool has_linear_attention = false;
     int linear_key_head_dim = 0, linear_value_head_dim = 0;
     int linear_conv_kernel_dim = 0, linear_num_key_heads = 0, linear_num_value_heads = 0;
     for (int i = 0; i < weights_.num_layer_; ++i) {
         if (auto* dn = weights_.layer(i)->linear_attn.get()) {
-            linear_key_head_dim   = dn->key_head_dim_;
-            linear_value_head_dim = dn->value_head_dim_;
-            linear_conv_kernel_dim = dn->d_conv_;
-            linear_num_key_heads  = dn->num_k_heads_ * param_.attn_tp_size;
-            linear_num_value_heads = dn->num_v_heads_ * param_.attn_tp_size;
+            has_linear_attention    = true;
+            linear_key_head_dim     = dn->key_head_dim_;
+            linear_value_head_dim   = dn->value_head_dim_;
+            linear_conv_kernel_dim  = dn->d_conv_;
+            linear_num_key_heads    = dn->num_k_heads_ * param_.attn_tp_size;
+            linear_num_value_heads  = dn->num_v_heads_ * param_.attn_tp_size;
             break;
         }
+    }
+
+    if (has_linear_attention && param_.enable_prefix_caching) {
+        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
     }
 
     const auto get_free_size = [&] {
