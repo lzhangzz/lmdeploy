@@ -37,3 +37,8 @@ echo ""
 echo "=== Running warp-specialized TMA load/store sample ==="
 echo "--- 1024x1024x1024 ---"
 $BIN/07_bf16_gemm_sm80_pipe_tma_ws 1024 1024 1024
+
+echo ""
+echo "=== Running persistent warp-specialized TMA sample ==="
+echo "--- 1024x1024x1024 ---"
+$BIN/08_bf16_gemm_sm80_pipe_tma_ws_persistent 1024 1024 1024
