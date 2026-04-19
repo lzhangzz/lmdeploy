@@ -542,7 +542,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM80 HMMA + SM90 TMA load/store, tile 256x128x64, 256 threads, STSM+TMAStore epilogue)\n\n");
+  printf("BF16 GEMM (SM80 HMMA + SM90 TMA load/store, tile 256x128x64, 384 threads WS, PipelineTmaAsync)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;

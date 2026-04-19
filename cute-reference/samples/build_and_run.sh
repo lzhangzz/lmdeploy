@@ -71,3 +71,15 @@ echo ""
 echo "=== Running TMA load + STSM/TMA store sample ==="
 echo "--- 1024x1024x1024 ---"
 ./bf16_gemm_sm80_pipe_tma 1024 1024 1024
+
+echo ""
+echo "Compiling bf16_gemm_sm80_pipe_tma_ws.cu (warp-specialized TMA load/store) ..."
+nvcc -std=c++17 -arch=sm_90a \
+     -I${CUTLASS_INC} \
+     bf16_gemm_sm80_pipe_tma_ws.cu \
+     -o bf16_gemm_sm80_pipe_tma_ws
+
+echo ""
+echo "=== Running warp-specialized TMA load/store sample ==="
+echo "--- 1024x1024x1024 ---"
+./bf16_gemm_sm80_pipe_tma_ws 1024 1024 1024
