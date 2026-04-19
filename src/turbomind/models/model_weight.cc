@@ -34,10 +34,10 @@ void ModelWeight::prepare()
         }
     }
     TM_CHECK(attn_layer) << "No full-attention layer found";
-    data_type_    = attn_layer->attention->data_type_;
-    hidden_units_ = attn_layer->attention->hidden_dim_;
-    head_dim_     = attn_layer->attention->head_dim_;
-    kv_head_num_  = attn_layer->attention->kv_head_num_;
+    data_type_    = attn_layer->attention->data_type;
+    hidden_units_ = attn_layer->attention->hidden_dim;
+    head_dim_     = attn_layer->attention->head_dim;
+    kv_head_num_  = attn_layer->attention->kv_head_num;
 
     vocab_size_        = tok_embeddings->weight.shape(0);
     embedding_size_    = vocab_size_;

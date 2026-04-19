@@ -100,28 +100,28 @@ public:
 
     TM_MODULE_DECLARE(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 
-    bool is_mla() const { return kv_lora_rank_ > 0; }
+    bool is_mla() const { return kv_lora_rank > 0; }
 
     // --- Config fields (public for runtime access) ---
-    int      hidden_dim_{};
-    int      head_dim_{};
-    int      head_num_{};
-    int      kv_head_num_{};
-    int kv_lora_rank_{};
-    int q_lora_rank_{};
-    int qk_rope_dim_{};
-    int v_head_dim_{};
-    bool     bias_{};
-    bool     qk_norm_{};
-    int      tp_size_{};
-    int      tp_rank_{};
-    DataType data_type_{};
-    int      window_size_{};
-    bool     sink_{};
-    bool     attn_output_gate_{};
-    float    softmax_scale_{};
-    bool     use_logn_attn_{};
-    core::RopeConfig rope_{};
+    int      hidden_dim{};
+    int      head_dim{};
+    int      head_num{};
+    int      kv_head_num{};
+    int      kv_lora_rank{};
+    int      q_lora_rank{};
+    int      qk_rope_dim{};
+    int      v_head_dim{};
+    bool     bias{};
+    bool     qk_norm{};
+    int      tp_size{};
+    int      tp_rank{};
+    DataType data_type{};
+    int      window_size{};
+    bool     sink{};
+    bool     attn_output_gate{};
+    float    softmax_scale{};
+    bool     use_logn_attn{};
+    core::RopeConfig rope{};
 };
 
 }  // namespace turbomind
