@@ -12,7 +12,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ._base import Builder, SplitSide, _dequant_linear
+from ._base import Builder, SplitSide, _dequant_linear, transform_tensors
 
 # ---------------------------------------------------------------------------
 # TP split rules (attention)
@@ -62,6 +62,15 @@ def _infer_heads(linear: Linear, head_dim: int) -> int:
     return w.size(-1) // head_dim
 
 
+@transform_tensors
+def _repeat_kv_heads_2d(tensor: torch.Tensor, *, n_repeat: int,
+                        heads: int) -> torch.Tensor:
+    per_head = tensor.size(-1) // heads
+    t = tensor.view(-1, heads, per_head)
+    target_heads = heads * n_repeat
+    return t.repeat(1, n_repeat, 1).reshape(-1, target_heads * per_head)
+
+
 def _repeat_kv_heads(linear: Linear, tp: int, head_dim: int) -> Linear:
     """Repeat KV heads to reach a TP-divisible count."""
     heads = _infer_heads(linear, head_dim)
@@ -70,21 +79,7 @@ def _repeat_kv_heads(linear: Linear, tp: int, head_dim: int) -> Linear:
     target_heads = ((heads + tp - 1) // tp) * tp
     assert target_heads % heads == 0, (
         f"target_heads={target_heads} must be divisible by heads={heads}")
-    n_repeat = target_heads // heads
-    new_tensors = {}
-    for kind, tensor in linear.tensors.items():
-        per_head = tensor.size(-1) // heads
-        was_1d = tensor.dim() == 1
-        if was_1d:
-            tensor = tensor.unsqueeze(0)
-        t = tensor.view(tensor.size(0), heads, per_head)
-        t = t.repeat(1, n_repeat, 1)
-        out = t.reshape(tensor.size(0), target_heads * per_head)
-        if was_1d:
-            out = out.squeeze(0)
-        new_tensors[kind] = out
-    return Linear(tensors=new_tensors, weight_format=linear.weight_format,
-                  data_format=linear.data_format)
+    return _repeat_kv_heads_2d(linear, n_repeat=target_heads // heads, heads=heads)
 
 
 def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
