@@ -103,6 +103,17 @@ class TextModelSpec(ABC):
         self._rope, self._max_position_embeddings = parse_rope_param(
             cfg, head_dim)
 
+        # Apply the deprecated --rope-scaling-factor override here so every
+        # downstream consumer (subclass __init__, _apply_rope) sees the
+        # patched rope before building C++ templates.
+        if self.engine_cfg.rope_scaling_factor:
+            self._rope.type = 'dynamic'
+            self._rope.factor = self.engine_cfg.rope_scaling_factor
+            self._rope.max_position_embeddings = self._max_position_embeddings
+            logger.warning(
+                '`--rope-scaling-factor` will be removed in a future release. '
+                'Please instead use `--hf-overrides`.')
+
         # Layer-prefix detection deferred until weights loaded; default now.
         # Subclasses that know their prefix unconditionally can override.
         self._layer_prefix, self._embed_key, self._norm_key = \
@@ -149,15 +160,6 @@ class TextModelSpec(ABC):
             cfg.cache_block_seq_len = ec.cache_block_seq_len
         if ec.use_logn_attn:
             cfg.use_logn_attn = int(ec.use_logn_attn)
-        if ec.rope_scaling_factor:
-            rope = cfg.rope_param or RopeParam(type='', base=0, dim=0)
-            rope.type = 'dynamic'
-            rope.factor = ec.rope_scaling_factor
-            rope.max_position_embeddings = cfg.max_position_embeddings
-            cfg.rope_param = rope
-            logger.warning(
-                '`--rope-scaling-factor` will be removed in a future release. '
-                'Please instead use `--hf-overrides`.')
         return cfg
 
     # ------------------------------------------------------------------
