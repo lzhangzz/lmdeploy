@@ -216,14 +216,10 @@ def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
                   data_format=linear.data_format)
 
 
-# --- TP padding helpers (moved from target_model/base.py) -----------------
+# --- TP padding helpers ----------------------------------------------------
 
 def _pad_inter_size(inter_size: int, group_size: int, tp: int) -> int:
-    """Pad inter_size so it is divisible by group_size * tp.
-
-    Moved from target_model/base.py where it lived as a module-level helper
-    inside finalize_config. Same formula.
-    """
+    """Pad inter_size so it is divisible by group_size * tp."""
     group_size = max(1, group_size)
     group_num = (inter_size + group_size - 1) // group_size
     groups_per_rank = (group_num + tp - 1) // tp
@@ -234,7 +230,7 @@ def _pad_inter_size(inter_size: int, group_size: int, tp: int) -> int:
 def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
     """Pad kv_head_num up to attn_tp when attn_tp is a multiple of kv_head_num.
 
-    Matches the rule in finalize_config:
+    Rule:
       if attn_tp > kv_head_num and attn_tp % kv_head_num == 0:
           kv_head_num = attn_tp
     """
