@@ -11,11 +11,10 @@ import _turbomind as _tm
 
 from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
 from .builder import make_linear_config
-from .config import (AttentionConfig, LoraConfig, ModelConfig,
-                     TurbomindModelConfig)
+from .config import AttentionConfig
 from .linear import pad_out_dim
 from .source_model.utils import (_pad_kv_head, detect_layer_prefix,
-                                 parse_rope_param)
+                                 parse_rope_param, rope_type_to_int)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -129,92 +128,12 @@ class TextModelSpec(ABC):
                 detect_layer_prefix(params, self.hf_cfg)
 
     # ------------------------------------------------------------------
-    # YAML export — mechanical copy from C++ configs + scalars
+    # YAML export — produce AttentionConfig for C++ consumption
     # ------------------------------------------------------------------
 
-    def to_legacy_config(self) -> TurbomindModelConfig:
-        """Produce the narrowed TurbomindModelConfig for YAML serialization."""
-        mc = ModelConfig()
-        self._copy_template_fields(mc)
-        self._copy_orchestration_fields(mc)
-        self._copy_perlayer_fields(mc)
-        ac = self._build_attention_config()
-        return TurbomindModelConfig(model_config=mc, attention_config=ac,
-                                    lora_config=LoraConfig())
-
-    def _copy_template_fields(self, mc: ModelConfig):
-        """Copy fields from C++ config templates onto ModelConfig.
-
-        Handles standard _attn_cfg (+ MLA fields), _ffn_cfg, and optional
-        _dn_cfg. Subclasses may extend to copy extra templates.
-        """
-        a = self._attn_cfg
-        mc.hidden_units     = a.hidden_dim
-        mc.head_num         = a.head_num
-        mc.kv_head_num      = a.kv_head_num
-        mc.size_per_head    = a.head_dim
-        mc.q_lora_rank      = a.q_lora_rank
-        mc.kv_lora_rank     = a.kv_lora_rank
-        mc.qk_rope_dim      = a.qk_rope_dim
-        mc.v_head_dim       = a.v_head_dim
-        mc.attn_bias        = int(a.has_bias)
-        mc.qk_norm          = a.qk_norm
-        mc.attn_sink        = a.attn_sink
-        mc.attn_output_gate = a.attn_output_gate
-
-        f = self._ffn_cfg
-        mc.mlp_bias        = f.has_bias
-        mc.activation_type = _act_type_str(f.act_type)
-
-        if hasattr(self, '_dn_cfg'):
-            dn = self._dn_cfg
-            mc.linear_num_key_heads    = dn.num_k_heads
-            mc.linear_num_value_heads  = dn.num_v_heads
-            mc.linear_key_head_dim     = dn.key_head_dim
-            mc.linear_value_head_dim   = dn.value_head_dim
-            mc.linear_conv_kernel_dim  = dn.d_conv
-
-        if hasattr(self, '_moe_cfg'):
-            moe = self._moe_cfg
-            mc.expert_num         = self._expert_nums
-            mc.expert_router_bias = moe.router_bias
-            mc.expert_inter_size  = self._expert_inter_size_padded
-            mc.experts_per_token  = moe.experts_per_token
-            mc.moe_shared_gate    = moe.shared_gate
-            mc.norm_topk_prob     = moe.norm_topk_prob
-            mc.routed_scale       = moe.routed_scale
-            mc.topk_group         = moe.topk_group
-            mc.topk_method        = moe.topk_method
-            mc.moe_group_num      = moe.n_group
-            mc.scoring_func       = moe.scoring_func
-            mc.router_n_groups    = moe.router_n_groups
-
-    def _copy_orchestration_fields(self, mc: ModelConfig):
-        """Copy orchestration scalars (not in any C++ config) onto ModelConfig."""
-        mc.num_layer      = self._num_layer
-        mc.vocab_size     = self._vocab_size
-        mc.embedding_size = self._embedding_size
-        mc.norm_eps       = self._norm_eps
-        mc.tune_layer_num = self._tune_layer_num
-        mc.model_name     = self._model_name
-        mc.data_type      = self.engine_cfg.dtype
-        mc.session_len    = self.engine_cfg.session_len
-        mc.group_size     = self._group_size
-        mc.attn_tp_size   = self.engine_cfg.attn_tp_size
-        mc.attn_cp_size   = self.engine_cfg.attn_cp_size
-        mc.mlp_tp_size    = self.engine_cfg.mlp_tp_size
-        mc.model_format   = self.engine_cfg.model_format
-
-    def _copy_perlayer_fields(self, mc: ModelConfig):
-        """Copy per-layer lists. Default covers only inter_size.
-
-        Subclasses override to emit window_size / layer_types / etc.
-        Every subclass MUST set self._inter_sizes_padded during __init__;
-        we use direct attribute access so a missing assignment fails fast
-        with AttributeError at to_legacy_config() time rather than silently
-        emitting inter_size=[].
-        """
-        mc.inter_size = self._inter_sizes_padded
+    def to_attention_config(self) -> AttentionConfig:
+        """Produce the AttentionConfig for YAML serialization."""
+        return self._build_attention_config()
 
     def _build_attention_config(self) -> AttentionConfig:
         return AttentionConfig(
@@ -236,6 +155,24 @@ class TextModelSpec(ABC):
 
     def _cpp_dtype(self):
         return _cd(self.engine_cfg.dtype)
+
+    def _apply_rope(self, rope_cfg):
+        """Copy self._rope fields into a C++ rope config object."""
+        rope_cfg.type = rope_type_to_int(self._rope.type)
+        rope_cfg.base = self._rope.base
+        rope_cfg.dim  = self._rope.dim
+        rope_cfg.factor = self._rope.factor
+        rope_cfg.max_position_embeddings = self._max_position_embeddings
+        if self._rope.type == 'yarn':
+            rope_cfg.yarn_attention_factor = self._rope.attention_factor
+            rope_cfg.yarn_beta_fast = self._rope.beta_fast
+            rope_cfg.yarn_beta_slow = self._rope.beta_slow
+        elif self._rope.type == 'llama3':
+            rope_cfg.llama3_low_freq_factor = self._rope.low_freq_factor
+            rope_cfg.llama3_high_freq_factor = self._rope.high_freq_factor
+            rope_cfg.llama3_original_max_position_embeddings = self._rope.original_max_position_embeddings
+        elif self._rope.type == 'mrope':
+            rope_cfg.mrope_section = self._rope.mrope_section
 
     # ------------------------------------------------------------------
     # Text-model universals (default factory methods)
@@ -267,14 +204,3 @@ class TextModelSpec(ABC):
         m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
         m.set_weight(output_t, split_side=SplitSide.OUTPUT)
         return m
-
-
-# ----------------------------------------------------------------------
-# Helpers used by _copy_template_fields
-# ----------------------------------------------------------------------
-
-_ACT_ID_TO_STR = {0: 'silu', 1: 'gpt-oss'}
-
-
-def _act_type_str(act_type: int) -> str:
-    return _ACT_ID_TO_STR.get(act_type, 'silu')

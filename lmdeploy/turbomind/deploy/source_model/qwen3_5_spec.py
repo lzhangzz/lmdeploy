@@ -17,7 +17,7 @@ from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import (_pad_inter_size, reorder_rotary_emb,
-                    reorder_rotary_emb_linear, rope_type_to_int)
+                    reorder_rotary_emb_linear)
 
 _LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
 
@@ -66,21 +66,7 @@ class Qwen3_5Spec(TextModelSpec):
         self._attn_cfg.qk_norm          = True
         self._attn_cfg.attn_output_gate = bool(self._layer_types) and \
                                           hf_cfg.get('attn_output_gate', False)
-        self._attn_cfg.rope.type = rope_type_to_int(self._rope.type)
-        self._attn_cfg.rope.base = self._rope.base
-        self._attn_cfg.rope.dim  = self._rope.dim
-        self._attn_cfg.rope.factor = self._rope.factor
-        self._attn_cfg.rope.max_position_embeddings = self._max_position_embeddings
-        if self._rope.type == 'yarn':
-            self._attn_cfg.rope.yarn_attention_factor = self._rope.attention_factor
-            self._attn_cfg.rope.yarn_beta_fast = self._rope.beta_fast
-            self._attn_cfg.rope.yarn_beta_slow = self._rope.beta_slow
-        elif self._rope.type == 'llama3':
-            self._attn_cfg.rope.llama3_low_freq_factor = self._rope.low_freq_factor
-            self._attn_cfg.rope.llama3_high_freq_factor = self._rope.high_freq_factor
-            self._attn_cfg.rope.llama3_original_max_position_embeddings = self._rope.original_max_position_embeddings
-        elif self._rope.type == 'mrope':
-            self._attn_cfg.rope.mrope_section = self._rope.mrope_section
+        self._apply_rope(self._attn_cfg.rope)
         self._attn_cfg.window_size      = 0
         self._attn_cfg.tp_size          = engine_cfg.attn_tp_size
         self._attn_cfg.data_type        = dtype
@@ -88,25 +74,25 @@ class Qwen3_5Spec(TextModelSpec):
 
         # ---- DeltaNet template (only if linear-attn layers present) ----
         if self._layer_types:
+            ln_key_heads = hf_cfg['linear_num_key_heads']
+            ln_val_heads = hf_cfg['linear_num_value_heads']
+            ln_key_dim   = hf_cfg['linear_key_head_dim']
+            ln_val_dim   = hf_cfg['linear_value_head_dim']
+
             self._dn_cfg = _tm.DeltaNetConfig()
             self._dn_cfg.hidden_dim      = self._hidden_units
-            self._dn_cfg.num_k_heads     = hf_cfg['linear_num_key_heads']
-            self._dn_cfg.num_v_heads     = hf_cfg['linear_num_value_heads']
-            self._dn_cfg.key_head_dim    = hf_cfg['linear_key_head_dim']
-            self._dn_cfg.value_head_dim  = hf_cfg['linear_value_head_dim']
+            self._dn_cfg.num_k_heads     = ln_key_heads
+            self._dn_cfg.num_v_heads     = ln_val_heads
+            self._dn_cfg.key_head_dim    = ln_key_dim
+            self._dn_cfg.value_head_dim  = ln_val_dim
             self._dn_cfg.d_conv          = hf_cfg.get('linear_conv_kernel_dim', 0) or 4
             self._dn_cfg.has_bias        = bool(self._attn_cfg.has_bias)
             self._dn_cfg.tp_size         = engine_cfg.attn_tp_size
             self._dn_cfg.data_type       = dtype
 
-            ln_key_heads = hf_cfg['linear_num_key_heads']
-            ln_val_heads = hf_cfg['linear_num_value_heads']
-            ln_key_dim   = hf_cfg['linear_key_head_dim']
-            ln_val_dim   = hf_cfg['linear_value_head_dim']
             q_dim = ln_key_heads * ln_key_dim
-            k_dim = ln_key_heads * ln_key_dim
             v_dim = ln_val_heads * ln_val_dim
-            self._linear_qkv_split = (q_dim, k_dim, v_dim)
+            self._linear_qkv_split = (q_dim, q_dim, v_dim)
 
         # ---- FFN template ----
         self._ffn_cfg = _tm.FfnConfig()
@@ -161,14 +147,6 @@ class Qwen3_5Spec(TextModelSpec):
 
     def num_experts(self, layer: int) -> int:
         return self._n_experts
-
-    # ------------------------------------------------------------------
-    # Per-layer fields override (add layer_types)
-    # ------------------------------------------------------------------
-
-    def _copy_perlayer_fields(self, mc):
-        super()._copy_perlayer_fields(mc)
-        mc.layer_types = self._layer_types
 
     # ------------------------------------------------------------------
     # model() — same topology as old code

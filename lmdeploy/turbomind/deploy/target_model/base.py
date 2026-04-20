@@ -6,8 +6,7 @@ from abc import ABC
 
 from mmengine import Registry
 
-from ..config import (AttentionConfig, LoraConfig, ModelConfig,
-                      TurbomindModelConfig)
+from ..config import TurbomindModelConfig
 
 OUTPUT_MODELS = Registry('target model',
                          locations=['lmdeploy.turbomind.deploy.target_model.base'])
@@ -18,28 +17,8 @@ class BaseOutputModel(ABC):
 
     @classmethod
     def finalize_config(cls, spec, cfg: TurbomindModelConfig):
-        """Assemble the YAML wire-format config from spec + pre-seeded fields.
-
-        The spec has already been constructed with a resolved engine_config
-        (dtype, model_format, session_len, tp sizes) plus group_size. The
-        only fields that the converter set directly onto ``cfg`` without
-        a corresponding engine_config field are ``model_arch``,
-        ``chat_template``, and ``model_name`` (pure metadata).
-
-        We generate ``produced`` from the spec, copy those three metadata
-        fields from ``cfg`` onto it, then install ``produced`` back onto
-        ``cfg``.
-        """
-        produced = spec.to_legacy_config()
-        preserved = ('model_arch', 'chat_template', 'model_name')
-        for name in preserved:
-            val = getattr(cfg.model_config, name, None)
-            if val not in (None, '', 0):
-                setattr(produced.model_config, name, val)
-        produced.model_config.verify()
-        cfg.model_config     = produced.model_config
-        cfg.attention_config = produced.attention_config
-        cfg.lora_config      = produced.lora_config
+        """Install attention_config from spec onto cfg."""
+        cfg.attention_config = spec.to_attention_config()
 
     def __init__(self, spec, cfg, model_comm, gpu_count, model_path):
         from ..text_model_loader import TextModelLoader
