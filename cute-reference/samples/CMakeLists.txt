@@ -11,6 +11,7 @@ set(CUTE_GEMM_SAMPLES
     07_bf16_gemm_sm80_pipe_tma_ws
     08_bf16_gemm_sm80_pipe_tma_ws_persistent
     09_bf16_gemm_sm90_pipe_tma_ws_persistent
+    10_bf16_gemm_sm90_pipe_tma_ws_persistent_mcast
 )
 
 foreach(sample ${CUTE_GEMM_SAMPLES})
