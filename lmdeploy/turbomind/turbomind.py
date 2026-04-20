@@ -25,7 +25,6 @@ from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
-from .deploy.config import TurbomindModelConfig
 from .supported_models import is_supported
 
 # TODO: find another way import _turbomind
@@ -206,25 +205,11 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _postprocess_config(self, tm_config: TurbomindModelConfig, engine_config: TurbomindEngineConfig):
-        """Postprocess turbomind config by."""
-        import copy
-        self.config = copy.deepcopy(tm_config)
-
-        # update some attributes of `engine_config` which depends on
-        # `session_len`
-        self.engine_config = engine_config
-
-        # pack `self.config` and `self.engine_config` into a dict
-        self.config_dict = self.config.to_dict()
-        self.config_dict.update(dict(engine_config=asdict(self.engine_config)))
-        logger.info(f'turbomind model config:\n\n'
-                    f'{json.dumps(self.config_dict, indent=2)}')
-
     def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
         """Load model which is in hf format."""
-        assert is_supported(model_path), (f'turbomind does not support {model_path}. '
-                                          'Plz try pytorch engine instead.')
+        assert is_supported(model_path), (
+            f'turbomind does not support {model_path}. '
+            'Plz try pytorch engine instead.')
 
         from .deploy.converter import get_tm_config
         from .deploy.target_model.base import OUTPUT_MODELS
@@ -233,11 +218,17 @@ class TurboMind:
             model_path, self.model_name, self.chat_template_name, engine_config)
 
         self._vocab_size = spec._vocab_size
+        self.engine_config = engine_config
 
-        self._postprocess_config(tm_cfg, engine_config)
+        config_dict = {
+            'attention_config': asdict(spec.to_attention_config()),
+            'engine_config': asdict(engine_config),
+        }
+        logger.info(f'turbomind model config:\n\n'
+                    f'{json.dumps(config_dict, indent=2)}')
 
-        model_comm = _tm.TurboMind.create(model_dir='',
-                                          config=yaml.safe_dump(self.config_dict))
+        model_comm = _tm.TurboMind.create(
+            model_dir='', config=yaml.safe_dump(config_dict))
         self._create_weight(model_comm)
 
         self._tm_model = OUTPUT_MODELS.get('tm')(
@@ -353,7 +344,7 @@ class TurboMind:
         Returns:
             TurboMindInstance: an instance of turbomind
         """
-        return TurboMindInstance(self, self.config, cuda_stream_id)
+        return TurboMindInstance(self, cuda_stream_id)
 
     def get_schedule_metrics(self):
         # TODO: support dp
@@ -485,15 +476,14 @@ class TurboMindInstance:
         cuda_stream_id(int): identity of a cuda stream
     """
 
-    def __init__(self, tm_model: TurboMind, config: TurbomindModelConfig, cuda_stream_id: int = 0):
+    def __init__(self, tm_model: 'TurboMind', cuda_stream_id: int = 0):
         self.tm_model = tm_model
         self.cuda_stream_id = cuda_stream_id
 
         # create model instances
-        lazy_init = self.tm_model.config_dict['engine_config'].get('empty_init', False)
+        lazy_init = self.tm_model.engine_config.empty_init
         self._model_inst = None if lazy_init else self._create_model_instance()
 
-        self.config = config
         self.lock = None
         # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
         # to lmdeploy.messages.ResponseType
