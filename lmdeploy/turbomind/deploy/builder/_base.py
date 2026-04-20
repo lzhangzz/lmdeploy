@@ -1,6 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import enum
+import functools
+import inspect
+import types as _bt
+import typing
+
 import torch
 
 import _turbomind as _tm
@@ -146,6 +151,144 @@ def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
     if len(set(formats.values())) <= 1:
         return linears
     return {name: _dequant_linear(lin) for name, lin in linears.items()}
+
+
+# ---------------------------------------------------------------------------
+# @transform_tensors decorator
+# ---------------------------------------------------------------------------
+
+
+def transform_tensors(fn):
+    """Decorator that lifts a tensor-level transform to Linear-level.
+
+    The decorated function operates on 2D ``torch.Tensor`` objects.  The
+    wrapper handles the 1D/2D roundtrip (unsqueeze/squeeze), iterates over
+    all tensor kinds in the ``Linear.tensors`` dict, and constructs new
+    ``Linear`` objects from the results.
+
+    Signature rules (determined by annotations):
+
+    - Parameters typed ``torch.Tensor`` map to ``Linear`` positional args.
+    - Parameters typed ``torch.Tensor | None`` are optional ``Linear`` args;
+      ``None`` passes through without the 1D/2D dance.
+    - Other parameters pass through unchanged.
+    - Return ``torch.Tensor`` produces a single ``Linear``.
+    - Return ``tuple[torch.Tensor, ...]`` produces a tuple of ``Linear`` objects.
+    """
+    hints = typing.get_type_hints(fn)
+    ret_hint = hints.get('return', torch.Tensor)
+
+    # Identify tensor-typed params and optional-tensor params
+    sig = inspect.signature(fn)
+    tensor_params = []      # param names that are torch.Tensor (required)
+    optional_params = []    # param names that are torch.Tensor | None
+
+    for pname in sig.parameters:
+        hint = hints.get(pname)
+        if hint is torch.Tensor:
+            tensor_params.append(pname)
+        elif _is_optional_tensor(hint):
+            optional_params.append(pname)
+
+    is_tuple_return = _is_tuple_of_tensors(ret_hint)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        # Bind args/kwargs to parameter names
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        # Separate Linear args from passthrough kwargs
+        linears = {}
+        for pname in tensor_params:
+            linears[pname] = bound.arguments[pname]
+        for pname in optional_params:
+            linears[pname] = bound.arguments[pname]
+
+        # Passthrough kwargs: everything that's not a tensor param
+        pass_kwargs = {k: v for k, v in bound.arguments.items()
+                       if k not in tensor_params and k not in optional_params}
+
+        # Use first non-None Linear for kind iteration and format
+        first_linear = next(l for l in linears.values() if l is not None)
+
+        # Collect output buckets
+        if is_tuple_return:
+            out_buckets = None  # will be list of dicts after first call
+        else:
+            out_tensors = {}
+
+        for kind, _ in first_linear.tensors.items():
+            was_1d = False
+            fn_kwargs = dict(pass_kwargs)
+
+            # Extract tensors for this kind, handle 1D/2D
+            for pname in tensor_params:
+                t = linears[pname].tensors[kind]
+                if t.dim() == 1:
+                    was_1d = True
+                    t = t.unsqueeze(0)
+                fn_kwargs[pname] = t
+
+            for pname in optional_params:
+                lin = linears[pname]
+                if lin is None:
+                    fn_kwargs[pname] = None
+                else:
+                    t = lin.tensors[kind]
+                    if t.dim() == 1:
+                        was_1d = True
+                        t = t.unsqueeze(0)
+                    fn_kwargs[pname] = t
+
+            result = fn(**fn_kwargs)
+
+            if is_tuple_return:
+                items = result
+                if out_buckets is None:
+                    out_buckets = [{} for _ in items]
+                for i, item in enumerate(items):
+                    if was_1d:
+                        item = item.squeeze(0)
+                    out_buckets[i][kind] = item
+            else:
+                if was_1d:
+                    result = result.squeeze(0)
+                out_tensors[kind] = result
+
+        if is_tuple_return:
+            return tuple(
+                Linear(tensors=b, weight_format=first_linear.weight_format,
+                       data_format=first_linear.data_format)
+                for b in out_buckets
+            )
+        return Linear(tensors=out_tensors,
+                      weight_format=first_linear.weight_format,
+                      data_format=first_linear.data_format)
+
+    return wrapper
+
+
+def _is_optional_tensor(hint) -> bool:
+    """Check if hint is ``torch.Tensor | None``.
+
+    Handles both ``typing.Union[torch.Tensor, None]`` and the
+    Python 3.10+ ``torch.Tensor | None`` syntax (``types.UnionType``).
+    """
+    origin = getattr(hint, '__origin__', None)
+    if origin is typing.Union or isinstance(hint, _bt.UnionType):
+        args = getattr(hint, '__args__', ())
+        return torch.Tensor in args and type(None) in args
+    return False
+
+
+def _is_tuple_of_tensors(hint) -> bool:
+    """Check if hint is ``tuple[torch.Tensor, ...]``."""
+    origin = getattr(hint, '__origin__', None)
+    if origin is tuple:
+        args = getattr(hint, '__args__', ())
+        return all(a is torch.Tensor for a in args)
+    return False
 
 
 # ---------------------------------------------------------------------------
