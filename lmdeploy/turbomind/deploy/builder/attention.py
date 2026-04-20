@@ -119,9 +119,9 @@ def fuse_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     Concatenates output channels with TP interleaving.
     Layout per tp-shard: [Q | K | V] or [Q | K | V | Gate].
     """
-    parts = [t.view(-1, tp, -1) for t in (q, k, v)]
+    parts = [t.view(t.size(0), tp, -1) for t in (q, k, v)]
     if gate is not None:
-        parts.append(gate.view(-1, tp, -1))
+        parts.append(gate.view(gate.size(0), tp, -1))
     merged = torch.cat(parts, dim=-1)
     return merged.view(-1, merged.size(-1) * tp)
 
