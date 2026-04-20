@@ -17,7 +17,7 @@
 | `lmdeploy/turbomind/deploy/config.py` | Holds only `RopeParam` and `AttentionConfig` (the two live dataclasses) |
 | `lmdeploy/turbomind/deploy/spec.py` | `TextModelSpec.to_attention_config()` owns all `AttentionConfig` construction including engine-config patching |
 | `lmdeploy/turbomind/deploy/converter.py` | `get_tm_config(model_path, engine_config, group_size=None) → (spec, model_path)`, mutates `engine_config` in place |
-| `lmdeploy/turbomind/deploy/target_model/base.py` | `BaseOutputModel.__init__(spec, engine_config, model_comm, gpu_count, model_path)` — no `finalize_config`, no tm_config/tp-size attributes |
+| `lmdeploy/turbomind/deploy/target_model/base.py` | `BaseOutputModel.__init__(spec, model_comm, gpu_count, model_path)` — no `finalize_config`, no tm_config/tp-size attributes, no `engine_config` either (set-but-never-read would reintroduce the anti-pattern) |
 | `lmdeploy/turbomind/turbomind.py` | `_from_hf` inlines YAML build from `spec.to_attention_config()` + `asdict(engine_config)`; no `_postprocess_config`; no `self.config` or `self.config_dict`; `TurboMindInstance.__init__(tm_model, cuda_stream_id)` |
 | `tests/test_lmdeploy/test_turbomind/test_converter.py` | Keeps only `test_ffn_reader_kind_none` |
 | `tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py` | Keeps the three tests that don't use `converter.get_output_model_registered_name_and_config` |
@@ -252,7 +252,7 @@ In `lmdeploy/turbomind/turbomind.py`, replace the body of `_from_hf` (lines 228-
         return model_comm
 ```
 
-Note: `cfg=tm_cfg` is kept as-is in this task. `BaseOutputModel` still accepts it. Task 3 changes that call site to `engine_config=engine_config`.
+Note: `cfg=tm_cfg` is kept as-is in this task. `BaseOutputModel` still accepts it. Task 3 changes that call site to pass only runtime handles (`spec`, `model_comm`, `gpu_count`, `model_path`) — no `cfg` / no `engine_config`.
 
 - [ ] **Step 2: Delete `_postprocess_config` method**
 
@@ -345,12 +345,12 @@ EOF
 
 ## Task 3: `BaseOutputModel` reads `engine_config`; delete `finalize_config`
 
-**Rationale:** `BaseOutputModel.__init__` today reads three tp-size fields off `cfg` (the `TurbomindModelConfig`) but never uses them elsewhere. It also stores `self.tm_config` which is never read. `finalize_config(cls, spec, cfg)` installs `cfg.attention_config = spec.to_attention_config()` — but with YAML building moved inline (Task 2), no one needs `cfg.attention_config` to be populated anymore.
+**Rationale:** `BaseOutputModel.__init__` today reads three tp-size fields off `cfg` (the `TurbomindModelConfig`) but never uses them elsewhere. It also stores `self.tm_config` which is never read. `finalize_config(cls, spec, cfg)` installs `cfg.attention_config = spec.to_attention_config()` — but with YAML building moved inline (Task 2), no one needs `cfg.attention_config` to be populated anymore. Also: storing `engine_config` on `BaseOutputModel` would reintroduce the exact "set but never read" anti-pattern being eliminated here — nothing downstream consumes `output_model.engine_config`, since `TurboMindInstance` already reaches engine_config via `self.tm_model.engine_config`. So the final `__init__` keeps only the runtime handles it actually uses.
 
 **Files:**
 - Modify: `lmdeploy/turbomind/deploy/target_model/base.py` (entire file)
-- Modify: `lmdeploy/turbomind/deploy/converter.py:219` (delete `finalize_config` call)
-- Modify: `lmdeploy/turbomind/turbomind.py` (change `cfg=tm_cfg` → `engine_config=engine_config` in `_from_hf`)
+- Modify: `lmdeploy/turbomind/deploy/converter.py:219` (delete `finalize_config` call; drop `BaseOutputModel` import)
+- Modify: `lmdeploy/turbomind/turbomind.py` (drop `cfg=tm_cfg` from the `OUTPUT_MODELS.get('tm')(...)` call in `_from_hf`)
 
 ### Steps
 
@@ -367,8 +367,6 @@ from abc import ABC
 
 from mmengine import Registry
 
-from lmdeploy.messages import TurbomindEngineConfig
-
 OUTPUT_MODELS = Registry('target model',
                          locations=['lmdeploy.turbomind.deploy.target_model.base'])
 
@@ -376,11 +374,9 @@ OUTPUT_MODELS = Registry('target model',
 class BaseOutputModel(ABC):
     """Base output model. Drives a TextModelSpec through loading + commit."""
 
-    def __init__(self, spec, engine_config: TurbomindEngineConfig,
-                 model_comm, gpu_count, model_path):
+    def __init__(self, spec, model_comm, gpu_count, model_path):
         from ..text_model_loader import TextModelLoader
         self.spec = spec
-        self.engine_config = engine_config
         self.model_comm = model_comm
         self.gpu_count = gpu_count
         # model_path is writable by update_params (Queue takes over).
@@ -431,8 +427,8 @@ class BaseOutputModel(ABC):
 
 Changes vs. the current file:
 - `finalize_config` classmethod is gone.
-- `__init__` takes `engine_config` instead of `cfg`. Stores `self.engine_config` only; no `self.tm_config`, `self.attn_tp_size`, `self.attn_cp_size`, `self.mlp_tp_size`.
-- Import of `TurbomindModelConfig` replaced with `TurbomindEngineConfig`.
+- `__init__` drops `cfg` (and does not accept `engine_config` either — nothing downstream would read it). Stores only `self.spec`, `self.model_comm`, `self.gpu_count`, `self.model_path`, and the bound `TextModelLoader`.
+- `TurbomindModelConfig` import is dropped. No other config import is needed.
 
 - [ ] **Step 2: Update `converter.py` to drop `finalize_config` call**
 
@@ -465,11 +461,12 @@ to:
 ```python
         self._tm_model = OUTPUT_MODELS.get('tm')(
             spec=spec,
-            engine_config=engine_config,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
             model_path=model_path)
 ```
+
+Note: `tm_cfg` stays in the tuple unpacking from `get_tm_config(...)` in this task; Task 5 collapses the return to `(spec, model_path)`.
 
 - [ ] **Step 4: Smoke test**
 
@@ -486,13 +483,15 @@ Expected: model loads, produces a coherent paragraph, exit 0.
 ```bash
 git add lmdeploy/turbomind/deploy/target_model/base.py lmdeploy/turbomind/deploy/converter.py lmdeploy/turbomind/turbomind.py
 git commit -m "$(cat <<'EOF'
-refactor(turbomind): BaseOutputModel takes engine_config directly
+refactor(turbomind): drop TurbomindModelConfig plumbing from BaseOutputModel
 
-BaseOutputModel.__init__ now accepts engine_config instead of tm_cfg.
-The tm_config/attn_tp_size/attn_cp_size/mlp_tp_size attributes (set but
-never read) are gone. finalize_config is deleted — its sole effect,
-installing cfg.attention_config, is no longer needed now that YAML
-building is inline in _from_hf.
+BaseOutputModel.__init__ no longer takes a TurbomindModelConfig. The
+tm_config/attn_tp_size/attn_cp_size/mlp_tp_size attributes (set but
+never read) are gone, along with the classmethod finalize_config
+(installing cfg.attention_config is no longer needed now that YAML
+building is inline in _from_hf). The constructor now stores only the
+runtime handles it actually uses: spec, model_comm, gpu_count,
+model_path.
 EOF
 )"
 ```
@@ -925,10 +924,10 @@ EOF
 
 ### Type Consistency
 
-- `TurbomindEngineConfig` is consistently the type of the `engine_config` parameter everywhere it appears (spec.py already stores `self.engine_cfg` of this type; `BaseOutputModel.__init__` annotates it; `get_tm_config` annotates it).
+- `TurbomindEngineConfig` is consistently the type of the `engine_config` parameter everywhere it appears (spec.py already stores `self.engine_cfg` of this type; `get_tm_config` annotates it). `BaseOutputModel.__init__` does NOT accept `engine_config` — nothing downstream reads it, so keeping the parameter out prevents a fresh instance of the set-but-never-read anti-pattern.
 - `spec.to_attention_config() → AttentionConfig` — matches the single call site in `turbomind._from_hf` where it's passed through `asdict()` into the YAML dict.
 - `get_tm_config(model_path, engine_config, group_size=None) → (spec, model_path)` — matches the single call site after Task 5 (`spec, model_path = get_tm_config(model_path, engine_config)`).
 - `TurboMindInstance(tm_model, cuda_stream_id=0)` — matches the single call site in `create_instance` after Task 2.
-- `BaseOutputModel(spec, engine_config, model_comm, gpu_count, model_path)` — matches the single call site in `_from_hf` after Task 3 (positional-compatible via keyword args).
+- `BaseOutputModel(spec, model_comm, gpu_count, model_path)` — matches the single call site in `_from_hf` after Task 3 (positional-compatible via keyword args). `engine_config` is intentionally absent to avoid storing state nothing reads.
 
 No inconsistencies found.

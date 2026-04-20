@@ -137,8 +137,7 @@ def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig):
     self._create_weight(model_comm)
 
     self._tm_model = OUTPUT_MODELS.get('tm')(
-        spec=spec, engine_config=engine_config,
-        model_comm=model_comm, gpu_count=self.gpu_count,
+        spec=spec, model_comm=model_comm, gpu_count=self.gpu_count,
         model_path=model_path)
     return model_comm
 ```
@@ -212,19 +211,15 @@ they were dead writes on `TurbomindModelConfig`. `model_name` and
 Verified via grep: `get_tm_config` has exactly one caller (`turbomind._from_hf` at
 `turbomind.py:236`) and zero test callers, so the signature change is safe.
 
-### 4. `BaseOutputModel` reads tp sizes from `engine_config`
+### 4. `BaseOutputModel` takes only the runtime handles
 
 ```python
-from lmdeploy.messages import TurbomindEngineConfig
-
 class BaseOutputModel(ABC):
     """Base output model. Drives a TextModelSpec through loading + commit."""
 
-    def __init__(self, spec, engine_config: TurbomindEngineConfig,
-                 model_comm, gpu_count, model_path):
+    def __init__(self, spec, model_comm, gpu_count, model_path):
         from ..text_model_loader import TextModelLoader
         self.spec = spec
-        self.engine_config = engine_config
         self.model_comm = model_comm
         self.gpu_count = gpu_count
         self.model_path = model_path
@@ -239,6 +234,11 @@ class BaseOutputModel(ABC):
 - `self.tm_config`, `self.attn_tp_size`, `self.attn_cp_size`, `self.mlp_tp_size`
   attributes are deleted. Verified with grep: all four are set in today's `__init__`
   but never read anywhere else in the codebase.
+- `engine_config` is intentionally NOT accepted as a parameter either. Nothing
+  downstream reads `output_model.engine_config` — `TurboMindInstance` already
+  reaches engine_config via `self.tm_model.engine_config` on the `TurboMind` instance.
+  Adding an `engine_config` attribute to `BaseOutputModel` would reintroduce the
+  exact "set but never read" anti-pattern this refactor eliminates.
 
 ### 5. `TurboMindInstance` drops the dead `config` parameter
 
@@ -286,7 +286,7 @@ File shrinks from 112 lines to roughly 40.
 | `lmdeploy/turbomind/deploy/config.py` | Delete `TurbomindModelConfig`, `LoraConfig`, `config_to_dict`. Drop unused imports (`asdict`, `TurbomindEngineConfig`, `logger`). Keep `RopeParam`, `AttentionConfig`. |
 | `lmdeploy/turbomind/deploy/spec.py` | `to_attention_config()` reads `self.engine_cfg` and applies the three engine-config patches. Inline `_build_attention_config`. Import `RopeParam` alongside `AttentionConfig` (needed by the `rope_scaling_factor` branch). |
 | `lmdeploy/turbomind/deploy/converter.py` | Fold `get_output_model_registered_name_and_config` into `get_tm_config`. Delete the function. Extract `_resolve_dtype(requested, hf_cfg)` private helper. `get_tm_config(model_path, engine_config, group_size=None)` returns `(spec, model_path)` and mutates `engine_config` in place. Drop `TurbomindModelConfig` import. |
-| `lmdeploy/turbomind/deploy/target_model/base.py` | `BaseOutputModel.__init__(spec, engine_config, model_comm, gpu_count, model_path)`. Store `self.engine_config`. Delete `finalize_config()`, `self.tm_config`, `self.attn_tp_size`, `self.attn_cp_size`, `self.mlp_tp_size`. Drop `TurbomindModelConfig` import. |
+| `lmdeploy/turbomind/deploy/target_model/base.py` | `BaseOutputModel.__init__(spec, model_comm, gpu_count, model_path)`. Delete `finalize_config()`, `self.tm_config`, `self.attn_tp_size`, `self.attn_cp_size`, `self.mlp_tp_size`. Drop `TurbomindModelConfig` import. `engine_config` is not stored — no downstream reader. |
 | `lmdeploy/turbomind/turbomind.py` | Delete `_postprocess_config`. Inline YAML build in `_from_hf`. Delete `self.config`, `self.config_dict`. Update `TurboMindInstance.__init__` to drop `config` param. Update `create_instance` call site. Fix `lazy_init` read. Drop `TurbomindModelConfig` import. (`copy` import stays — still used at line 139 for `engine_config` deepcopy.) |
 | `tests/test_lmdeploy/test_turbomind/test_converter.py` | Delete `test_torch_dtype_fallback`, `test_registered_models`, `test_update_from_engine_config`, `test_dtype`. Keep `test_ffn_reader_kind_none` (unrelated). |
 | `tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py` | Delete `test_compressed_tensors_support_matrix`. Keep the three tests that don't touch `converter.get_output_model_registered_name_and_config`. |
@@ -334,8 +334,8 @@ Python-side only. Single logical refactor; landable as one PR or split into:
    `lora_config` from YAML.
 2. Eliminate `_postprocess_config`, inline YAML build in `_from_hf`, drop
    `TurboMindInstance.config`.
-3. `get_tm_config` returns `(spec, model_path)`; `BaseOutputModel` reads
-   `engine_config`; delete `finalize_config`; delete
+3. `get_tm_config` returns `(spec, model_path)`; `BaseOutputModel.__init__` accepts
+   only runtime handles; delete `finalize_config`; delete
    `get_output_model_registered_name_and_config`.
 4. Delete `TurbomindModelConfig` class; clean up test files.
 
