@@ -10,6 +10,7 @@ set(CUTE_GEMM_SAMPLES
     06_bf16_gemm_sm80_pipe_tma
     07_bf16_gemm_sm80_pipe_tma_ws
     08_bf16_gemm_sm80_pipe_tma_ws_persistent
+    09_bf16_gemm_sm90_pipe_tma_ws_persistent
 )
 
 foreach(sample ${CUTE_GEMM_SAMPLES})
