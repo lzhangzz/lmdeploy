@@ -6,12 +6,12 @@
  * smem via 64-bit GMMA descriptors, eliminating LDSM copies and the k_block inner loop.
  *
  * Key changes from 08:
- *   - SM90 WGMMA atom (64x128x16_SS) replaces SM80 HMMA atom (16x8x16)
- *   - Tile size 128x128 (was 256x128) — matches 2 warpgroups of 64x128 each
+ *   - SM90 WGMMA atom (64x256x16_SS) replaces SM80 HMMA atom (16x8x16)
+ *   - Tile size 128x256 (was 256x128) — 2 warpgroups of 64x256 each, high arithmetic intensity
  *   - No S2R (smem-to-register) copies — WGMMA reads smem via descriptors
  *   - No k_block inner loop — single gemm() call per pipeline stage
  *   - warpgroup_arrive/commit_batch/wait replaces manual mma.sync scheduling
- *   - Smem reduced to ~131 KB (from ~208 KB) due to smaller A tile
+ *   - Smem ~213 KB (128x256x64 tile, 3 pipeline stages)
  *
  * C = alpha * A * B^T + beta * C
  *   A: bf16, M x K, row-major (TN layout)
@@ -333,7 +333,7 @@ bf16_gemm_persistent(int m, int n, int k,
 
   // CTA tile sizes (static)
   auto bM = Int<128>{};
-  auto bN = Int<128>{};
+  auto bN = Int<256>{};
   auto bK = Int<64>{};
   auto cta_tiler = make_shape(bM, bN, bK);
 
@@ -358,7 +358,7 @@ bf16_gemm_persistent(int m, int n, int k,
 
   // TiledMMA — SM90 WGMMA (warpgroup-level, smem descriptors, no S2R copies)
   TiledMMA mma = make_tiled_mma(
-      SM90_64x128x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>{},
+      SM90_64x256x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>{},
       Layout<Shape<_2, _1>>{});
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
@@ -428,7 +428,7 @@ void benchmark_size(int m, int n, int k,
 {
   using namespace cute;
 
-  assert(m % 128 == 0 && n % 128 == 0 && k % 64 == 0);
+  assert(m % 128 == 0 && n % 256 == 0 && k % 64 == 0);
 
   int ldA = k, ldB = k, ldC = m;
 
@@ -476,7 +476,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM90 WGMMA + TMA load/store, tile 128x128x64, 384 threads WS, PipelineTmaAsync, PERSISTENT)\n\n");
+  printf("BF16 GEMM (SM90 WGMMA + TMA load/store, tile 128x256x64, 384 threads WS, PipelineTmaAsync, PERSISTENT)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
