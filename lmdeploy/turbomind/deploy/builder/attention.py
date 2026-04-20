@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import torch
 
-from ..linear import Linear, pad_out_dim
+from ..linear import Linear
 from ._base import Builder, SplitSide, _dequant_linear
 
 # ---------------------------------------------------------------------------
@@ -54,100 +54,49 @@ def dequant_mixed(q: Linear, k: Linear, v: Linear) -> tuple[Linear, Linear, Line
     return _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
 
 
+def _infer_heads(linear: Linear, head_dim: int) -> int:
+    """Derive head count from the weight tensor's output dimension."""
+    w = linear.tensors.get('weight')
+    if w is None:
+        return 0
+    return w.size(-1) // head_dim
+
+
+def _repeat_kv_heads(linear: Linear, tp: int, head_dim: int) -> Linear:
+    """Repeat KV heads to reach a TP-divisible count."""
+    heads = _infer_heads(linear, head_dim)
+    if heads % tp == 0:
+        return linear
+    target_heads = ((heads + tp - 1) // tp) * tp
+    assert target_heads % heads == 0, (
+        f"target_heads={target_heads} must be divisible by heads={heads}")
+    n_repeat = target_heads // heads
+    new_tensors = {}
+    for kind, tensor in linear.tensors.items():
+        per_head = tensor.size(-1) // heads
+        if tensor.dim() == 2:
+            t = tensor.view(tensor.size(0), heads, per_head)
+            t = t.repeat(1, n_repeat, 1)
+            new_tensors[kind] = t.reshape(tensor.size(0), target_heads * per_head)
+        else:
+            t = tensor.view(heads, per_head)
+            t = t.repeat(n_repeat, 1)
+            new_tensors[kind] = t.reshape(target_heads * per_head)
+    return Linear(tensors=new_tensors, weight_format=linear.weight_format,
+                  data_format=linear.data_format)
+
+
 def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
                tp: int, head_dim: int) -> tuple[Linear, Linear, Linear]:
-    """Make head counts tp-divisible.
+    """Repeat KV heads to reach a TP-divisible count.
 
-    q: pad with zero heads to reach tp-divisible count.
-    kv: repeat heads to reach tp-divisible count (preserves real data).
-    Also handles quantization block alignment.
-
+    Q is asserted to already be TP-divisible.
     Head counts are derived from actual tensor shapes, not config parameters.
-    The spec's _pad_kv_head has already bumped cfg.kv_head_num up to attn_tp
-    before this pipeline runs, so cfg cannot be used to recover the original
-    un-padded head count from the checkpoint.
     """
-    def _infer_heads(linear):
-        """Derive head count from the weight tensor's output dimension."""
-        w = linear.tensors.get('weight')
-        if w is None:
-            return 0
-        return w.size(-1) // head_dim
-
-    def _adjust_linear(linear, heads, is_kv: bool):
-        """Adjust one linear's head count. Pad for q, repeat for kv."""
-        wfmt = linear.weight_format
-        block_out = (wfmt.block_out or 0) if wfmt is not None else 0
-
-        if heads % tp == 0:
-            return linear
-
-        target_heads = ((heads + tp - 1) // tp) * tp
-        if is_kv:
-            assert target_heads % heads == 0, (
-                f"target_heads={target_heads} must be divisible by heads={heads}")
-        new_tensors = {}
-
-        for kind, tensor in linear.tensors.items():
-            is_block_kind = kind in ("scales", "zeros") and block_out > 0
-
-            if is_block_kind:
-                # Block-scale: pad or repeat at block granularity
-                # Assumes block_out >= head_dim and block_out % head_dim == 0
-                # (dequant_mixed or reorder_rotary_emb_linear handles misalignment)
-                assert block_out % head_dim == 0, (
-                    f"block_out={block_out} must be divisible by head_dim={head_dim}")
-                blocks_per_head = block_out // head_dim
-                head_blocks = tensor.size(-1) // blocks_per_head
-                target_blocks = target_heads * blocks_per_head
-                deficit = target_blocks - head_blocks
-                if deficit > 0:
-                    if is_kv:
-                        # Repeat: each head's blocks get repeated
-                        n_repeat = target_heads // heads
-                        new_tensors[kind] = tensor.repeat_interleave(n_repeat, dim=-1)
-                    else:
-                        # Pad with identity scale=1, zero=0
-                        pad_val = 1.0 if kind == "scales" else 0.0
-                        padding = torch.full(
-                            [*tensor.shape[:-1], deficit],
-                            pad_val, dtype=tensor.dtype, device=tensor.device)
-                        new_tensors[kind] = torch.cat([tensor, padding], dim=-1)
-                else:
-                    new_tensors[kind] = tensor
-            else:
-                # Per-element tensor (weight, bias, qweight)
-                out_dim = tensor.dim() - 1
-                per_head = tensor.size(out_dim) // heads
-                target_size = target_heads * per_head
-                deficit = target_size - tensor.size(out_dim)
-
-                if deficit > 0:
-                    if is_kv:
-                        # Repeat: reshape to [batch, heads, head_dim] then repeat
-                        if tensor.dim() == 2:
-                            reshaped = tensor.view(tensor.size(0), heads, per_head)
-                            n_repeat = target_heads // heads
-                            reshaped = reshaped.repeat(1, 1, n_repeat)
-                            new_tensors[kind] = reshaped.reshape(
-                                tensor.size(0), target_heads * per_head)
-                        else:
-                            reshaped = tensor.view(heads, per_head)
-                            n_repeat = target_heads // heads
-                            reshaped = reshaped.repeat(1, n_repeat)
-                            new_tensors[kind] = reshaped.reshape(target_heads * per_head)
-                    else:
-                        # Pad with zeros
-                        new_tensors[kind] = pad_out_dim(tensor, target_size, out_dim)
-                else:
-                    new_tensors[kind] = tensor
-
-        return Linear(tensors=new_tensors, weight_format=linear.weight_format,
-                      data_format=linear.data_format)
-
-    q = _adjust_linear(q, _infer_heads(q), is_kv=False)
-    k = _adjust_linear(k, _infer_heads(k), is_kv=True)
-    v = _adjust_linear(v, _infer_heads(v), is_kv=True)
+    assert _infer_heads(q, head_dim) % tp == 0, (
+        f"Q heads={_infer_heads(q, head_dim)} must be divisible by tp={tp}")
+    k = _repeat_kv_heads(k, tp, head_dim)
+    v = _repeat_kv_heads(v, tp, head_dim)
     return q, k, v
 
 
