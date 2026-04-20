@@ -5,11 +5,6 @@ from dataclasses import asdict
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
 
-from lmdeploy.messages import TurbomindEngineConfig
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
 
 def config_to_dict(config):
     """Export config to a dict."""
@@ -69,34 +64,6 @@ class TurbomindModelConfig:
     attn_tp_size: int = 1
     attn_cp_size: int = 1
     mlp_tp_size: int = 1
-
-    def update_from_engine_config(self, config: TurbomindEngineConfig):
-        """Update the attributes of this instance with the attributes from
-        TurbomindEngineConfig.
-
-        Args:
-            config (TurbomindEngineConfig): The turbomind engine config
-        """
-        for key, value in asdict(config).items():
-            if value is None:
-                continue
-
-            if hasattr(self, key):
-                setattr(self, key, value)
-            if hasattr(self.attention_config, key):
-                setattr(self.attention_config, key, value)
-
-        # use dynamic ntk
-        if config.rope_scaling_factor:
-            # some ut will create empty RopeParam, will check base/dim in src code
-            rope_param = self.attention_config.rope_param or RopeParam(type='', base=0, dim=0)
-            rope_param.type = 'dynamic'
-            rope_param.factor = config.rope_scaling_factor
-            rope_param.max_position_embeddings = self.attention_config.max_position_embeddings
-
-            self.attention_config.rope_param = rope_param
-            logger.warning(
-                '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
     def to_dict(self):
         """Export to a dict."""

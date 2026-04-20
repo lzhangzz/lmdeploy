@@ -210,10 +210,6 @@ class TurboMind:
         """Postprocess turbomind config by."""
         import copy
         self.config = copy.deepcopy(tm_config)
-        # Update the attribute values in `self.config` with the valid values
-        # from the corresponding attributes in `engine_config`, such as
-        # `session_len`, `quant_policy`, `rope_scaling_factor`, etc.
-        self.config.update_from_engine_config(engine_config)
 
         # update some attributes of `engine_config` which depends on
         # `session_len`

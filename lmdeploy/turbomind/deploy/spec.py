@@ -7,15 +7,19 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from lmdeploy.utils import get_logger
+
 from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
 from .builder import make_linear_config
-from .config import AttentionConfig
+from .config import AttentionConfig, RopeParam
 from .linear import pad_out_dim
 from .source_model.utils import (_pad_kv_head, detect_layer_prefix,
                                  parse_rope_param, rope_type_to_int)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
+
+logger = get_logger('lmdeploy')
 
 
 class TextModelSpec(ABC):
@@ -130,15 +134,31 @@ class TextModelSpec(ABC):
     # ------------------------------------------------------------------
 
     def to_attention_config(self) -> AttentionConfig:
-        """Produce the AttentionConfig for YAML serialization."""
-        return self._build_attention_config()
+        """Produce the AttentionConfig for YAML serialization.
 
-    def _build_attention_config(self) -> AttentionConfig:
-        return AttentionConfig(
+        Reads from self.engine_cfg for runtime-patched fields
+        (cache_block_seq_len, use_logn_attn, rope_scaling_factor).
+        """
+        cfg = AttentionConfig(
             rope_param=self._rope,
             max_position_embeddings=self._max_position_embeddings,
             softmax_scale=self._softmax_scale,
         )
+        ec = self.engine_cfg
+        if ec.cache_block_seq_len:
+            cfg.cache_block_seq_len = ec.cache_block_seq_len
+        if ec.use_logn_attn:
+            cfg.use_logn_attn = int(ec.use_logn_attn)
+        if ec.rope_scaling_factor:
+            rope = cfg.rope_param or RopeParam(type='', base=0, dim=0)
+            rope.type = 'dynamic'
+            rope.factor = ec.rope_scaling_factor
+            rope.max_position_embeddings = cfg.max_position_embeddings
+            cfg.rope_param = rope
+            logger.warning(
+                '`--rope-scaling-factor` will be removed in a future release. '
+                'Please instead use `--hf-overrides`.')
+        return cfg
 
     # ------------------------------------------------------------------
     # Checkpoint access helpers
