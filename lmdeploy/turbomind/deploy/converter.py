@@ -15,6 +15,19 @@ from .target_model.base import BaseOutputModel
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
 
+
+def _deep_merge(base: dict, override: dict, path: str = '') -> dict:
+    """Recursively merge override into base, mutating base in-place."""
+    for k, v in override.items():
+        key_path = f'{path}.{k}' if path else k
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            _deep_merge(base[k], v, key_path)
+        else:
+            if k not in base:
+                logger.warning(f'hf_overrides key "{key_path}" not found in config, applying anyway')
+            base[k] = v
+    return base
+
 _DEFAULT_GROUP_SIZES = {
     'awq': 128,
     'gptq': 128,
