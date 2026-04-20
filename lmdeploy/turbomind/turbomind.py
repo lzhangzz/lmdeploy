@@ -220,7 +220,9 @@ class TurboMind:
         self.engine_config = engine_config
 
         config_dict = {
-            'attention_config': asdict(spec.to_attention_config()),
+            'attention_config': {
+                'cache_block_seq_len': engine_config.cache_block_seq_len,
+            },
             'engine_config': asdict(engine_config),
         }
         logger.info(f'turbomind model config:\n\n'
