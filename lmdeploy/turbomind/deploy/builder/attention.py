@@ -74,14 +74,15 @@ def _repeat_kv_heads(linear: Linear, tp: int, head_dim: int) -> Linear:
     new_tensors = {}
     for kind, tensor in linear.tensors.items():
         per_head = tensor.size(-1) // heads
-        if tensor.dim() == 2:
-            t = tensor.view(tensor.size(0), heads, per_head)
-            t = t.repeat(1, n_repeat, 1)
-            new_tensors[kind] = t.reshape(tensor.size(0), target_heads * per_head)
-        else:
-            t = tensor.view(heads, per_head)
-            t = t.repeat(n_repeat, 1)
-            new_tensors[kind] = t.reshape(target_heads * per_head)
+        was_1d = tensor.dim() == 1
+        if was_1d:
+            tensor = tensor.unsqueeze(0)
+        t = tensor.view(tensor.size(0), heads, per_head)
+        t = t.repeat(1, n_repeat, 1)
+        out = t.reshape(tensor.size(0), target_heads * per_head)
+        if was_1d:
+            out = out.squeeze(0)
+        new_tensors[kind] = out
     return Linear(tensors=new_tensors, weight_format=linear.weight_format,
                   data_format=linear.data_format)
 
@@ -111,13 +112,13 @@ def split_output_gate(q: Linear, *, head_dim: int) -> tuple[Linear, Linear]:
 
     for kind, tensor in q.tensors.items():
         head_num = tensor.size(-1) // (head_dim * 2)
-        orig_shape = list(tensor.shape)
-        if tensor.dim() == 1:
+        was_1d = tensor.dim() == 1
+        if was_1d:
             tensor = tensor.unsqueeze(0)
         tensor = tensor.view(tensor.size(0), head_num, 2, head_dim)
         q_real = tensor[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
         gate = tensor[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
-        if len(orig_shape) == 1:
+        if was_1d:
             q_real = q_real.squeeze(0)
             gate = gate.squeeze(0)
         new_q_tensors[kind] = q_real
@@ -137,30 +138,23 @@ def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
     Layout per tp-shard: [Q | K | V] or [Q | K | V | Gate].
     """
     merged_tensors: dict[str, torch.Tensor] = {}
-    all_kinds = sorted(set(q.tensors) | set(k.tensors) | set(v.tensors))
 
-    for kind in all_kinds:
-        qt = q.tensors.get(kind)
-        kt = k.tensors.get(kind)
-        vt = v.tensors.get(kind)
-        if qt is None or kt is None or vt is None:
-            continue
+    for kind, qt in q.tensors.items():
+        kt = k.tensors[kind]
+        vt = v.tensors[kind]
 
-        is_2d = qt.dim() == 2
-
-        def reshape(x):
-            return x.view(x.size(0), tp, -1) if is_2d else x.view(tp, -1)
-
-        components = [reshape(qt), reshape(kt), reshape(vt)]
+        was_1d = qt.dim() == 1
+        raw = [qt, kt, vt]
         if gate is not None:
-            gt = gate.tensors.get(kind)
-            if gt is not None:
-                components.append(reshape(gt))
+            raw.append(gate.tensors[kind])
+        if was_1d:
+            raw = [t.unsqueeze(0) for t in raw]
 
+        components = [t.view(t.size(0), tp, -1) for t in raw]
         merged = torch.cat(components, dim=-1)
         merged = merged.view(-1, merged.size(-1) * tp)
-        if not is_2d:
-            merged.squeeze_()
+        if was_1d:
+            merged = merged.squeeze(0)
         merged_tensors[kind] = merged
 
     return Linear(tensors=merged_tensors, weight_format=q.weight_format,
