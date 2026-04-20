@@ -65,16 +65,18 @@ for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter) {
 }
 ```
 
-New (WGMMA — single gemm per pipeline stage):
+New (WGMMA — single gemm call per pipeline stage):
 ```cpp
 for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter) {
   pipeline.consumer_wait(smem_pipe_read);
 
-  warpgroup_arrive();
+  warpgroup_fence_operand(tCrC);           // compiler barrier on accum registers
+  warpgroup_arrive();                      // hw fence: wgmma.fence.sync.aligned
   gemm(mma, tCrA(_,_,_,smem_pipe_read.index()),
             tCrB(_,_,_,smem_pipe_read.index()), tCrC);
-  warpgroup_commit_batch();
-  warpgroup_wait<0>();
+  warpgroup_commit_batch();                // wgmma.commit_group.sync.aligned
+  warpgroup_wait<0>();                     // wgmma.wait_group.sync.aligned 0
+  warpgroup_fence_operand(tCrC);           // compiler barrier before reading accum
 
   pipeline.consumer_release(smem_pipe_release);
   ++smem_pipe_read;
@@ -82,7 +84,9 @@ for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter) {
 }
 ```
 
-No k_block loop. `gemm()` internally tiles over all M/N/K replicas within the pipeline stage. The `warpgroup_arrive/commit_batch/wait` triplet provides warpgroup-level synchronization for the async WGMMA instructions.
+No k_block loop. A single `gemm()` call per pipeline stage internally loops over all M/N/K atom tiles, issuing multiple `wgmma.mma_async` PTX instructions. The `warpgroup_fence_operand` is a compiler-only barrier (empty asm with memory clobber) that prevents reordering accumulator register accesses across the async WGMMA boundary — required because WGMMA is asynchronous and the compiler could otherwise read stale accumulator values. The `warpgroup_arrive/commit_batch/wait` triplet provides hardware-level warpgroup synchronization.
+
+The `gemm()` function accepts `TiledMMA` (which inherits from `MMA_Atom`) and the partitioned descriptor/accumulator tensors. It dispatches through Dispatch [5] (loops K) → Dispatch [4] (loops M/N with serpentine traversal) → Dispatch [1] (calls `mma.call()` → `mma_unpack` → `MMA_Op::fma()`). For WGMMA SS, `fma()` takes `uint64_t` smem descriptors and 64 F32 accumulator references per atom invocation.
 
 ### 5. Host Function
 
@@ -124,7 +128,7 @@ Half the smem of 08 due to halving bM.
 ## What Stays the Same
 
 - **Producer warp group:** TMA loads, pipeline acquire/release, persistent while loop — identical code
-- **Epilogue:** F32→BF16 conversion, STSM write to C smem, NamedBarrier(256,6), TMA store — identical structure. `make_tiled_copy_C` adapts STSM tiling to WGMMA's CLayout automatically.
+- **Epilogue:** F32→BF16 conversion, STSM write to C smem, NamedBarrier(256,6), TMA store — identical structure. `make_tiled_copy_C` adapts STSM tiling to WGMMA's CLayout automatically. Note: WGMMA accumulators are 4x larger per thread (128 F32 vs 32 F32) — the `make_tensor<bf16_t>(tCrC.layout())` conversion adapts automatically.
 - **Pipeline:** PipelineTmaAsync with 3 stages, register dealloc/alloc (40/232)
 - **SharedStorage:** Same struct with separate C buffer
 - **Kernel launch:** 384 threads, `__launch_bounds__(384, 1)`, cluster launch API
@@ -145,6 +149,8 @@ Half the smem of 08 due to halving bM.
 | Consumer threads | 256 (8 warps) | 256 (2 warpgroups) |
 | Total threads | 384 | 384 |
 | Smem usage | ~208 KB | ~131 KB |
+| Accum/thread | 32 F32 | 128 F32 |
+| Fence operand | Not needed | Required (compiler barrier) |
 
 ## Testing
 
