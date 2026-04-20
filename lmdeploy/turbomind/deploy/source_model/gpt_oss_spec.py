@@ -16,7 +16,7 @@ from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, reorder_rotary_emb_linear
+from .utils import _pad_inter_size, layer_progress, reorder_rotary_emb_linear
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -210,7 +210,7 @@ class GptOssSpec(TextModelSpec):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
-        for i in range(self._num_layer):
+        for i in layer_progress(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
             d.attention_norm = self.norm(f'{pfx}.{i}.input_layernorm.weight')
             d.attention = self.attn(f'{pfx}.{i}.self_attn', i)

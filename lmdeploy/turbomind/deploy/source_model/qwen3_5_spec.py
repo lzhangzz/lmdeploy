@@ -16,7 +16,7 @@ from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import (_pad_inter_size, reorder_rotary_emb,
+from .utils import (_pad_inter_size, layer_progress, reorder_rotary_emb,
                     reorder_rotary_emb_linear)
 
 _LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
@@ -326,7 +326,7 @@ class Qwen3_5Spec(TextModelSpec):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
-        for i in range(self._num_layer):
+        for i in layer_progress(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
             d.attention_norm = self.norm(f'{pfx}.{i}.input_layernorm.weight')
             if self._is_linear_attn(i):

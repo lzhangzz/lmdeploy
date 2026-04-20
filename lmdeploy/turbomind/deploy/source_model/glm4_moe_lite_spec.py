@@ -11,7 +11,7 @@ from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, _pad_kv_head, get_yarn_params, parse_rope_param, rope_type_to_int
+from .utils import _pad_inter_size, _pad_kv_head, get_yarn_params, layer_progress, parse_rope_param, rope_type_to_int
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -271,7 +271,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
-        for i in range(self._num_layer):
+        for i in layer_progress(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
             d.attention_norm = self.norm(f'{pfx}.{i}.input_layernorm.weight')
             d.attention = self.attn(f'{pfx}.{i}.self_attn', i)
