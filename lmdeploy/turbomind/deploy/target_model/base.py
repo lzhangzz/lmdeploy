@@ -24,12 +24,9 @@ class BaseOutputModel(ABC):
         from ..text_model_loader import TextModelLoader
         self.spec = spec
         self.tm_config = cfg
-        self.model_config = cfg.model_config
-        self.attention_config = cfg.attention_config
-        self.lora_config = cfg.lora_config
-        self.attn_tp_size = cfg.model_config.attn_tp_size
-        self.attn_cp_size = cfg.model_config.attn_cp_size
-        self.mlp_tp_size = cfg.model_config.mlp_tp_size
+        self.attn_tp_size = cfg.attn_tp_size
+        self.attn_cp_size = cfg.attn_cp_size
+        self.mlp_tp_size = cfg.mlp_tp_size
         self.model_comm = model_comm
         self.gpu_count = gpu_count
         # model_path is writable by update_params (Queue takes over).

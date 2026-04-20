@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import inspect
 import json
-from dataclasses import asdict, field, fields
+from dataclasses import asdict
 
 # use pydantic.dataclasses.dataclass to check data type
 from pydantic.dataclasses import dataclass
@@ -12,96 +11,12 @@ from lmdeploy.utils import get_logger
 logger = get_logger('lmdeploy')
 
 
-def config_from_dict(cls, env):
-    """Initiate an instance of a config class from a dict."""
-    params = inspect.signature(cls).parameters
-    used = {k: v for k, v in env.items() if k in params and v is not None}
-
-    def _remove_none(d: dict):
-        for k, v in d.items():
-            if isinstance(v, dict):
-                d[k] = _remove_none(v)
-        return {k: v for k, v in d.items() if v is not None}
-
-    used = _remove_none(used)
-    return cls(**used)
-
-
 def config_to_dict(config):
     """Export config to a dict."""
-    assert isinstance(config, (ModelConfig, AttentionConfig, LoraConfig)), \
+    assert isinstance(config, (AttentionConfig, LoraConfig)), \
         f'A dataclass is expected, but got {type(config)}'
 
     return asdict(config)
-
-
-@dataclass
-class ModelConfig:
-    model_name: str = ''
-    chat_template: str = ''
-    model_arch: str = None
-    head_num: int = None
-    kv_head_num: int = None
-    hidden_units: int = None
-    vocab_size: int = None
-    # Turbomind used to assume token_embedding and lm_head has the same size
-    # at vocab dim, i.e. `vocab_size`
-    # But in molmo, embedding.shape is [vocab_size + 128, hidden_units]
-    # while lm_head shape is [hidden_units, vocab_size].
-    # Therefore, we add a new attr "embedding_size" to represent the vocab dim
-    # of token_embedding
-    embedding_size: int = 0
-    num_layer: int = None
-    inter_size: list[int] = None
-    norm_eps: float = None
-    attn_bias: int = 0
-    mlp_bias: bool = False
-    window_size: list[int] = field(default_factory=list)
-    attn_sink: bool = False
-    qk_norm: bool = False
-    size_per_head: int = 128
-    group_size: int = 32
-    data_type: str = None
-    session_len: int = None
-    attn_tp_size: int = 1
-    attn_cp_size: int = 1
-    mlp_tp_size: int = 1
-    model_format: str = 'hf'
-    activation_type: str = ''
-    expert_num: list[int] = field(default_factory=list)
-    expert_router_bias: bool = False
-    expert_inter_size: int = 0
-    experts_per_token: int = 0
-    moe_shared_gate: bool = False
-    norm_topk_prob: bool = False
-    routed_scale: float = 1.0
-    topk_group: int = 1
-    topk_method: str = 'greedy'
-    moe_group_num: int = 1
-    scoring_func: str = 'softmax'
-    router_n_groups: int = -1
-    # MLA
-    q_lora_rank: int = 0
-    kv_lora_rank: int = 0
-    qk_rope_dim: int = 0
-    v_head_dim: int = 0
-    # Qwen 3.5
-    layer_types: list[str] = field(default_factory=list)
-    linear_key_head_dim: int = 0
-    linear_value_head_dim: int = 0
-    linear_conv_kernel_dim: int = 0
-    linear_num_key_heads: int = 0
-    linear_num_value_heads: int = 0
-    attn_output_gate: bool = False
-    # tuning
-    tune_layer_num: int = 1
-
-    def verify(self):
-        invalid = {}
-        for k, v in self.__dict__.items():
-            if v is None:
-                invalid[k] = v
-        assert not invalid, f'incomplete model config: {invalid}'
 
 
 @dataclass
@@ -142,9 +57,18 @@ class LoraConfig:
 @dataclass
 class TurbomindModelConfig:
     """Config for turbomind model."""
-    model_config: ModelConfig = None
     attention_config: AttentionConfig = None
     lora_config: LoraConfig = None
+    model_arch: str = ''
+    chat_template: str = ''
+    model_name: str = ''
+    data_type: str = ''
+    model_format: str = 'hf'
+    session_len: int = 0
+    group_size: int = 0
+    attn_tp_size: int = 1
+    attn_cp_size: int = 1
+    mlp_tp_size: int = 1
 
     def update_from_engine_config(self, config: TurbomindEngineConfig):
         """Update the attributes of this instance with the attributes from
@@ -153,14 +77,12 @@ class TurbomindModelConfig:
         Args:
             config (TurbomindEngineConfig): The turbomind engine config
         """
-        if config is None:
-            return
         for key, value in asdict(config).items():
             if value is None:
                 continue
 
-            if hasattr(self.model_config, key):
-                setattr(self.model_config, key, value)
+            if hasattr(self, key):
+                setattr(self, key, value)
             if hasattr(self.attention_config, key):
                 setattr(self.attention_config, key, value)
 
@@ -176,31 +98,14 @@ class TurbomindModelConfig:
             logger.warning(
                 '`--rope-scaling-factor` will be removed in a future release. Please instead use `--hf-overrides`.')
 
-    @classmethod
-    def from_dict(cls, config: dict = {}):
-        """Construct TurbomindModelConfig instance from config in a dict."""
-        _cfg = {field.name: config.get(field.name, {}) for field in fields(TurbomindModelConfig)}
-
-        return TurbomindModelConfig(model_config=config_from_dict(ModelConfig, _cfg['model_config']),
-                                    attention_config=config_from_dict(AttentionConfig, _cfg['attention_config']),
-                                    lora_config=config_from_dict(LoraConfig, _cfg['lora_config']))
-
     def to_dict(self):
         """Export to a dict."""
-        return dict(attention_config=config_to_dict(self.attention_config),
-                    lora_config=config_to_dict(self.lora_config))
-
-    @property
-    def session_len(self):
-        return self.model_config.session_len
-
-    @property
-    def group_size(self):
-        return self.model_config.group_size
-
-    @property
-    def vocab_size(self):
-        return self.model_config.vocab_size
+        result = {}
+        if self.attention_config is not None:
+            result['attention_config'] = config_to_dict(self.attention_config)
+        if self.lora_config is not None:
+            result['lora_config'] = config_to_dict(self.lora_config)
+        return result
 
     def __str__(self):
         return json.dumps(self.to_dict(), indent=2)

@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-import _turbomind as _tm
-
 from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
 from .builder import make_linear_config
 from .config import AttentionConfig

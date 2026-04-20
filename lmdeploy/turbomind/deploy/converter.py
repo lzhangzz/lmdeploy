@@ -111,7 +111,7 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
                        'torch.cuda.is_bf16_supported is False')
         dtype = 'float16'
 
-    config = TurbomindModelConfig.from_dict()
+    config = TurbomindModelConfig()
 
     session_len = _get_and_verify_max_len(model_config, None)
 
@@ -122,11 +122,11 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
         if model_format == 'compressed-tensors':
             model_format = 'awq'
 
-    config.model_config.model_arch = model_arch
-    config.model_config.data_type = dtype
-    config.model_config.model_format = model_format
-    config.model_config.group_size = group_size
-    config.model_config.session_len = session_len
+    config.model_arch = model_arch
+    config.data_type = dtype
+    config.model_format = model_format
+    config.group_size = group_size
+    config.session_len = session_len
 
     return register_name, config
 
@@ -192,10 +192,10 @@ def get_tm_config(model_path,
                                                                             dtype=engine_config.dtype,
                                                                             group_size=group_size)
 
-    engine_config.dtype = tm_cfg.model_config.data_type
-    engine_config.model_format = tm_cfg.model_config.model_format
+    engine_config.dtype = tm_cfg.data_type
+    engine_config.model_format = tm_cfg.model_format
     if engine_config.session_len is None:
-        engine_config.session_len = tm_cfg.model_config.session_len
+        engine_config.session_len = tm_cfg.session_len
     if engine_config.attn_tp_size is None:
         engine_config.attn_tp_size = 1
     if engine_config.attn_cp_size is None:
@@ -203,11 +203,11 @@ def get_tm_config(model_path,
     if engine_config.mlp_tp_size is None:
         engine_config.mlp_tp_size = 1
 
-    tm_cfg.model_config.chat_template = chat_template_name
-    tm_cfg.model_config.model_name = model_name
-    tm_cfg.model_config.attn_tp_size = engine_config.attn_tp_size
-    tm_cfg.model_config.attn_cp_size = engine_config.attn_cp_size
-    tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
+    tm_cfg.chat_template = chat_template_name
+    tm_cfg.model_name = model_name
+    tm_cfg.attn_tp_size = engine_config.attn_tp_size
+    tm_cfg.attn_cp_size = engine_config.attn_cp_size
+    tm_cfg.mlp_tp_size = engine_config.mlp_tp_size
 
     hf_cfg = load_model_config(model_path)
     if engine_config.hf_overrides:
