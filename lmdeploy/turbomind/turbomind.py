@@ -219,12 +219,7 @@ class TurboMind:
         self._vocab_size = spec._vocab_size
         self.engine_config = engine_config
 
-        config_dict = {
-            'attention_config': {
-                'cache_block_seq_len': engine_config.cache_block_seq_len,
-            },
-            'engine_config': asdict(engine_config),
-        }
+        config_dict = {'engine_config': asdict(engine_config)}
         logger.info(f'turbomind model config:\n\n'
                     f'{json.dumps(config_dict, indent=2)}')
 

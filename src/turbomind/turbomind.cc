@@ -189,13 +189,12 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     }
 
     /// TODO: move config parsing to suitable place
-    const auto attention = node["attention_config"];
-    const auto engine    = node["engine_config"];
+    const auto engine = node["engine_config"];
 
     data_type_ = data_type_from_string(engine["dtype"].as<std::string>());
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
 
-    engine_param_.cache_block_seq_len = attention["cache_block_seq_len"].as<int>(0);
+    engine_param_.cache_block_seq_len = engine["cache_block_seq_len"].as<int>(0);
     engine_param_.quant_policy        = engine["quant_policy"].as<int>(0);
     engine_param_.tune_layer_num      = engine["tune_layer_num"].as<int>(1);
 
