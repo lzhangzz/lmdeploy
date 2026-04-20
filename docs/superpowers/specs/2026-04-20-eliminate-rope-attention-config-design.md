@@ -257,14 +257,15 @@ pre-configured `build/` directory):
 cd build && ninja
 ```
 
-Then run the smoke script unmodified against two cases:
+Then run the smoke script unmodified against two cases (concrete models
+resolved from the local registry):
 
 ```bash
 # Unquantized — exercises parse_rope_param defaults and _apply_rope
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
 
 # Quantized — exercises the full pipeline under AWQ
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B-AWQ <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B-AWQ /nvme4/huggingface_hub/hub 1 0
 ```
 
 Each run must produce a coherent text response. The logged

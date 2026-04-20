@@ -96,10 +96,10 @@ Do NOT remove the `RopeParam` import yet — it's still referenced elsewhere (no
 Run:
 
 ```bash
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
 ```
 
-Expected: model loads, produces a coherent paragraph, exit 0. No double `--rope-scaling-factor` deprecation warning (there should be none at all, because the smoke run doesn't set `rope_scaling_factor`).
+Expected: model loads, produces a coherent paragraph, exit 0. No `--rope-scaling-factor` deprecation warning (the smoke run doesn't set `rope_scaling_factor`).
 
 - [ ] **Step 4: Commit**
 
@@ -180,19 +180,13 @@ Expected: no matches.
 
 - [ ] **Step 3: Smoke test with GLM4**
 
-If a GLM-4.7-Flash checkpoint is available locally, run:
+GLM-4.7-Flash is the direct consumer of the changed block. Run:
 
 ```bash
-python scripts/test_turbomind_model.py <glm4-path> <cache_dir> 1 0
+python scripts/test_turbomind_model.py zai-org/GLM-4.7-Flash /nvme2/huggingface_hub/hub 1 0
 ```
 
-Otherwise, run the default smoke test to confirm nothing broke elsewhere:
-
-```bash
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
-```
-
-Expected: coherent paragraph, exit 0.
+Expected: coherent paragraph, exit 0. (GLM exercises `_apply_rope` through the newly-inserted single call, verifying the DRY'd path produces identical behavior to the previous inline block.)
 
 - [ ] **Step 4: Commit**
 
@@ -291,7 +285,7 @@ C++ still reads `attention["cache_block_seq_len"]` from this shape — no schema
 Run:
 
 ```bash
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
 ```
 
 Expected: coherent paragraph, exit 0. The logged `turbomind model config` JSON should show `attention_config: {cache_block_seq_len: 64}` only (no `rope_param`, `softmax_scale`, `use_logn_attn`, `max_position_embeddings`).
@@ -395,7 +389,7 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
 Run:
 
 ```bash
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
 ```
 
 Expected: coherent paragraph, exit 0. `_apply_rope` in `spec.py` continues to read `self._rope.type`, `.base`, `.dim`, etc. unchanged because `SimpleNamespace` supports attribute access.
@@ -455,7 +449,7 @@ git rm lmdeploy/turbomind/deploy/config.py
 Run:
 
 ```bash
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
 ```
 
 Expected: coherent paragraph, exit 0. Specifically, no `ImportError` or `ModuleNotFoundError` for anything in `config`.
@@ -556,8 +550,8 @@ Run:
 
 ```bash
 cd ..   # back to repo root if you cd'd into build
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
-python scripts/test_turbomind_model.py Qwen/Qwen3-8B-AWQ <cache_dir> 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B /nvme4/huggingface_hub/hub 1 0
+python scripts/test_turbomind_model.py Qwen/Qwen3-4B-AWQ /nvme4/huggingface_hub/hub 1 0
 ```
 
 Expected: both runs produce coherent paragraphs, exit 0. The logged `turbomind model config` JSON now has exactly one top-level key: `engine_config`. No `attention_config` section at all.
