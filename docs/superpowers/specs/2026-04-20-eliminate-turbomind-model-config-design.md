@@ -293,7 +293,7 @@ File shrinks from 112 lines to roughly 40.
 
 ## Verification
 
-Run the smoke script against three cases:
+Run the smoke script unmodified against two cases:
 
 ```bash
 # Unquantized path — dtype inference, session_len default, YAML building
@@ -301,27 +301,13 @@ python scripts/test_turbomind_model.py Qwen/Qwen3-8B <cache_dir> 1 0
 
 # Quantized path — group_size validation, dtype='float16' override
 python scripts/test_turbomind_model.py Qwen/Qwen3-8B-AWQ <cache_dir> 1 0
-
-# hf_overrides path — post-resolve engine_config mutation + spec rope handling
-python scripts/test_turbomind_model.py \
-    --hf-overrides '{"rope_scaling": {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32768}}' \
-    Qwen/Qwen3-8B <cache_dir> 1 0
 ```
 
-Each run must produce a coherent text response. The `rope_scaling_factor=3.0` dynamic-
-NTK path is not exposed by the smoke script (no CLI flag for a deprecated engine
-field). Cover it with a one-off inline Python snippet during implementation:
-
-```python
-# One-off, not checked in.
-from lmdeploy import TurbomindEngineConfig
-from lmdeploy.turbomind.deploy.converter import get_tm_config
-ec = TurbomindEngineConfig(rope_scaling_factor=3.0)
-# ... update_parallel_config(ec) ...
-spec, _ = get_tm_config('Qwen/Qwen3-8B', ec)
-ac = spec.to_attention_config()
-assert ac.rope_param.type == 'dynamic' and ac.rope_param.factor == 3.0
-```
+Each run must produce a coherent text response. Dynamic-NTK
+(`rope_scaling_factor`) is deprecated in `TurbomindEngineConfig` and not exercised
+by the smoke script; the five-line patching branch it controls in
+`to_attention_config()` is a direct transcription of the current
+`update_from_engine_config` block, so code review is sufficient for that path.
 
 ## Non-Goals
 
