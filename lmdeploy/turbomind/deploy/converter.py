@@ -7,7 +7,6 @@ from lmdeploy.utils import get_logger
 
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
-from .config import TurbomindModelConfig
 from .source_model.base import INPUT_MODELS
 from .source_model.utils import load_model_config
 
@@ -76,32 +75,19 @@ def get_spec_registered_name(model_path: str, model_format: str):
     return register_name
 
 
-def get_output_model_registered_name_and_config(model_path: str, model_format: str, dtype: str, group_size: int):
-    """Get the registered name of the turbomind model and its configuration
-    according to the input model path, format and user-input config. The name
-    will be used to access the OUTPUT_MODELS registry.
+def _resolve_dtype(requested: str, hf_model_cfg) -> str:
+    """Resolve 'auto' dtype against the HF config and the current device.
 
-    Args:
-        model_path (str): the path of the input model
-        model_format (str): the format of the model, which can be one of
-            ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4']
-        dtype (str): the data type of the model's weights and activations
-        group_size (int): the quantization group size used by grouped formats
+    Prefers `dtype` over the deprecated `torch_dtype` key. Falls back to
+    float16 on hardware that does not support bfloat16.
     """
-    register_name = 'tm'
-
     has_bf16 = is_bf16_supported()
-
-    model_arch, model_config = get_model_arch(model_path)
-
-    # infer dtype from device and model config
+    dtype = requested
     if dtype == 'auto':
-        # pick dtype by device as default
         dtype = 'bfloat16' if has_bf16 else 'float16'
-        # dtype from model (prefer `dtype` over deprecated `torch_dtype`)
-        torch_dtype = getattr(model_config, 'dtype', None)
+        torch_dtype = getattr(hf_model_cfg, 'dtype', None)
         if torch_dtype is None:
-            torch_dtype = getattr(model_config, 'torch_dtype', None)
+            torch_dtype = getattr(hf_model_cfg, 'torch_dtype', None)
         TORCH_DTYPE_MAP = {torch.bfloat16: 'bfloat16', torch.float16: 'float16'}
         dtype = TORCH_DTYPE_MAP.get(torch_dtype, dtype)
 
@@ -109,39 +95,24 @@ def get_output_model_registered_name_and_config(model_path: str, model_format: s
         logger.warning('data type fallback to float16 since '
                        'torch.cuda.is_bf16_supported is False')
         dtype = 'float16'
-
-    config = TurbomindModelConfig()
-
-    session_len = _get_and_verify_max_len(model_config, None)
-
-    group_size = _validate_quant_group_size(model_format, group_size)
-
-    if model_format in ['awq', 'gptq', 'compressed-tensors']:
-        dtype = 'float16'
-        if model_format == 'compressed-tensors':
-            model_format = 'awq'
-
-    config.model_arch = model_arch
-    config.data_type = dtype
-    config.model_format = model_format
-    config.group_size = group_size
-    config.session_len = session_len
-
-    return register_name, config
+    return dtype
 
 
 def get_tm_config(model_path,
-                  model_name,
-                  chat_template_name,
                   engine_config: TurbomindEngineConfig,
                   group_size: int = None):
-    """Compute finalized TurbomindModelConfig and the TextModelSpec.
+    """Resolve dtype/model_format/group_size/session_len, mutate engine_config
+    in place, build the spec.
 
     Returns:
-        tuple: (spec, tm_cfg, model_path)
+        tuple: (spec, model_path)
     """
-    _, cfg = get_model_arch(model_path)
-    quant_config = search_nested_config(cfg.to_dict(), 'quantization_config')
+    # 1. Load HF config once; reused for quant_config, dtype, and session_len.
+    _, hf_model_cfg = get_model_arch(model_path)
+
+    # 2. Reconcile quant_config (unchanged logic from the prior flow).
+    quant_config = search_nested_config(
+        hf_model_cfg.to_dict(), 'quantization_config')
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
@@ -149,8 +120,9 @@ def get_tm_config(model_path,
         assert engine_config.model_format is None or engine_config.model_format == quant_method, (
             f'mismatched quant method: user input "{engine_config.model_format}" '
             f'vs model quant_config "{quant_method}"')
-        assert not group_size or group_size == _group_size, (f'mismatched quant group size: user input "{group_size}" '
-                                                             f'vs model quant_config "{_group_size}"')
+        assert not group_size or group_size == _group_size, (
+            f'mismatched quant group size: user input "{group_size}" '
+            f'vs model quant_config "{_group_size}"')
 
         if quant_method == 'awq':
             assert version == 'gemm', f'unsupported quant config: {quant_config}'
@@ -163,14 +135,16 @@ def get_tm_config(model_path,
             _group_size = 32
         elif quant_method == 'compressed-tensors':
             _format = quant_config['config_groups']['group_0']['format']
-            assert _format == 'pack-quantized', ('compressed-tennsors only supports pack-quantized format, '
-                                                 f'but got {_format}')
+            assert _format == 'pack-quantized', (
+                'compressed-tensors only supports pack-quantized format, '
+                f'but got {_format}')
             _weights = quant_config['config_groups']['group_0']['weights']
             _group_size = _weights['group_size']
             _num_bits = _weights['num_bits']
             _type = _weights['type']
-            assert _num_bits == 4 and _type == 'int', ('pack-quantized requires 4-bit int, '
-                                                       f'but got {_num_bits}-bit {_type}')
+            assert _num_bits == 4 and _type == 'int', (
+                'pack-quantized requires 4-bit int, '
+                f'but got {_num_bits}-bit {_type}')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
@@ -178,41 +152,34 @@ def get_tm_config(model_path,
         group_size = _group_size
 
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
-
-    # Default to 'hf' for unquantized checkpoints. Without this, a None
-    # model_format flows through to downstream code that expects a string.
     if engine_config.model_format is None:
         engine_config.model_format = 'hf'
 
-    spec_name = get_spec_registered_name(model_path, engine_config.model_format)
+    # 3. Resolve dtype and format overrides.
+    dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
+    if engine_config.model_format in ('awq', 'gptq', 'compressed-tensors'):
+        dtype = 'float16'
+        if engine_config.model_format == 'compressed-tensors':
+            engine_config.model_format = 'awq'
 
-    output_model_name, tm_cfg = get_output_model_registered_name_and_config(model_path=model_path,
-                                                                            model_format=engine_config.model_format,
-                                                                            dtype=engine_config.dtype,
-                                                                            group_size=group_size)
+    # 4. Resolve session_len default.
+    session_len_default = _get_and_verify_max_len(hf_model_cfg, None)
 
-    engine_config.dtype = tm_cfg.data_type
-    engine_config.model_format = tm_cfg.model_format
+    # 5. Mutate engine_config with resolved values.
+    engine_config.dtype = dtype
     if engine_config.session_len is None:
-        engine_config.session_len = tm_cfg.session_len
-    if engine_config.attn_tp_size is None:
-        engine_config.attn_tp_size = 1
-    if engine_config.attn_cp_size is None:
-        engine_config.attn_cp_size = 1
-    if engine_config.mlp_tp_size is None:
-        engine_config.mlp_tp_size = 1
+        engine_config.session_len = session_len_default
+    engine_config.attn_tp_size = engine_config.attn_tp_size or 1
+    engine_config.attn_cp_size = engine_config.attn_cp_size or 1
+    engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    tm_cfg.chat_template = chat_template_name
-    tm_cfg.model_name = model_name
-    tm_cfg.attn_tp_size = engine_config.attn_tp_size
-    tm_cfg.attn_cp_size = engine_config.attn_cp_size
-    tm_cfg.mlp_tp_size = engine_config.mlp_tp_size
-
+    # 6. Build spec (hf_overrides handling unchanged).
     hf_cfg = load_model_config(model_path)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
         _deep_merge(hf_cfg, engine_config.hf_overrides)
+    spec_name = get_spec_registered_name(model_path, engine_config.model_format)
     spec_cls = INPUT_MODELS.get(spec_name)
     spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
 
-    return spec, tm_cfg, model_path
+    return spec, model_path

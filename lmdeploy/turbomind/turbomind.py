@@ -214,8 +214,7 @@ class TurboMind:
         from .deploy.converter import get_tm_config
         from .deploy.target_model.base import OUTPUT_MODELS
 
-        spec, tm_cfg, model_path = get_tm_config(
-            model_path, self.model_name, self.chat_template_name, engine_config)
+        spec, model_path = get_tm_config(model_path, engine_config)
 
         self._vocab_size = spec._vocab_size
         self.engine_config = engine_config
