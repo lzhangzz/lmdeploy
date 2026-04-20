@@ -746,7 +746,7 @@ Replace with:
         spec, model_path = get_tm_config(model_path, engine_config)
 ```
 
-The `tm_cfg` variable is gone. The `OUTPUT_MODELS.get('tm')(...)` call was updated in Task 3 to take `engine_config=engine_config`, so no further change here.
+The `tm_cfg` variable is gone. The `OUTPUT_MODELS.get('tm')(...)` call already takes only the runtime handles (`spec`, `model_comm`, `gpu_count`, `model_path`) after Task 3 — no kwarg changes needed here.
 
 Run `rg -n "tm_cfg" lmdeploy/turbomind/turbomind.py` — should be empty.
 
