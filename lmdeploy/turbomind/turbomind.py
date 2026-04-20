@@ -233,7 +233,6 @@ class TurboMind:
 
         self._tm_model = OUTPUT_MODELS.get('tm')(
             spec=spec,
-            cfg=tm_cfg,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
             model_path=model_path)

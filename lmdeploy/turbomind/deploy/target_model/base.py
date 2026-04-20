@@ -6,8 +6,6 @@ from abc import ABC
 
 from mmengine import Registry
 
-from ..config import TurbomindModelConfig
-
 OUTPUT_MODELS = Registry('target model',
                          locations=['lmdeploy.turbomind.deploy.target_model.base'])
 
@@ -15,18 +13,9 @@ OUTPUT_MODELS = Registry('target model',
 class BaseOutputModel(ABC):
     """Base output model. Drives a TextModelSpec through loading + commit."""
 
-    @classmethod
-    def finalize_config(cls, spec, cfg: TurbomindModelConfig):
-        """Install attention_config from spec onto cfg."""
-        cfg.attention_config = spec.to_attention_config()
-
-    def __init__(self, spec, cfg, model_comm, gpu_count, model_path):
+    def __init__(self, spec, model_comm, gpu_count, model_path):
         from ..text_model_loader import TextModelLoader
         self.spec = spec
-        self.tm_config = cfg
-        self.attn_tp_size = cfg.attn_tp_size
-        self.attn_cp_size = cfg.attn_cp_size
-        self.mlp_tp_size = cfg.mlp_tp_size
         self.model_comm = model_comm
         self.gpu_count = gpu_count
         # model_path is writable by update_params (Queue takes over).
@@ -56,6 +45,7 @@ class BaseOutputModel(ABC):
 
     def export(self) -> None:
         import torch
+
         from ..loader import create_loader
         loader = create_loader(self.model_path, self.spec._layer_pattern,
                                self.spec._loader_mappings)
@@ -65,6 +55,7 @@ class BaseOutputModel(ABC):
 
     def export_iter(self):
         import torch
+
         from ..loader import create_loader
         loader = create_loader(self.model_path, self.spec._layer_pattern,
                                self.spec._loader_mappings)

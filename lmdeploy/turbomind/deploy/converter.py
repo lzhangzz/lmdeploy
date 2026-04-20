@@ -10,7 +10,6 @@ from ..supported_models import SUPPORTED_ARCHS
 from .config import TurbomindModelConfig
 from .source_model.base import INPUT_MODELS
 from .source_model.utils import load_model_config
-from .target_model.base import BaseOutputModel
 
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
@@ -215,7 +214,5 @@ def get_tm_config(model_path,
         _deep_merge(hf_cfg, engine_config.hf_overrides)
     spec_cls = INPUT_MODELS.get(spec_name)
     spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
-
-    BaseOutputModel.finalize_config(spec, tm_cfg)
 
     return spec, tm_cfg, model_path
