@@ -265,3 +265,14 @@ def detect_layer_prefix(params: dict | None, cfg: dict) -> tuple[str, str, str]:
     return ('model.layers',
             'model.embed_tokens.weight',
             'model.norm.weight')
+
+
+def layer_progress(num_layers: int):
+    """tqdm iterable for spec.layers() per-layer conversion loops.
+
+    Yields the layer indices 0..num_layers-1, displaying a single-line
+    progress bar on stderr. ``leave=False`` clears the bar when the loop
+    completes. Lazy-imports tqdm so importing utils.py stays cheap.
+    """
+    from tqdm import tqdm
+    return tqdm(range(num_layers), desc='Loading', leave=False)
