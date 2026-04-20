@@ -212,6 +212,9 @@ def get_tm_config(model_path,
     tm_cfg.model_config.mlp_tp_size = engine_config.mlp_tp_size
 
     hf_cfg = load_model_config(model_path)
+    if engine_config.hf_overrides:
+        logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
+        _deep_merge(hf_cfg, engine_config.hf_overrides)
     spec_cls = INPUT_MODELS.get(spec_name)
     spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
 
