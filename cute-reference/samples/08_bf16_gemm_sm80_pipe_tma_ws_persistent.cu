@@ -11,6 +11,7 @@
  *   - Producer/consumer pipeline states persist across tiles
  *   - gmem tensors (gA, gB, gC) computed per-tile inside the loop
  *   - producer_tail called once after the while loop exits
+ *   - Separate epilogue smem buffer (C output tile uses dedicated smem, not overlay on smem.A)
  *
  * C = alpha * A * B^T + beta * C
  *   A: bf16, M x K, row-major (TN layout)
@@ -42,11 +43,13 @@ using bf16_t = cute::bfloat16_t;
 // SharedStorage struct
 // ================================================================================================
 
-template <class ElementA, class ElementB, class SmemLayoutA, class SmemLayoutB, int Stages>
+template <class ElementA, class ElementB, class ElementC,
+          class SmemLayoutA, class SmemLayoutB, class SmemLayoutC, int Stages>
 struct SharedStorage
 {
   alignas(128) cute::ArrayEngine<ElementA, cute::cosize_v<SmemLayoutA>> A;
   alignas(128) cute::ArrayEngine<ElementB, cute::cosize_v<SmemLayoutB>> B;
+  alignas(128) cute::ArrayEngine<ElementC, cute::cosize_v<SmemLayoutC>> C;
   typename cutlass::PipelineTmaAsync<Stages>::SharedStorage pipeline;
 };
 
@@ -99,7 +102,7 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   // ---- Step 2: Shared memory tensors ----
 
   extern __shared__ char shared_memory[];
-  using SharedStorage = SharedStorage<TA, TB, SmemLayoutA, SmemLayoutB, cute::size<2>(SmemLayoutA{})>;
+  using SharedStorage = SharedStorage<TA, TB, TC, SmemLayoutA, SmemLayoutB, SmemLayoutC, cute::size<2>(SmemLayoutA{})>;
   SharedStorage& smem = *reinterpret_cast<SharedStorage*>(shared_memory);
   Tensor sA = make_tensor(make_smem_ptr(smem.A.begin()), SmemLayoutA{});  // (BLK_M,BLK_K,PIPE)
   Tensor sB = make_tensor(make_smem_ptr(smem.B.begin()), SmemLayoutB{});  // (BLK_N,BLK_K,PIPE)
@@ -225,9 +228,7 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
     // ---- TMA store setup (done once) ----
 
-    Tensor sC = make_tensor(
-        make_smem_ptr(reinterpret_cast<bf16_t*>(smem.A.begin())),
-        SmemLayoutC{});
+    Tensor sC = make_tensor(make_smem_ptr(smem.C.begin()), SmemLayoutC{});
 
     auto cta_tile_mn = product_each(shape(SmemLayoutC{}));
     Tensor mC_tma = tma_store_c.get_tma_tensor(make_shape(M, N));
@@ -404,7 +405,7 @@ bf16_gemm_persistent(int m, int n, int k,
   dim3 dimGrid(std::min(num_SMs, total_tiles));
 
   // Shared memory
-  int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, decltype(sA), decltype(sB), cute::size<2>(decltype(sA){})>));
+  int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, bf16_t, decltype(sA), decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sA){})>));
 
   // Kernel function pointer
   auto* kernel_ptr = &bf16_gemm_persistent_device<
