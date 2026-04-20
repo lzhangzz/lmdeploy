@@ -111,35 +111,19 @@ def split_output_gate(tensor: torch.Tensor, *, head_dim: int
     return q_real, gate
 
 
-def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
-             tp: int, gate: Linear | None = None) -> Linear:
+@transform_tensors
+def fuse_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+             *, tp: int, gate: torch.Tensor | None = None) -> torch.Tensor:
     """Fuse Q, K, V (and optionally gate) into a single w_qkv Linear.
 
     Concatenates output channels with TP interleaving.
     Layout per tp-shard: [Q | K | V] or [Q | K | V | Gate].
     """
-    merged_tensors: dict[str, torch.Tensor] = {}
-
-    for kind, qt in q.tensors.items():
-        kt = k.tensors[kind]
-        vt = v.tensors[kind]
-
-        was_1d = qt.dim() == 1
-        raw = [qt, kt, vt]
-        if gate is not None:
-            raw.append(gate.tensors[kind])
-        if was_1d:
-            raw = [t.unsqueeze(0) for t in raw]
-
-        components = [t.view(t.size(0), tp, -1) for t in raw]
-        merged = torch.cat(components, dim=-1)
-        merged = merged.view(-1, merged.size(-1) * tp)
-        if was_1d:
-            merged = merged.squeeze(0)
-        merged_tensors[kind] = merged
-
-    return Linear(tensors=merged_tensors, weight_format=q.weight_format,
-                  data_format=q.data_format)
+    parts = [t.view(-1, tp, -1) for t in (q, k, v)]
+    if gate is not None:
+        parts.append(gate.view(-1, tp, -1))
+    merged = torch.cat(parts, dim=-1)
+    return merged.view(-1, merged.size(-1) * tp)
 
 
 # ---------------------------------------------------------------------------
