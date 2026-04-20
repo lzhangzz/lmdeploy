@@ -55,17 +55,13 @@ class BaseOutputModel(ABC):
     # ------------------------------------------------------------------
 
     def export(self) -> None:
-        from tqdm import tqdm
         import torch
         from ..loader import create_loader
-        pbar = tqdm(total=1, desc='Convert to turbomind format', leave=False)
         loader = create_loader(self.model_path, self.spec._layer_pattern,
                                self.spec._loader_mappings)
         self.spec.set_params(loader.all_items())
         self.spec.model()
         torch.cuda.empty_cache()
-        pbar.update(1)
-        pbar.close()
 
     def export_iter(self):
         import torch
