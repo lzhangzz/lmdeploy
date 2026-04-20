@@ -96,33 +96,19 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
     return q, k, v
 
 
-def split_output_gate(q: Linear, *, head_dim: int) -> tuple[Linear, Linear]:
+@transform_tensors
+def split_output_gate(tensor: torch.Tensor, *, head_dim: int
+                      ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split output gate from Q projection (Qwen3.5).
 
     Q's output dim is 2 * head_num * head_dim. Reshape to
     [batch, head_num, 2, head_dim], split into q_real and gate.
     """
-    new_q_tensors = {}
-    gate_tensors = {}
-
-    for kind, tensor in q.tensors.items():
-        head_num = tensor.size(-1) // (head_dim * 2)
-        was_1d = tensor.dim() == 1
-        if was_1d:
-            tensor = tensor.unsqueeze(0)
-        tensor = tensor.view(tensor.size(0), head_num, 2, head_dim)
-        q_real = tensor[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
-        gate = tensor[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
-        if was_1d:
-            q_real = q_real.squeeze(0)
-            gate = gate.squeeze(0)
-        new_q_tensors[kind] = q_real
-        gate_tensors[kind] = gate
-
-    return (Linear(tensors=new_q_tensors, weight_format=q.weight_format,
-                   data_format=q.data_format),
-            Linear(tensors=gate_tensors, weight_format=q.weight_format,
-                   data_format=q.data_format))
+    head_num = tensor.size(-1) // (head_dim * 2)
+    t = tensor.view(-1, head_num, 2, head_dim)
+    q_real = t[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
+    gate = t[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
+    return q_real, gate
 
 
 def fuse_qkv(q: Linear, k: Linear, v: Linear, *,
