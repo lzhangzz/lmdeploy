@@ -39,7 +39,6 @@ Example gpus: "0" for tp=1, "0,1" for tp=2.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -62,27 +61,14 @@ def _set_hf_cache(path: str) -> None:
     hf_constants.HF_HUB_OFFLINE = 1
 
 
-def parse_args(argv: list[str]) -> tuple[str, str, int, str, bool, dict | None]:
+def parse_args(argv: list[str]) -> tuple[str, str, int, str, bool]:
     prog = os.path.basename(argv[0]) if argv else 'test_turbomind_model.py'
     rest = [a for a in argv[1:] if a != '--debug']
     debug = len(rest) != len(argv) - 1
 
-    # Extract --hf-overrides if present
-    hf_overrides = None
-    filtered = []
-    i = 0
-    while i < len(rest):
-        if rest[i] == '--hf-overrides' and i + 1 < len(rest):
-            hf_overrides = json.loads(rest[i + 1])
-            i += 2
-        else:
-            filtered.append(rest[i])
-            i += 1
-    rest = filtered
-
     if len(rest) != 4:
         print(
-            f'usage: {prog} [--debug] [--hf-overrides JSON] <model_path> <cache_dir> <tp> <gpus>',
+            f'usage: {prog} [--debug] <model_path> <cache_dir> <tp> <gpus>',
             file=sys.stderr,
         )
         sys.exit(2)
@@ -93,7 +79,7 @@ def parse_args(argv: list[str]) -> tuple[str, str, int, str, bool, dict | None]:
     except ValueError:
         print(f'invalid tp: {tp_s!r}', file=sys.stderr)
         sys.exit(2)
-    return model_path, cache_dir, tp, gpus, debug, hf_overrides
+    return model_path, cache_dir, tp, gpus, debug
 
 
 def run_smoke_infer(
@@ -103,7 +89,6 @@ def run_smoke_infer(
     gpus: str,
     *,
     debug: bool = False,
-    hf_overrides: dict | None = None,
 ) -> SmokeResult:
     _set_hf_cache(cache_dir)
     os.environ['CUDA_VISIBLE_DEVICES'] = gpus
@@ -122,7 +107,6 @@ def run_smoke_infer(
         dp=1,
         enable_metrics=False,
         communicator='nccl',
-        hf_overrides=hf_overrides,
     )
     gen_config = GenerationConfig(max_new_tokens=128, do_sample=False)
     prompt = 'Write a short paragraph about the importance of reading books.'
@@ -175,8 +159,8 @@ def print_report(
 
 
 def main() -> None:
-    model_path, cache_dir, tp, gpus, debug, hf_overrides = parse_args(sys.argv)
-    result = run_smoke_infer(model_path, cache_dir, tp, gpus, debug=debug, hf_overrides=hf_overrides)
+    model_path, cache_dir, tp, gpus, debug = parse_args(sys.argv)
+    result = run_smoke_infer(model_path, cache_dir, tp, gpus, debug=debug)
     print_report(model_path, tp, gpus, result, debug=debug)
 
 
