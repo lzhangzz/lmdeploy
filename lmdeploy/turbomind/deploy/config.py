@@ -187,8 +187,7 @@ class TurbomindModelConfig:
 
     def to_dict(self):
         """Export to a dict."""
-        return dict(model_config=config_to_dict(self.model_config),
-                    attention_config=config_to_dict(self.attention_config),
+        return dict(attention_config=config_to_dict(self.attention_config),
                     lora_config=config_to_dict(self.lora_config))
 
     @property
