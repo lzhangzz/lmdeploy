@@ -172,7 +172,7 @@ class TurboMind:
             self._process_weights()
             self._create_engine()
 
-        self.session_len = self.config.session_len
+        self.session_len = _engine_config.session_len
 
     def _load_weights(self):
         """Load weights."""
@@ -235,6 +235,8 @@ class TurboMind:
 
         spec, tm_cfg, model_path = get_tm_config(
             model_path, self.model_name, self.chat_template_name, engine_config)
+
+        self._vocab_size = spec._vocab_size
 
         self._postprocess_config(tm_cfg, engine_config)
 
@@ -555,7 +557,7 @@ class TurboMindInstance:
         length = sum([x.shape[0] for x in input_embeddings])
 
         _MAP = dict(bfloat16=torch.bfloat16, float16=torch.float16)
-        dtype = _MAP[self.tm_model.config.model_config.data_type]
+        dtype = _MAP[self.tm_model.engine_config.dtype]
 
         values = torch.empty((length, input_embeddings[0].shape[-1]), dtype=dtype, device='cpu')
         ranges = torch.tensor(input_embedding_ranges, dtype=torch.int32, device='cpu')
@@ -657,7 +659,7 @@ class TurboMindInstance:
 
         if gen_config.response_format is not None:
             tokenizer = self.tm_model.tokenizer
-            vocab_size = self.tm_model.config.model_config.vocab_size
+            vocab_size = self.tm_model._vocab_size
 
             try:
                 tokenizer_info = TokenizerInfo.from_huggingface(tokenizer.model.model, vocab_size=vocab_size)
