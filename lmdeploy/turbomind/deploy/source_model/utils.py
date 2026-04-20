@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..config import RopeParam
 from ..kind_map import TRIVIAL_FORMAT
 
 
@@ -42,11 +42,14 @@ def rope_type_to_int(type_str: str) -> int:
     return _ROPE_TYPE_MAP[type_str]
 
 
-def parse_rope_param(cfg: dict, head_dim: int) -> tuple[RopeParam, int]:
+def parse_rope_param(cfg: dict, head_dim: int) -> tuple[SimpleNamespace, int]:
     """Parse RoPE configuration from a model config dict.
 
     Returns:
-        rope_param: populated RopeParam instance
+        rope_param: SimpleNamespace carrying rope fields (type, base, dim,
+            factor, max_position_embeddings, attention_factor, beta_fast,
+            beta_slow, low_freq_factor, high_freq_factor,
+            original_max_position_embeddings, mrope_section)
         max_position_embeddings: int (0 if not present in config)
     """
     if 'rope_parameters' in cfg:
@@ -58,7 +61,20 @@ def parse_rope_param(cfg: dict, head_dim: int) -> tuple[RopeParam, int]:
         rope_scaling = cfg.get('rope_scaling', None)
 
     max_position_embeddings = int(cfg.get('max_position_embeddings', 0))
-    rope_param = RopeParam(type='default', base=rope_theta, dim=head_dim)
+    rope_param = SimpleNamespace(
+        type='default',
+        base=rope_theta,
+        dim=head_dim,
+        factor=1.0,
+        max_position_embeddings=None,
+        attention_factor=1.0,
+        beta_fast=32,
+        beta_slow=1,
+        low_freq_factor=None,
+        high_freq_factor=None,
+        original_max_position_embeddings=None,
+        mrope_section=None,
+    )
 
     if isinstance(rope_scaling, dict):
         rope_type = rope_scaling.get('rope_type', '') or rope_scaling.get('type', '')
