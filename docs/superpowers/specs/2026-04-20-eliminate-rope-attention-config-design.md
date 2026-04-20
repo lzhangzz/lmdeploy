@@ -296,6 +296,30 @@ review covers it.
   models that don't use mrope). `SimpleNamespace` carries all 12 fields
   the same way `RopeParam` did, with the same defaults.
 
+### Incidental behavior notes
+
+- **`--rope-scaling-factor` now takes effect in the C++ kernel for
+  non-GLM specs.** Before this refactor, the override was applied inside
+  `to_attention_config()` — which ran *after* each spec subclass had
+  already called `_apply_rope(self._attn_cfg.rope)`. The pybind-bound
+  `_tm.AttentionConfig.rope` carried the unpatched rope to C++, so the
+  deprecation warning fired but the kernel used `type='default'`.
+  Moving the patch into `_parse_base()` (Task 1) reorders it ahead of
+  `_apply_rope`, so the patched rope reaches C++. This is the behavior
+  the deprecation warning was always warning toward; no user-visible
+  regression. The smoke script does not exercise `--rope-scaling-factor`
+  directly — code review + the surrounding `dynamic` rope test coverage
+  in existing C++ kernels is the verification.
+
+- **GLM4 MoE Lite continues to silently ignore `--rope-scaling-factor`.**
+  `Glm4MoeLiteSpec.__init__` re-invokes `parse_rope_param(hf_cfg, qk_rope_dim)`
+  after `super().__init__()`, overwriting the patched `self._rope` with
+  a fresh parse. This is unchanged behavior — the old code path had the
+  same problem — but it does mean the "every downstream consumer sees
+  the override" framing has one asterisk. Re-applying the patch inside
+  GLM4 is out of scope for this refactor (the flag is deprecated and
+  the users we care about have migrated to `--hf-overrides`).
+
 ## Scope
 
 Cross-language (Python + 1-line C++). Landable as a single PR or split into
