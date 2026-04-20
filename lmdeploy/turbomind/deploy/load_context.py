@@ -2,17 +2,12 @@
 """Composable loading primitives for building the C++ module tree from Python."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import torch
 
 import _turbomind as _tm
 
 from .linear import Linear
 from .spec import SplitSide
-
-if TYPE_CHECKING:
-    from .config import ModelConfig
 
 # Canonical dtype mappings
 _STR_TO_DTYPE: dict[str, _tm.DataType] = {
@@ -372,7 +367,7 @@ class LoadContext:
     """
 
     def __init__(self, handle, tp_config: dict,
-                 model_config: 'ModelConfig | None' = None,
+                 dtype: str | None = None,
                  context=None):
         """
         Args:
@@ -380,23 +375,23 @@ class LoadContext:
             tp_config: Dict with keys: tp_size, rank, head_dim,
                        rope_dim, permute_qk, attn_output_gate,
                        kv_head_num.
-            model_config: The Python ``ModelConfig`` for the model being loaded.
+            dtype: The model's compute dtype string (e.g. 'float16', 'bfloat16').
             context: Optional context manager to wrap load operations.
         """
         self._handle = handle
         self._tp_config = tp_config
-        self._model_config = model_config
+        self._dtype = dtype
         self._context = context
 
     @property
-    def model_config(self) -> 'ModelConfig':
-        assert self._model_config is not None, 'model_config not set'
-        return self._model_config
+    def dtype(self) -> str:
+        assert self._dtype is not None, 'dtype not set'
+        return self._dtype
 
     @property
     def cpp_dtype(self):
         """C++ DataType enum for the model's compute dtype."""
-        return _cpp_dtype(self.model_config.data_type)
+        return _cpp_dtype(self.dtype)
 
     @property
     def tp_size(self) -> int:
@@ -428,12 +423,12 @@ class LoadContext:
         Returns a new LoadContext rooted at the created module.
         """
         child = self._handle.create_child(name, module_type, config)
-        return LoadContext(child, self._tp_config, self._model_config)
+        return LoadContext(child, self._tp_config, self._dtype)
 
     def child(self, name: str) -> 'LoadContext':
         """Return a LoadContext for an existing child (no creation)."""
         handle = self._handle.get(name)
-        return LoadContext(handle, self._tp_config, self._model_config)
+        return LoadContext(handle, self._tp_config, self._dtype)
 
     def load_linear(self, name: str, linear: Linear,
                     tp_rule: str | None = None):
