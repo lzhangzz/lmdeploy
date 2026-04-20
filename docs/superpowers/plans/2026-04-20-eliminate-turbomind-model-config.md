@@ -499,91 +499,84 @@ EOF
 
 ---
 
-## Task 4: Delete stale tests
+## Task 4: Remove blocking tests
 
-**Rationale:** Four tests in `test_converter.py` and one in `test_compressed_tensors.py` reference `config.model_config.*` — an attribute removed by the prior ModelConfig elimination. They're already broken against HEAD. They also directly call `get_output_model_registered_name_and_config`, which Task 5 deletes. Remove them now so later tasks don't leave import errors behind.
+**Rationale:** Four tests in `test_converter.py` and one in `test_compressed_tensors.py` will break later tasks — either because they call `config.update_from_engine_config` (deleted in Task 1) or because they import / call `get_output_model_registered_name_and_config` (deleted in Task 5). A file-level import failure on `test_converter.py` would stop pytest from collecting the remaining surviving test. Surgically delete only the blocking tests (and the now-unused helpers / imports they used).
 
 **Files:**
-- Modify: `tests/test_lmdeploy/test_turbomind/test_converter.py`
-- Modify: `tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py`
+- Modify: `tests/test_lmdeploy/test_turbomind/test_converter.py` (delete 4 test functions + unused module-level imports)
+- Modify: `tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py` (delete 1 test function + its `_FakeModelConfig` helper + unused `pytest` import)
 
 ### Steps
 
-- [ ] **Step 1: Rewrite `test_converter.py`**
+- [ ] **Step 1: Delete blocking tests from `test_converter.py`**
 
-Replace the entire contents of `tests/test_lmdeploy/test_turbomind/test_converter.py` with:
+In `tests/test_lmdeploy/test_turbomind/test_converter.py`, delete the following **functions** — leave `test_ffn_reader_kind_none` intact:
+
+- `test_torch_dtype_fallback` (the `def test_torch_dtype_fallback():` block through the final `assert config.model_config.data_type in ('float16', 'bfloat16')`)
+- `test_registered_models` (the full function body through `assert config.model_config.model_arch is not None`)
+- `test_update_from_engine_config` (the full function body through `assert (config.attention_config.use_logn_attn == engine_config.use_logn_attn)`)
+- `test_dtype` (the full function body through `assert _config.model_config.data_type == 'float16'`)
+
+Then delete the now-unused module-level imports at the top of the file:
 
 ```python
-# yapf: disable
-def test_ffn_reader_kind_none():
-    """FFN readers must handle kind=None (returns filter list, not tensors).
-
-    This is the probe call from Ffn.apply() to discover parameter keys before
-    loading actual tensor data. A missing guard causes KeyError with 'None' in
-    the key string (regression test for InternLM2Reader._ffn bug).
-    """
-    import re
-
-    from lmdeploy.turbomind.deploy.source_model.internlm2 import InternLM2Reader
-    from lmdeploy.turbomind.deploy.source_model.llama import LlamaReader
-
-    # Create minimal readers with fake params that match ffn patterns
-    fake_params = {
-        'model.layers.0.mlp.gate_proj.weight': None,
-        'model.layers.0.mlp.down_proj.weight': None,
-        'model.layers.0.mlp.up_proj.weight': None,
-        'model.layers.0.feed_forward.w1.weight': None,
-        'model.layers.0.feed_forward.w2.weight': None,
-        'model.layers.0.feed_forward.w3.weight': None,
-    }
-
-    # LlamaReader with kind=None should return filtered key list
-    reader = LlamaReader.__new__(LlamaReader)
-    reader.params = dict(fake_params)
-    reader.ffn_pattern = r'mlp'
-    result = reader._ffn(0, None)
-    assert isinstance(result, list)
-    assert len(result) > 0
-    assert all(isinstance(k, str) for k in result)
-    assert all(re.search(r'mlp', k) for k in result)
-
-    # InternLM2Reader with kind=None should also return filtered key list
-    reader2 = InternLM2Reader.__new__(InternLM2Reader)
-    reader2.params = dict(fake_params)
-    reader2.fp8_quant = None
-    reader2.ffn_pattern = r'feed_forward'
-    result2 = reader2._ffn(0, None)
-    assert isinstance(result2, list)
-    assert len(result2) > 0
-    assert all(isinstance(k, str) for k in result2)
-    assert all(re.search(r'feed_forward', k) for k in result2)
+from lmdeploy import TurbomindEngineConfig
+from lmdeploy.turbomind import update_parallel_config
+from lmdeploy.turbomind.deploy.converter import (
+    get_input_model_registered_name,
+    get_output_model_registered_name_and_config,
+)
+from lmdeploy.turbomind.deploy.source_model.base import INPUT_MODELS
 ```
 
-This drops `test_torch_dtype_fallback`, `test_registered_models`, `test_update_from_engine_config`, and `test_dtype`. The preserved test is independent of the converter.
+All four of those import lines can go — `test_ffn_reader_kind_none` does its own `import re` and reader imports inside the function body.
 
-- [ ] **Step 2: Delete `test_compressed_tensors_support_matrix` from `test_compressed_tensors.py`**
+Verify:
+
+```bash
+rg -n "get_output_model_registered_name_and_config|update_from_engine_config" \
+    tests/test_lmdeploy/test_turbomind/test_converter.py
+```
+
+Expected: no matches.
+
+- [ ] **Step 2: Delete blocking test from `test_compressed_tensors.py`**
 
 In `tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py`, delete:
 
-- The `_FakeModelConfig` class (lines 11-17) — only used by the deleted test.
-- The `test_compressed_tensors_support_matrix` function (lines 44-70).
-- The `pytest` import (line 3) if unused after deletion. Run `rg -n "pytest" tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py` to confirm.
+- The `_FakeModelConfig` class (roughly lines 11-17) — only consumer is the deleted test.
+- The `test_compressed_tensors_support_matrix` function (roughly lines 44-70).
+- The `from lmdeploy.turbomind.deploy import converter` import at the top if no surviving test uses `converter`. Check with:
 
-Keep:
-- `_reference_compressed_tensors_dequant` helper
-- `_DummyQwen35Reader` helper class
-- `test_quant_weight_only_synthesizes_compressed_tensor_zero_points_from_scales`
-- `test_compressed_tensors_dequant_matches_reference`
-- `test_qwen35_linear_attn_dequantizes_compressed_tensors_weights`
+  ```bash
+  rg -n "converter\." tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py
+  ```
 
-After edit, the file should have no references to `converter` or `get_output_model_registered_name_and_config`.
+- The `import pytest` line if no surviving test uses `pytest.raises`. Check with:
+
+  ```bash
+  rg -n "pytest\." tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py
+  ```
+
+Keep everything else: `_reference_compressed_tensors_dequant`, `_DummyQwen35Reader`, and the three surviving `test_*` functions.
+
+Verify:
+
+```bash
+rg -n "get_output_model_registered_name_and_config" \
+    tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py
+```
+
+Expected: no matches.
 
 - [ ] **Step 3: Run the surviving tests**
 
 Run:
 
 ```bash
-pytest tests/test_lmdeploy/test_turbomind/test_converter.py tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py -v
+pytest tests/test_lmdeploy/test_turbomind/test_converter.py \
+       tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py -v
 ```
 
 Expected: all listed tests pass. No import errors.
@@ -591,16 +584,16 @@ Expected: all listed tests pass. No import errors.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/test_lmdeploy/test_turbomind/test_converter.py tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py
+git add tests/test_lmdeploy/test_turbomind/test_converter.py \
+        tests/test_lmdeploy/test_turbomind/test_compressed_tensors.py
 git commit -m "$(cat <<'EOF'
-test(turbomind): drop stale converter/ModelConfig tests
+test(turbomind): remove tests that block the config elimination
 
-test_torch_dtype_fallback, test_registered_models,
-test_update_from_engine_config, test_dtype, and
-test_compressed_tensors_support_matrix all asserted against
-config.model_config.* (an attribute removed in a prior refactor)
-and called get_output_model_registered_name_and_config (being
-deleted). Keep only the tests that don't touch the converter API.
+Delete test_torch_dtype_fallback, test_registered_models,
+test_update_from_engine_config, test_dtype (all reference
+config.model_config.* and/or get_output_model_registered_name_and_config)
+and test_compressed_tensors_support_matrix (calls the same deleted
+converter API). Preserve the surviving non-blocking tests.
 EOF
 )"
 ```
