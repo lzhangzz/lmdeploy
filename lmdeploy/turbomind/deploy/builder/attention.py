@@ -126,17 +126,14 @@ class AttentionBuilder(Builder):
         'sinks': SplitSide.OUTPUT,
     }
 
-    def add_qkv_proj(self, q, k, v):
+    def add_qkv_proj(self, q, k, v, *, gate=None):
         """Fuse Q/K/V into a single w_qkv with TP interleave, commit.
 
         Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
-        q, k, v = dequant_mixed(q, k, v)
+        q, k, v, gate = dequant_mixed(q, k, v, gate)
         k, v = repeat_kv_for_tp(k, v, tp=self._tp,
                                 head_dim=self.config.head_dim)
-        gate = None
-        if self.config.attn_output_gate:
-            q, gate = split_output_gate(q, head_dim=self.config.head_dim)
         merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)
         self._commit_linear('w_qkv', merged, SplitSide.OUTPUT,
                             model_dtype=self.config.data_type)

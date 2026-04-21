@@ -12,6 +12,7 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
                        FfnBuilder, MoeBuilder, ModuleListBuilder,
                        TextModelBuilder, _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
+from ..builder.attention import split_output_gate
 from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
@@ -193,11 +194,13 @@ class Qwen3_5Spec(TextModelSpec):
         q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim)
         k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim)
 
+        q, gate = split_output_gate(q, head_dim=self._head_dim)
+
         cfg = self._attn_cfg.clone()
         attn = AttentionBuilder(cfg, self._contexts,
                                 tp=self.engine_cfg.attn_tp_size,
                                 ranks=self._attn_ranks)
-        attn.add_qkv_proj(q, k, v)
+        attn.add_qkv_proj(q, k, v, gate=gate)
         attn.add_o_proj(o)
 
         q_norm = self._zero_centered(self._get(f'{pfx}.q_norm.weight'))
