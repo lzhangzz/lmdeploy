@@ -26,8 +26,6 @@
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
 
-#include <yaml-cpp/yaml.h>
-
 // #include "dbg.h"
 
 namespace turbomind {
@@ -36,33 +34,6 @@ using std::vector;
 using std::string;
 using std::shared_ptr;
 using std::unique_ptr;
-
-static DataType data_type_from_string(std::string str)
-{
-    if (str == "fp16" || str == "float16") {
-        return kFloat16;
-    }
-    else if (str == "bf16" || str == "bfloat16") {
-        return kBfloat16;
-    }
-    else if (str == "fp32") {
-        return kFloat32;
-    }
-    else if (str == "int8") {
-        return kUint8;
-    }
-    else if (str == "int4") {
-        return kUint4;
-    }
-    else if (str == "fp8") {
-        return kFloat8_e4m3;
-    }
-    else if (str == "e2m1") {
-        return kFloat4_e2m1;
-    }
-    TM_CHECK(0) << "unsupported weight type: " << str;
-    return {};
-}
 
 struct TurboMind::Impl {
     DataType       data_type_;
@@ -96,7 +67,7 @@ struct TurboMind::Impl {
 
     ~Impl();
 
-    Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory);
+    Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory);
 
     unique_ptr<ModelRequest> CreateRequest()
     {
@@ -175,59 +146,46 @@ TurboMind::Impl::~Impl()
     }
 }
 
-TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_factory):
+TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory):
     data_type_{}, engine_param_{}, ffi_ctx_factory_{ffi_ctx_factory}
 {
-    TM_CHECK(!config.empty());
-
-    YAML::Node node;
-    try {
-        node = YAML::Load(config);
-    }
-    catch (const YAML::Exception& e) {
-        TM_CHECK(0) << "Error loading YAML config: " << e.what() << "\nconfig:\n" << config;
-    }
-
-    /// TODO: move config parsing to suitable place
-    const auto engine = node["engine_config"];
-
-    data_type_ = data_type_from_string(engine["dtype"].as<std::string>());
+    data_type_ = config.data_type;
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
 
-    engine_param_.cache_block_seq_len = engine["cache_block_seq_len"].as<int>(0);
-    engine_param_.quant_policy        = engine["quant_policy"].as<int>(0);
-    engine_param_.tune_layer_num      = engine["tune_layer_num"].as<int>(1);
+    engine_param_.cache_block_seq_len = config.cache_block_seq_len;
+    engine_param_.quant_policy        = config.quant_policy;
+    engine_param_.tune_layer_num      = config.tune_layer_num;
 
-    engine_param_.max_batch_size = engine["max_batch_size"].as<int>(0);
-    auto max_forward_token_num   = engine["max_prefill_token_num"].as<int>(0);
-    max_forward_token_num += engine_param_.max_batch_size;
+    engine_param_.max_batch_size = config.max_batch_size;
+    auto max_forward_token_num   = config.max_prefill_token_num;
+    max_forward_token_num       += engine_param_.max_batch_size;
 
-    engine_param_.max_context_token_num = engine["max_context_token_num"].as<int>(0);
-    engine_param_.session_len           = engine["session_len"].as<int>(0);
+    engine_param_.max_context_token_num = config.max_context_token_num;
+    engine_param_.session_len           = config.session_len;
 
-    engine_param_.cache_max_block_count = engine["cache_max_entry_count"].as<float>(0);
-    engine_param_.cache_chunk_size      = engine["cache_chunk_size"].as<int>(0);
-    engine_param_.enable_prefix_caching = engine["enable_prefix_caching"].as<bool>(false);
-    engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
+    engine_param_.cache_max_block_count = config.cache_max_block_count;
+    engine_param_.cache_chunk_size      = config.cache_chunk_size;
+    engine_param_.enable_prefix_caching = config.enable_prefix_caching;
+    engine_param_.enable_metrics        = config.enable_metrics;
 
-    engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);
-    engine_param_.max_prefill_iters   = engine["max_prefill_iters"].as<int>(1);
+    engine_param_.num_tokens_per_iter = config.num_tokens_per_iter;
+    engine_param_.max_prefill_iters   = config.max_prefill_iters;
 
-    phases_ = engine["async_"].as<int>() ? 2 : 1;
+    phases_ = config.async_ ? 2 : 1;
 
-    engine_param_.outer_dp_size = engine["outer_dp_size"].as<int>();
+    engine_param_.outer_dp_size = config.outer_dp_size;
 
-    engine_param_.attn_dp_size = engine["attn_dp_size"].as<int>();
-    engine_param_.attn_tp_size = engine["attn_tp_size"].as<int>();
-    engine_param_.attn_cp_size = engine["attn_cp_size"].as<int>();
+    engine_param_.attn_dp_size = config.attn_dp_size;
+    engine_param_.attn_tp_size = config.attn_tp_size;
+    engine_param_.attn_cp_size = config.attn_cp_size;
 
-    engine_param_.mlp_tp_size = engine["mlp_tp_size"].as<int>();
+    engine_param_.mlp_tp_size = config.mlp_tp_size;
 
-    engine_param_.devices = engine["devices"].as<std::vector<int>>();
+    engine_param_.devices = std::move(config.devices);
 
     // multi-node information
-    engine_param_.nnodes    = engine["nnodes"].as<int>();
-    engine_param_.node_rank = engine["node_rank"].as<int>();
+    engine_param_.nnodes    = config.nnodes;
+    engine_param_.node_rank = config.node_rank;
 
     {
         auto sp                             = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
@@ -237,7 +195,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     comm_size_ = engine_param_.attn_dp_size * engine_param_.attn_tp_size * engine_param_.attn_cp_size;
     FT_CHECK(engine_param_.mlp_tp_size == comm_size_);
 
-    communicator_type_ = engine["communicator"].as<std::string>();
+    communicator_type_ = std::move(config.communicator);
 
     HandleMissingParams();
 
@@ -507,8 +465,8 @@ void TurboMind::Impl::WarmUp(int index)
 
 TurboMind::~TurboMind() = default;
 
-TurboMind::TurboMind(string model_dir, string config, FFICtxFactory ffi_ctx_factory):
-    impl_{std::make_unique<Impl>(model_dir, config, ffi_ctx_factory)}
+TurboMind::TurboMind(string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory):
+    impl_{std::make_unique<Impl>(model_dir, std::move(config), ffi_ctx_factory)}
 {
 }
 

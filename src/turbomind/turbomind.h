@@ -9,6 +9,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
+#include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -20,7 +21,7 @@ public:
 
     ~TurboMind();
 
-    TurboMind(std::string model_dir, std::string config, FFICtxFactory ffi_ctx_factory);
+    TurboMind(std::string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory);
 
     void CreateWeights(int index);
 
