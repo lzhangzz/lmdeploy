@@ -65,7 +65,7 @@ Checkpoint ──► build_linear ──► Linear {tensors, weight_format, data
                                               │
                                               ▼ at _commit_linear time
      LinearConfig{input_dim, output_dim, format=linear.data_format,
-                  has_bias, is_grouped, epilogue}
+                  has_bias, epilogue}
                                               │
                                               ▼ C++
      LinearWeight ctor:
@@ -96,12 +96,13 @@ struct LinearConfig: ModuleConfig {
     int        output_dim;
     DataFormat format;        // weight storage: compute dtype, weight dtype, block sizes, scales/zeros descriptors
     bool       has_bias;
-    bool       is_grouped;    // for MoE grouped-GEMM experts
     Epilogue   epilogue;      // kNone / kGatedSilu
 };
 ```
 
-`LinearConfig.data_type` is removed. Callers read `cfg.format.dtype` — the compute dtype is a property of the weight's `DataFormat`, not a separate field. `is_grouped` and `epilogue` subsume the post-hoc `set_grouped` and `FfnWeight::prepare`'s epilogue mutation.
+`LinearConfig.data_type` is removed. Callers read `cfg.format.dtype` — the compute dtype is a property of the weight's `DataFormat`, not a separate field. `epilogue` subsumes `FfnWeight::prepare`'s post-hoc mutation of the `w1w3` child.
+
+`is_grouped` is **not** carried on `LinearConfig`. The information "this LinearWeight is an expert weight under a kFused MoeWeight" lives in the module-tree structure and is derived by walking the parent chain at `prepare()` time (see "Grouped GEMM derivation" below). This eliminates the need to push knowledge of "am I part of a fused-MoE FFN?" through every linear commit.
 
 ### `LinearWeight` simplifies
 
@@ -149,17 +150,17 @@ public:
     TM_MODULE_DECLARE(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)
 
 private:
-    bool has_bias_   = false;
-    bool is_grouped_ = false;
+    bool has_bias_ = false;
 };
 ```
 
 Deleted relative to today:
 - `set_weight_spec(DataType, int)` — folded into `LinearConfig.format`.
-- `set_grouped(bool)` — folded into `LinearConfig.is_grouped`.
+- `set_grouped(bool)` — replaced by parent-chain derivation in `prepare()`; no field, no setter.
 - `preprocess()` — was a no-op.
 - `configure(int,int,DataType,bool)` overload — replaced by `configure(int,int,DataFormat,bool)`.
 - Public fields `weight_format: DataType`, `group_size: int`, `data_type: DataType` — all redundant with `format`.
+- Private field `is_grouped_` — no longer stored; derived on demand.
 - The `LinearPolicy` struct — redundant with the three `DataFormat`s.
 
 ### `MakeLinearWeightFormat` signature
@@ -201,7 +202,7 @@ GEMM-level `QuantDesc` objects are synthesized on-demand from the three `DataFor
 
 `LinearWeight(const LinearConfig& cfg)`:
 
-1. Stores `input_dim`, `output_dim`, `has_bias_`, `is_grouped_`, `epilogue` from cfg.
+1. Stores `input_dim`, `output_dim`, `has_bias_`, `epilogue` from cfg.
 2. `format = cfg.format`.
 3. `(input_format, output_format) = DeriveActivationFormats(format, format.dtype, getSMVersion())`.
 4. Allocates every param slot declared by `format`:
@@ -231,9 +232,38 @@ std::swap(format.block_sizes[0], format.block_sizes[1]);
 
 For symmetric FP8 (`{128, 128}`) this is numerically invariant, but the descriptor stays consistent with the described tensor even under asymmetric future shapes.
 
+### Grouped GEMM derivation
+
+`GetConverters` (called from `prepare()`'s general quantization path) takes a `bool grouped` flag that selects row-major-vs-col-major internal layout. Today this flag comes from `LinearWeight::is_grouped_`, set by `FfnWeight::prepare()` via `set_grouped(true)` when `is_fused_moe_`. The new design derives it at `prepare()` time from the module tree:
+
+```cpp
+bool LinearWeight::is_part_of_grouped_moe_() const {
+    for (auto* p = parent(); p; p = p->parent()) {
+        if (auto* moe = dynamic_cast<MoeWeight*>(p)) {
+            return moe->method() == MoeMethod::kFused;
+        }
+    }
+    return false;
+}
+
+// Inside prepare()'s general quantization path:
+auto [conv_w, conv_s] = GetConverters(
+    format.dtype, format.dtype, input_format.dtype,
+    is_part_of_grouped_moe_(), getSMVersion());
+```
+
+Benefits:
+- `LinearConfig` stays minimal; no `is_grouped` plumbed through every commit.
+- `FfnBuilder.add_ffn` does not inspect `self.config.fused_moe` or pass anything through `_commit_linear`.
+- `_commit_linear` does not need an `is_grouped` kwarg.
+- The post-hoc `set_grouped` loop in `FfnWeight::prepare` is deleted (as in the prior plan), and so is the `is_grouped_` field and the `set_grouped` method on `LinearWeight`.
+- Truth derives from the tree: whatever creates a LinearWeight under an expert's FfnWeight inside a kFused MoeWeight gets grouped converters automatically.
+
+Cost: one `dynamic_cast` per parent-chain step during each expert's `prepare()` at startup (typical depth = 3). Negligible.
+
 ### MoE `block_` remains untouched
 
-`MoeWeight::prepare()` creates `block_` (a batched-pointer view over all experts' prepared LinearWeights) via `add_child(name, std::make_unique<LinearWeight>())` — **default-constructed** — then `LinkLinearExperts` fills it via `copy_metadata_to` plus synthetic `MakeBlockedPtrs` / `MakeStridedPtrs` tensors. This path is outside the `LinearConfig` flow by design: the tensors aren't real GPU buffers. `copy_metadata_to` now copies `format`, `input_format`, `output_format`, `epilogue`, `is_grouped_`, `has_bias_`, `k_desc`, `q_desc` — structurally unchanged, field names shifted to the new scheme.
+`MoeWeight::prepare()` creates `block_` (a batched-pointer view over all experts' prepared LinearWeights) via `add_child(name, std::make_unique<LinearWeight>())` — **default-constructed** — then `LinkLinearExperts` fills it via `copy_metadata_to` plus synthetic `MakeBlockedPtrs` / `MakeStridedPtrs` tensors. This path is outside the `LinearConfig` flow by design: the tensors aren't real GPU buffers. `copy_metadata_to` now copies `format`, `input_format`, `output_format`, `epilogue`, `has_bias_`, `k_desc`, `q_desc` — no `is_grouped_` field to copy. The `block_` LinearWeight doesn't run `prepare()` itself (it holds ptr arrays, not real buffers), so parent-chain derivation doesn't apply to it either.
 
 ## 2. Python `WeightFormat` as a constant `DataFormat` factory
 
@@ -420,7 +450,6 @@ def _linear(self, pfx):
 ```python
 def _commit_linear(self, name, linear, split_side=None, *,
                    tp=None, ranks=None,
-                   is_grouped: bool = False,
                    epilogue=_tm.Epilogue.kNone):
     """Commit a Linear to a named LinearWeight child.
 
@@ -428,9 +457,10 @@ def _commit_linear(self, name, linear, split_side=None, *,
     linears whose TP differs from their parent (e.g. output committed onto
     the root text-model handle).
 
-    is_grouped / epilogue are LinearConfig knobs the caller supplies based
-    on the semantics of this particular commit. This primitive stays
-    format-agnostic and name-agnostic.
+    epilogue is a LinearConfig knob the caller supplies based on the
+    semantics of this particular commit (e.g. kGatedSilu on fused w1w3).
+    Grouped-GEMM selection is derived at prepare() time from the module
+    tree and is NOT an argument here.
     """
 
 def _commit_tensor(self, name, tensor, split_side=None, *, tp=None, ranks=None):
@@ -445,7 +475,6 @@ Inside `_commit_linear` all GPU-invariant work is hoisted above the per-GPU loop
 
 ```python
 def _make_linear_config_for(self, linear, split_side, tp, *,
-                            is_grouped: bool,
                             epilogue) -> _tm.LinearConfig:
     w = linear.tensors['weight']
     in_dim, out_dim = w.shape[0], w.shape[-1]
@@ -458,43 +487,40 @@ def _make_linear_config_for(self, linear, split_side, tp, *,
     cfg.output_dim = out_dim
     cfg.format     = linear.data_format
     cfg.has_bias   = 'bias' in linear.tensors
-    cfg.is_grouped = is_grouped
     cfg.epilogue   = epilogue
     return cfg
 ```
 
-**Callers supply `is_grouped` / `epilogue` explicitly** based on what the commit means in their context. Example from `FfnBuilder.add_ffn`:
+**Callers supply `epilogue` explicitly** only where it matters. Example from `FfnBuilder.add_ffn`:
 
 ```python
 def add_ffn(self, w1, w2, w3):
-    is_grouped = getattr(self.config, 'fused_moe', False)
-    act_type   = _act_type_name(getattr(self.config, 'act_type', 0))
+    act_type = _act_type_name(getattr(self.config, 'act_type', 0))
+    is_moe   = getattr(self.config, 'fused_moe', False)  # only used by fuse_ffn_linears
 
     fused = None
     fused_silu = False
     if w1 is not None and w3 is not None:
-        fused, fused_silu = fuse_ffn_linears(w1, w3, self._tp, act_type,
-                                             is_moe=is_grouped)
+        fused, fused_silu = fuse_ffn_linears(w1, w3, self._tp, act_type, is_moe=is_moe)
 
     if fused is not None:
         epilogue = _tm.Epilogue.kGatedSilu if fused_silu else _tm.Epilogue.kNone
-        self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
-                            is_grouped=is_grouped, epilogue=epilogue)
+        self._commit_linear('w1w3', fused, SplitSide.OUTPUT, epilogue=epilogue)
     else:
         if w1 is not None:
-            self._commit_linear('w1', w1, SplitSide.OUTPUT,
-                                is_grouped=is_grouped)
+            self._commit_linear('w1', w1, SplitSide.OUTPUT)
         if w3 is not None:
-            self._commit_linear('w3', w3, SplitSide.OUTPUT,
-                                is_grouped=is_grouped)
+            self._commit_linear('w3', w3, SplitSide.OUTPUT)
     if w2 is not None:
-        self._commit_linear('w2', w2, SplitSide.INPUT,
-                            is_grouped=is_grouped)
+        self._commit_linear('w2', w2, SplitSide.INPUT)
 ```
+
+Note: `is_moe` is still consulted inside `fuse_ffn_linears` to pick the SiLU-fusion strategy (it's a quant-kernel availability heuristic on the Python side). It is **not** threaded into any commit — C++ will derive the grouped-GEMM layout from the module tree.
 
 Benefits:
 - `_commit_linear` and `_make_linear_config_for` are general primitives with no knowledge of the FFN-vs-attention-vs-MLA distinction, no knowledge of name-based dispatch.
 - The one place that knows "w1w3 + fuse_silu means kGatedSilu" is `FfnBuilder.add_ffn` — exactly where that semantic lives.
+- Grouped-GEMM selection is invisible at the commit layer — owned entirely by C++ `prepare()` via parent-chain derivation.
 - `FfnConfig.fuse_silu` on the C++ side becomes redundant (the epilogue now lives directly on the `LinearConfig` of `w1w3`). Decide in implementation whether to keep / drop the `FfnConfig.fuse_silu` field.
 
 ### `LinearBuilder` and `set_weight` deleted
@@ -558,7 +584,12 @@ Normalize `_embed_key` / `_norm_key` in the base class to prefixes (not full key
 
 ### `FfnWeight::prepare` post-hoc mutations gone
 
-Both `set_grouped(true)` (for fused MoE experts) and `epilogue = kGatedSilu` (for `w1w3` when fused SiLU) are passed directly on `LinearConfig` at construction. Python callers in `FfnBuilder.add_ffn` supply these via `_commit_linear` kwargs, based on the fusion decision they just made. The `FfnWeight::prepare()` loops that mutated children post-construction are deleted.
+Both post-hoc mutations in `FfnWeight::prepare()` are deleted:
+
+- `epilogue = kGatedSilu` assignment on `w1w3` — Python caller in `FfnBuilder.add_ffn` passes `epilogue` via `_commit_linear` kwarg at the `w1w3` commit, set directly on `LinearConfig` at construction.
+- `set_grouped(true)` loop — `LinearWeight::prepare()` derives grouped-ness by walking its parent chain and checking for a kFused `MoeWeight` ancestor. No mutation, no plumbing.
+
+Both mutations gone for different reasons: epilogue is a caller-supplied semantic property (explicit kwarg); grouped-ness is a tree-structural property (derivation). The outcome is the same — no post-hoc field writes after `LinearWeight` construction.
 
 ## 4. `Linear` dataclass finalization
 
@@ -594,9 +625,9 @@ Verify: trivial dense + AWQ + FP8 at tp=1. The FP8 case is the critical regressi
 
 Verify: trivial + AWQ + FP8 at tp=1.
 
-### C3 — `refactor(linear_weight): LinearConfig carries DataFormat/is_grouped/epilogue; pre-alloc at construction; kill set_weight_spec/set_grouped/preprocess` *(largest atomic commit — C++ + Python together)*
+### C3 — `refactor(linear_weight): LinearConfig carries DataFormat/epilogue; pre-alloc at construction; kill set_weight_spec/set_grouped/preprocess; derive grouped at prepare()` *(largest atomic commit — C++ + Python together)*
 
-- `src/turbomind/models/linear_weight.{h,cc}` — `LinearConfig` with `format`/`is_grouped`/`epilogue`; `configure(in, out, DataFormat, has_bias)`; param slot pre-allocation; `prepare()` entry assert; `prepare()` swap `block_sizes` on FP8-native transpose; delete `set_weight_spec`, `set_grouped`, `preprocess`, old `configure` overload; delete `weight_format`/`group_size`/`data_type` fields (use `format`).
+- `src/turbomind/models/linear_weight.{h,cc}` — `LinearConfig` with `format`/`epilogue`; `configure(in, out, DataFormat, has_bias)`; param slot pre-allocation; `prepare()` entry assert; `prepare()` swap `block_sizes` on FP8-native transpose; `prepare()` derives grouped via parent-chain walk to a kFused `MoeWeight`; delete `set_weight_spec`, `set_grouped`, `preprocess`, old `configure` overload; delete `weight_format`/`group_size`/`data_type` public fields and `is_grouped_` private field (all redundant with `format` or derived).
 - `src/turbomind/models/ffn_weight.cc` — delete `set_grouped` loop, `epilogue` assignment.
 - `src/turbomind/kernels/gemm/test/testbed_v3.h` — single-phase `configure(in, out, DataFormat, false)`.
 - `src/turbomind/python/bind.cpp` — LinearConfig binding updated.
@@ -662,6 +693,7 @@ Each run: `scripts/test_turbomind_model.py`, ≥ 128 tokens of coherent output. 
 - `struct LinearPolicy`
 - `LinearWeight::set_weight_spec`, `set_grouped`, `preprocess`, `configure(int,int,DataType,bool)`
 - `LinearWeight::weight_format`, `group_size` public fields; `data_type` public field (read `format.dtype`)
+- `LinearWeight::is_grouped_` private field (derived from parent chain at `prepare()` time)
 - `LinearConfig::data_type` field
 - `FfnWeight::prepare` post-hoc `set_grouped` loop
 - `FfnWeight::prepare` post-hoc `epilogue = kGatedSilu` assignment
@@ -685,13 +717,14 @@ Each run: `scripts/test_turbomind_model.py`, ≥ 128 tokens of coherent output. 
 ### Added
 
 **C++:**
-- `LinearConfig::format: DataFormat`, `is_grouped: bool`, `epilogue: Epilogue` fields
+- `LinearConfig::format: DataFormat`, `epilogue: Epilogue` fields
 - `LinearWeight::input_format`, `output_format` fields
 - `DeriveActivationFormats(const DataFormat&, DataType, int) -> pair<DataFormat, DataFormat>`
 - `MakeLinearWeightFormat(compute_dtype, weight_dtype, block_in, block_out)` signature
 - Pre-allocation of `LinearWeight` param slots at construction
 - `TM_CHECK(format.dtype != DataType{})` at `prepare()` entry
 - `block_sizes` swap on FP8-native transpose in `prepare()`
+- Parent-chain walk in `prepare()` to derive grouped-GEMM selection (replaces `set_grouped` + `is_grouped_` field)
 
 **Python:**
 - `FormatKind` enum
@@ -701,8 +734,8 @@ Each run: `scripts/test_turbomind_model.py`, ≥ 128 tokens of coherent output. 
 - `_parse_quant_blocks` in `converter.py`
 - `TextModelSpec._blocks: BlockSize` field
 - `tp` / `ranks` kwargs on `_commit_linear` and `_commit_tensor`
-- `is_grouped` / `epilogue` kwargs on `_commit_linear` (caller-supplied, no name-based dispatch)
-- `_copy_linear_to_handle`, `_make_linear_config_for(..., *, is_grouped, epilogue)` helpers in `_base.py`
+- `epilogue` kwarg on `_commit_linear` (caller-supplied where it matters; `is_grouped` is not a kwarg — derived C++-side)
+- `_copy_linear_to_handle`, `_make_linear_config_for(..., *, epilogue)` helpers in `_base.py`
 - `Linear.__post_init__` guards
 
 ### Invariants strengthened
