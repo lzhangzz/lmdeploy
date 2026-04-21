@@ -271,7 +271,7 @@ Four observable changes relative to today:
 | `lmdeploy/turbomind/deploy/builder/_base.py` | Add `_copy_shard_to_param`, `_shard`. Simplify `_infer_cpp_linear_dtype` (scalar return). Rewrite `_commit_tensor`, `_commit_linear`, `_add_norm_child`. Delete module-level `_commit_tensors`. Remove `group_size` local, default, and dead deferred `data_format` attach. |
 | `lmdeploy/turbomind/deploy/load_context.py` | Delete file. |
 | `lmdeploy/turbomind/deploy/kind_map.py` | `build_linear` accepts symmetric `block_in` / `block_out` parameters; clones format via `dataclasses.replace` when sentinels need resolving; drops hardcoded `to_data_format(0, 0)` call. |
-| `lmdeploy/turbomind/deploy/spec.py` | `Spec.build_linear` (line 151) passes `self._group_size` as both `block_in` and `block_out`. |
+| `lmdeploy/turbomind/deploy/spec.py` | `TextModelSpec._linear` (line 151) passes `self._group_size` as both `block_in` and `block_out`. |
 | `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py` | Two `build_linear` call sites updated to pass `self._group_size`. |
 | `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` | One `build_linear` call site updated to pass `self._group_size`. |
 
