@@ -34,6 +34,12 @@ AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg)
 void AttentionWeight::prepare()
 {
     Module::prepare();
+
+    // Derive kv_head_num from actual weight tensor dimensions.
+    // Python's repeat_kv_for_tp() physically pads KV heads, and w_qkv
+    // is TP-sharded, so output_dim is per-shard.
+    int local_total = w_qkv->output_dim / head_dim;
+    kv_head_num = (local_total * tp_size - head_num) / 2;
 }
 
 void init_rope_kernel_param(const core::RopeConfig& rope, RopeKernelParam& rope_kernel)
