@@ -101,10 +101,8 @@ def split_output_gate(tensor: torch.Tensor, *, head_dim: int
     [batch, head_num, 2, head_dim], split into q_real and gate.
     """
     head_num = tensor.size(-1) // (head_dim * 2)
-    t = tensor.view(-1, head_num, 2, head_dim)
-    q_real = t[:, :, 0, :].contiguous().reshape(-1, head_num * head_dim)
-    gate = t[:, :, 1, :].contiguous().reshape(-1, head_num * head_dim)
-    return q_real, gate
+    q, gate = tensor.view(-1, head_num, 2, head_dim).unbind(2)
+    return q.reshape(-1, head_num * head_dim), gate.reshape(-1, head_num * head_dim)
 
 
 @transform_tensors
