@@ -110,17 +110,16 @@ def fuse_ffn_linears(
 
 
 def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
-                     tp: int) -> tuple[Linear, Linear, Linear, int]:
+                     tp: int) -> tuple[Linear, Linear, Linear]:
     """Pad w1/w3 output dim and w2 input dim for TP sharding.
 
-    Returns the padded (w1, w2, w3) and the padded inter_size.
+    Returns the padded (w1, w2, w3).
     Padding uses lcm(block_in, block_out) * tp as the alignment target.
     """
-    w = w1.tensors.get('weight') or w3.tensors.get('weight')
-    raw_inter = w.size(-1)
+    raw_inter = w1.tensors['weight'].size(-1)
 
     if tp <= 1:
-        return w1, w2, w3, raw_inter
+        return w1, w2, w3
     fmt = w1.weight_format
     block_out = (fmt.block_out or 1) if fmt else 1
     block_in = (fmt.block_in or 1) if fmt else 1
@@ -131,7 +130,7 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     groups_per_rank = (groups + tp - 1) // tp
     padded_inter = groups_per_rank * effective_block * tp
     if padded_inter == raw_inter:
-        return w1, w2, w3, raw_inter
+        return w1, w2, w3
 
     # Pad w1/w3 output dim (axis -1)
     def _pad_linear_out(lin: Linear, target: int) -> Linear:
@@ -158,7 +157,7 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     w1 = _pad_linear_out(w1, padded_inter)
     w3 = _pad_linear_out(w3, padded_inter)
     w2 = _pad_linear_in(w2, padded_inter)
-    return w1, w2, w3, padded_inter
+    return w1, w2, w3
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +176,7 @@ class FfnBuilder(Builder):
         call ensures the C++ module is lazily created with the correct flag.
         """
         # Pad weights for TP alignment before any fusion or sharding
-        w1, w2, w3, padded_inter = _pad_ffn_for_tp(
-            w1, w2, w3, self._tp)
+        w1, w2, w3 = _pad_ffn_for_tp(w1, w2, w3, self._tp)
 
         act_type = getattr(self.config, 'act_type', 0)
         if isinstance(act_type, int):
