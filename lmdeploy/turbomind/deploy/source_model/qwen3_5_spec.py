@@ -62,7 +62,7 @@ class Qwen3_5Spec(TextModelSpec):
         self._attn_cfg.hidden_dim       = self._hidden_units
         self._attn_cfg.head_dim         = self._head_dim
         self._attn_cfg.head_num         = self._head_num
-        self._attn_cfg.kv_head_num      = self._kv_head_num_padded
+        self._attn_cfg.kv_head_num      = self._kv_head_num
         self._attn_cfg.has_bias         = hf_cfg.get('attention_bias', 0)
         self._attn_cfg.qk_norm          = True
         self._attn_cfg.attn_output_gate = bool(self._layer_types) and \

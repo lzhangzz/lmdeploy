@@ -54,7 +54,7 @@ class GptOssSpec(TextModelSpec):
         self._attn_cfg.hidden_dim  = self._hidden_units
         self._attn_cfg.head_dim    = self._head_dim
         self._attn_cfg.head_num    = self._head_num
-        self._attn_cfg.kv_head_num = self._kv_head_num_padded
+        self._attn_cfg.kv_head_num = self._kv_head_num
         self._attn_cfg.has_bias    = int(hf_cfg['attention_bias'])
         self._attn_cfg.attn_sink   = True
         self._apply_rope(self._attn_cfg.rope)

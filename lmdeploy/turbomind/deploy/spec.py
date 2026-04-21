@@ -12,7 +12,7 @@ from lmdeploy.utils import get_logger
 from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
 from .builder import make_linear_config
 from .linear import pad_out_dim
-from .source_model.utils import (_pad_kv_head, detect_layer_prefix,
+from .source_model.utils import (detect_layer_prefix,
                                  parse_rope_param, rope_type_to_int)
 
 if TYPE_CHECKING:
@@ -55,9 +55,9 @@ class TextModelSpec(ABC):
 
         ``group_size`` is the quantization group size the converter resolves
         from ``engine_cfg.model_format`` plus any user override. It lands on
-        ``self._group_size`` so inter_size padding can use it during
-        subclass ``__init__``. (It's not on ``TurbomindEngineConfig``
-        today, so we take it as an explicit kwarg.)
+        ``self._group_size`` so build_linear() can use it during weight
+        loading. (It's not on ``TurbomindEngineConfig`` today, so we take
+        it as an explicit kwarg.)
 
         Subclasses override `_parse_base` (or extend in their own __init__)
         then construct C++ config templates and per-layer lists.
@@ -72,7 +72,7 @@ class TextModelSpec(ABC):
 
         Populated:
           _num_layer, _vocab_size, _norm_eps, _head_num, _kv_head_num,
-          _kv_head_num_padded, _head_dim, _hidden_units, _rope,
+          _head_dim, _hidden_units, _rope,
           _max_position_embeddings, _tie_embeddings, _layer_prefix,
           _embed_key, _norm_key, _model_name, _tune_layer_num,
           _embedding_size.
@@ -96,8 +96,6 @@ class TextModelSpec(ABC):
         self._head_dim = head_dim
         self._head_num = attn_head_num
         self._kv_head_num = kv_head_num
-        self._kv_head_num_padded = _pad_kv_head(
-            kv_head_num, self.engine_cfg.attn_tp_size)
 
         self._rope, self._max_position_embeddings = parse_rope_param(
             cfg, head_dim)
