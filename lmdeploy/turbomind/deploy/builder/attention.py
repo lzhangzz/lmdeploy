@@ -3,7 +3,7 @@
 
 Provides ``AttentionBuilder`` for committing attention weights (QKV fusion,
 O-proj, QK-norm, direct params) and pipeline functions (``dequant_mixed``,
-``pad_for_tp``, ``split_output_gate``, ``fuse_qkv``) for fusing Q/K/V
+``repeat_kv_for_tp``, ``split_output_gate``, ``fuse_qkv``) for fusing Q/K/V
 Linear bundles into a single interleaved w_qkv with KV head padding and
 output-gate splitting.
 """
@@ -78,19 +78,12 @@ def _repeat_kv_heads(tensor: torch.Tensor, *, tp: int,
     return t.repeat(1, n_repeat, 1).reshape(tensor.size(0), target_heads * per_head)
 
 
-def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
-               tp: int, head_dim: int) -> tuple[Linear, Linear, Linear]:
-    """Repeat KV heads to reach a TP-divisible count.
-
-    Q is asserted to already be TP-divisible.
-    Head counts are derived from actual tensor shapes, not config parameters.
-    """
-    q_heads = _infer_heads(q, head_dim)
-    assert q_heads % tp == 0, (
-        f"Q heads={q_heads} must be divisible by tp={tp}")
+def repeat_kv_for_tp(k: Linear, v: Linear, *,
+                     tp: int, head_dim: int) -> tuple[Linear, Linear]:
+    """Repeat KV heads to reach a TP-divisible count."""
     k = _repeat_kv_heads(k, tp=tp, heads=_infer_heads(k, head_dim))
     v = _repeat_kv_heads(v, tp=tp, heads=_infer_heads(v, head_dim))
-    return q, k, v
+    return k, v
 
 
 @transform_tensors
@@ -136,12 +129,11 @@ class AttentionBuilder(Builder):
     def add_qkv_proj(self, q, k, v):
         """Fuse Q/K/V into a single w_qkv with TP interleave, commit.
 
-        Pipeline: dequant_mixed -> pad_for_tp -> [split_output_gate] -> fuse_qkv -> commit.
-        RoPE permutation is done by the spec before calling this method.
+        Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
         q, k, v = dequant_mixed(q, k, v)
-        q, k, v = pad_for_tp(q, k, v, tp=self._tp,
-                              head_dim=self.config.head_dim)
+        k, v = repeat_kv_for_tp(k, v, tp=self._tp,
+                                head_dim=self.config.head_dim)
         gate = None
         if self.config.attn_output_gate:
             q, gate = split_output_gate(q, head_dim=self.config.head_dim)
