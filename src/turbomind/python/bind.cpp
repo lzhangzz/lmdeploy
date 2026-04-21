@@ -25,6 +25,7 @@
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/python/dlpack.h"
 #include "src/turbomind/turbomind.h"
@@ -447,6 +448,7 @@ PYBIND11_MODULE(_turbomind, m)
 
     bind_config<turbomind::core::LinearConfig>(m, "LinearConfig");
     bind_struct<turbomind::core::RopeConfig>(m, "RopeConfig");
+    bind_struct<turbomind::EngineConfig>(m, "EngineConfig");
     bind_config<turbomind::core::AttentionConfig>(m, "AttentionConfig");
     bind_config<turbomind::core::FfnConfig>(m, "FfnConfig");
     bind_config<turbomind::core::MoeConfig>(m, "MoeConfig");
@@ -677,7 +679,7 @@ PYBIND11_MODULE(_turbomind, m)
     py::class_<TurboMind, std::shared_ptr<TurboMind>>(m, "TurboMind")
         .def_static(
             "create",
-            [](std::string model_dir, std::string config) -> std::shared_ptr<TurboMind> {
+            [](std::string model_dir, turbomind::EngineConfig config) -> std::shared_ptr<TurboMind> {
                 auto gil_factory = [] {  //
                     // erase the type
                     return std::static_pointer_cast<void>(std::make_shared<ScopedGIL>());
@@ -687,11 +689,11 @@ PYBIND11_MODULE(_turbomind, m)
                     delete ptr;
                 };
 
-                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, config, gil_factory), no_gil_deleter);
+                std::shared_ptr<TurboMind> model(new TurboMind(model_dir, std::move(config), gil_factory), no_gil_deleter);
                 return model;
             },
             "model_dir"_a,
-            "config"_a = "")
+            "engine_config"_a)
         .def(
             "create_request",
             [](TurboMind* model) { return model->CreateRequest(); },
