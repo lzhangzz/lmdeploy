@@ -90,18 +90,23 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
 
 
 def _infer_cpp_linear_dtype(linear: Linear):
-    """Determine C++ DataType and group_size from ``Linear.weight_format``."""
+    """Determine the C++ ``DataType`` for a ``Linear`` bundle.
+
+    Returns the ``_tm.DataType`` value corresponding to the declared
+    ``weight_format.cpp_dtype_name`` when set, else the C++ equivalent of
+    the weight tensor's torch dtype, else ``None``.  The quantization
+    block size is no longer returned here — callers read it directly from
+    ``linear.weight_format.block_in``.
+    """
     fmt = linear.weight_format
     if fmt is not None and fmt.cpp_dtype_name is not None:
         cpp_dtype = getattr(_tm.DataType, fmt.cpp_dtype_name, None)
         if cpp_dtype is not None:
-            return cpp_dtype, fmt.block_in or 0
-
-    # Trivial (or missing format): dtype from weight tensor
+            return cpp_dtype
     weight = linear.tensors.get("weight")
     if weight is not None:
-        return _TORCH_TO_CPP.get(weight.dtype), 0
-    return None, 0
+        return _TORCH_TO_CPP.get(weight.dtype)
+    return None
 
 
 def _infer_compute_dtype(linear: Linear):
@@ -206,11 +211,6 @@ def transform_tensors(fn):
     return wrapper
 
 
-# ---------------------------------------------------------------------------
-# Core tensor commit (moved from commit.py)
-# ---------------------------------------------------------------------------
-
-
 def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
                          alloc_shape: list[int] | None = None,
                          alloc_dtype=None) -> None:
@@ -254,77 +254,6 @@ def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int,
     if split_dim is None or tp <= 1:
         return tensor
     return tensor.split(tensor.shape[split_dim] // tp, dim=split_dim)[rank]
-
-
-def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
-                    split_side: SplitSide | None, split_num: int, rank: int,
-                    in_dim: int, out_dim: int,
-                    model_dtype=None):
-    """Commit tensor data from a ``Linear`` to a pre-created C++ LinearWeight handle.
-
-    Handles packing, TP sharding, allocation, dtype casting, and padding.
-    """
-    split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
-
-    packer = linear.weight_format.packer if linear.weight_format else None
-
-    # Whether the weight format is quantized (packed).  For quantized formats
-    # the weight shard has a different shape/dtype than the allocation, but
-    # byte sizes match due to the packing invariant.
-    fmt = linear.weight_format
-    is_quantized = fmt is not None and fmt.name != 'trivial'
-
-    for kind, tensor in linear.tensors.items():
-        if packer is not None:
-            tensor = packer(tensor, kind)
-
-        tensor_split_dim = split_dim
-        if kind == "bias" and split_side == SplitSide.INPUT:
-            tensor_split_dim = None
-
-        if tensor_split_dim is not None and split_num > 1:
-            split_size = tensor.shape[tensor_split_dim] // split_num
-            shard = tensor.split(split_size, dim=tensor_split_dim)[rank]
-        else:
-            shard = tensor
-
-        if not shard.is_cuda:
-            shard = shard.cuda(0).contiguous()
-        elif not shard.is_contiguous():
-            shard = shard.contiguous()
-
-        # Determine allocation shape and dtype.
-        if kind == "weight" and is_quantized:
-            # Quantized weight: allocate with model dimensions and weight
-            # format dtype.  Byte sizes match the packed shard due to the
-            # packing invariant (e.g. 8 uint4 values = 1 int32 = 4 bytes).
-            alloc_shape = [in_dim, out_dim]
-            alloc_dtype = cpp_dtype
-        elif kind == "weight" and model_dtype is not None:
-            # Trivial weight: use model compute dtype for dtype coercion.
-            alloc_shape = list(shard.shape)
-            alloc_dtype = model_dtype
-        else:
-            # Scales, zeros, bias: use shard's own shape and dtype.
-            alloc_shape = list(shard.shape)
-            alloc_dtype = _torch_dtype_to_cpp(shard.dtype)
-
-        dst = handle.param(kind).alloc(alloc_shape, alloc_dtype)
-        shard = _cast_shard_for_tm(shard, dst)
-        if dst.byte_size != shard.nbytes and dst.byte_size > shard.nbytes:
-            pad_dim = tensor_split_dim if tensor_split_dim is not None else -1
-            if pad_dim < 0:
-                pad_dim = shard.dim() + pad_dim
-            outer = shard.numel() // shard.shape[pad_dim]
-            extra = (dst.byte_size - shard.nbytes) // (outer * shard.element_size())
-            new_shape = list(shard.shape)
-            new_shape[pad_dim] += extra
-            padded = torch.zeros(new_shape, dtype=shard.dtype, device=shard.device)
-            idx = [slice(None)] * shard.dim()
-            idx[pad_dim] = slice(0, shard.shape[pad_dim])
-            padded[tuple(idx)].copy_(shard)
-            shard = padded
-        dst.copy_from(shard)
 
 
 # ---------------------------------------------------------------------------
@@ -434,13 +363,12 @@ class Builder:
                        model_dtype=None):
         """Commit a ``Linear`` bundle to a named child on all GPUs.
 
-        Creates the LinearWeight child on first call (deferred creation),
-        attaches DataFormat, validates block-scale TP splits, then commits
-        tensor data.
-
-        This mirrors the logic in ``commit.commit_linear()`` exactly,
-        including deferred LinearWeight creation, DataFormat attachment,
-        block-scale TP validation, and padding logic.
+        On first call for a given ``name`` the child ``LinearWeight`` is
+        created via ``handle.create_child`` using a ``LinearConfig``
+        derived from the linear's dimensions and compute dtype; on
+        subsequent calls the existing child is reused.  Tensor data is
+        then sharded per rank (for TP) and copied to the C++ slots via
+        ``_copy_shard_to_param``.
 
         Parameters
         ----------
@@ -453,88 +381,87 @@ class Builder:
         model_dtype : C++ DataType value | None
             The model's configured compute dtype.  When set, trivial
             (non-quantized) weights use this dtype instead of the weight
-            tensor's dtype.  This prevents dtype mismatches when the
-            checkpoint stores weights in a different precision than the
-            model config (e.g. BF16 weights in an FP16 model).
+            tensor's dtype, preventing mismatches when the checkpoint
+            stores weights in a different precision than the model
+            config (e.g. BF16 weights in an FP16 model).
         """
         self._ensure_handles()
-        cpp_dtype, group_size = _infer_cpp_linear_dtype(linear)
-        if group_size == 0:
-            group_size = max(1, 128)  # default; caller should pass correct value
+        w = linear.tensors.get('weight')
+        if w is None:
+            return
 
-        # Ensure the Linear has a DataFormat attached (deferred creation for
-        # formats like AWQ/GPTQ where group_size is not known at build_linear
-        # time).
-        if linear.data_format is None and linear.weight_format is not None:
-            linear = Linear(tensors=linear.tensors,
-                            weight_format=linear.weight_format,
-                            data_format=linear.weight_format.to_data_format(
-                                cpp_dtype if cpp_dtype else _tm.DataType.TYPE_INVALID,
-                                group_size))
+        # --- GPU-invariant preparation -------------------------------------
+        cpp_dtype = _infer_cpp_linear_dtype(linear)
+        fmt = linear.weight_format
+        block_in = (fmt.block_in or 0) if fmt is not None else 0
 
         tp = self._tp if split_side else 1
+        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
-        # Ensure the LinearWeight child exists on each GPU handle.
-        # We check only the first handle; if it doesn't exist, create on all.
-        # The child is created once; subsequent calls for the same name reuse it.
+        in_dim, out_dim = w.shape[0], w.shape[-1]
+        if split_side == SplitSide.OUTPUT:
+            out_dim //= tp
+        elif split_side == SplitSide.INPUT:
+            in_dim //= tp
+
+        compute_dtype = (model_dtype if model_dtype is not None
+                         else _infer_compute_dtype(linear))
+        lin_cfg = _tm.LinearConfig()
+        lin_cfg.input_dim = in_dim
+        lin_cfg.output_dim = out_dim
+        lin_cfg.data_type = compute_dtype or _tm.DataType.TYPE_INVALID
+        lin_cfg.has_bias = 'bias' in linear.tensors
+
+        packer = fmt.packer if fmt else None
+        if packer is not None:
+            tensors = {k: packer(t, k) for k, t in linear.tensors.items()}
+        else:
+            tensors = linear.tensors
+        is_quantized = fmt is not None and fmt.name != 'trivial'
+
+        # Uniform TP-split validation: every kind split along some axis
+        # must have that axis evenly divisible by tp.  Covers weight,
+        # scales, zeros, bias; covers both INPUT and OUTPUT split_side;
+        # respects the bias-on-INPUT no-split rule.  Runs after the
+        # packer hoist so it sees the tensors that will actually be
+        # split.
+        if tp > 1 and split_dim is not None:
+            for kind, tensor in tensors.items():
+                kind_split_dim = split_dim
+                if kind == 'bias' and split_side == SplitSide.INPUT:
+                    kind_split_dim = None
+                if kind_split_dim is not None:
+                    d = tensor.shape[kind_split_dim]
+                    assert d % tp == 0, (
+                        f"TP split: {name}.{kind} dim {kind_split_dim} "
+                        f"has size {d}, not divisible by tp={tp}.")
+
+        # --- Per-GPU commit ------------------------------------------------
         for i, handle in enumerate(self._handles):
             with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
 
-                linear_mod = handle.child(name)
+                linear_mod = (handle.child(name)
+                              or handle.create_child(name, lin_cfg))
+                linear_mod.set_weight_spec(cpp_dtype, block_in)
 
-                if linear_mod is None:
-                    w = linear.tensors.get('weight')
-                    if w is None:
-                        return
-                    in_dim = w.shape[0]
-                    out_dim = w.shape[-1]
-                    if split_side == SplitSide.OUTPUT:
-                        out_dim = out_dim // tp
-                    elif split_side == SplitSide.INPUT:
-                        in_dim = in_dim // tp
-                    compute_dtype = _infer_compute_dtype(linear)
-                    # Always prefer the model's configured compute dtype.  For
-                    # quantized formats, the scales/bias dtype may differ from
-                    # the model's actual compute dtype (e.g. AWQ scales stored
-                    # as bf16 in an fp16 model), which would cause an
-                    # input_dtype mismatch at GEMM time.
-                    if model_dtype is not None:
-                        compute_dtype = model_dtype
-                    lin_cfg = _tm.LinearConfig()
-                    lin_cfg.input_dim = in_dim
-                    lin_cfg.output_dim = out_dim
-                    lin_cfg.data_type = compute_dtype if compute_dtype else _tm.DataType.TYPE_INVALID
-                    lin_cfg.has_bias = 'bias' in linear.tensors
-                    linear_mod = handle.create_child(name, lin_cfg)
+                for kind, tensor in tensors.items():
+                    kind_split_dim = split_dim
+                    if kind == 'bias' and split_side == SplitSide.INPUT:
+                        kind_split_dim = None
+                    shard = _shard(tensor, kind_split_dim, tp, rank)
 
-                # Block-scale TP split validation
-                if split_side == SplitSide.OUTPUT and tp > 1:
-                    wfmt = linear.weight_format
-                    if wfmt is not None and wfmt.block_out:
-                        for kind, tensor in linear.tensors.items():
-                            if kind in ("scales", "zeros"):
-                                n_blocks = tensor.size(-1)
-                                assert n_blocks % tp == 0, (
-                                    f"TP split: {name}.{kind} has {n_blocks} "
-                                    f"output-dimension scale blocks "
-                                    f"(block_out={wfmt.block_out}), not "
-                                    f"divisible by split_num={tp}.")
+                    if kind == 'weight' and is_quantized:
+                        alloc_shape, alloc_dtype = ([in_dim, out_dim],
+                                                    cpp_dtype)
+                    elif kind == 'weight' and model_dtype is not None:
+                        alloc_shape, alloc_dtype = None, model_dtype
+                    else:
+                        alloc_shape, alloc_dtype = None, None
 
-                linear_mod.set_weight_spec(cpp_dtype, group_size)
-
-                # Get model dimensions for correct weight allocation shape
-                w = linear.tensors.get('weight')
-                in_dim = w.shape[0] if w is not None else 0
-                out_dim = w.shape[-1] if w is not None else 0
-                if split_side == SplitSide.OUTPUT:
-                    out_dim = out_dim // tp
-                elif split_side == SplitSide.INPUT:
-                    in_dim = in_dim // tp
-
-                _commit_tensors(linear_mod, linear, cpp_dtype, group_size,
-                                split_side, tp, rank, in_dim, out_dim,
-                                model_dtype=model_dtype)
+                    _copy_shard_to_param(linear_mod, kind, shard,
+                                         alloc_shape=alloc_shape,
+                                         alloc_dtype=alloc_dtype)
 
     def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
                        split_side: SplitSide | None = None):
