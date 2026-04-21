@@ -15,23 +15,6 @@ from ..linear import Linear
 from ._base import Builder, SplitSide, _dequant_linear, transform_tensors
 
 # ---------------------------------------------------------------------------
-# TP split rules (attention)
-# ---------------------------------------------------------------------------
-# Maps attention parameter names to their TP split side.  Parameters with
-# SplitSide.OUTPUT are column-parallel (sharded along output dim, gathered
-# via all-reduce).  Parameters with SplitSide.INPUT are row-parallel
-# (sharded along input dim, gathered via all-reduce).  Keys absent from the
-# table are broadcast to all TP ranks (no split needed).
-
-_ATTN_TP_RULES: dict[str, dict] = {
-    "w_qkv":     dict(split_side=SplitSide.OUTPUT),  # column-parallel
-    "wo":        dict(split_side=SplitSide.INPUT),   # row-parallel
-    "q_proj":    dict(split_side=SplitSide.OUTPUT),
-    "q_b_proj":  dict(split_side=SplitSide.OUTPUT),
-    "kv_b_proj": dict(split_side=SplitSide.OUTPUT),
-}
-
-# ---------------------------------------------------------------------------
 # New pipeline functions (replacing merge_qkv_linear)
 # ---------------------------------------------------------------------------
 
@@ -107,9 +90,8 @@ def fuse_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     Concatenates output channels with TP interleaving.
     Layout per tp-shard: [Q | K | V] or [Q | K | V | Gate].
     """
-    parts = [t.view(t.size(0), tp, -1) for t in (q, k, v)]
-    if gate is not None:
-        parts.append(gate.view(gate.size(0), tp, -1))
+    tensors = [t for t in (q, k, v, gate) if t is not None]
+    parts = [t.view(t.size(0), tp, -1) for t in tensors]
     merged = torch.cat(parts, dim=-1)
     return merged.view(-1, merged.size(-1) * tp)
 
@@ -143,24 +125,10 @@ class AttentionBuilder(Builder):
         self._commit_linear('wo', o, SplitSide.INPUT,
                             model_dtype=self.config.data_type)
 
-    def add_linear(self, name, linear):
-        """Commit a named attention linear using TP rules.
-
-        Looks up ``_ATTN_TP_RULES`` for the split side; absent keys are
-        broadcast (no TP split).  Used for MLA projections (q_b_proj,
-        kv_b_proj, o_proj) and other non-QKV attention linears.
-        """
-        rule = _ATTN_TP_RULES.get(name, {})
-        split_side = rule.get('split_side')
-        self._commit_linear(name, linear, split_side=split_side,
-                            model_dtype=self.config.data_type)
-
     def add_qk_norm(self, q, k, *, norm_eps):
         """Create NormConfig children for q_norm, k_norm, commit tensors."""
-        if q is not None:
-            self._add_norm_child('q_norm', q, data_type=self.config.data_type, norm_eps=norm_eps)
-        if k is not None:
-            self._add_norm_child('k_norm', k, data_type=self.config.data_type, norm_eps=norm_eps)
+        self._add_norm_child('q_norm', q, data_type=self.config.data_type, norm_eps=norm_eps)
+        self._add_norm_child('k_norm', k, data_type=self.config.data_type, norm_eps=norm_eps)
 
     def add_param(self, name, tensor):
         """Commit a direct parameter. Builder determines split side."""
