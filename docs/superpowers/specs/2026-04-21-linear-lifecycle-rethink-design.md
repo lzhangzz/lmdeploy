@@ -415,13 +415,23 @@ def _linear(self, pfx):
 
 `tok_embeddings` was always used as a lookup table (`weights_.tok_embeddings->weight` in `language_model.cc`); no GEMM is performed with it. Wrapping it in `LinearWeight` was scaffolding. `verify()` and `vocab_size` derivation in `model_weight.cc` read the Tensor directly.
 
-### `_commit_linear` / `_commit_tensor` accept tp/ranks overrides
+### `_commit_linear` / `_commit_tensor` accept kwargs for TP and config overrides
 
 ```python
-def _commit_linear(self, name, linear, split_side=None, *, tp=None, ranks=None):
-    """Commit a Linear to a named LinearWeight child. tp/ranks default to
-    the builder's own values; override for top-level linears whose TP differs
-    from their parent (e.g. output committed onto the root text-model handle)."""
+def _commit_linear(self, name, linear, split_side=None, *,
+                   tp=None, ranks=None,
+                   is_grouped: bool = False,
+                   epilogue=_tm.Epilogue.kNone):
+    """Commit a Linear to a named LinearWeight child.
+
+    tp / ranks default to the builder's own values; override for top-level
+    linears whose TP differs from their parent (e.g. output committed onto
+    the root text-model handle).
+
+    is_grouped / epilogue are LinearConfig knobs the caller supplies based
+    on the semantics of this particular commit. This primitive stays
+    format-agnostic and name-agnostic.
+    """
 
 def _commit_tensor(self, name, tensor, split_side=None, *, tp=None, ranks=None):
     """Commit a raw tensor to a named parameter slot on the builder's handle.
@@ -431,8 +441,12 @@ def _commit_tensor(self, name, tensor, split_side=None, *, tp=None, ranks=None):
 
 Inside `_commit_linear` all GPU-invariant work is hoisted above the per-GPU loop (packer, `LinearConfig` build, TP-split validation). Post-Section-1 no `alloc(shape, dtype)` call is made from Python — param slots are pre-allocated in the C++ constructor; commit just copies bytes.
 
+`_make_linear_config_for` is name-agnostic and knows nothing about which builder or layer this linear belongs to:
+
 ```python
-def _make_linear_config_for(self, linear, split_side, tp, name):
+def _make_linear_config_for(self, linear, split_side, tp, *,
+                            is_grouped: bool,
+                            epilogue) -> _tm.LinearConfig:
     w = linear.tensors['weight']
     in_dim, out_dim = w.shape[0], w.shape[-1]
     if split_side is SplitSide.OUTPUT:
@@ -440,21 +454,48 @@ def _make_linear_config_for(self, linear, split_side, tp, name):
     elif split_side is SplitSide.INPUT:
         in_dim  //= tp
     cfg = _tm.LinearConfig()
-    cfg.input_dim     = in_dim
-    cfg.output_dim    = out_dim
-    cfg.format        = linear.data_format
-    cfg.has_bias      = 'bias' in linear.tensors
-    cfg.is_grouped    = getattr(self.config, 'fused_moe', False)
-    # kGatedSilu epilogue fires only on fused gate+up projection committed
-    # as 'w1w3' when the builder's config has fuse_silu set. All other
-    # LinearWeights get kNone.
-    cfg.epilogue      = (_tm.Epilogue.kGatedSilu
-                         if name == 'w1w3' and getattr(self.config, 'fuse_silu', False)
-                         else _tm.Epilogue.kNone)
+    cfg.input_dim  = in_dim
+    cfg.output_dim = out_dim
+    cfg.format     = linear.data_format
+    cfg.has_bias   = 'bias' in linear.tensors
+    cfg.is_grouped = is_grouped
+    cfg.epilogue   = epilogue
     return cfg
 ```
 
-The `name` argument is the same `name` already passed to `_commit_linear`, so callers don't supply anything new. Epilogue logic is centralized here; `FfnBuilder` no longer has to set anything special.
+**Callers supply `is_grouped` / `epilogue` explicitly** based on what the commit means in their context. Example from `FfnBuilder.add_ffn`:
+
+```python
+def add_ffn(self, w1, w2, w3):
+    is_grouped = getattr(self.config, 'fused_moe', False)
+    act_type   = _act_type_name(getattr(self.config, 'act_type', 0))
+
+    fused = None
+    fused_silu = False
+    if w1 is not None and w3 is not None:
+        fused, fused_silu = fuse_ffn_linears(w1, w3, self._tp, act_type,
+                                             is_moe=is_grouped)
+
+    if fused is not None:
+        epilogue = _tm.Epilogue.kGatedSilu if fused_silu else _tm.Epilogue.kNone
+        self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
+                            is_grouped=is_grouped, epilogue=epilogue)
+    else:
+        if w1 is not None:
+            self._commit_linear('w1', w1, SplitSide.OUTPUT,
+                                is_grouped=is_grouped)
+        if w3 is not None:
+            self._commit_linear('w3', w3, SplitSide.OUTPUT,
+                                is_grouped=is_grouped)
+    if w2 is not None:
+        self._commit_linear('w2', w2, SplitSide.INPUT,
+                            is_grouped=is_grouped)
+```
+
+Benefits:
+- `_commit_linear` and `_make_linear_config_for` are general primitives with no knowledge of the FFN-vs-attention-vs-MLA distinction, no knowledge of name-based dispatch.
+- The one place that knows "w1w3 + fuse_silu means kGatedSilu" is `FfnBuilder.add_ffn` — exactly where that semantic lives.
+- `FfnConfig.fuse_silu` on the C++ side becomes redundant (the epilogue now lives directly on the `LinearConfig` of `w1w3`). Decide in implementation whether to keep / drop the `FfnConfig.fuse_silu` field.
 
 ### `LinearBuilder` and `set_weight` deleted
 
@@ -517,7 +558,7 @@ Normalize `_embed_key` / `_norm_key` in the base class to prefixes (not full key
 
 ### `FfnWeight::prepare` post-hoc mutations gone
 
-Both `set_grouped(true)` (for fused MoE experts) and `epilogue = kGatedSilu` (for `w1w3` when fused SiLU) are passed to `LinearConfig` at construction. The `FfnWeight::prepare()` loops that applied these post-construction are deleted. `is_grouped` comes from `FfnConfig.fused_moe` at LinearConfig build time; epilogue comes from `FfnConfig.fuse_silu` combined with the caller's decision to commit under the name `w1w3`.
+Both `set_grouped(true)` (for fused MoE experts) and `epilogue = kGatedSilu` (for `w1w3` when fused SiLU) are passed directly on `LinearConfig` at construction. Python callers in `FfnBuilder.add_ffn` supply these via `_commit_linear` kwargs, based on the fusion decision they just made. The `FfnWeight::prepare()` loops that mutated children post-construction are deleted.
 
 ## 4. `Linear` dataclass finalization
 
@@ -605,9 +646,9 @@ Per `AGENTS.md`:
 | --- | --- | --- |
 | Qwen3-small trivial | 1, 2 | C1, C3, C4, C5, C6 |
 | AWQ quantized | 1, 2 | C1, C3, C6 |
-| FP8 (DeepSeek-V3 FP8 or similar) | 1, 2 | C1, C2, C3 |
+| FP8 (GLM-4.7-Flash FP8 if available, else other FP8 model in local cache) | 1, 2 | C1, C2, C3 |
 | MXFP4 (GPT-OSS) | 1 | C3 |
-| MLA (DeepSeek-V3) | 2 | C3 |
+| MLA (GLM-4.7-Flash via `glm4_moe_lite_spec`) | 2 | C3 |
 | DeltaNet (Qwen3.5) | 1 | C3, C6 |
 | Compressed-tensors `group_size=32`, if available | 1 | C3 — latent-bug regression guard |
 
@@ -660,7 +701,8 @@ Each run: `scripts/test_turbomind_model.py`, ≥ 128 tokens of coherent output. 
 - `_parse_quant_blocks` in `converter.py`
 - `TextModelSpec._blocks: BlockSize` field
 - `tp` / `ranks` kwargs on `_commit_linear` and `_commit_tensor`
-- `_copy_linear_to_handle`, `_make_linear_config_for` helpers in `_base.py`
+- `is_grouped` / `epilogue` kwargs on `_commit_linear` (caller-supplied, no name-based dispatch)
+- `_copy_linear_to_handle`, `_make_linear_config_for(..., *, is_grouped, epilogue)` helpers in `_base.py`
 - `Linear.__post_init__` guards
 
 ### Invariants strengthened
