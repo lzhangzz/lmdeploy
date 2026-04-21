@@ -36,22 +36,23 @@ _ATTN_TP_RULES: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 
-def dequant_mixed(q: Linear, k: Linear, v: Linear) -> tuple[Linear, Linear, Linear]:
-    """Dequantize to trivial if formats are mixed.
+def dequant_mixed(*linears: Linear) -> tuple[Linear, ...]:
+    """Dequantize to trivial if any arg is in trivial format.
 
-    Two cases:
-    1. q, k, v have different weight formats -> dequant all to trivial
-    2. Some are already trivial (e.g. from reorder_rotary_emb_linear)
-       -> dequant the rest so all match for fusion
+    When any Linear has trivial weight format (e.g. from RoPE reordering),
+    dequantize all non-trivial args so formats match for fusion.
+    None args pass through unchanged.
     """
-    names = {lin.weight_format.name for lin in (q, k, v) if lin.weight_format}
-    if len(names) <= 1:
-        # All same format (or all None) -- check if any are trivial while others aren't
-        trivial = {lin.weight_format.name == 'trivial' for lin in (q, k, v)
-                   if lin.weight_format}
-        if len(trivial) <= 1:
-            return q, k, v
-    return _dequant_linear(q), _dequant_linear(k), _dequant_linear(v)
+    has_trivial = any(
+        l is not None
+        and l.weight_format is not None
+        and l.weight_format.name == 'trivial'
+        for l in linears
+    )
+    if not has_trivial:
+        return linears
+    return tuple(_dequant_linear(l) if l is not None else l
+                 for l in linears)
 
 
 def _infer_heads(linear: Linear, head_dim: int) -> int:
