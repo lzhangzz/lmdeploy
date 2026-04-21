@@ -297,9 +297,13 @@ class Qwen3_5Spec(TextModelSpec):
 
     def _packed_moe_expert_indexed(self, pfx, expert_idx, inter_size):
         gate_up_lin = build_linear(self.params, f'{pfx}.gate_up_proj',
-                                   index=expert_idx)
+                                   index=expert_idx,
+                                   block_in=self._group_size,
+                                   block_out=self._group_size)
         down_lin = build_linear(self.params, f'{pfx}.down_proj',
-                                index=expert_idx)
+                                index=expert_idx,
+                                block_in=self._group_size,
+                                block_out=self._group_size)
         if gate_up_lin is None or down_lin is None:
             return None
 

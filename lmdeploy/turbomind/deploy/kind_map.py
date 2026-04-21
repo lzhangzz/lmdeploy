@@ -14,7 +14,7 @@ logic that previously lived in ``policy.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import torch
@@ -536,7 +536,10 @@ ALL_SUFFIXES: frozenset[str] = frozenset(s for fmt in FORMAT_PRIORITY for s in f
 def build_linear(
     params: dict[str, torch.Tensor],
     prefix: str,
+    *,
     index: int | None = None,
+    block_in: int = 0,
+    block_out: int = 0,
 ) -> Linear | None:
     """Build a ``Linear`` bundle from checkpoint tensors at *prefix*.
 
@@ -549,8 +552,17 @@ def build_linear(
     before classification and normalisation (used for packed expert tensors
     where the expert dimension is the leading axis).
 
+    ``block_in`` and ``block_out`` resolve the format's quantization block
+    sizes at conversion time.  A format with ``block_in == 0`` (AWQ, GPTQ,
+    compressed-tensors) declares "use the runtime group_size".  The caller
+    passes that value; we clone the format with ``dataclasses.replace`` so
+    the returned ``Linear`` carries an authoritative ``WeightFormat``.  The
+    same mechanism applies to ``block_out == 0``, reserved for future
+    formats.  Passing ``0`` means "no runtime value available" and leaves
+    the format's declared sentinel in place.
+
     The returned ``Linear`` is in TM layout ``[in, out]`` and carries the
-    detected ``WeightFormat`` for downstream use in ``commit_linear``.
+    detected ``WeightFormat`` for downstream use in ``_commit_linear``.
     Returns ``None`` if no tensors are found at *prefix*.
     """
     from .linear import Linear
@@ -565,6 +577,14 @@ def build_linear(
     if fmt is None:
         return None
 
+    replacements: dict[str, int] = {}
+    if fmt.block_in == 0 and block_in > 0:
+        replacements['block_in'] = block_in
+    if fmt.block_out == 0 and block_out > 0:
+        replacements['block_out'] = block_out
+    if replacements:
+        fmt = replace(fmt, **replacements)
+
     tensors: dict[str, torch.Tensor] = {
         kind: fmt.normalizer(available[s], kind)
         for s, kind in fmt.suffix_map.items()
@@ -574,8 +594,7 @@ def build_linear(
         return None
 
     fmt.complete_tensors(tensors)
-    data_format = fmt.to_data_format(0, group_size=0)
-    return Linear(tensors=tensors, weight_format=fmt, data_format=data_format)
+    return Linear(tensors=tensors, weight_format=fmt, data_format=None)
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:

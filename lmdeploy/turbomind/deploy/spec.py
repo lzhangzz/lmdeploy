@@ -148,7 +148,9 @@ class TextModelSpec(ABC):
 
     def _linear(self, pfx: str):
         from .kind_map import build_linear
-        return build_linear(self.params, pfx)
+        return build_linear(self.params, pfx,
+                            block_in=self._group_size,
+                            block_out=self._group_size)
 
     def _cpp_dtype(self):
         return _cd(self.engine_cfg.dtype)
