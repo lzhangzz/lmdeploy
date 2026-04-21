@@ -116,20 +116,11 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     Returns the padded (w1, w2, w3) and the padded inter_size.
     Padding uses lcm(block_in, block_out) * tp as the alignment target.
     """
-    if tp <= 1:
-        w = w1.tensors.get('weight')
-        if w is None:
-            w = w3.tensors.get('weight')
-        raw_inter = w.size(-1) if w is not None else 0
-        return w1, w2, w3, raw_inter
-
-    w = w1.tensors.get('weight')
-    if w is None:
-        w = w3.tensors.get('weight')
-    if w is None:
-        return w1, w2, w3, 0
-
+    w = w1.tensors.get('weight') or w3.tensors.get('weight')
     raw_inter = w.size(-1)
+
+    if tp <= 1:
+        return w1, w2, w3, raw_inter
     fmt = w1.weight_format
     block_out = (fmt.block_out or 1) if fmt else 1
     block_in = (fmt.block_in or 1) if fmt else 1
@@ -189,18 +180,13 @@ class FfnBuilder(Builder):
         w1, w2, w3, padded_inter = _pad_ffn_for_tp(
             w1, w2, w3, self._tp)
 
-        fused = None
-        fused_silu = False
-        if w1 is not None and w3 is not None:
-            act_type = getattr(self.config, 'act_type', 0)
-            # act_type is an int in FfnConfig, convert to string for transform
-            if isinstance(act_type, int):
-                act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
-            fused, fused_silu = fuse_ffn_linears(
-                w1, w3, self._tp, act_type,
-                is_moe=getattr(self.config, 'fused_moe', False))
+        act_type = getattr(self.config, 'act_type', 0)
+        if isinstance(act_type, int):
+            act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
+        fused, fused_silu = fuse_ffn_linears(
+            w1, w3, self._tp, act_type,
+            is_moe=getattr(self.config, 'fused_moe', False))
 
-        # Update config BEFORE first _commit_linear triggers _ensure_handles()
         self.config.fuse_silu = fused_silu
 
         model_dtype = self.config.data_type
@@ -208,12 +194,9 @@ class FfnBuilder(Builder):
             self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)
         else:
-            if w1 is not None:
-                self._commit_linear('w1', w1, SplitSide.OUTPUT,
-                                    model_dtype=model_dtype)
-            if w3 is not None:
-                self._commit_linear('w3', w3, SplitSide.OUTPUT,
-                                    model_dtype=model_dtype)
-        if w2 is not None:
-            self._commit_linear('w2', w2, SplitSide.INPUT,
+            self._commit_linear('w1', w1, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)
+            self._commit_linear('w3', w3, SplitSide.OUTPUT,
+                                model_dtype=model_dtype)
+        self._commit_linear('w2', w2, SplitSide.INPUT,
+                            model_dtype=model_dtype)
