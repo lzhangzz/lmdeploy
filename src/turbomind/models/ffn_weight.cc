@@ -24,9 +24,10 @@ void FfnWeight::prepare()
 {
     // Derive per-rank inter_size from actual weight dimensions.
     // Weight tensors are already TP-sharded by the Python builder,
-    // so w1/w3 output_dim (or w1w3 output_dim) equals per-rank inter_size.
+    // so w1 output_dim equals per-rank inter_size.  For fused w1w3,
+    // output_dim = 2 * inter_size (gate + up).
     if (w1w3) {
-        inter_size_ = w1w3->output_dim;
+        inter_size_ = w1w3->output_dim / 2;
     } else if (w1) {
         inter_size_ = w1->output_dim;
     }

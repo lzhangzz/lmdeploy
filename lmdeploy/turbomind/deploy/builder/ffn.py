@@ -117,11 +117,15 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     Padding uses lcm(block_in, block_out) * tp as the alignment target.
     """
     if tp <= 1:
-        w = w1.tensors.get('weight') or w3.tensors.get('weight')
+        w = w1.tensors.get('weight')
+        if w is None:
+            w = w3.tensors.get('weight')
         raw_inter = w.size(-1) if w is not None else 0
         return w1, w2, w3, raw_inter
 
-    w = w1.tensors.get('weight') or w3.tensors.get('weight')
+    w = w1.tensors.get('weight')
+    if w is None:
+        w = w3.tensors.get('weight')
     if w is None:
         return w1, w2, w3, 0
 

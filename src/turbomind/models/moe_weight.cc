@@ -104,7 +104,7 @@ void MoeWeight::prepare()
 
         core::FfnConfig block_cfg;
         block_cfg.hidden_dim = hidden_dim;
-        block_cfg.inter_size = inter_size * tp_size_;
+        block_cfg.inter_size = inter_size;
         block_cfg.has_bias   = mlp_bias_;
         block_cfg.tp_size    = tp_size_;
         block_cfg.tp_rank    = tp_rank_;
