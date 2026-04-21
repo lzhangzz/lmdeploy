@@ -23,7 +23,7 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
     scoring_func = cfg.scoring_func;
     router_n_groups = cfg.router_n_groups;
     hidden_dim = cfg.hidden_dim;
-    inter_size = cfg.inter_size / cfg.tp_size;
+    inter_size = cfg.inter_size;
     mlp_bias_ = cfg.mlp_bias;
     data_type_ = cfg.data_type;
     tp_size_ = cfg.tp_size;
@@ -97,6 +97,11 @@ void MoeWeight::prepare()
 
     // Create batched block view for fused MoE path
     if (expert_num > 0 && method() == MoeMethod::kFused) {
+        // Derive per-rank inter_size from first expert's weights.
+        if (auto* e0 = expert(0)) {
+            inter_size = e0->inter_size();
+        }
+
         core::FfnConfig block_cfg;
         block_cfg.hidden_dim = hidden_dim;
         block_cfg.inter_size = inter_size * tp_size_;
