@@ -9,7 +9,6 @@ import os.path as osp
 import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from queue import Queue
@@ -17,7 +16,6 @@ from typing import Any
 
 import pybase64
 import torch
-import yaml
 
 import lmdeploy
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
@@ -219,12 +217,43 @@ class TurboMind:
         self._vocab_size = spec._vocab_size
         self.engine_config = engine_config
 
-        config_dict = {'engine_config': asdict(engine_config)}
-        logger.info(f'turbomind model config:\n\n'
-                    f'{json.dumps(config_dict, indent=2)}')
+        dtype_map = {
+            'bfloat16': _tm.DataType.TYPE_BF16,
+            'float16': _tm.DataType.TYPE_FP16,
+        }
+        ec = _tm.EngineConfig()
+        ec.data_type = dtype_map[engine_config.dtype]
+        ec.cache_block_seq_len = engine_config.cache_block_seq_len
+        ec.quant_policy = engine_config.quant_policy
+        ec.max_batch_size = engine_config.max_batch_size
+        ec.max_prefill_token_num = engine_config.max_prefill_token_num
+        ec.session_len = engine_config.session_len
+        ec.cache_max_block_count = engine_config.cache_max_entry_count
+        ec.cache_chunk_size = engine_config.cache_chunk_size
+        ec.enable_prefix_caching = engine_config.enable_prefix_caching
+        ec.enable_metrics = engine_config.enable_metrics
+        ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
+        ec.max_prefill_iters = engine_config.max_prefill_iters
+        ec.async_ = engine_config.async_
+        ec.outer_dp_size = engine_config.outer_dp_size
+        ec.attn_dp_size = engine_config.attn_dp_size
+        ec.attn_tp_size = engine_config.attn_tp_size
+        ec.attn_cp_size = engine_config.attn_cp_size
+        ec.mlp_tp_size = engine_config.mlp_tp_size
+        ec.devices = engine_config.devices
+        ec.nnodes = engine_config.nnodes
+        ec.node_rank = engine_config.node_rank
+        ec.communicator = engine_config.communicator
 
-        model_comm = _tm.TurboMind.create(
-            model_dir='', config=yaml.safe_dump(config_dict))
+        logger.info(f'turbomind engine config:\n\n'
+                    f'dtype={engine_config.dtype}, session_len={engine_config.session_len}, '
+                    f'max_batch_size={engine_config.max_batch_size}, '
+                    f'devices={engine_config.devices}, '
+                    f'tp={engine_config.attn_tp_size}, '
+                    f'dp={engine_config.attn_dp_size}, '
+                    f'cp={engine_config.attn_cp_size}')
+
+        model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
 
         self._tm_model = OUTPUT_MODELS.get('tm')(
