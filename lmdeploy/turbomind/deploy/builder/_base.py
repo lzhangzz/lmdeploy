@@ -417,7 +417,13 @@ class Builder:
             tensors = {k: packer(t, k) for k, t in linear.tensors.items()}
         else:
             tensors = linear.tensors
-        is_quantized = fmt is not None and fmt.name != 'trivial'
+        is_quantized = fmt is not None and fmt.packer is not None
+
+        kind_split_dims = {
+            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
+                  else split_dim
+            for kind in tensors
+        }
 
         # Uniform TP-split validation: every kind split along some axis
         # must have that axis evenly divisible by tp.  Covers weight,
@@ -427,9 +433,7 @@ class Builder:
         # split.
         if tp > 1 and split_dim is not None:
             for kind, tensor in tensors.items():
-                kind_split_dim = split_dim
-                if kind == 'bias' and split_side == SplitSide.INPUT:
-                    kind_split_dim = None
+                kind_split_dim = kind_split_dims[kind]
                 if kind_split_dim is not None:
                     d = tensor.shape[kind_split_dim]
                     assert d % tp == 0, (
@@ -441,15 +445,13 @@ class Builder:
             with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
 
+                # get-or-create: create_child fires only on the first commit for this name
                 linear_mod = (handle.child(name)
                               or handle.create_child(name, lin_cfg))
                 linear_mod.set_weight_spec(cpp_dtype, block_in)
 
                 for kind, tensor in tensors.items():
-                    kind_split_dim = split_dim
-                    if kind == 'bias' and split_side == SplitSide.INPUT:
-                        kind_split_dim = None
-                    shard = _shard(tensor, kind_split_dim, tp, rank)
+                    shard = _shard(tensor, kind_split_dims[kind], tp, rank)
 
                     if kind == 'weight' and is_quantized:
                         alloc_shape, alloc_dtype = ([in_dim, out_dim],
