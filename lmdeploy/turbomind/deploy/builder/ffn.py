@@ -15,7 +15,6 @@ import torch
 from ..linear import (Linear, chunk_linears as _chunk_linears,
                        interleave_linears as _interleave_linears,
                        pad_in_dim, pad_out_dim)
-from ..source_model.utils import _pad_inter_size
 from ._base import Builder, SplitSide
 
 __all__ = [
@@ -132,7 +131,10 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     block_in = (fmt.block_in or 1) if fmt else 1
     effective_block = math.lcm(block_in, block_out) if block_in != block_out else block_out
 
-    padded_inter = _pad_inter_size(raw_inter, effective_block, tp)
+    # Pad inter_size so it is divisible by effective_block * tp.
+    groups = (raw_inter + effective_block - 1) // effective_block
+    groups_per_rank = (groups + tp - 1) // tp
+    padded_inter = groups_per_rank * effective_block * tp
     if padded_inter == raw_inter:
         return w1, w2, w3, raw_inter
 
