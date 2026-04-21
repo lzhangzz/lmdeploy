@@ -18,14 +18,20 @@ FfnWeight::FfnWeight(const core::FfnConfig& cfg)
     , is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(cfg.act_type) == ActivationType::kSilu}
     , is_fused_moe_{cfg.fused_moe}
 {
-    TM_CHECK(inter_size_ % tp_size_ == 0) << inter_size_ << " " << tp_size_;
-    inter_size_ /= tp_size_;
 }
 
 void FfnWeight::prepare()
 {
+    // Derive per-rank inter_size from actual weight dimensions.
+    // Weight tensors are already TP-sharded by the Python builder,
+    // so w1/w3 output_dim (or w1w3 output_dim) equals per-rank inter_size.
+    if (w1w3) {
+        inter_size_ = w1w3->output_dim;
+    } else if (w1) {
+        inter_size_ = w1->output_dim;
+    }
+
     // Set epilogue on existing w1w3 child if fused silu is active.
-    // The w1/w3 fusion (interleave/chunk) is now done on the Python side.
     if (w1w3) {
         auto* fused = static_cast<LinearWeight*>(w1w3.get());
         if (is_fused_silu_) {
