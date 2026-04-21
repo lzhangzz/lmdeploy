@@ -211,6 +211,51 @@ def transform_tensors(fn):
 # ---------------------------------------------------------------------------
 
 
+def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
+                         alloc_shape: list[int] | None = None,
+                         alloc_dtype=None) -> None:
+    """Move shard to GPU, allocate the C++ param slot, cast, and copy.
+
+    Invariant: ``dst.byte_size == shard.nbytes`` after the cast.  Upstream
+    is responsible for any padding/reshape needed to satisfy this.  A
+    mismatch raises immediately.
+
+    ``alloc_shape`` / ``alloc_dtype`` default to the shard's own shape /
+    dtype.  Override only to express shape/dtype *relabels* where byte
+    size is preserved (e.g. quantized weight: physical int32
+    [in, out/8] stored in a logical UINT4 [in, out] C++ slot).
+    """
+    if not shard.is_cuda:
+        shard = shard.cuda(0).contiguous()
+    elif not shard.is_contiguous():
+        shard = shard.contiguous()
+
+    if alloc_shape is None:
+        alloc_shape = list(shard.shape)
+    if alloc_dtype is None:
+        alloc_dtype = _torch_dtype_to_cpp(shard.dtype)
+
+    dst = handle.param(param_name).alloc(alloc_shape, alloc_dtype)
+    shard = _cast_shard_for_tm(shard, dst)
+    assert dst.byte_size == shard.nbytes, (
+        f"{param_name}: alloc byte_size={dst.byte_size} != "
+        f"shard.nbytes={shard.nbytes}")
+    dst.copy_from(shard)
+
+
+def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int,
+           rank: int) -> torch.Tensor:
+    """Return the ``rank``-th split along ``split_dim``, or the tensor unchanged.
+
+    Used wherever a TP shard is selected from a broadcast-by-default
+    tensor.  A ``split_dim`` of ``None`` or ``tp <= 1`` returns the tensor
+    untouched.
+    """
+    if split_dim is None or tp <= 1:
+        return tensor
+    return tensor.split(tensor.shape[split_dim] // tp, dim=split_dim)[rank]
+
+
 def _commit_tensors(handle, linear: Linear, cpp_dtype, group_size: int,
                     split_side: SplitSide | None, split_num: int, rank: int,
                     in_dim: int, out_dim: int,
@@ -514,22 +559,8 @@ class Builder:
         for i, handle in enumerate(self._handles):
             with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
-
-                if split_dim is not None and tp > 1:
-                    split_size = tensor.shape[split_dim] // tp
-                    shard = tensor.split(split_size, dim=split_dim)[rank]
-                else:
-                    shard = tensor
-
-                if not shard.is_cuda:
-                    shard = shard.cuda(0).contiguous()
-                elif not shard.is_contiguous():
-                    shard = shard.contiguous()
-
-                cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
-                dst = handle.param(name).alloc(list(shard.shape), cpp_dtype)
-                shard = _cast_shard_for_tm(shard, dst)
-                dst.copy_from(shard)
+                shard = _shard(tensor, split_dim, tp, rank)
+                _copy_shard_to_param(handle, name, shard)
 
     def _add_norm_child(self, name: str, tensor: torch.Tensor,
                         data_type=None, *, norm_eps):
@@ -550,20 +581,14 @@ class Builder:
         from .norm import make_norm_config
         if data_type is None:
             data_type = _tm.DataType.TYPE_FP32
-        norm_cfg = make_norm_config(dim=tensor.shape[-1], data_type=data_type, norm_eps=norm_eps)
+        norm_cfg = make_norm_config(dim=tensor.shape[-1],
+                                    data_type=data_type,
+                                    norm_eps=norm_eps)
 
         for i, handle in enumerate(self._handles):
             with self._contexts[i]:
                 child = handle.create_child(name, norm_cfg)
-                shard = tensor
-                if not shard.is_cuda:
-                    shard = shard.cuda(0).contiguous()
-                elif not shard.is_contiguous():
-                    shard = shard.contiguous()
-                cpp_dtype = _torch_dtype_to_cpp(shard.dtype)
-                dst = child.param('weight').alloc(list(shard.shape), cpp_dtype)
-                shard = _cast_shard_for_tm(shard, dst)
-                dst.copy_from(shard)
+                _copy_shard_to_param(child, 'weight', tensor)
 
 
 # ---------------------------------------------------------------------------
