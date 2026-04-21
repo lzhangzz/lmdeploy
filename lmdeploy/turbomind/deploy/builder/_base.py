@@ -417,7 +417,7 @@ class Builder:
             tensors = {k: packer(t, k) for k, t in linear.tensors.items()}
         else:
             tensors = linear.tensors
-        is_quantized = fmt is not None and fmt.packer is not None
+        is_quantized = fmt is not None and fmt.cpp_dtype_name is not None
 
         kind_split_dims = {
             kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
