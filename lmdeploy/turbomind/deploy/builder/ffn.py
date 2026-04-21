@@ -8,9 +8,14 @@ the given TP configuration.
 """
 from __future__ import annotations
 
+import math
+
 import torch
 
-from ..linear import Linear, chunk_linears as _chunk_linears, interleave_linears as _interleave_linears
+from ..linear import (Linear, chunk_linears as _chunk_linears,
+                       interleave_linears as _interleave_linears,
+                       pad_in_dim, pad_out_dim)
+from ..source_model.utils import _pad_inter_size
 from ._base import Builder, SplitSide
 
 __all__ = [
@@ -101,6 +106,65 @@ def fuse_ffn_linears(
 
 
 # ---------------------------------------------------------------------------
+# TP padding
+# ---------------------------------------------------------------------------
+
+
+def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
+                     tp: int) -> tuple[Linear, Linear, Linear, int]:
+    """Pad w1/w3 output dim and w2 input dim for TP sharding.
+
+    Returns the padded (w1, w2, w3) and the padded inter_size.
+    Padding uses lcm(block_in, block_out) * tp as the alignment target.
+    """
+    if tp <= 1:
+        w = w1.tensors.get('weight') or w3.tensors.get('weight')
+        raw_inter = w.size(-1) if w is not None else 0
+        return w1, w2, w3, raw_inter
+
+    w = w1.tensors.get('weight') or w3.tensors.get('weight')
+    if w is None:
+        return w1, w2, w3, 0
+
+    raw_inter = w.size(-1)
+    fmt = w1.weight_format
+    block_out = (fmt.block_out or 1) if fmt else 1
+    block_in = (fmt.block_in or 1) if fmt else 1
+    effective_block = math.lcm(block_in, block_out) if block_in != block_out else block_out
+
+    padded_inter = _pad_inter_size(raw_inter, effective_block, tp)
+    if padded_inter == raw_inter:
+        return w1, w2, w3, raw_inter
+
+    # Pad w1/w3 output dim (axis -1)
+    def _pad_linear_out(lin: Linear, target: int) -> Linear:
+        new_tensors = {}
+        for kind, t in lin.tensors.items():
+            dim = t.dim() - 1
+            new_tensors[kind] = pad_out_dim(t, target, dim=dim)
+        return Linear(tensors=new_tensors,
+                       weight_format=lin.weight_format,
+                       data_format=lin.data_format)
+
+    # Pad w2 input dim (axis 0)
+    def _pad_linear_in(lin: Linear, target: int) -> Linear:
+        new_tensors = {}
+        for kind, t in lin.tensors.items():
+            if t.dim() < 2:
+                new_tensors[kind] = t
+            else:
+                new_tensors[kind] = pad_in_dim(t, target, dim=0)
+        return Linear(tensors=new_tensors,
+                       weight_format=lin.weight_format,
+                       data_format=lin.data_format)
+
+    w1 = _pad_linear_out(w1, padded_inter)
+    w3 = _pad_linear_out(w3, padded_inter)
+    w2 = _pad_linear_in(w2, padded_inter)
+    return w1, w2, w3, padded_inter
+
+
+# ---------------------------------------------------------------------------
 # FfnBuilder -- w1+w3 fusion, w2 commit
 # ---------------------------------------------------------------------------
 
@@ -109,12 +173,16 @@ class FfnBuilder(Builder):
     """FFN weight loading builder with w1+w3 fusion."""
 
     def add_ffn(self, w1, w2, w3):
-        """Fuse w1+w3 if possible, update config, then shard and commit.
+        """Pad weights for TP alignment, fuse w1+w3 if possible, then shard and commit.
 
         The fusion result determines ``fuse_silu`` on the C++ module config.
         Updating ``self.config.fuse_silu`` **before** any ``_commit_linear``
         call ensures the C++ module is lazily created with the correct flag.
         """
+        # Pad weights for TP alignment before any fusion or sharding
+        w1, w2, w3, padded_inter = _pad_ffn_for_tp(
+            w1, w2, w3, self._tp)
+
         fused = None
         fused_silu = False
         if w1 is not None and w3 is not None:
