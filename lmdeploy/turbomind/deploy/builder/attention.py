@@ -63,23 +63,18 @@ def _infer_heads(linear: Linear, head_dim: int) -> int:
 
 
 @transform_tensors
-def _repeat_kv_heads_2d(tensor: torch.Tensor, *, n_repeat: int,
-                        heads: int) -> torch.Tensor:
-    per_head = tensor.size(-1) // heads
-    t = tensor.view(-1, heads, per_head)
-    target_heads = heads * n_repeat
-    return t.repeat(1, n_repeat, 1).reshape(-1, target_heads * per_head)
-
-
-def _repeat_kv_heads(linear: Linear, tp: int, head_dim: int) -> Linear:
+def _repeat_kv_heads(tensor: torch.Tensor, *, tp: int,
+                     heads: int) -> torch.Tensor:
     """Repeat KV heads to reach a TP-divisible count."""
-    heads = _infer_heads(linear, head_dim)
     if heads % tp == 0:
-        return linear
+        return tensor
     target_heads = ((heads + tp - 1) // tp) * tp
     assert target_heads % heads == 0, (
         f"target_heads={target_heads} must be divisible by heads={heads}")
-    return _repeat_kv_heads_2d(linear, n_repeat=target_heads // heads, heads=heads)
+    n_repeat = target_heads // heads
+    per_head = tensor.size(-1) // heads
+    t = tensor.view(tensor.size(0), heads, per_head)
+    return t.repeat(1, n_repeat, 1).reshape(tensor.size(0), target_heads * per_head)
 
 
 def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
@@ -89,10 +84,11 @@ def pad_for_tp(q: Linear, k: Linear, v: Linear, *,
     Q is asserted to already be TP-divisible.
     Head counts are derived from actual tensor shapes, not config parameters.
     """
-    assert _infer_heads(q, head_dim) % tp == 0, (
-        f"Q heads={_infer_heads(q, head_dim)} must be divisible by tp={tp}")
-    k = _repeat_kv_heads(k, tp, head_dim)
-    v = _repeat_kv_heads(v, tp, head_dim)
+    q_heads = _infer_heads(q, head_dim)
+    assert q_heads % tp == 0, (
+        f"Q heads={q_heads} must be divisible by tp={tp}")
+    k = _repeat_kv_heads(k, tp=tp, heads=_infer_heads(k, head_dim))
+    v = _repeat_kv_heads(v, tp=tp, heads=_infer_heads(v, head_dim))
     return q, k, v
 
 
