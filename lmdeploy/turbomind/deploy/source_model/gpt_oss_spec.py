@@ -16,7 +16,7 @@ from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, layer_progress, reorder_rotary_emb_linear
+from .utils import layer_progress, reorder_rotary_emb_linear
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -91,9 +91,7 @@ class GptOssSpec(TextModelSpec):
         self._moe_cfg.act_type          = _act_type_id('gpt-oss')
         self._moe_cfg.fuse_silu         = True
 
-        self._expert_inter_size_padded = _pad_inter_size(
-            hf_cfg['intermediate_size'], self._group_size,
-            engine_cfg.mlp_tp_size)
+        self._expert_inter_size = hf_cfg['intermediate_size']
 
         # Per-layer window sizes from layer_types
         types = hf_cfg['layer_types']
@@ -103,7 +101,7 @@ class GptOssSpec(TextModelSpec):
         ]
 
         # Inter-size list (zero; gpt-oss has no dense FFN layers)
-        self._inter_sizes_padded = [0] * self._num_layer
+        self._inter_sizes = [0] * self._num_layer
         self._expert_nums = [self._n_experts] * self._num_layer
 
     def num_experts(self, layer: int) -> int:
@@ -169,7 +167,7 @@ class GptOssSpec(TextModelSpec):
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = (inter_size if inter_size is not None
-                          else self._inter_sizes_padded[layer])
+                          else self._inter_sizes[layer])
         cfg.fuse_silu  = False
         cfg.fused_moe  = fused_moe
 
@@ -186,7 +184,7 @@ class GptOssSpec(TextModelSpec):
         cfg = self._moe_cfg.clone()
         cfg.layer_id   = layer
         cfg.expert_num = self._expert_nums[layer]
-        cfg.inter_size = self._expert_inter_size_padded
+        cfg.inter_size = self._expert_inter_size
 
         m = MoeBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
@@ -204,7 +202,7 @@ class GptOssSpec(TextModelSpec):
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
             experts[str(e)] = self._packed_expert_ffn(
-                f'{pfx}.experts.{e}', self._expert_inter_size_padded)
+                f'{pfx}.experts.{e}', self._expert_inter_size)
         m.experts = experts
         return m
 

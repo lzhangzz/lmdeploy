@@ -11,7 +11,7 @@ from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import _pad_inter_size, get_yarn_params, layer_progress, parse_rope_param
+from .utils import get_yarn_params, layer_progress, parse_rope_param
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -119,11 +119,9 @@ class Glm4MoeLiteSpec(TextModelSpec):
             self._moe_cfg.act_type          = _act_type_id('silu')
             self._moe_cfg.fuse_silu         = True
 
-            self._expert_inter_size_padded = _pad_inter_size(
-                hf_cfg['moe_intermediate_size'], self._group_size,
-                engine_cfg.mlp_tp_size)
+            self._expert_inter_size = hf_cfg['moe_intermediate_size']
         else:
-            self._expert_inter_size_padded = 0
+            self._expert_inter_size = 0
 
         # Per-layer inter_size:
         #   - dense layers use intermediate_size
@@ -133,10 +131,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         raw_inter = [n_shared_experts * expert_inter] * self._num_layer
         raw_inter[0] = hf_cfg.get('intermediate_size',
                                   n_shared_experts * expert_inter)
-        self._inter_sizes_padded = [
-            _pad_inter_size(v, self._group_size, engine_cfg.mlp_tp_size)
-            for v in raw_inter
-        ]
+        self._inter_sizes = raw_inter
         # Per-layer expert count (0 for dense layers)
         self._expert_nums = [
             self._n_experts if i >= self._dense_layers else 0
@@ -211,7 +206,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = (inter_size if inter_size is not None
-                          else self._inter_sizes_padded[layer])
+                          else self._inter_sizes[layer])
         cfg.fuse_silu  = False
         cfg.fused_moe  = fused_moe
 
@@ -228,7 +223,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         cfg = self._moe_cfg.clone()
         cfg.layer_id   = layer
         cfg.expert_num = self._expert_nums[layer]
-        cfg.inter_size = self._expert_inter_size_padded
+        cfg.inter_size = self._expert_inter_size
 
         m = MoeBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
@@ -250,7 +245,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         for e in range(self._n_experts):
             experts[str(e)] = self.ffn(
                 f'{pfx}.experts.{e}', layer,
-                inter_size=self._expert_inter_size_padded, fused_moe=True)
+                inter_size=self._expert_inter_size, fused_moe=True)
         m.experts = experts
         return m
 

@@ -16,8 +16,7 @@ from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import (_pad_inter_size, layer_progress, reorder_rotary_emb,
-                    reorder_rotary_emb_linear)
+from .utils import layer_progress, reorder_rotary_emb, reorder_rotary_emb_linear
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -87,19 +86,13 @@ class Qwen3TextSpec(TextModelSpec):
             self._moe_cfg.act_type          = _act_type_id('silu')
             self._moe_cfg.fuse_silu         = True
 
-            self._expert_inter_size_padded = _pad_inter_size(
-                hf_cfg.get('moe_intermediate_size', 768),
-                self._group_size, engine_cfg.mlp_tp_size)
+            self._expert_inter_size = hf_cfg.get('moe_intermediate_size', 768)
         else:
-            self._expert_inter_size_padded = 0
+            self._expert_inter_size = 0
 
         # ---- Per-layer inter_size (dense FFN) ----
         raw_inter = hf_cfg.get('intermediate_size', 0) if self._n_experts == 0 else 0
-        self._inter_sizes_padded = [
-            _pad_inter_size(raw_inter, self._group_size,
-                            engine_cfg.mlp_tp_size)
-            for _ in range(self._num_layer)
-        ]
+        self._inter_sizes = [raw_inter] * self._num_layer
         self._expert_nums = (
             [self._n_experts] * self._num_layer if self._n_experts > 0 else []
         )
@@ -168,7 +161,7 @@ class Qwen3TextSpec(TextModelSpec):
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = (inter_size if inter_size is not None
-                          else self._inter_sizes_padded[layer])
+                          else self._inter_sizes[layer])
         cfg.fuse_silu  = False
         cfg.fused_moe  = fused_moe
 
@@ -185,7 +178,7 @@ class Qwen3TextSpec(TextModelSpec):
         cfg = self._moe_cfg.clone()
         cfg.layer_id   = layer
         cfg.expert_num = self._expert_nums[layer]
-        cfg.inter_size = self._expert_inter_size_padded
+        cfg.inter_size = self._expert_inter_size
 
         m = MoeBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
@@ -200,7 +193,7 @@ class Qwen3TextSpec(TextModelSpec):
         for e in range(self.num_experts(layer)):
             experts[str(e)] = self.ffn(
                 f'{pfx}.experts.{e}', layer,
-                inter_size=self._expert_inter_size_padded, fused_moe=True)
+                inter_size=self._expert_inter_size, fused_moe=True)
         m.experts = experts
         return m
 
