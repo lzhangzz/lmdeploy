@@ -31,7 +31,7 @@
 | `lmdeploy/turbomind/deploy/builder/_base.py` | 2, 3, 4 |
 | `lmdeploy/turbomind/deploy/builder/attention.py` | 3 |
 | `lmdeploy/turbomind/deploy/builder/deltanet.py` | 3 |
-| `lmdeploy/turbomind/deploy/builder/mla.py` | 3 |
+| `lmdeploy/turbomind/deploy/builder/mla.py` | — (inspected only; already correct) |
 | `lmdeploy/turbomind/deploy/spec.py` | 2, 5 |
 | `lmdeploy/turbomind/deploy/converter.py` | 5 |
 | `lmdeploy/turbomind/deploy/source_model/utils.py` | 3, 5 |
@@ -72,25 +72,23 @@ if (BUILD_TEST)
 endif ()
 ```
 
-- [ ] **Step 2: Rebuild to confirm the existing test_data_format binary builds from source**
+- [ ] **Step 2: CMake reconfigure + build the test binary**
+
+The existing `build/bin/test_data_format` binary is stale (left over from an earlier CMake config); ninja's current build graph does not know about it. Force reconfigure so ninja picks up the new `add_executable` target, then build:
 
 ```bash
-cd build && ninja test_data_format
+cd build && cmake . && ninja test_data_format
 ```
 
-Expected: binary built successfully at `build/bin/test_data_format`. If CMake reconfiguration is needed first:
+Expected: fresh binary at `build/bin/test_data_format` that links against the current `data_format.cc`.
 
-```bash
-cd build && cmake --build . --target test_data_format
-```
-
-- [ ] **Step 3: Run the old (pre-refactor) tests to establish a baseline**
+- [ ] **Step 3: Run the tests to establish a baseline**
 
 ```bash
 ./build/bin/test_data_format
 ```
 
-Expected: all tests pass (old signatures, old `[N,K]` ordering).
+Expected: all 7 tests pass (old signatures, old `[N,K]` block_sizes ordering — the file hasn't been edited yet). This baseline confirms the build wiring works; the tests themselves will be rewritten in Step 6.
 
 - [ ] **Step 4: Update `src/turbomind/core/data_format.h` — new factory declaration**
 
@@ -632,11 +630,14 @@ cd /data/lmdeploy-modeling && git add \
 - Modify: `lmdeploy/turbomind/deploy/builder/_base.py`
 - Modify: `lmdeploy/turbomind/deploy/builder/attention.py`
 - Modify: `lmdeploy/turbomind/deploy/builder/deltanet.py`
-- Modify: `lmdeploy/turbomind/deploy/builder/mla.py`
-- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py` (delete duplicate `_dequant_linear`, thread `data_type` into `_fold_head_dim`)
-- Modify: `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` (MoE gate ad-hoc Linear construction; callers of `_fold_head_dim`)
+- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py` (delete duplicate `_dequant_linear`, thread `data_type` into `reorder_rotary_emb_linear`)
+- Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_spec.py` (callers of `reorder_rotary_emb_linear`)
+- Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py` (callers of `reorder_rotary_emb_linear`; inherit-`data_format` on ad-hoc w1/w3 Linear constructions)
+- Modify: `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` (MoE gate ad-hoc Linear construction; callers of `reorder_rotary_emb_linear`; inherit-`data_format` on gate/up split Linears)
 - Modify: `lmdeploy/turbomind/deploy/source_model/glm4_moe_lite_spec.py` (MoE gate ad-hoc Linear construction)
 - Modify: `tests/test_lmdeploy/test_turbomind/test_transform_tensors.py` (`_make_linear` helper)
+
+**Note:** `mla.py`'s three `Linear(tensors={...})` constructions (lines 57, 60, 74) already supply both `weight_format` and `data_format` — **no change needed**.
 
 - [ ] **Step 1: Add `_CPP_TO_TORCH` inverse map in `_base.py`**
 
@@ -726,33 +727,44 @@ The `if fmt is None` branch is retained in Task 3 (defensively). It is removed w
 
 - [ ] **Step 5: Update `_ensure_compatible_formats` to take `data_type`**
 
+Preserve current behavior exactly (including no `None` filtering — deltanet callers guarantee non-`None` Linears in practice; changing that is a separate concern).
+
 ```python
 def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
     """Dequant linears to a common trivial format if a fusion group has mixed formats."""
-    formats = {name: lin.weight_format.name for name, lin in linears.items() if lin is not None}
+    formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
         return linears
-    return {name: _dequant_linear(lin, data_type=data_type) if lin is not None else lin
-            for name, lin in linears.items()}
+    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
 ```
 
 - [ ] **Step 6: Update `dequant_mixed` in `attention.py`**
+
+Match current behavior exactly — only dequant when `any(l.weight_format.name == 'trivial')` (a format-mismatch signal, e.g. from RoPE reordering). Add `data_type` keyword.
 
 In `lmdeploy/turbomind/deploy/builder/attention.py` (line 22), replace `dequant_mixed`:
 
 ```python
 def dequant_mixed(*linears: Linear, data_type) -> tuple[Linear, ...]:
-    """When a fusion group has mixed formats (e.g. AWQ qkv + trivial norm bias),
+    """Dequantize to trivial if any arg is in trivial format.
+
+    When any Linear has trivial weight format (e.g. from RoPE reordering),
     dequantize all non-trivial args so formats match for fusion.
+    None args pass through unchanged.
     """
-    formats = {l.weight_format.name for l in linears if l is not None}
-    if len(formats) <= 1:
+    has_trivial = any(
+        l is not None
+        and l.weight_format is not None
+        and l.weight_format.name == 'trivial'
+        for l in linears
+    )
+    if not has_trivial:
         return linears
     return tuple(_dequant_linear(l, data_type=data_type) if l is not None else l
                  for l in linears)
 ```
 
-Then update the call site (line ~116) to pass `data_type=self.config.data_type`:
+Then update the call site in `attention.py` (line 116) to pass `data_type=self.config.data_type`:
 
 ```python
 q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
@@ -768,7 +780,7 @@ group = _ensure_compatible_formats(
     data_type=self.config.data_type)
 ```
 
-- [ ] **Step 8: Delete duplicate `_dequant_linear` in `source_model/utils.py`; import from `_base`; thread `data_type` into `_fold_head_dim`**
+- [ ] **Step 8: Delete duplicate `_dequant_linear` in `source_model/utils.py`; import from `_base`; thread `data_type` into `reorder_rotary_emb_linear`**
 
 In `lmdeploy/turbomind/deploy/source_model/utils.py`:
 
@@ -780,22 +792,39 @@ At the top of the file, add:
 from ..builder._base import _dequant_linear
 ```
 
-Modify `_fold_head_dim` (around line 195) to accept `data_type`:
+Modify `reorder_rotary_emb_linear` signature (line 191) to accept a required keyword-only `data_type`:
 
 ```python
-def _fold_head_dim(linear: "Linear", *, head_num: int, head_dim: int,
-                   kv_head_num: int | None = None, data_type) -> "Linear":
-    """Fold (head_num, head_dim) into a single output dimension.
+def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int, *, data_type):
+    """Apply RoPE permutation to all tensors in a Linear.
 
-    - If quantized and block_out % head_dim != 0, dequantizes first using
-      *data_type* to resolve the trivialized format.
+    Quantization-aware:
+    - If quantized and block_out % head_dim != 0, dequantizes first
+      (permuting within a head would cross block boundaries).
+    - For weight/bias: element-level RoPE permutation.
+    - For scales/zeros when block_out % head_dim == 0: block-level channel
+      shuffling. Each head maps to (block_out / head_dim) complete blocks,
+      so we apply the same interleave pattern at block granularity.
+    - For scales/zeros when dequantized: skipped (trivial format has none).
     """
-    ...
-    # existing body, but wherever _dequant_linear(linear) is called, replace with:
-    #     linear = _dequant_linear(linear, data_type=data_type)
 ```
 
-Find each `_dequant_linear(linear)` call in this function and add `data_type=data_type`.
+Update the single `_dequant_linear(linear)` call at line 210:
+
+```python
+    if block_out and block_out % head_dim != 0:
+        linear = _dequant_linear(linear, data_type=data_type)
+        block_out = 0
+```
+
+> **Ordering note for Steps 9–15.** Step 9 (Linear dataclass tightening) makes
+> `weight_format` and `data_format` required with no default. Any `Linear(tensors=...)`
+> call that doesn't supply both will `TypeError` at construction. Steps 11–13 fix
+> the remaining ad-hoc call sites. **Do Steps 11–15 before Step 9** (despite the
+> numbering) — run pytest after each to confirm nothing breaks. The step numbers
+> reflect logical grouping, not execution order. The alternative ordering also
+> works: do Step 9 first, accept a broken intermediate state, then fix sites in
+> 11–13 until pytest is green again.
 
 - [ ] **Step 9: Tighten `Linear` dataclass — make `weight_format` and `data_format` required**
 
@@ -875,26 +904,33 @@ def concat_in_dim(cls, xs: list[Linear]) -> Linear:
                   data_format=next(iter(dfmts)))
 ```
 
-- [ ] **Step 11: Fix ad-hoc `Linear(tensors={...})` construction sites in `mla.py`**
+- [ ] **Step 11: Add `data_format` to ad-hoc `Linear(tensors=..., weight_format=...)` sites that inherit from an input Linear**
 
-In `lmdeploy/turbomind/deploy/builder/mla.py`, update three sites (lines 57, 60, 74):
+Two call sites have `weight_format=X` but no `data_format=X` — they will break when the dataclass tightens in Step 9. Fix both to also pass `data_format`:
+
+In `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py` (lines 317-318):
 
 ```python
-# Around line 57 — q_b + wo fold result:
-return (Linear(tensors={"weight": q_folded.contiguous()},
-               weight_format=q_b.weight_format,
-               data_format=q_b.data_format),
-        Linear(tensors={"weight": o_folded.contiguous()},
-               weight_format=wo.weight_format,
-               data_format=wo.data_format))
-
-# Around line 74 — single-output variant:
-return Linear(tensors={"weight": w.contiguous()},
-              weight_format=wo.weight_format,
-              data_format=wo.data_format)
+w1 = Linear(tensors=gate_tensors, weight_format=gate_up_lin.weight_format,
+            data_format=gate_up_lin.data_format)
+w3 = Linear(tensors=up_tensors,   weight_format=gate_up_lin.weight_format,
+            data_format=gate_up_lin.data_format)
 ```
 
+In `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` (lines 244-245, inside `_deinterleave`):
+
+```python
+return (Linear(tensors=gate_t, weight_format=lin.weight_format,
+               data_format=lin.data_format),
+        Linear(tensors=up_t,   weight_format=lin.weight_format,
+               data_format=lin.data_format))
+```
+
+Note: `mla.py` (lines 57, 60, 74) and `deltanet.py` (lines 40, 92) and `source_model/utils.py::reorder_rotary_emb_linear` (line 231) already supply both `weight_format` and `data_format` correctly — no changes needed.
+
 - [ ] **Step 12: Fix ad-hoc MoE gate `Linear(tensors)` in `gpt_oss_spec.py` and `glm4_moe_lite_spec.py`**
+
+These two sites construct a `Linear` with **only** the `tensors` kwarg — both `weight_format` and `data_format` are missing. Supply both explicitly using `TRIVIAL_FORMAT` (MoE router gate is always a plain dense weight).
 
 In `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` (line 200):
 
@@ -906,30 +942,43 @@ m.add_gate('gate', Linear(
 ), model_dtype=dtype)
 ```
 
-The file needs a new import at the top:
+Add the import (it already has `from ..kind_map import build_linear` on line 15):
+
+```python
+from ..kind_map import build_linear, TRIVIAL_FORMAT
+```
+
+In `lmdeploy/turbomind/deploy/source_model/glm4_moe_lite_spec.py` (line 239), apply the same `Linear(tensors, weight_format=..., data_format=...)` change. This file currently has no `kind_map` import; add one at the top:
 
 ```python
 from ..kind_map import TRIVIAL_FORMAT
 ```
 
-In `lmdeploy/turbomind/deploy/source_model/glm4_moe_lite_spec.py` (line 239), apply the same change with the same import.
+- [ ] **Step 13: Thread `data_type` into `reorder_rotary_emb_linear` callers**
 
-- [ ] **Step 13: Thread `data_type` into `_fold_head_dim` callers**
-
-`_fold_head_dim` is called from spec subclasses. Find every caller (search `_fold_head_dim(`) and add `data_type=self._cpp_dtype()`. The known callers live in the same files already touched (qwen3_5_spec.py, glm4_moe_lite_spec.py, etc.) — verify via:
+Six call sites across spec subclasses. Each spec has `self._cpp_dtype()` available.
 
 ```bash
-cd /data/lmdeploy-modeling && rg -n '_fold_head_dim\(' --type py
+cd /data/lmdeploy-modeling && rg -n 'reorder_rotary_emb_linear\(' --type py
 ```
 
-Update each call site:
+Expected sites (update each to add `data_type=self._cpp_dtype()`):
+
+- `lmdeploy/turbomind/deploy/source_model/qwen3_spec.py:137` and `:138`
+- `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:186` and `:187`
+- `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py:144` and `:145`
+
+Update pattern per site:
 
 ```python
 # Before:
-lin = _fold_head_dim(lin, head_num=..., head_dim=..., kv_head_num=...)
+q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim)
+k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim)
 # After:
-lin = _fold_head_dim(lin, head_num=..., head_dim=..., kv_head_num=...,
-                     data_type=self._cpp_dtype())
+q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim,
+                              data_type=self._cpp_dtype())
+k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim,
+                              data_type=self._cpp_dtype())
 ```
 
 - [ ] **Step 14: Add `data_format` assertion in `_commit_linear`**
@@ -953,30 +1002,35 @@ is_quantized = linear.data_format.is_quantized()
 
 - [ ] **Step 15: Update `_make_linear` test helper**
 
-In `tests/test_lmdeploy/test_turbomind/test_transform_tensors.py`, find `_make_linear` (line 114) and update to supply `weight_format` + `data_format`:
+The test module stubs `_turbomind` in-file (lines 23-49) so it cannot call `_tm.ResolveLinearWeightFormat` — trying to would raise `AttributeError`. Since the tests only care that the decorators *propagate* `weight_format` / `data_format` values (not their content — see `test_format_propagation` which passes the string `'fake_fmt'`), the helper just needs to supply non-None placeholders.
+
+In `tests/test_lmdeploy/test_turbomind/test_transform_tensors.py`, replace `_make_linear` (line 114):
 
 ```python
-from lmdeploy.turbomind.deploy.kind_map import TRIVIAL_FORMAT
-import _turbomind as _tm
-
 def _make_linear(out_dim: int, in_dim: int | None = None,
                  has_bias: bool = False) -> Linear:
-    """Build a trivial BF16 Linear for tests."""
+    """Create a trivial Linear for testing.
+
+    If *in_dim* is given the weight is 2-D (in_dim, out_dim); otherwise
+    it is 1-D (out_dim,) -- simulating a bias-only tensor.
+
+    ``weight_format`` and ``data_format`` are tight (non-optional) on the
+    dataclass; the decorators under test don't interpret the values, so
+    string placeholders are sufficient.
+    """
     tensors: dict[str, torch.Tensor] = {}
-    if in_dim is None:
-        tensors['weight'] = torch.randn(out_dim)  # 1-D (embed/lm_head style)
-    else:
+    if in_dim is not None:
         tensors['weight'] = torch.randn(in_dim, out_dim)
+    else:
+        tensors['weight'] = torch.randn(out_dim)
     if has_bias:
         tensors['bias'] = torch.randn(out_dim)
-    return Linear(
-        tensors=tensors,
-        weight_format=TRIVIAL_FORMAT,
-        data_format=TRIVIAL_FORMAT.make_data_format(_tm.DataType.TYPE_BF16),
-    )
+    return Linear(tensors=tensors,
+                  weight_format='placeholder',
+                  data_format='placeholder')
 ```
 
-The existing `test_format_propagation` test (line 274) uses `object.__setattr__` to overwrite the format fields with strings — it continues to work because the decorator doesn't interpret the format values.
+The existing `test_format_propagation` test (line 274) uses `object.__setattr__` to overwrite the format fields with `'fake_fmt'` / `'fake_data'`; it continues to work unchanged.
 
 - [ ] **Step 16: Run `test_transform_tensors.py`**
 
@@ -1019,8 +1073,9 @@ cd /data/lmdeploy-modeling && git add \
     lmdeploy/turbomind/deploy/builder/_base.py \
     lmdeploy/turbomind/deploy/builder/attention.py \
     lmdeploy/turbomind/deploy/builder/deltanet.py \
-    lmdeploy/turbomind/deploy/builder/mla.py \
     lmdeploy/turbomind/deploy/source_model/utils.py \
+    lmdeploy/turbomind/deploy/source_model/qwen3_spec.py \
+    lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py \
     lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py \
     lmdeploy/turbomind/deploy/source_model/glm4_moe_lite_spec.py \
     tests/test_lmdeploy/test_turbomind/test_transform_tensors.py \
@@ -1028,16 +1083,17 @@ cd /data/lmdeploy-modeling && git add \
 refactor(deploy): explicit data_type in dequant pipelines; fix _dequant_fp8 hardcoded BF16
 
 Plumb data_type through _dequant_linear, _ensure_compatible_formats,
-dequant_mixed, and _fold_head_dim. Make WeightFormat.dequant signature
-uniform with a data_type arg. Rewrite _dequant_fp8 to honor data_type
-(fixes latent bug: FP8-activation-FP16 models were silently coerced
-to BF16). Dedupe _dequant_linear — utils.py now imports from _base.
+dequant_mixed, and reorder_rotary_emb_linear. Make WeightFormat.dequant
+signature uniform with a data_type arg. Rewrite _dequant_fp8 to honor
+data_type (fixes latent bug: FP8-activation-FP16 models were silently
+coerced to BF16). Dedupe _dequant_linear — utils.py now imports from _base.
 
 Tighten Linear.weight_format and Linear.data_format to required
-(non-optional). Update ad-hoc Linear constructions in mla.py,
-gpt_oss_spec.py, glm4_moe_lite_spec.py to supply both explicitly.
-concat_*_dim asserts uniform formats, replacing silent None fallback.
-Add data_format assertion in _commit_linear.
+(non-optional). Update ad-hoc Linear constructions: MoE gate in
+gpt_oss_spec.py / glm4_moe_lite_spec.py supplies both from TRIVIAL_FORMAT;
+gate/up split in qwen3_5_spec.py / gpt_oss_spec.py inherits data_format
+from input. concat_*_dim asserts uniform formats, replacing silent None
+fallback. Add data_format assertion in _commit_linear.
 EOF
 )"
 ```
@@ -1379,19 +1435,31 @@ EOF
 
 - [ ] **Step 1: Resolve active `WeightFormat` in `converter.py`**
 
-In `lmdeploy/turbomind/deploy/converter.py`, add the import at the top:
+**Critical ordering:** the `WeightFormat` must be resolved *before* the `compressed-tensors → awq` rename at line 163, because the rename would cause `get_weight_format('awq')` to return `AWQ_FORMAT` (with `.qweight` suffixes) for a checkpoint that actually has `.weight_packed` suffixes. The downstream rename is cosmetic (affects only `engine_config.model_format`, not per-linear format detection) — but only under the old `FORMAT_PRIORITY`-iterating `build_linear`. Under the new single-format `build_linear`, the rename would break CT model loading.
+
+In `lmdeploy/turbomind/deploy/converter.py`, add the imports at the top:
 
 ```python
 from dataclasses import replace
 from .kind_map import get_weight_format
 ```
 
-Then in `get_tm_config`, replace the tail (lines 154-185) — specifically where `group_size` is threaded into `spec_cls(...)` — with:
+Then in `get_tm_config`, restructure the tail (lines 154 onward) to resolve the `WeightFormat` immediately after `_validate_quant_group_size`, before the CT rename:
 
 ```python
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
     if engine_config.model_format is None:
         engine_config.model_format = 'hf'
+
+    # Resolve the active WeightFormat before the CT→AWQ rename below, so
+    # compressed-tensors models still get COMPRESSED_TENSOR_FORMAT (correct
+    # suffixes) rather than AWQ_FORMAT after the rename.
+    # Sentinel ``block_in == 0`` (AWQ / GPTQ / CT) resolves to the concrete
+    # group_size here; other formats pass through unchanged (FP8=128,
+    # MXFP4=32, TRIVIAL=None).
+    weight_format = get_weight_format(engine_config.model_format)
+    if weight_format.block_in == 0:
+        weight_format = replace(weight_format, block_in=group_size)
 
     # 3. Resolve dtype and format overrides.
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
@@ -1411,15 +1479,7 @@ Then in `get_tm_config`, replace the tail (lines 154-185) — specifically where
     engine_config.attn_cp_size = engine_config.attn_cp_size or 1
     engine_config.mlp_tp_size = engine_config.mlp_tp_size or 1
 
-    # 6. Resolve the active WeightFormat (sentinel block sizes → concrete ints).
-    #    Only ``block_in == 0`` is a sentinel today (AWQ / GPTQ / CT).
-    #    ``block_out`` is either a concrete int (FP8 = 128) or ``None`` (no
-    #    blocking on that axis); neither needs converter-time resolution.
-    weight_format = get_weight_format(engine_config.model_format)
-    if weight_format.block_in == 0:
-        weight_format = replace(weight_format, block_in=group_size)
-
-    # 7. Build spec.
+    # 6. Build spec.
     hf_cfg = load_model_config(model_path)
     if engine_config.hf_overrides:
         logger.warning(f'Overriding HF config with {engine_config.hf_overrides}')
