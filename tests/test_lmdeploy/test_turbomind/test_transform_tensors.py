@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Tests for the @transform_tensors decorator."""
+"""Tests for the @transform_output_dim decorator."""
 
 from __future__ import annotations
 
@@ -94,7 +94,8 @@ Linear = _linear_mod.Linear
 # Load builder/_base.py
 _base_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'builder', '_base.py')
 _base_mod = _load_module_from_file('lmdeploy.turbomind.deploy.builder._base', _base_path)
-transform_tensors = _base_mod.transform_tensors
+transform_output_dim = _base_mod.transform_output_dim
+transform_input_dim = _base_mod.transform_input_dim
 
 # Register builder sub-package
 _builder_pkg = sys.modules.get('lmdeploy.turbomind.deploy.builder')
@@ -139,7 +140,7 @@ class TestTransformTensors:
     def test_1in_1out_2d_weight_only(self):
         """1-in/1-out with a 2-D weight tensor."""
 
-        @transform_tensors
+        @transform_output_dim
         def double(x: torch.Tensor) -> torch.Tensor:
             return x * 2
 
@@ -154,7 +155,7 @@ class TestTransformTensors:
     def test_1in_1out_1d_bias_only(self):
         """1-in/1-out with a 1-D tensor (bias-only shape)."""
 
-        @transform_tensors
+        @transform_output_dim
         def add_one(x: torch.Tensor) -> torch.Tensor:
             return x + 1.0
 
@@ -168,7 +169,7 @@ class TestTransformTensors:
     def test_1in_1out_mixed_dims(self):
         """1-in/1-out with 2-D weight + 1-D bias."""
 
-        @transform_tensors
+        @transform_output_dim
         def negate(x: torch.Tensor) -> torch.Tensor:
             return -x
 
@@ -190,7 +191,7 @@ class TestTransformTensors:
     def test_1in_2out_split(self):
         """1-in/2-out: split one Linear into two along last dim."""
 
-        @transform_tensors
+        @transform_output_dim
         def split_in_half(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             mid = x.shape[-1] // 2
             return x[..., :mid], x[..., mid:]
@@ -207,7 +208,7 @@ class TestTransformTensors:
     def test_1in_2out_1d_only(self):
         """1-in/2-out with 1-D tensors."""
 
-        @transform_tensors
+        @transform_output_dim
         def split_1d(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             mid = x.shape[-1] // 2
             return x[..., :mid], x[..., mid:]
@@ -222,7 +223,7 @@ class TestTransformTensors:
     def test_multi_in_1out_concat(self):
         """Multi-in/1-out: concatenate three Linears along last dim."""
 
-        @transform_tensors
+        @transform_output_dim
         def concat3(a: torch.Tensor, b: torch.Tensor,
                     c: torch.Tensor) -> torch.Tensor:
             return torch.cat([a, b, c], dim=-1)
@@ -240,7 +241,7 @@ class TestTransformTensors:
     def test_optional_tensor_none(self):
         """Optional tensor arg passed as None -> inner fn receives None."""
 
-        @transform_tensors
+        @transform_output_dim
         def maybe_add(x: torch.Tensor,
                       y: torch.Tensor | None) -> torch.Tensor:
             if y is None:
@@ -256,7 +257,7 @@ class TestTransformTensors:
     def test_optional_tensor_provided(self):
         """Optional tensor arg provided -> inner fn receives the tensor."""
 
-        @transform_tensors
+        @transform_output_dim
         def maybe_add(x: torch.Tensor,
                       y: torch.Tensor | None) -> torch.Tensor:
             return x + y
@@ -273,7 +274,7 @@ class TestTransformTensors:
     def test_format_propagation(self):
         """Output inherits weight_format and data_format from first input."""
 
-        @transform_tensors
+        @transform_output_dim
         def identity(x: torch.Tensor) -> torch.Tensor:
             return x
 
@@ -290,7 +291,7 @@ class TestTransformTensors:
     def test_kwargs_passthrough(self):
         """Non-tensor kwargs are forwarded unchanged."""
 
-        @transform_tensors
+        @transform_output_dim
         def scale(x: torch.Tensor, factor: float) -> torch.Tensor:
             return x * factor
 
@@ -299,3 +300,66 @@ class TestTransformTensors:
         assert isinstance(result, Linear)
         assert torch.allclose(result.tensors['weight'],
                               lin.tensors['weight'] * 3.0)
+
+
+class TestTransformInputDim:
+
+    def test_2d_transformed(self):
+        """2-D tensors are passed through the inner function."""
+
+        @transform_input_dim
+        def pad_first_dim(tensor: torch.Tensor,
+                          *, target: int) -> torch.Tensor:
+            return torch.nn.functional.pad(
+                tensor, [0, 0, 0, target - tensor.size(0)])
+
+        lin = _make_linear(out_dim=4, in_dim=2)
+        result = pad_first_dim(lin, target=6)
+        assert isinstance(result, Linear)
+        assert result.tensors['weight'].shape == (6, 4)
+
+    def test_1d_passthrough(self):
+        """1-D tensors (bias) pass through unchanged."""
+
+        @transform_input_dim
+        def pad_first_dim(tensor: torch.Tensor,
+                          *, target: int) -> torch.Tensor:
+            return torch.nn.functional.pad(
+                tensor, [0, 0, 0, target - tensor.size(0)])
+
+        lin = _make_linear(out_dim=4)  # 1-D weight
+        result = pad_first_dim(lin, target=6)
+        assert isinstance(result, Linear)
+        assert result.tensors['weight'].shape == (4,)  # unchanged
+
+    def test_mixed_dims_2d_transformed_1d_passthrough(self):
+        """2-D weight is transformed; 1-D bias passes through."""
+
+        @transform_input_dim
+        def double_input_dim(tensor: torch.Tensor) -> torch.Tensor:
+            return tensor.repeat(2, 1)
+
+        lin = _make_linear(out_dim=4, in_dim=3, has_bias=True)
+        result = double_input_dim(lin)
+        assert isinstance(result, Linear)
+        assert set(result.tensors) == {'weight', 'bias'}
+        assert result.tensors['weight'].shape == (6, 4)  # doubled
+        assert result.tensors['bias'].shape == (4,)  # unchanged
+
+    def test_1in_2out_distributes_1d(self):
+        """Multi-output: 1-D tensors duplicated into all output buckets."""
+
+        @transform_input_dim
+        def split_input(tensor: torch.Tensor
+                        ) -> tuple[torch.Tensor, torch.Tensor]:
+            mid = tensor.size(0) // 2
+            return tensor[:mid], tensor[mid:]
+
+        lin = _make_linear(out_dim=4, in_dim=6, has_bias=True)
+        a, b = split_input(lin)
+        assert isinstance(a, Linear)
+        assert isinstance(b, Linear)
+        assert a.tensors['weight'].shape == (3, 4)
+        assert b.tensors['weight'].shape == (3, 4)
+        assert a.tensors['bias'].shape == (4,)  # duplicated
+        assert b.tensors['bias'].shape == (4,)  # duplicated

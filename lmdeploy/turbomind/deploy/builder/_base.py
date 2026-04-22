@@ -212,6 +212,67 @@ def transform_output_dim(fn):
     return wrapper
 
 
+def transform_input_dim(fn):
+    """Decorator that lifts a tensor-level transform to Linear-level.
+
+    For input-dim operations: 1-D tensors (bias) have no input dimension
+    and are **passed through unchanged**.  The inner function only ever
+    sees 2-D tensors for each kind.  For multi-output functions, 1-D
+    tensors are duplicated into every output bucket.
+    """
+    sig = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        first = next(v for v in bound.arguments.values()
+                     if isinstance(v, Linear))
+        out_buckets = None
+        deferred_1d: list[str] = []
+
+        for kind in first.tensors:
+            fn_kwargs = {}
+            is_1d = False
+
+            for name, val in bound.arguments.items():
+                if isinstance(val, Linear):
+                    t = val.tensors[kind]
+                    if t.dim() < 2:
+                        is_1d = True
+                        break
+                    fn_kwargs[name] = t
+                else:
+                    fn_kwargs[name] = val
+
+            if is_1d:
+                deferred_1d.append(kind)
+                continue
+
+            result = fn(**fn_kwargs)
+            if not isinstance(result, tuple):
+                result = (result,)
+            if out_buckets is None:
+                out_buckets = [{} for _ in result]
+            for i, item in enumerate(result):
+                out_buckets[i][kind] = item
+
+        if out_buckets is None:
+            out_buckets = [{}]
+        for kind in deferred_1d:
+            for bucket in out_buckets:
+                bucket[kind] = first.tensors[kind]
+
+        outputs = tuple(
+            Linear(ts, weight_format=first.weight_format,
+                   data_format=first.data_format)
+            for ts in out_buckets)
+        return outputs if len(outputs) > 1 else outputs[0]
+
+    return wrapper
+
+
 def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
                          alloc_shape: list[int] | None = None,
                          alloc_dtype=None) -> None:
