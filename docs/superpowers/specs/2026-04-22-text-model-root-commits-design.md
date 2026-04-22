@@ -57,11 +57,14 @@ TP/ranks contract on `Builder.__init__`. Touches both Python and C++.
    initialized to `attn_tp_size * attn_cp_size` and only used to derive
    `vocab_size_padded`).
 
-Plus a structural issue: `Builder.__init__(self, config, contexts, tp=1,
-ranks=None)` lets callers forget tp/ranks and silently get broadcast
-semantics. For the `TextModelBuilder`-for-tok-embeddings/output path this
-is exactly what happens today — the bypass papers over it by sidestepping
-`_commit_*` on the root entirely.
+Plus a structural issue on `TextModelBuilder` specifically: its
+`__init__(handles, contexts, tp=1, ranks=None)` defaults let the root
+silently become `tp=1, ranks=None` — broadcast semantics — even though
+its real role (owning `tok_embeddings` and `output` commits) requires
+attn-TP values. The bypass papers over this by sidestepping `_commit_*`
+on the root entirely. The base `Builder`'s defaults are fine for
+broadcast / pure-attachment builders (`NormBuilder`, `ModuleListBuilder`,
+`DecoderLayerBuilder`) which never shard, and stay as-is.
 
 ## Architecture
 
@@ -81,13 +84,15 @@ is exactly what happens today — the bypass papers over it by sidestepping
 
 ┌── Python builder/_base.py ─────────────────────────────┐
 │ class Builder:                                         │
-│     def __init__(self, config, contexts, *, tp, ranks):│
-│         # keyword-only, required                       │
+│     def __init__(self, config, contexts,               │
+│                  tp=1, ranks=None):                    │
+│         # defaults unchanged; broadcast builders       │
+│         # (Norm/ModuleList/DecoderLayer) rely on them  │
 │                                                        │
 │ class TextModelBuilder(Builder):                       │
 │     def __init__(self, handles, contexts, *,           │
 │                  tp, ranks, vocab_size):               │
-│         ...                                            │
+│         # required keyword-only                        │
 │     def add_token_embeds(self, tensor): ...            │
 │     def add_lm_head(self, linear): ...                 │
 └────────────────────────────────────────────────────────┘
@@ -198,20 +203,16 @@ penalty / logprob kernels continue to stride on `vocab_size_padded`; the
 value is smaller or equal to before (equal when `cp == 1`, strictly
 smaller when `cp > 1`).
 
-## 2. Python `Builder` TP/ranks discipline
+## 2. Python `TextModelBuilder` TP/ranks discipline
 
-### Required keyword-only
+### Required keyword-only on `TextModelBuilder` only
 
 ```python
 class Builder:
-    def __init__(self, config, contexts, *, tp, ranks):
-        object.__setattr__(self, '_contexts', contexts)
-        object.__setattr__(self, '_tp', tp)
-        object.__setattr__(self, '_ranks', ranks)
-        object.__setattr__(self, '_children', {})
-        object.__setattr__(self, 'config', config)
-        object.__setattr__(self, '_handles', None)
-        object.__setattr__(self, '_handles_created', False)
+    def __init__(self, config, contexts, tp=1, ranks=None):
+        # unchanged: defaults preserved for broadcast / pure-attachment
+        # builders (NormBuilder, ModuleListBuilder, DecoderLayerBuilder).
+        ...
 
 
 class TextModelBuilder(Builder):
@@ -226,21 +227,32 @@ class TextModelBuilder(Builder):
         object.__setattr__(self, 'config', None)
 ```
 
-`tp` / `ranks` are required at every construction site. No silent
-`tp=1, ranks=None` fallback. `TextModelBuilder` additionally requires
-`vocab_size` so `add_lm_head` can pad without threading it per call.
+`TextModelBuilder` is the only class that loses its defaults. It now
+requires explicit `tp`, `ranks`, `vocab_size` at construction. This is
+where the original antipattern sat — a root builder that silently
+defaulted to `tp=1, ranks=None` but whose commits (`tok_embeddings`,
+`output`) actually need real attn-TP values. `vocab_size` is threaded in
+so `add_lm_head` can pad without asking per call.
 
-### Every construction site sources tp/ranks explicitly
+The base `Builder` keeps its `tp=1, ranks=None` defaults. The only
+construction sites that rely on them are broadcast / pure-attachment
+builders (`NormBuilder`, `ModuleListBuilder`, `DecoderLayerBuilder`) —
+making them explicit everywhere adds noise without catching a real bug
+(`_rank_for` returns `0` when `tp <= 1`; these builders don't shard).
 
-- **attn-TP builders** (`AttentionBuilder`, `MLABuilder`,
-  `DeltaNetBuilder`, `TextModelBuilder`):
-  `tp=engine_cfg.attn_tp_size`, `ranks=self._attn_ranks`.
-- **mlp-TP builders** (`FfnBuilder`, `MoeBuilder`):
-  `tp=engine_cfg.mlp_tp_size`, `ranks=self._mlp_ranks`.
-- **Broadcast / pure-attachment builders** (`NormBuilder`,
-  `ModuleListBuilder`, `DecoderLayerBuilder`):
-  `tp=1, ranks=None`. Broadcast semantics preserved —
-  `_rank_for` returns 0 when `tp <= 1`.
+### Construction sites unchanged except for `TextModelBuilder`
+
+- attn-TP builders (`AttentionBuilder`, `MLABuilder`, `DeltaNetBuilder`)
+  already pass `tp=engine_cfg.attn_tp_size`, `ranks=self._attn_ranks` at
+  every call site. No change.
+- mlp-TP builders (`FfnBuilder`, `MoeBuilder`) already pass
+  `tp=engine_cfg.mlp_tp_size`, `ranks=self._mlp_ranks`. No change.
+- Broadcast builders (`NormBuilder`, `ModuleListBuilder`,
+  `DecoderLayerBuilder`) keep `tp=1, ranks=None` via base defaults. No
+  change at construction sites.
+- `TextModelBuilder`: now constructed with required
+  `tp=engine_cfg.attn_tp_size, ranks=self._attn_ranks,
+  vocab_size=self._vocab_size`.
 
 No `engine_cfg.attn_cp_size` multiplication anywhere on the Python side.
 `self._attn_ranks` / `self._mlp_ranks` come from
@@ -251,9 +263,9 @@ No `engine_cfg.attn_cp_size` multiplication anywhere on the Python side.
 ### No changes to `_commit_linear` / `_commit_tensor` signatures
 
 They keep reading `self._tp` / `self._ranks`. The discipline change is at
-construction: every Builder instance is initialized with explicit tp/ranks,
-so `_commit_*` always sees the right values without needing per-call
-overrides.
+`TextModelBuilder` construction: every instance is initialized with
+explicit attn-TP values, so `_commit_*` always sees the right values
+without needing per-call overrides.
 
 ## 3. `TextModelBuilder` public commit methods
 
@@ -379,26 +391,20 @@ def model(self):
 `__setattr__` → `add_child_raw`) — that operation is TP-agnostic and
 doesn't care about root's stored tp/ranks.
 
-Every builder-construction site inside each spec file grows explicit
-tp/ranks kwargs. Mechanical change:
+Only one construction site changes in each spec file — the
+`TextModelBuilder(...)` call. Every other builder construction
+(`AttentionBuilder`, `FfnBuilder`, `MoeBuilder`, `DeltaNetBuilder`,
+`MLABuilder`, `NormBuilder`, `ModuleListBuilder`, `DecoderLayerBuilder`)
+stays as-is.
 
-- `AttentionBuilder(cfg, ctx, tp=..., ranks=...)` — already explicit; no
-  change.
-- `FfnBuilder(cfg, ctx, tp=..., ranks=...)` — already explicit; no
-  change.
-- `MoeBuilder(cfg, ctx, tp=..., ranks=...)` — already explicit; no
-  change.
-- `DeltaNetBuilder(cfg, ctx, tp=..., ranks=...)` — already explicit; no
-  change.
-- `MLABuilder(cfg, ctx, tp=..., ranks=...)` — already explicit; no
-  change.
-- `NormBuilder(cfg, ctx)` → `NormBuilder(cfg, ctx, tp=1, ranks=None)`.
-- `ModuleListBuilder(cfg, ctx)` → `ModuleListBuilder(cfg, ctx, tp=1,
-  ranks=None)`.
-- `DecoderLayerBuilder(cfg, ctx)` → `DecoderLayerBuilder(cfg, ctx, tp=1,
-  ranks=None)`.
-- `TextModelBuilder(handles, ctx)` → `TextModelBuilder(handles, ctx,
-  tp=attn_tp_size, ranks=self._attn_ranks, vocab_size=self._vocab_size)`.
+GLM4-MoE-Lite never ties embeddings, so its `lm_key` line is
+unconditional:
+
+```python
+root.add_lm_head(self._linear('lm_head'))
+```
+
+Otherwise identical.
 
 ## 6. Data flow
 
@@ -551,8 +557,9 @@ internally but the validated checkpoint is unified.
 - `make_linear_config` function
 - `TextModelSpec.token_embeds` method
 - `TextModelSpec.lm_head` method
-- Default values `tp=1, ranks=None` on `Builder.__init__` and
-  `TextModelBuilder.__init__`
+- Default values `tp=1, ranks=None` on `TextModelBuilder.__init__`
+  (base `Builder` keeps its defaults — broadcast builders still rely
+  on them)
 - `spec.py` imports: `LinearBuilder`, `SplitSide`, `make_linear_config`,
   `pad_out_dim`
 
@@ -584,6 +591,8 @@ internally but the validated checkpoint is unified.
 3. `tok_embeddings` shape in C++ becomes `[vocab, hidden / attn_tp_size]`
    (unpadded along vocab). Previously padded along vocab. Embedding
    lookup results identical — the padded rows were dead storage.
-4. Constructing any `Builder` without explicit `tp` and `ranks` now
-   raises `TypeError`. Previously the missing args silently defaulted to
-   `1` and `None`.
+4. Constructing `TextModelBuilder` without explicit `tp`, `ranks`, and
+   `vocab_size` now raises `TypeError`. Previously the missing args
+   silently defaulted to `tp=1, ranks=None` and `vocab_size` didn't
+   exist — the bypass path papered over it. Base `Builder` is
+   unaffected.
