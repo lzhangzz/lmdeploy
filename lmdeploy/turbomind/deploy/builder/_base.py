@@ -157,17 +157,18 @@ def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
 
 
 # ---------------------------------------------------------------------------
-# @transform_tensors decorator
+# @transform_output_dim / @transform_input_dim decorators
 # ---------------------------------------------------------------------------
 
 
-def transform_tensors(fn):
+def transform_output_dim(fn):
     """Decorator that lifts a tensor-level transform to Linear-level.
 
-    Convention: args that are ``Linear`` instances are treated as tensor
-    inputs; all other args pass through unchanged.  Return type is detected
-    at runtime: ``Tensor`` -> single ``Linear``, ``tuple`` -> tuple of
-    ``Linear`` objects.
+    For output-dim operations: 1-D tensors (bias) are unsqueezed to 2-D
+    before calling *fn*, then squeezed back.  Convention: args that are
+    ``Linear`` instances are treated as tensor inputs; all other args pass
+    through unchanged.  Return type is detected at runtime:
+    ``Tensor`` -> single ``Linear``, ``tuple`` -> tuple of ``Linear`` objects.
     """
     sig = inspect.signature(fn)
 
