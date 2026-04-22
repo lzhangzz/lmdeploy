@@ -38,10 +38,10 @@ def _chunk_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
     if tp <= 1:
         return torch.cat([w1, w3], dim=-1).contiguous()
     d = w1.dim() - 1
-    r1 = w1.reshape(w1.shape[:d] + [tp, w1.shape[d] // tp])
-    r3 = w3.reshape(w3.shape[:d] + [tp, w3.shape[d] // tp])
+    r1 = w1.reshape(w1.shape[:d] + (tp, w1.shape[d] // tp))
+    r3 = w3.reshape(w3.shape[:d] + (tp, w3.shape[d] // tp))
     combined = torch.cat([r1, r3], dim=d + 1)
-    return combined.reshape(w1.shape[:d] + [-1]).contiguous()
+    return combined.reshape(w1.shape[:d] + (-1,)).contiguous()
 
 
 @transform_output_dim

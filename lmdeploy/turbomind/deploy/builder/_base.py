@@ -143,8 +143,20 @@ def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict
     """Dequant linears to a common trivial format if a fusion group has mixed formats."""
     formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
-        return linears
-    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
+        # Weight formats agree; normalize data_format to a single shared object.
+        target_df = next(iter(linears.values())).data_format
+        return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
+                              data_format=target_df)
+                       if lin.data_format is not target_df else lin)
+                for name, lin in linears.items()}
+    result = {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
+    # Normalize data_format after dequant — each _dequant_linear may produce
+    # a distinct DataFormat object even when they represent the same dtype.
+    target_df = next(iter(result.values())).data_format
+    return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
+                          data_format=target_df)
+                   if lin.data_format is not target_df else lin)
+            for name, lin in result.items()}
 
 
 # ---------------------------------------------------------------------------
