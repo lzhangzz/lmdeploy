@@ -12,7 +12,7 @@ from __future__ import annotations
 import torch
 
 from ..linear import Linear
-from ._base import Builder, SplitSide, _dequant_linear, transform_tensors
+from ._base import Builder, SplitSide, _dequant_linear, transform_output_dim
 
 # ---------------------------------------------------------------------------
 # New pipeline functions (replacing merge_qkv_linear)
@@ -46,7 +46,7 @@ def _infer_heads(linear: Linear, head_dim: int) -> int:
     return w.size(-1) // head_dim
 
 
-@transform_tensors
+@transform_output_dim
 def _repeat_kv_heads(tensor: torch.Tensor, *, tp: int,
                      heads: int) -> torch.Tensor:
     """Repeat KV heads to reach a TP-divisible count."""
@@ -69,7 +69,7 @@ def repeat_kv_for_tp(k: Linear, v: Linear, *,
     return k, v
 
 
-@transform_tensors
+@transform_output_dim
 def split_output_gate(tensor: torch.Tensor, *, head_dim: int
                       ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split output gate from Q projection (Qwen3.5).
@@ -82,7 +82,7 @@ def split_output_gate(tensor: torch.Tensor, *, head_dim: int
     return q.reshape(-1, head_num * head_dim), gate.reshape(-1, head_num * head_dim)
 
 
-@transform_tensors
+@transform_output_dim
 def fuse_qkv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
              *, tp: int, gate: torch.Tensor | None = None) -> torch.Tensor:
     """Fuse Q, K, V (and optionally gate) into a single w_qkv Linear.
