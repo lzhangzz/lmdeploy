@@ -7,7 +7,7 @@ from ._base import (Builder, TextModelBuilder, SplitSide,
 from .attention import AttentionBuilder
 from .deltanet import DeltaNetBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
-from .ffn import FfnBuilder, fuse_ffn_linears
+from .ffn import FfnBuilder, fuse_w1w3
 from .linear import LinearBuilder, make_linear_config
 from .mla import MLABuilder
 from .moe import MoeBuilder
@@ -28,5 +28,5 @@ __all__ = [
     # C++ config re-exports
     'DecoderLayerConfig', 'ModuleListConfig',
     # Helper functions
-    'fuse_ffn_linears',
+    'fuse_w1w3',
 ]
