@@ -37,7 +37,8 @@ class BaseOutputModel(ABC):
 
     def tp_ranks(self, index: int):
         return (self.model_comm.attn_tp_rank(index),
-                self.model_comm.mlp_tp_rank(index))
+                self.model_comm.mlp_tp_rank(index),
+                self.model_comm.model_tp_rank(index))
 
     # ------------------------------------------------------------------
     # Export drivers

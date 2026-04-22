@@ -23,6 +23,8 @@ class TextModelLoader:
                       for gpu in range(model.gpu_count)]
         mlp_ranks = [model.tp_ranks(gpu)[1]
                      for gpu in range(model.gpu_count)]
+        model_tp_ranks = [model.tp_ranks(gpu)[2]
+                          for gpu in range(model.gpu_count)]
         handles = []
         contexts = []
         for gpu in range(model.gpu_count):
@@ -36,4 +38,5 @@ class TextModelLoader:
             root_handles=handles,
             attn_ranks=attn_ranks,
             mlp_ranks=mlp_ranks,
+            model_tp_ranks=model_tp_ranks,
         )

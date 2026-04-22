@@ -122,11 +122,13 @@ class TextModelSpec(ABC):
     # Runtime binding (called by TextModelLoader after model_comm exists)
     # ------------------------------------------------------------------
 
-    def bind_runtime(self, *, contexts, root_handles, attn_ranks, mlp_ranks):
+    def bind_runtime(self, *, contexts, root_handles,
+                     attn_ranks, mlp_ranks, model_tp_ranks):
         self._contexts = contexts
         self._root_handles = root_handles
         self._attn_ranks = attn_ranks
         self._mlp_ranks = mlp_ranks
+        self._model_tp_ranks = model_tp_ranks
 
     def set_params(self, params: dict):
         self.params = params
