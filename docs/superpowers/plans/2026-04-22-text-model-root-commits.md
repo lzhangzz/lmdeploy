@@ -290,7 +290,7 @@ EOF
 - Modify: `src/turbomind/models/model_weight.h:36-45` (X-macros)
 - Modify: `src/turbomind/models/model_weight.cc:20-51, 76-86`
 - Modify: `src/turbomind/models/language_model.cc:194`
-- Modify: `lmdeploy/turbomind/deploy/builder/_base.py:12, 590-600`
+- Modify: `lmdeploy/turbomind/deploy/builder/_base.py:12, 590-611`
 - Delete: `lmdeploy/turbomind/deploy/builder/linear.py`
 - Modify: `lmdeploy/turbomind/deploy/builder/__init__.py:5-32`
 - Modify: `lmdeploy/turbomind/deploy/spec.py:12-14, 177-203`
@@ -392,7 +392,7 @@ Edit `src/turbomind/models/language_model.cc` line 194:
     TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units);
 ```
 
-One character removed: `weights_.tok_embeddings->weight` → `weights_.tok_embeddings`. The rest of `LookupEmbedding` consumes `embedding_table` (a local reference) and is unchanged.
+The `->weight` suffix is dropped: `weights_.tok_embeddings->weight` → `weights_.tok_embeddings`. The rest of `LookupEmbedding` consumes `embedding_table` (a local reference) and is unchanged.
 
 - [ ] **Step 3.5: Build C++**
 
@@ -417,7 +417,7 @@ from ..linear import Linear, pad_out_dim
 
 - [ ] **Step 3.7: Replace `TextModelBuilder` with the new version**
 
-Edit `lmdeploy/turbomind/deploy/builder/_base.py` lines 590–600 (the current `TextModelBuilder` class). Replace wholesale:
+Edit `lmdeploy/turbomind/deploy/builder/_base.py` lines 590–611 (the section-header comment at 590–592 plus the current `TextModelBuilder` class body at 595–611). Replace wholesale:
 
 ```python
 # ---------------------------------------------------------------------------
@@ -462,12 +462,12 @@ class TextModelBuilder(Builder):
         """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
         ``output`` LinearWeight root child.
 
-        Works for every checkpoint format in use today (trivial / AWQ /
-        GPTQ / compressed-tensors / MXFP4): padding every tensor in the
-        bundle along ``dim=-1`` keeps the format-specific block structure
-        intact because ``block_out`` is ``None`` in all of them. FP8
-        ``lm_head`` (``block_out == 128``) would misalign scales and is
-        not a configuration used by any released checkpoint.
+        Works for every checkpoint format in use today — trivial / AWQ /
+        GPTQ / compressed-tensors / MXFP4 all have ``block_out is None``,
+        so padding every tensor in the bundle along ``dim=-1`` keeps the
+        format-specific block structure intact. FP8 ``lm_head``
+        (``block_out == 128``) would misalign scales under naive padding
+        but is not a configuration used by any released checkpoint.
         """
         padded_vocab = ((self._vocab_size + self._tp - 1)
                         // self._tp) * self._tp
@@ -646,13 +646,13 @@ Edit `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` lines 114–120:
 
 ### 3D — Build and verify
 
-- [ ] **Step 3.15: Build**
+- [ ] **Step 3.15: Final build sanity check**
 
 ```bash
 cd build && ninja
 ```
 
-Expected: clean build. If any C++ call site still references `tok_embeddings->weight`, fix it (spec-time grep found only `language_model.cc:194`, which was updated in step 3.4).
+Step 3.5 already built `_turbomind` after the C++ edits. Steps 3.6–3.14 were Python-only and don't participate in the C++ build graph, so this invocation is typically a no-op — run it anyway to confirm nothing regressed. Expected: "ninja: no work to do." or a clean rebuild of any incremental targets. If any C++ call site still references `tok_embeddings->weight`, fix it (spec-time grep found only `language_model.cc:194`, which was updated in step 3.4).
 
 - [ ] **Step 3.16: Smoke-test trivial Qwen3 at tp=1**
 
