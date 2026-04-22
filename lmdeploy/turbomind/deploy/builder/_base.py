@@ -89,26 +89,6 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
     return shard
 
 
-def _infer_cpp_linear_dtype(linear: Linear):
-    """Determine the C++ ``DataType`` for a ``Linear`` bundle.
-
-    Returns the ``_tm.DataType`` value corresponding to the declared
-    ``weight_format.cpp_dtype_name`` when set, else the C++ equivalent of
-    the weight tensor's torch dtype, else ``None``.  The quantization
-    block size is no longer returned here — callers read it directly from
-    ``linear.weight_format.block_in``.
-    """
-    fmt = linear.weight_format
-    if fmt is not None and fmt.cpp_dtype_name is not None:
-        cpp_dtype = getattr(_tm.DataType, fmt.cpp_dtype_name, None)
-        if cpp_dtype is not None:
-            return cpp_dtype
-    weight = linear.tensors.get("weight")
-    if weight is not None:
-        return _TORCH_TO_CPP.get(weight.dtype)
-    return None
-
-
 def _infer_compute_dtype(linear: Linear):
     """Get the model's compute dtype from a Linear's tensors.
 
@@ -453,7 +433,7 @@ class Builder:
             return
 
         # --- GPU-invariant preparation -------------------------------------
-        cpp_dtype = _infer_cpp_linear_dtype(linear)
+        weight_cpp_dtype = linear.data_format.dtype if linear.data_format is not None else None
         fmt = linear.weight_format
         block_in = (fmt.block_in or 0) if fmt is not None else 0
 
@@ -510,14 +490,14 @@ class Builder:
                 # get-or-create: create_child fires only on the first commit for this name
                 linear_mod = (handle.child(name)
                               or handle.create_child(name, lin_cfg))
-                linear_mod.set_weight_spec(cpp_dtype, block_in)
+                linear_mod.set_weight_spec(weight_cpp_dtype, block_in)
 
                 for kind, tensor in tensors.items():
                     shard = _shard(tensor, kind_split_dims[kind], tp, rank)
 
                     if kind == 'weight' and is_quantized:
                         alloc_shape, alloc_dtype = ([in_dim, out_dim],
-                                                    cpp_dtype)
+                                                    weight_cpp_dtype)
                     elif kind == 'weight' and model_dtype is not None:
                         alloc_shape, alloc_dtype = None, model_dtype
                     else:

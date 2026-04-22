@@ -224,6 +224,7 @@ class GptOssSpec(TextModelSpec):
 
     def _read_packed_expert(self, prefix: str, expert: int):
         lin = build_linear(self.params, prefix, index=expert,
+                           data_type=self._cpp_dtype(),
                            block_in=self._group_size,
                            block_out=self._group_size)
         if lin is None:

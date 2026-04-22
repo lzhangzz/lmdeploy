@@ -86,23 +86,24 @@ class WeightFormat:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def to_data_format(self, cpp_dtype: int, group_size: int = 0):
-        """Construct a C++ DataFormat from this WeightFormat.
+    def make_data_format(self, data_type) -> "_tm.DataFormat":
+        """Construct the C++ DataFormat describing this checkpoint format's
+        weight storage, resolved for the given model activation dtype.
 
-        Returns None when group_size is needed but not yet known (block_in==0
-        and group_size==0), or when the format is trivial (block_in is None).
+        Delegates format-validity rules to the C++ factory
+        (``ResolveLinearWeightFormat``), which is the source of truth on which
+        (weight_dtype, block_sizes) combinations are supported on this GPU.
         """
-        if self.block_in is None:
-            return None
-        gs = group_size if self.block_in == 0 else self.block_in
-        # Formats with block_in==0 need a real group_size; defer to commit time.
-        if gs == 0:
-            return None
-        if self.cpp_dtype_name is not None:
-            dt = getattr(_tm.DataType, self.cpp_dtype_name, None)
-            if dt is not None:
-                return _tm.MakeLinearWeightFormat(dt, dt, gs)
-        return None
+        if self.cpp_dtype_name is None:
+            # trivial: weight dtype equals activation dtype, no blocking
+            return _tm.ResolveLinearWeightFormat(data_type, data_type, 1, 1)
+        weight_dtype = getattr(_tm.DataType, self.cpp_dtype_name)
+        return _tm.ResolveLinearWeightFormat(
+            data_type,
+            weight_dtype,
+            self.block_in  or 1,
+            self.block_out or 1,
+        )
 
     def complete_tensors(self, tensors: dict[str, Tensor]) -> None:
         """Add any synthesizable tensors absent from the checkpoint in-place.
@@ -537,6 +538,7 @@ def build_linear(
     params: dict[str, torch.Tensor],
     prefix: str,
     *,
+    data_type,                      # the model activation dtype
     index: int | None = None,
     block_in: int = 0,
     block_out: int = 0,
@@ -594,7 +596,7 @@ def build_linear(
         return None
 
     fmt.complete_tensors(tensors)
-    return Linear(tensors=tensors, weight_format=fmt, data_format=None)
+    return Linear(tensors=tensors, weight_format=fmt, data_format=fmt.make_data_format(data_type))
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
