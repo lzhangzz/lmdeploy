@@ -18,43 +18,52 @@ bool DataFormat::is_quantized() const noexcept
     return false;
 }
 
-DataFormat MakeLinearWeightFormat(DataType data_type, DataType weight_format, int group_size)
+DataFormat ResolveLinearWeightFormat(DataType data_type,
+                                     DataType weight_dtype,
+                                     int      block_in,
+                                     int      block_out)
 {
     DataFormat fmt;
-    fmt.dtype = weight_format;
+    fmt.dtype = weight_dtype;
 
-    if (IsTrivialFloatType(weight_format)) {
+    if (IsTrivialFloatType(weight_dtype)) {
+        TM_CHECK(block_in == 1 && block_out == 1)
+            << "Trivial float weight requires block_in==1 and block_out==1, got "
+            << block_in << ", " << block_out;
         fmt.block_sizes = {1, 1};
         return fmt;
     }
 
-    if (weight_format == kFloat8_e4m3) {
-        TM_CHECK_EQ(group_size, 128)
-            << "FP8 weight format requires group_size=128, got " << group_size;
+    if (weight_dtype == kFloat8_e4m3) {
+        TM_CHECK(block_in == 128 && block_out == 128)
+            << "FP8 weight format requires block_in==128 and block_out==128, got "
+            << block_in << ", " << block_out;
         fmt.block_sizes  = {128, 128};
         fmt.scales.dtype = kFloat;
         return fmt;
     }
 
-    if (weight_format == kFloat4_e2m1) {
-        TM_CHECK(group_size > 0)
-            << "FP4 weight format requires group_size > 0, got " << group_size;
-        fmt.block_sizes  = {1, group_size};
+    if (weight_dtype == kFloat4_e2m1) {
+        TM_CHECK(block_in > 0 && block_out == 1)
+            << "FP4 weight format requires block_in>0 and block_out==1, got "
+            << block_in << ", " << block_out;
+        fmt.block_sizes  = {block_in, 1};
         fmt.scales.dtype = kUint8;
         return fmt;
     }
 
-    const bool is_qweight = weight_format == kUint4 || weight_format == kUint8;
+    const bool is_qweight = weight_dtype == kUint4 || weight_dtype == kUint8;
     if (is_qweight) {
-        TM_CHECK(group_size > 0 && group_size <= 256)
-            << "Invalid group_size for quantized weight: " << group_size;
-        fmt.block_sizes  = {1, group_size};
+        TM_CHECK(block_in > 0 && block_in <= 256 && block_out == 1)
+            << "Quantized integer weight requires 0 < block_in <= 256 and block_out==1, got "
+            << block_in << ", " << block_out;
+        fmt.block_sizes  = {block_in, 1};
         fmt.scales.dtype = data_type;
         fmt.zeros.dtype  = data_type;
         return fmt;
     }
 
-    TM_CHECK(0) << "Unsupported weight format: " << to_string(weight_format);
+    TM_CHECK(0) << "Unsupported weight format: " << to_string(weight_dtype);
     return fmt;
 }
 

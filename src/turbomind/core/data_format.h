@@ -34,7 +34,14 @@ struct DataFormat {
     int rank() const noexcept { return static_cast<int>(block_sizes.size()); }
 };
 
-/// Factory: create a DataFormat for linear weight storage.
-DataFormat MakeLinearWeightFormat(DataType data_type, DataType weight_format, int group_size);
+/// Construct the DataFormat for a linear weight tensor in TM [in, out] layout.
+/// block_sizes stored in tensor-shape order: {block_in, block_out}, so
+/// block_sizes[0] is the K-axis group size and block_sizes[1] is the N-axis.
+/// Scales / zeros dtypes are derived from (data_type, weight_dtype) per the
+/// format's GEMM convention. Validates that the combination is supported.
+DataFormat ResolveLinearWeightFormat(DataType data_type,
+                                     DataType weight_dtype,
+                                     int      block_in,
+                                     int      block_out);
 
 }  // namespace turbomind

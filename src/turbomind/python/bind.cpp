@@ -437,8 +437,11 @@ PYBIND11_MODULE(_turbomind, m)
         .def("is_quantized", &turbomind::DataFormat::is_quantized)
         .def("rank", &turbomind::DataFormat::rank);
 
-    m.def("MakeLinearWeightFormat", &turbomind::MakeLinearWeightFormat,
-          py::arg("data_type"), py::arg("weight_format"), py::arg("group_size"));
+    m.def("ResolveLinearWeightFormat", &turbomind::ResolveLinearWeightFormat,
+          py::arg("data_type"),
+          py::arg("weight_dtype"),
+          py::arg("block_in"),
+          py::arg("block_out"));
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")

@@ -31,7 +31,7 @@ LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, i
     }
 
     if (format.dtype == kFloat8_e4m3) {
-        int gs = format.block_sizes[1];
+        int gs = format.block_sizes[0];
         p.weight_quant = gemm::QuantDesc{gemm::QuantType::kB, gs};
         if (sm == 90) {
             p.input_dtype  = kFloat8_e4m3;
@@ -41,13 +41,13 @@ LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, i
     }
 
     if (format.dtype == kFloat4_e2m1) {
-        int gs = format.block_sizes[1];
+        int gs = format.block_sizes[0];
         p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
         return p;
     }
 
     if (format.dtype == kUint4 || format.dtype == kUint8) {
-        int gs = format.block_sizes[1];
+        int gs = format.block_sizes[0];
         p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
         return p;
     }
@@ -100,7 +100,21 @@ void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
     }
     weight_format = weight_dtype;
     this->group_size = group_size;
-    format = MakeLinearWeightFormat(data_type, weight_format, group_size);
+
+    // Translate the legacy single-arg group_size to explicit (block_in, block_out).
+    // This shim survives only until Task 4 deletes set_weight_spec entirely.
+    int block_in, block_out;
+    if (IsTrivialFloatType(weight_dtype)) {
+        block_in = block_out = 1;
+    }
+    else if (weight_dtype == kFloat8_e4m3) {
+        block_in = block_out = 128;
+    }
+    else {  // kFloat4_e2m1 / kUint4 / kUint8 — K-grouped
+        block_in = group_size;
+        block_out = 1;
+    }
+    format = ResolveLinearWeightFormat(data_type, weight_format, block_in, block_out);
     policy = ResolveLinearPolicy(format, data_type, getSMVersion());
 }
 
