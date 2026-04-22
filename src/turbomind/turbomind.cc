@@ -240,8 +240,9 @@ void TurboMind::Impl::CreateContext(int index)
             p.attn_cp_rank = c.d_comm->rank(c.d_cp_group);
         }
 
-        p.attn_tp_rank = c.d_comm->rank(c.d_tp_group) / p.attn_cp_size;
-        p.mlp_tp_rank  = c.d_comm->rank(0);
+        p.model_tp_rank = c.d_comm->rank(c.d_tp_group);
+        p.attn_tp_rank  = p.model_tp_rank / p.attn_cp_size;
+        p.mlp_tp_rank   = c.d_comm->rank(0);
     }
 
     if (c.h_tp_group->rank() == 0) {
@@ -503,6 +504,11 @@ int TurboMind::GetAttnTpRank(int index)
 int TurboMind::GetMlpTpRank(int index)
 {
     return impl_->engine_params_.at(index).mlp_tp_rank;
+}
+
+int TurboMind::GetModelTpRank(int index)
+{
+    return impl_->engine_params_.at(index).model_tp_rank;
 }
 
 }  // namespace turbomind

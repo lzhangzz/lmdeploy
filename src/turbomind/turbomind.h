@@ -51,6 +51,9 @@ public:
     /// MLP TP rank for GPU *index*.
     int GetMlpTpRank(int index);
 
+    /// Model-level TP rank (rank within d_tp_group) for GPU *index*.
+    int GetModelTpRank(int index);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
