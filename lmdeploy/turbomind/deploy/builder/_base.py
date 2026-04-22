@@ -533,7 +533,8 @@ class Builder:
                                          alloc_dtype=alloc_dtype)
 
     def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
-                       split_side: SplitSide | None = None):
+                       split_side: SplitSide | None = None, *,
+                       model_dtype=None):
         """Commit a raw tensor to a named parameter on all GPUs.
 
         Parameters
@@ -556,7 +557,8 @@ class Builder:
             with self._contexts[i]:
                 rank = self._rank_for(i) if tp > 1 else 0
                 shard = _shard(tensor, split_dim, tp, rank)
-                _copy_shard_to_param(handle, name, shard)
+                _copy_shard_to_param(handle, name, shard,
+                                     alloc_dtype=model_dtype)
 
     def _add_norm_child(self, name: str, tensor: torch.Tensor,
                         data_type=None, *, norm_eps):
@@ -623,7 +625,8 @@ class TextModelBuilder(Builder):
         embedding lookup never indexes past ``vocab - 1``.
         """
         self._commit_tensor('tok_embeddings', tensor,
-                            split_side=SplitSide.OUTPUT)
+                            split_side=SplitSide.OUTPUT,
+                            model_dtype=self._data_type)
 
     def add_lm_head(self, linear):
         """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
