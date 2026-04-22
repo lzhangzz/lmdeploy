@@ -47,15 +47,23 @@ TP/ranks contract on `Builder.__init__`. Touches both Python and C++.
    never indexes past `vocab_size - 1`, so the pad is dead storage.
 
 5. **TP is computed as `attn_tp_size * attn_cp_size` for both methods,
-   which is wrong.** `self._attn_ranks` holds values in
+   semantically wrong.** `self._attn_ranks` holds values in
    `[0, attn_tp_size)` (populated from `bind.cpp`'s `attn_tp_rank =
-   rank(d_tp_group) / attn_cp_size`). With `tp = attn_tp × cp` the shard
-   function splits the tensor into `attn_tp × cp` pieces and picks the
-   first `attn_tp` of them; the remaining `(cp-1) × attn_tp` shards are
-   never committed. Masked by `attn_cp_size == 1` being the common case.
-   Same bug exists on the C++ side in `ModelWeight::tp_size` (which is
-   initialized to `attn_tp_size * attn_cp_size` and only used to derive
-   `vocab_size_padded`).
+   rank(d_tp_group) / attn_cp_size`). With `tp = attn_tp × cp` the
+   shard function splits the tensor into `attn_tp × cp` pieces and
+   picks only the first `attn_tp` of them; the remaining `(cp-1) ×
+   attn_tp` shards are never committed to any GPU. For `cp == 1` this
+   is identical to `tp = attn_tp` and works fine (the only
+   currently-tested configuration). For `cp > 1` it produces silently
+   garbled embeddings. The mirror of this bug sits on the C++ side in
+   `ModelWeight::tp_size = attn_tp_size * attn_cp_size` (used only for
+   `vocab_size_padded`). Fixing the Python side exposes a second
+   dimension mismatch in `language_model.cc::tp_size_` (which derives
+   from `h_tp_group->n_ranks() = attn_tp × cp`), turning the cp > 1
+   failure mode from "silent garbage" into "startup assertion" —
+   better but still not a working cp > 1 path end-to-end. Full
+   cp > 1 correctness is out of scope here; see §1 for the coordinated
+   follow-up required.
 
 Plus a structural issue on `TextModelBuilder` specifically: its
 `__init__(handles, contexts, tp=1, ranks=None)` defaults let the root
@@ -91,7 +99,7 @@ broadcast / pure-attachment builders (`NormBuilder`, `ModuleListBuilder`,
 │                                                        │
 │ class TextModelBuilder(Builder):                       │
 │     def __init__(self, handles, contexts, *,           │
-│                  tp, ranks, vocab_size):               │
+│                  tp, ranks, vocab_size, data_type):    │
 │         # required keyword-only                        │
 │     def add_token_embeds(self, tensor): ...            │
 │     def add_lm_head(self, linear): ...                 │
@@ -103,7 +111,8 @@ broadcast / pure-attachment builders (`NormBuilder`, `ModuleListBuilder`,
 │         self._root_handles, self._contexts,            │
 │         tp=self.engine_cfg.attn_tp_size,               │
 │         ranks=self._attn_ranks,                        │
-│         vocab_size=self._vocab_size)                   │
+│         vocab_size=self._vocab_size,                   │
+│         data_type=self._cpp_dtype())                   │
 │     root.add_token_embeds(self._get(self._embed_key))  │
 │     root.norm = self.output_norm(self._norm_key)       │
 │     lm_key = (self._embed_key if self._tie_embeddings  │
@@ -165,11 +174,11 @@ if (!tok_embeddings) {
 
 ### `attn_tp_size` replaces `tp_size`
 
-`ModelWeight::tp_size` is used in exactly one place:
-`vocab_size_padded = round_up((size_t)vocab_size, (size_t)tp_size)`. Today
-it is initialized from `engine_param.attn_tp_size * engine_param.attn_cp_size`
-— the same `× cp` bug as in Python. Rename to `attn_tp_size` and
-initialize from `engine_param.attn_tp_size` alone:
+`ModelWeight::tp_size` is used in exactly one place on `ModelWeight`
+itself: `vocab_size_padded = round_up((size_t)vocab_size,
+(size_t)tp_size)`. Today it is initialized from `engine_param.attn_tp_size
+* engine_param.attn_cp_size` — the same `× cp` bug as in Python. Rename
+to `attn_tp_size` and initialize from `engine_param.attn_tp_size` alone:
 
 ```cpp
 ModelWeight::ModelWeight(const EngineParam& engine_param)
@@ -194,14 +203,53 @@ int attn_tp_size{};
 int tp_rank{};
 ```
 
-Nothing outside `ModelWeight` reads `tp_size` (verified across the C++
-tree), so the rename is self-contained.
+The field `ModelWeight::tp_size` has no readers outside `ModelWeight`
+itself (verified by grep across `src/`). Separately, there are
+references to `weights.tp_size` in `unified_attention_layer.cc` but
+those resolve to `AttentionWeight::tp_size`, a different field on a
+different class — unaffected by this rename.
 
-Effect: `vocab_size_padded` is now consistently `round_up(vocab,
-attn_tp_size)` — matches the Python padding in `add_lm_head`. Sampling /
-penalty / logprob kernels continue to stride on `vocab_size_padded`; the
-value is smaller or equal to before (equal when `cp == 1`, strictly
-smaller when `cp > 1`).
+### Relationship with `LanguageModel::tp_size_`
+
+`src/turbomind/models/language_model.cc` holds a separate, locally-scoped
+`tp_size_` member initialized from `comm_.h_tp_group->n_ranks()`, which
+evaluates to `attn_tp_size × attn_cp_size` at runtime (the host TP group
+combines both). It is used in the lookup / post-embedding AllGather
+paths (lines 154, 169, 195, 212, 235, 246, 265, 279, 297, 305).
+
+When `attn_cp_size == 1` (every currently-tested configuration) this
+equals `attn_tp_size`, so with our fix:
+- The per-rank `embedding_table` has shape `[vocab, hidden /
+  attn_tp_size]`.
+- `language_model.cc` line 195
+  `TM_CHECK_EQ(embedding_table.shape(1) * tp_size_, hidden_units)` still
+  passes (`hidden/attn_tp × attn_tp == hidden`).
+- `vocab_size = output->output_dim * tp_size_` still reconstitutes
+  correctly.
+- The AllGather across `d_tp_group` (same size) correctly reconstitutes
+  hidden / vocab across attn_tp ranks.
+
+When `attn_cp_size > 1`, the divergence between `ModelWeight::attn_tp_size`
+(now = attn_tp_size) and `LanguageModel::tp_size_` (still = attn_tp × cp)
+would surface as an assertion failure on line 195 at startup. Today's
+code "passes" that assertion by sharding Python-side into `attn_tp × cp`
+pieces, but the resulting per-GPU embedding is semantically wrong
+(attn_tp_ranks in `[0, attn_tp)` only cover attn_tp of the attn_tp × cp
+shards; the remaining (cp-1) × attn_tp shards are zeros from `alloc`,
+and the AllGather reassembles garbled content). In other words:
+- **Today, cp > 1**: silent garbage.
+- **After this refactor, cp > 1**: loud assertion failure at startup.
+
+That's an improvement, not a regression. Full end-to-end cp > 1
+correctness would additionally require `language_model.cc` to gather
+across an attn-TP-only comm group (new group Split, or computed from
+ModelWeight's `attn_tp_size`) — out of scope for this refactor.
+
+Effect for cp = 1 deployments (the only currently-tested path):
+- `vocab_size_padded = round_up(vocab, attn_tp_size)` (was identical
+  value when cp = 1).
+- Sampling / penalty / logprob kernels continue to stride on
+  `vocab_size_padded`; no behavior change.
 
 ## 2. Python `TextModelBuilder` TP/ranks discipline
 
@@ -216,23 +264,33 @@ class Builder:
 
 
 class TextModelBuilder(Builder):
-    def __init__(self, handles, contexts, *, tp, ranks, vocab_size):
+    def __init__(self, handles, contexts, *,
+                 tp, ranks, vocab_size, data_type):
         object.__setattr__(self, '_handles', handles)
         object.__setattr__(self, '_contexts', contexts)
         object.__setattr__(self, '_tp', tp)
         object.__setattr__(self, '_ranks', ranks)
         object.__setattr__(self, '_vocab_size', vocab_size)
+        object.__setattr__(self, '_data_type', data_type)
         object.__setattr__(self, '_children', {})
         object.__setattr__(self, '_handles_created', True)
         object.__setattr__(self, 'config', None)
 ```
 
 `TextModelBuilder` is the only class that loses its defaults. It now
-requires explicit `tp`, `ranks`, `vocab_size` at construction. This is
-where the original antipattern sat — a root builder that silently
-defaulted to `tp=1, ranks=None` but whose commits (`tok_embeddings`,
-`output`) actually need real attn-TP values. `vocab_size` is threaded in
-so `add_lm_head` can pad without asking per call.
+requires explicit `tp`, `ranks`, `vocab_size`, `data_type` at
+construction. This is where the original antipattern sat — a root
+builder that silently defaulted to `tp=1, ranks=None` but whose commits
+(`tok_embeddings`, `output`) actually need real attn-TP values.
+`vocab_size` is threaded in so `add_lm_head` can pad without asking per
+call; `data_type` is the model's compute dtype (`engine_cfg.dtype` via
+`_cpp_dtype()`) — required so `add_lm_head` can forward it to
+`_commit_linear(..., model_dtype=...)`, which matters for quantized
+`lm_head` (after normalization, a quantized weight's `torch.dtype` is
+e.g. `uint8` / `int32` and `_infer_compute_dtype` would return the
+storage dtype rather than the compute dtype; for trivial `lm_head` it
+would also be correct without this, but threading unconditionally keeps
+the two paths uniform).
 
 The base `Builder` keeps its `tp=1, ranks=None` defaults. The only
 construction sites that rely on them are broadcast / pure-attachment
@@ -252,7 +310,7 @@ making them explicit everywhere adds noise without catching a real bug
   change at construction sites.
 - `TextModelBuilder`: now constructed with required
   `tp=engine_cfg.attn_tp_size, ranks=self._attn_ranks,
-  vocab_size=self._vocab_size`.
+  vocab_size=self._vocab_size, data_type=self._cpp_dtype()`.
 
 No `engine_cfg.attn_cp_size` multiplication anywhere on the Python side.
 `self._attn_ranks` / `self._mlp_ranks` come from
@@ -270,16 +328,13 @@ without needing per-call overrides.
 ## 3. `TextModelBuilder` public commit methods
 
 ```python
-from .._base import Builder, SplitSide
-from ..linear import Linear, pad_out_dim
-
-
 class TextModelBuilder(Builder):
     """Wraps pre-existing root `ModelWeight` handles. Owns tok_embeddings
     and lm_head commits on the root.
     """
 
-    def __init__(self, handles, contexts, *, tp, ranks, vocab_size):
+    def __init__(self, handles, contexts, *,
+                 tp, ranks, vocab_size, data_type):
         ...
 
     def add_token_embeds(self, tensor):
@@ -292,12 +347,15 @@ class TextModelBuilder(Builder):
                             split_side=SplitSide.OUTPUT)
 
     def add_lm_head(self, linear):
-        """Pad output dim to `round_up(vocab_size, tp)` and commit to
-        the `output` LinearWeight root child.
+        """Pad along output dim to `round_up(vocab_size, tp)` and commit
+        to the `output` LinearWeight root child.
 
-        Works for any format: pad is applied uniformly across every
-        tensor in the Linear bundle along dim=-1 (weight, scales, zeros,
-        bias if present).
+        Uniform pad along dim=-1 works for trivial / AWQ / GPTQ /
+        compressed-tensors / MXFP4 (block_out is None or 1). FP8
+        lm_head (block_out = 128) would misalign scales under naive
+        padding — not a configuration used by any released checkpoint,
+        and if encountered it surfaces downstream as a dim-mismatch /
+        TP-split validation error in `_commit_linear`.
         """
         padded_vocab = ((self._vocab_size + self._tp - 1)
                         // self._tp) * self._tp
@@ -307,7 +365,8 @@ class TextModelBuilder(Builder):
             weight_format=linear.weight_format,
             data_format=linear.data_format)
         self._commit_linear('output', padded,
-                            split_side=SplitSide.OUTPUT)
+                            split_side=SplitSide.OUTPUT,
+                            model_dtype=self._data_type)
 ```
 
 The internal commits still use the **C++ names** `'tok_embeddings'` and
@@ -315,9 +374,28 @@ The internal commits still use the **C++ names** `'tok_embeddings'` and
 method names `add_token_embeds` / `add_lm_head` are the spec-facing
 semantic names.
 
-Imports now needed in `builder/_base.py` (or near `TextModelBuilder`, if
-kept in the same file): `Linear`, `pad_out_dim` from `..linear`, and
-`SplitSide` (already defined here).
+`TextModelBuilder` stays in `builder/_base.py`. That file already
+imports `Linear` from `..linear` (existing line) and defines `SplitSide`
+locally. The only new import is `pad_out_dim`:
+
+```python
+# before: from ..linear import Linear
+# after:  from ..linear import Linear, pad_out_dim
+```
+
+### Why `model_dtype` is threaded through `add_lm_head`
+
+`_commit_linear` derives the compute dtype from `model_dtype` when
+provided, otherwise from `_infer_compute_dtype(linear)`. The fallback
+reads `linear.tensors['weight'].dtype` — for trivial this is `bfloat16`
+/ `float16` (correct). But for AWQ / GPTQ / compressed-tensors, the
+post-normalizer weight is `torch.uint8` and `_infer_compute_dtype`
+returns `TYPE_UINT8` — which becomes `LinearConfig.data_type` and is the
+**wrong** compute dtype. Every other quantized-weight commit in the
+repo passes `model_dtype=<config>.data_type` explicitly
+(`AttentionBuilder.add_qkv_proj`, `MoeBuilder.add_gate`, etc.). To make
+quantized `lm_head` actually work (motivation #3), `add_lm_head` threads
+it the same way.
 
 ## 4. Deletions
 
@@ -379,7 +457,8 @@ def model(self):
         self._root_handles, self._contexts,
         tp=self.engine_cfg.attn_tp_size,
         ranks=self._attn_ranks,
-        vocab_size=self._vocab_size)
+        vocab_size=self._vocab_size,
+        data_type=self._cpp_dtype())
     root.add_token_embeds(self._get(self._embed_key))
     root.norm = self.output_norm(self._norm_key)
     lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
@@ -456,10 +535,13 @@ Per-rank `output->weight` shape: `[hidden, padded_vocab / attn_tp_size]`.
 
 1. Spec never calls `_commit_*` on a builder directly. Every commit flows
    through a public builder method (`add_X`, `set_weight`).
-2. `Builder.__init__` (and `TextModelBuilder.__init__`) require tp/ranks
-   keyword-only. Every construction site sources them from
-   `engine_cfg` (tp size) and the per-GPU ranks lists populated from
-   `bind.cpp` (`attn_tp_rank`, `mlp_tp_rank`) via `TextModelLoader`.
+2. `TextModelBuilder.__init__` requires `tp`, `ranks`, `vocab_size`,
+   `data_type` keyword-only. The four attn-TP / sizing / dtype values
+   feeding it come from `engine_cfg` (`attn_tp_size`, `dtype`) and
+   per-GPU `self._attn_ranks` (populated from `bind.cpp`'s
+   `attn_tp_rank` via `TextModelLoader._bind_runtime`). The base
+   `Builder` keeps its `tp=1, ranks=None` defaults for broadcast /
+   pure-attachment builders.
 3. `attn_tp_size` and `attn_cp_size` are never multiplied together when
    sizing weight shards. CP does not shard weights.
 4. `tok_embeddings` is a Tensor parameter on `ModelWeight`, unpadded
@@ -487,15 +569,19 @@ child). Correct without special cases.
 
 `self._linear(prefix)` dispatches to the detected format's normalizer
 (AWQ / GPTQ / compressed-tensors / FP8 / MXFP4 / trivial). `add_lm_head`
-pads every tensor in the bundle along `dim=-1`. For AWQ / GPTQ /
-compressed-tensors the block-grouping is along K (input), not N (output),
-so output-dim padding by a small amount (`< attn_tp_size`, usually ≤ 16)
-is compatible.
+pads every tensor in the bundle along `dim=-1`, passes `model_dtype`
+through to `_commit_linear` (see §3).
 
-FP8 / MXFP4 `lm_head` would pad scales block-sized along output too —
-pathological but never seen in practice (lm_head is always trivial in
-released checkpoints). No assert; if encountered, it surfaces as a
-dimension mismatch in `_commit_linear`'s uniform TP-split validation.
+- **Trivial / MXFP4 / AWQ / GPTQ / compressed-tensors**: `block_out` is
+  `None`. Weight, scales, zeros, bias all pad uniformly along the output
+  dim. Works.
+- **FP8**: `block_out = 128`. Scales are `[K/128, N/128]` after `.t()`
+  — block-structured along the output dim too. A naive `pad_out_dim` on
+  `N/128` would try to grow scales to `padded_vocab` rows, misaligning
+  the block structure. This path isn't used by any released checkpoint
+  (`lm_head` is always trivial in practice); if encountered it surfaces
+  downstream as a dim-mismatch / TP-split-validation failure in
+  `_commit_linear`. No guard added here.
 
 ### Multi-modal prefix
 
@@ -508,19 +594,32 @@ Qwen3.5 as multimodal root has weights under
 
 ### `attn_cp_size > 1`
 
-With the fix, `tp = attn_tp_size` (not × cp). Shard function splits
-`attn_tp_size` ways; ranks in `[0, attn_tp_size)` pick their shards. CP
-peers share the same shard (they share `attn_tp_rank`). Without the fix
-(current code), shards were `hidden / (attn_tp × cp)` wide but ranks only
-covered the first `attn_tp` — downstream attention received too-narrow
-inputs and produced gibberish whenever `cp > 1`.
+Python side (after fix): `tp = attn_tp_size` (not × cp). Shard splits
+`attn_tp_size` ways; ranks in `[0, attn_tp_size)` pick their shards;
+CP peers share the same shard (they share `attn_tp_rank`). Current
+(buggy) code uses `tp = attn_tp × cp`, splits `attn_tp × cp` ways but
+only attn_tp distinct ranks exist — (cp-1) × attn_tp shards never get
+committed to any GPU.
+
+End-to-end `cp > 1` is **not** fixed by this refactor. The Python
+side becomes semantically correct, but `language_model.cc::tp_size_`
+still derives from `h_tp_group->n_ranks() = attn_tp × cp`, mismatching
+our new `embedding_table.shape(1) = hidden / attn_tp`. Startup
+assertion in `language_model.cc` line 195 would fire. That's louder
+than today's silent garbage (see §1 "Relationship with
+`LanguageModel::tp_size_`"), but still not a working `cp > 1` path.
+Coordinated updates to `language_model.cc` (attn-TP-only comm group for
+the embedding / logits AllGather) are required, tracked separately.
+
+For the current `cp = 1` deployments, our refactor is behavior-neutral —
+`attn_tp_size × 1 == attn_tp_size`.
 
 ### Broadcast / pure-attachment builders
 
-`NormBuilder`, `ModuleListBuilder`, `DecoderLayerBuilder` all pass
-`tp=1, ranks=None` at construction. `_rank_for` returns 0 when `tp <= 1`,
-`_shard` passes tensor through untouched. Broadcast semantics preserved;
-explicit at every call site.
+`NormBuilder`, `ModuleListBuilder`, `DecoderLayerBuilder` rely on the
+base `Builder`'s `tp=1, ranks=None` defaults (unchanged). `_rank_for`
+returns 0 when `tp <= 1`; `_shard` passes tensor through untouched.
+Broadcast semantics preserved without any construction-site churn.
 
 ## 9. Testing
 
@@ -528,15 +627,16 @@ Per `AGENTS.md`: `scripts/test_turbomind_model.py` with ≥128 tokens of
 coherent output each. Check `get_gpu_usage` first. Use `model-server` MCP
 for locally cached models.
 
+All testing is `cp = 1` (cp > 1 is out of scope).
+
 | Case | TP | Why |
 | --- | --- | --- |
-| Qwen3 trivial dense | 1 | Baseline: semantics preserved vs. today (cp=1). |
+| Qwen3 trivial dense | 1 | Baseline: semantics preserved vs. today. |
 | Qwen3 trivial dense | 2 | Real TP sharding of tok_embeddings + lm_head. |
-| AWQ quantized model | 1, 2 | Exercises `self._linear(prefix)` through quantized path; lm_head typically trivial but dispatch must not regress. |
-| Tied-embeddings model (e.g. GPT-OSS if tied, or Qwen3 small variant) | 1 | Same tensor → two independent slots. |
-| Qwen3.5 (DeltaNet + multimodal prefix) | 1 | Multi-modal `_embed_key` path. |
-| GLM4-MoE-Lite (MLA) | 2 | MLA path untouched, exercises the Builder tp/ranks change across builders. |
-| Optional: model with `attn_cp_size > 1` if available | N | Validates the cp-bug fix; otherwise preventive. |
+| AWQ quantized model | 1, 2 | Exercises `self._linear(prefix)` through quantized path and the `model_dtype` threading in `add_lm_head`; lm_head itself is typically trivial but dispatch must not regress. |
+| Tied-embeddings model (GPT-OSS if tied, or a Qwen3 small variant) | 1 | Same tensor → two independent C++ slots (Tensor param + LinearWeight child). |
+| Qwen3.5 (DeltaNet + multimodal prefix) | 1 | Multi-modal `_embed_key` path, `.removesuffix('.weight')` handling. |
+| GLM4-MoE-Lite (MLA) | 2 | MLA path untouched; exercises the unconditional `'lm_head'` key path (never tied in this arch). |
 
 Failure criteria: gibberish, dimension asserts, crashes → halt and bisect.
 
@@ -572,9 +672,11 @@ internally but the validated checkpoint is unified.
 ### Added
 
 **Python:**
-- `TextModelBuilder.__init__` required `vocab_size` kwarg
+- `TextModelBuilder.__init__` required `vocab_size` and `data_type` kwargs
 - `TextModelBuilder.add_token_embeds(tensor)`
 - `TextModelBuilder.add_lm_head(linear)`
+- `pad_out_dim` added to `builder/_base.py`'s existing
+  `from ..linear import Linear` import
 
 **C++:**
 - `X(tok_embeddings)` entry in `MODEL_WEIGHT_PARAMS`
@@ -583,16 +685,34 @@ internally but the validated checkpoint is unified.
 
 ### Behavior changes visible at runtime
 
-1. `attn_cp_size > 1` deployments: tok_embeddings and lm_head are now
-   sharded correctly along attn TP only. Previously under-shared.
-2. `vocab_size_padded = round_up(vocab, attn_tp_size)` (was `× cp`).
-   Same value when `cp == 1`; smaller when `cp > 1`. Sampling /
-   penalty / logprob kernels see the reduced width.
-3. `tok_embeddings` shape in C++ becomes `[vocab, hidden / attn_tp_size]`
-   (unpadded along vocab). Previously padded along vocab. Embedding
-   lookup results identical — the padded rows were dead storage.
-4. Constructing `TextModelBuilder` without explicit `tp`, `ranks`, and
-   `vocab_size` now raises `TypeError`. Previously the missing args
-   silently defaulted to `tp=1, ranks=None` and `vocab_size` didn't
-   exist — the bypass path papered over it. Base `Builder` is
-   unaffected.
+`cp == 1` (only configuration currently tested / deployed):
+
+1. `tok_embeddings` shape in C++ becomes `[vocab, hidden / attn_tp_size]`
+   (unpadded along vocab). Previously it was padded along vocab to
+   `[padded_vocab, hidden / attn_tp_size]`. Embedding lookup results
+   identical — the padded rows were dead storage, never indexed.
+2. `vocab_size_padded` derivation changes: today it's
+   `round_up(tok_embeddings->weight.shape(0), attn_tp × cp)` where the
+   shape is already the Python-padded vocab, so the rounding is a
+   no-op and the value equals the Python pad. After the refactor,
+   `vocab_size = tok_embeddings.shape(0)` is the unpadded real vocab
+   and `vocab_size_padded = round_up(vocab_size, attn_tp_size)` —
+   numerically identical to today at `cp == 1` when `attn_tp × 1 ==
+   attn_tp`.
+3. Constructing `TextModelBuilder` without explicit `tp`, `ranks`,
+   `vocab_size`, `data_type` now raises `TypeError`. Previously the
+   missing args silently defaulted to `tp=1, ranks=None` and
+   `vocab_size` / `data_type` didn't exist — the bypass papered over
+   it. Base `Builder` is unaffected.
+
+`cp > 1` (untested in the wild; the refactor does not fully fix but
+improves failure mode):
+
+4. Today: assertion passes at startup, embedding content is silently
+   garbled, `lm_head` produces wrong logits. After this refactor:
+   startup assertion `embedding_table.shape(1) * tp_size_ ==
+   hidden_units` fires in `language_model.cc` line 195. Louder than
+   silent garbage but still not a working cp>1 path — see §1.
+5. Full cp>1 support would also require `language_model.cc`'s
+   `tp_size_` / AllGather comm group to align with `attn_tp_size`
+   alone. Out of scope; tracked separately.
