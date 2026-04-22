@@ -9,9 +9,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .builder import LinearBuilder, SplitSide, _cpp_dtype as _cd
-from .builder import make_linear_config
-from .linear import pad_out_dim
+from .builder import _cpp_dtype as _cd
 from .source_model.utils import (detect_layer_prefix,
                                  parse_rope_param, rope_type_to_int)
 
@@ -29,9 +27,11 @@ class TextModelSpec(ABC):
         builds per-module C++ config templates as self._attn_cfg /
         self._ffn_cfg / self._moe_cfg / self._dn_cfg.
       - Factory method NAMES (attn/ffn/moe/linear_attn/mla/norm/...)
-        are a convention for readability, NOT a protocol. Signatures may
-        differ across subclasses; the base provides no stubs except the
-        universal text-model primitives (token_embeds, lm_head).
+        are a convention for readability, NOT a protocol. Signatures
+        may differ across subclasses. The base class provides no
+        factory stubs; every subclass implements its own model()
+        that calls root.add_token_embeds / root.add_lm_head on a
+        TextModelBuilder for the root-level commits.
     """
 
     # Class-level: checkpoint loader hints (HF key renaming + layer regex).
@@ -171,34 +171,3 @@ class TextModelSpec(ABC):
             rope_cfg.llama3_original_max_position_embeddings = self._rope.original_max_position_embeddings
         elif self._rope.type == 'mrope':
             rope_cfg.mrope_section = self._rope.mrope_section
-
-    # ------------------------------------------------------------------
-    # Text-model universals (default factory methods)
-    # ------------------------------------------------------------------
-
-    def token_embeds(self, key):
-        emb = self._get(key)
-        tp = self.engine_cfg.attn_tp_size * self.engine_cfg.attn_cp_size
-        padded_vocab = ((self._vocab_size + tp - 1) // tp) * tp
-        emb_padded = pad_out_dim(emb, padded_vocab, dim=0)
-        dtype = self._cpp_dtype()
-        cfg = make_linear_config(input_dim=padded_vocab,
-                                 output_dim=self._hidden_units // tp,
-                                 data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(emb_padded, split_side=SplitSide.OUTPUT)
-        return m
-
-    def lm_head(self, key):
-        output = self._get(key)
-        tp = self.engine_cfg.attn_tp_size * self.engine_cfg.attn_cp_size
-        padded_vocab = ((self._vocab_size + tp - 1) // tp) * tp
-        output_padded = pad_out_dim(output, padded_vocab, dim=0)
-        output_t = output_padded.t()
-        dtype = self._cpp_dtype()
-        cfg = make_linear_config(input_dim=self._hidden_units,
-                                 output_dim=padded_vocab // tp,
-                                 data_type=dtype)
-        m = LinearBuilder(cfg, self._contexts, tp=tp, ranks=self._attn_ranks)
-        m.set_weight(output_t, split_side=SplitSide.OUTPUT)
-        return m

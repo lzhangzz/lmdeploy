@@ -8,7 +8,6 @@ from .attention import AttentionBuilder
 from .deltanet import DeltaNetBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
 from .ffn import FfnBuilder, fuse_w1w3
-from .linear import LinearBuilder, make_linear_config
 from .mla import MLABuilder
 from .moe import MoeBuilder
 from .module_list import ModuleListBuilder, ModuleListConfig
@@ -22,9 +21,9 @@ __all__ = [
     'AttentionBuilder', 'FfnBuilder', 'MoeBuilder',
     'DeltaNetBuilder', 'MLABuilder',
     'DecoderLayerBuilder', 'ModuleListBuilder',
-    'NormBuilder', 'LinearBuilder',
-    # Primitive config wrappers (still used by default token_embeds/lm_head)
-    'make_linear_config', 'make_norm_config',
+    'NormBuilder',
+    # Primitive config wrappers
+    'make_norm_config',
     # C++ config re-exports
     'DecoderLayerConfig', 'ModuleListConfig',
     # Helper functions

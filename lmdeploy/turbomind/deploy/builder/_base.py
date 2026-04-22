@@ -9,7 +9,7 @@ import torch
 import _turbomind as _tm
 
 from ..kind_map import TRIVIAL_FORMAT
-from ..linear import Linear
+from ..linear import Linear, pad_out_dim
 # make_norm_config imported locally in _add_norm_child to avoid circular import
 # (_base -> norm -> _base)
 
@@ -598,14 +598,51 @@ class TextModelBuilder(Builder):
     Unlike regular Builders, ``TextModelBuilder`` does NOT create new modules
     in ``__init__``.  The root handles already exist (created by the
     BaseOutputModel / TurboMind runtime).
+
+    Owns ``tok_embeddings`` (Tensor param) and ``output`` (LinearWeight
+    child) commits on the root via ``add_token_embeds`` / ``add_lm_head``.
     """
 
-    def __init__(self, handles, contexts, tp=1, ranks=None):
-        # Bypass Builder.__init__ which calls _tm.create_module
+    def __init__(self, handles, contexts, *,
+                 tp, ranks, vocab_size, data_type):
+        # Bypass Builder.__init__ which calls _tm.create_module.
         object.__setattr__(self, '_handles', handles)
         object.__setattr__(self, '_contexts', contexts)
         object.__setattr__(self, '_tp', tp)
         object.__setattr__(self, '_ranks', ranks)
+        object.__setattr__(self, '_vocab_size', vocab_size)
+        object.__setattr__(self, '_data_type', data_type)
         object.__setattr__(self, '_children', {})
         object.__setattr__(self, '_handles_created', True)
         object.__setattr__(self, 'config', None)
+
+    def add_token_embeds(self, tensor):
+        """Commit the raw embedding lookup as the ``tok_embeddings`` root param.
+
+        Shards along hidden (output) dim by ``self._tp``. No vocab padding —
+        embedding lookup never indexes past ``vocab - 1``.
+        """
+        self._commit_tensor('tok_embeddings', tensor,
+                            split_side=SplitSide.OUTPUT)
+
+    def add_lm_head(self, linear):
+        """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
+        ``output`` LinearWeight root child.
+
+        Works for every checkpoint format in use today — trivial / AWQ /
+        GPTQ / compressed-tensors / MXFP4 all have ``block_out is None``,
+        so padding every tensor in the bundle along ``dim=-1`` keeps the
+        format-specific block structure intact. FP8 ``lm_head``
+        (``block_out == 128``) would misalign scales under naive padding
+        but is not a configuration used by any released checkpoint.
+        """
+        padded_vocab = ((self._vocab_size + self._tp - 1)
+                        // self._tp) * self._tp
+        padded = Linear(
+            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
+                     for k, t in linear.tensors.items()},
+            weight_format=linear.weight_format,
+            data_format=linear.data_format)
+        self._commit_linear('output', padded,
+                            split_side=SplitSide.OUTPUT,
+                            model_dtype=self._data_type)

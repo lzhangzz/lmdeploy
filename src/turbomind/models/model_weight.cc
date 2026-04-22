@@ -39,7 +39,7 @@ void ModelWeight::prepare()
     head_dim     = attn_layer->attention->head_dim;
     kv_head_num  = attn_layer->attention->kv_head_num;
 
-    vocab_size        = tok_embeddings->weight.shape(0);
+    vocab_size        = tok_embeddings.shape(0);
     embedding_size    = vocab_size;
     num_layer         = layers->size();
     vocab_size_padded = round_up((size_t)vocab_size, (size_t)tp_size);

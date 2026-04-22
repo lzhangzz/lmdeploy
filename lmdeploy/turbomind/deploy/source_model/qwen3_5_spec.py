@@ -146,11 +146,17 @@ class Qwen3_5Spec(TextModelSpec):
     # ------------------------------------------------------------------
 
     def model(self):
-        root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds(self._embed_key)
+        ec = self.engine_cfg
+        root = TextModelBuilder(
+            self._root_handles, self._contexts,
+            tp=ec.attn_tp_size * ec.attn_cp_size,
+            ranks=self._model_tp_ranks,
+            vocab_size=self._vocab_size,
+            data_type=self._cpp_dtype())
+        root.add_token_embeds(self._get(self._embed_key))
         root.norm = self.output_norm(self._norm_key)
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
-        root.output = self.lm_head(lm_key)
+        root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
         root.layers = self.layers(self._layer_prefix)
 
     # ------------------------------------------------------------------

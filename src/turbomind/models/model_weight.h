@@ -35,12 +35,12 @@ public:
 
     // --- X-macro field lists ---
 #define MODEL_WEIGHT_CHILDREN(X)         \
-    X(LinearWeight,     tok_embeddings)  \
     X(LinearWeight,     output)          \
     X(NormWeight,       norm)            \
     X(core::ModuleList, layers)
 
-#define MODEL_WEIGHT_PARAMS(X)
+#define MODEL_WEIGHT_PARAMS(X)           \
+    X(tok_embeddings)
 
     TM_MODULE_DECLARE(ModelWeight, MODEL_WEIGHT_CHILDREN, MODEL_WEIGHT_PARAMS)
 

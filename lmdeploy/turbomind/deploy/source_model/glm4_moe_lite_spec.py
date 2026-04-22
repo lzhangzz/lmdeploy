@@ -151,10 +151,16 @@ class Glm4MoeLiteSpec(TextModelSpec):
     # ------------------------------------------------------------------
 
     def model(self):
-        root = TextModelBuilder(self._root_handles, self._contexts)
-        root.tok_embeddings = self.token_embeds(self._embed_key)
+        ec = self.engine_cfg
+        root = TextModelBuilder(
+            self._root_handles, self._contexts,
+            tp=ec.attn_tp_size * ec.attn_cp_size,
+            ranks=self._model_tp_ranks,
+            vocab_size=self._vocab_size,
+            data_type=self._cpp_dtype())
+        root.add_token_embeds(self._get(self._embed_key))
         root.norm = self.output_norm(self._norm_key)
-        root.output = self.lm_head('lm_head.weight')  # GLM: never tied
+        root.add_lm_head(self._linear('lm_head'))  # GLM: never tied
         root.layers = self.layers(self._layer_prefix)
 
     # Standard RMSNorm
