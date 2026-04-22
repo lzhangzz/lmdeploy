@@ -36,7 +36,12 @@ void AttentionWeight::prepare()
     Module::prepare();
 
     if (!w_qkv) {
-        // MLA models use separate q_a/q_b/kv_a projections — skip derivation.
+        // MLA models use separate q_a/q_b/kv_a projections.
+        // The compressed KV latent is not sharded across TP ranks, so
+        // pad kv_head_num to tp_size to survive the engine's division.
+        if (kv_lora_rank > 0 && kv_head_num < tp_size) {
+            kv_head_num = tp_size;
+        }
         return;
     }
 
