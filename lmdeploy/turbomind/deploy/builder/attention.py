@@ -19,7 +19,7 @@ from ._base import Builder, SplitSide, _dequant_linear, transform_output_dim
 # ---------------------------------------------------------------------------
 
 
-def dequant_mixed(*linears: Linear) -> tuple[Linear, ...]:
+def dequant_mixed(*linears: Linear, data_type) -> tuple[Linear, ...]:
     """Dequantize to trivial if any arg is in trivial format.
 
     When any Linear has trivial weight format (e.g. from RoPE reordering),
@@ -34,7 +34,7 @@ def dequant_mixed(*linears: Linear) -> tuple[Linear, ...]:
     )
     if not has_trivial:
         return linears
-    return tuple(_dequant_linear(l) if l is not None else l
+    return tuple(_dequant_linear(l, data_type=data_type) if l is not None else l
                  for l in linears)
 
 
@@ -113,7 +113,7 @@ class AttentionBuilder(Builder):
 
         Pipeline: dequant_mixed -> repeat_kv_for_tp -> fuse_qkv -> commit.
         """
-        q, k, v, gate = dequant_mixed(q, k, v, gate)
+        q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
         k, v = repeat_kv_for_tp(k, v, tp=self._tp,
                                 head_dim=self.config.head_dim)
         merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)

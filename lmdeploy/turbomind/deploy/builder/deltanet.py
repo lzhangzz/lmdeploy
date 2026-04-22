@@ -121,7 +121,8 @@ class DeltaNetBuilder(Builder):
         """
         q, k, v = split_qkv(in_proj_qkv, qkv_split)
         group = _ensure_compatible_formats(
-            {"q": q, "k": k, "v": v, "z": in_proj_z, "b": in_proj_b, "a": in_proj_a})
+            {"q": q, "k": k, "v": v, "z": in_proj_z, "b": in_proj_b, "a": in_proj_a},
+            data_type=self.config.data_type)
         fused = fuse_gdn(group["q"], group["k"], group["v"],
                          group["z"], group["b"], group["a"],
                          tp=self._tp)

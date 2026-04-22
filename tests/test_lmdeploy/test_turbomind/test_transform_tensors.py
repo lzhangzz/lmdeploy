@@ -125,7 +125,9 @@ def _make_linear(out_dim: int, in_dim: int | None = None,
         tensors['weight'] = torch.randn(out_dim)
     if has_bias:
         tensors['bias'] = torch.randn(out_dim)
-    return Linear(tensors=tensors)
+    return Linear(tensors=tensors,
+                  weight_format='placeholder',
+                  data_format='placeholder')
 
 
 # ---------------------------------------------------------------------------

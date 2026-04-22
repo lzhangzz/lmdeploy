@@ -49,6 +49,8 @@ _TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
     torch.uint8:    _tm.DataType.TYPE_UINT8,
 }
 
+_CPP_TO_TORCH: dict[_tm.DataType, torch.dtype] = {v: k for k, v in _TORCH_TO_CPP.items()}
+
 _FP8_DTYPES: set[torch.dtype] = {torch.uint8}
 for _fp8_attr in ('float8_e4m3fn', 'float8_e5m2fn'):
     _fp8_dt = getattr(torch, _fp8_attr, None)
@@ -119,21 +121,30 @@ def _infer_compute_dtype(linear: Linear):
 # ---------------------------------------------------------------------------
 
 
-def _dequant_linear(linear: Linear) -> Linear:
-    """Dequantize a quantized Linear to trivial when the format provides ``dequant``."""
+def _dequant_linear(linear: Linear, *, data_type) -> Linear:
+    """Dequantize a quantized Linear to trivial when the format provides ``dequant``.
+
+    *data_type* is the model's activation dtype; used to construct the new
+    trivial ``data_format`` on the result and is threaded into the dequant
+    callable so e.g. FP8 produces weights in the caller's activation dtype.
+    """
     fmt = linear.weight_format
-    if fmt is None or fmt.dequant is None:
+    if fmt.dequant is None:
         return linear
-    new_tensors = fmt.dequant(linear.tensors)
-    return Linear(tensors=new_tensors, weight_format=TRIVIAL_FORMAT, data_format=None)
+    new_tensors = fmt.dequant(linear.tensors, data_type)
+    return Linear(
+        tensors=new_tensors,
+        weight_format=TRIVIAL_FORMAT,
+        data_format=TRIVIAL_FORMAT.make_data_format(data_type),
+    )
 
 
-def _ensure_compatible_formats(linears: dict[str, Linear]) -> dict[str, Linear]:
+def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
     """Dequant linears to a common trivial format if a fusion group has mixed formats."""
     formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
         return linears
-    return {name: _dequant_linear(lin) for name, lin in linears.items()}
+    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -433,9 +444,12 @@ class Builder:
             return
 
         # --- GPU-invariant preparation -------------------------------------
-        weight_cpp_dtype = linear.data_format.dtype if linear.data_format is not None else None
+        assert linear.data_format is not None, (
+            f"{name}: Linear.data_format must be populated by build_linear or "
+            f"by a fusion helper with explicit data_type.")
+        weight_cpp_dtype = linear.data_format.dtype
         fmt = linear.weight_format
-        block_in = (fmt.block_in or 0) if fmt is not None else 0
+        block_in = fmt.block_in or 0
 
         tp = self._tp if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
@@ -459,7 +473,7 @@ class Builder:
             tensors = {k: packer(t, k) for k, t in linear.tensors.items()}
         else:
             tensors = linear.tensors
-        is_quantized = fmt is not None and fmt.cpp_dtype_name is not None
+        is_quantized = linear.data_format.is_quantized()
 
         kind_split_dims = {
             kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)

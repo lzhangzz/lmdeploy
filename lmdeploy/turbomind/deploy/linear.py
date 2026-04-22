@@ -134,8 +134,8 @@ class Linear:
     """
 
     tensors: dict[str, Tensor]
-    weight_format: WeightFormat | None = field(default=None, compare=False, repr=False)
-    data_format: _tm.DataFormat | None = field(default=None, compare=False, repr=False)
+    weight_format: "WeightFormat" = field(compare=False, repr=False)
+    data_format: "_tm.DataFormat" = field(compare=False, repr=False)
 
     def split_out_dim(self, num: int) -> list[Linear]:
         """Split along output dim into *num* equal parts."""
@@ -167,11 +167,14 @@ class Linear:
         for kind in first.tensors:
             t = first.tensors[kind]
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
-        fmts = {x.weight_format for x in xs}
-        wfmt = next(iter(fmts)) if len(fmts) == 1 else None
-        dfmts = {x.data_format for x in xs}
-        dfmt = next(iter(dfmts)) if len(dfmts) == 1 else None
-        return Linear(tensors=result, weight_format=wfmt, data_format=dfmt)
+        wfmts = {x.weight_format for x in xs}
+        dfmts = {x.data_format  for x in xs}
+        assert len(wfmts) == 1 and len(dfmts) == 1, (
+            "concat_out_dim requires uniform weight_format and data_format; "
+            "call dequant_mixed first if formats differ.")
+        return Linear(tensors=result,
+                      weight_format=next(iter(wfmts)),
+                      data_format=next(iter(dfmts)))
 
     @classmethod
     def concat_in_dim(cls, xs: list[Linear]) -> Linear:
@@ -184,8 +187,11 @@ class Linear:
                 result[kind] = t0
                 continue
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=0)
-        fmts = {x.weight_format for x in xs}
-        wfmt = next(iter(fmts)) if len(fmts) == 1 else None
-        dfmts = {x.data_format for x in xs}
-        dfmt = next(iter(dfmts)) if len(dfmts) == 1 else None
-        return Linear(tensors=result, weight_format=wfmt, data_format=dfmt)
+        wfmts = {x.weight_format for x in xs}
+        dfmts = {x.data_format  for x in xs}
+        assert len(wfmts) == 1 and len(dfmts) == 1, (
+            "concat_in_dim requires uniform weight_format and data_format; "
+            "call dequant_mixed first if formats differ.")
+        return Linear(tensors=result,
+                      weight_format=next(iter(wfmts)),
+                      data_format=next(iter(dfmts)))

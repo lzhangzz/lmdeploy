@@ -66,10 +66,12 @@ class WeightFormat:
         presence and tensor dtype are checked so that, e.g., an FP8 layer
         stored without ``weight_scale_inv`` is correctly classified as trivial
         rather than fp8.
-    dequant : Callable[[dict[str, Tensor]], dict[str, Tensor]] | None
-        Optional fusion-time dequantizer: maps TM ``tensors`` to a trivial
-        ``{weight, bias?}`` dict.  ``None`` means the format is not dequantized
-        in Python (e.g. GPTQ / MXFP4 stay as-is for mixed-format fusion).
+    dequant : Callable[[dict[str, Tensor], "_tm.DataType"],
+                       dict[str, Tensor]] | None
+        Optional fusion-time dequantizer: maps TM ``tensors`` and the model's
+        activation ``data_type`` to a trivial ``{weight, bias?}`` dict.
+        ``None`` means the format is not dequantized in Python (e.g. GPTQ /
+        MXFP4 stay as-is for mixed-format fusion).
     """
 
     name: str | None
@@ -81,7 +83,8 @@ class WeightFormat:
     block_out: int | None
     zeros_factory: Callable[[Tensor], Tensor] | None
     accepts: Callable[[dict[str, Tensor]], bool]
-    dequant: Callable[[dict[str, Tensor]], dict[str, Tensor]] | None
+    dequant: Callable[[dict[str, Tensor], "_tm.DataType"],
+                      dict[str, Tensor]] | None
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -383,7 +386,7 @@ def _accepts_mxfp4(available: dict[str, "Tensor"]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _dequant_awq(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+def _dequant_awq(tensors: dict[str, Tensor], data_type) -> dict[str, Tensor]:
     from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
 
     qweight = tensors["weight"]
@@ -397,7 +400,9 @@ def _dequant_awq(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
     return result
 
 
-def _dequant_fp8(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+def _dequant_fp8(tensors: dict[str, Tensor], data_type) -> dict[str, Tensor]:
+    from .builder._base import _CPP_TO_TORCH
+
     weight = tensors["weight"]
     scales = tensors["scales"]
     block_size = 128
@@ -406,7 +411,8 @@ def _dequant_fp8(tensors: dict[str, Tensor]) -> dict[str, Tensor]:
     scale = scale.repeat_interleave(block_size, dim=0)
     scale = scale.repeat_interleave(block_size, dim=1)
     scale = scale[: fp8_weight.shape[0], : fp8_weight.shape[1]]
-    result: dict[str, Tensor] = {"weight": (fp8_weight * scale).to(torch.bfloat16)}
+    target_dtype = _CPP_TO_TORCH[data_type]
+    result: dict[str, Tensor] = {"weight": (fp8_weight * scale).to(target_dtype)}
     if "bias" in tensors:
         result["bias"] = tensors["bias"]
     return result

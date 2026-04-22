@@ -13,7 +13,7 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
                        TextModelBuilder, _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..builder.attention import split_output_gate
-from ..kind_map import build_linear
+from ..kind_map import TRIVIAL_FORMAT, build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
@@ -183,8 +183,10 @@ class Qwen3_5Spec(TextModelSpec):
         v = self._linear(f'{pfx}.v_proj')
         o = self._linear(f'{pfx}.o_proj')
 
-        q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim)
-        k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim)
+        q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim,
+                                      data_type=self._cpp_dtype())
+        k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim,
+                                      data_type=self._cpp_dtype())
 
         q, gate = split_output_gate(q, head_dim=self._head_dim)
 
@@ -264,11 +266,17 @@ class Qwen3_5Spec(TextModelSpec):
         dtype = self._cpp_dtype()
         gate_w = self._get(f'{pfx}.gate.weight')
         gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-        m.add_gate('gate', Linear({'weight': gate_w}), model_dtype=dtype)
+        m.add_gate('gate', Linear({'weight': gate_w},
+                                  weight_format=TRIVIAL_FORMAT,
+                                  data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype())),
+                   model_dtype=dtype)
 
         sg = self._get(f'{pfx}.shared_expert_gate.weight')
         sg = sg.t() if sg.dim() > 1 else sg
-        m.add_gate('shared_gate', Linear({'weight': sg}), model_dtype=dtype)
+        m.add_gate('shared_gate', Linear({'weight': sg},
+                                         weight_format=TRIVIAL_FORMAT,
+                                         data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype())),
+                   model_dtype=dtype)
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
@@ -316,8 +324,10 @@ class Qwen3_5Spec(TextModelSpec):
         m = FfnBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
-        w1 = Linear(tensors=gate_tensors, weight_format=gate_up_lin.weight_format)
-        w3 = Linear(tensors=up_tensors,   weight_format=gate_up_lin.weight_format)
+        w1 = Linear(tensors=gate_tensors, weight_format=gate_up_lin.weight_format,
+                    data_format=gate_up_lin.data_format)
+        w3 = Linear(tensors=up_tensors,   weight_format=gate_up_lin.weight_format,
+                    data_format=gate_up_lin.data_format)
         m.add_ffn(w1, down_lin, w3)
         return m
 

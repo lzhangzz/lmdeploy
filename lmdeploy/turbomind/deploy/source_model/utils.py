@@ -10,6 +10,7 @@ import torch
 from lmdeploy.archs import get_model_arch
 
 from ..kind_map import TRIVIAL_FORMAT
+from ..builder._base import _dequant_linear
 
 
 def load_model_config(model_path: str) -> dict:
@@ -175,20 +176,7 @@ def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def _dequant_linear(linear) -> 'Linear':
-    """Dequantize a quantized Linear to trivial when the format provides dequant.
-
-    Local copy to avoid circular import from builder/_base.py.
-    """
-    fmt = linear.weight_format
-    if fmt is None or fmt.dequant is None:
-        return linear
-    new_tensors = fmt.dequant(linear.tensors)
-    from ..linear import Linear
-    return Linear(tensors=new_tensors, weight_format=TRIVIAL_FORMAT, data_format=None)
-
-
-def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
+def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int, *, data_type):
     """Apply RoPE permutation to all tensors in a Linear.
 
     Quantization-aware:
@@ -203,11 +191,11 @@ def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int):
     from ..linear import Linear
 
     wfmt = linear.weight_format
-    block_out = (wfmt.block_out or 0) if wfmt is not None else 0
+    block_out = wfmt.block_out or 0
 
     # If blocks don't align with heads, dequant first
     if block_out and block_out % head_dim != 0:
-        linear = _dequant_linear(linear)
+        linear = _dequant_linear(linear, data_type=data_type)
         block_out = 0
 
     new_tensors = {}

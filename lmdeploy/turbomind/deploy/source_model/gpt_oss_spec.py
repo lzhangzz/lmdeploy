@@ -12,7 +12,7 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
                        _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..kind_map import build_linear
+from ..kind_map import TRIVIAL_FORMAT, build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
@@ -141,8 +141,10 @@ class GptOssSpec(TextModelSpec):
         v = self._linear(f'{pfx}.v_proj')
         o = self._linear(f'{pfx}.o_proj')
 
-        q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim)
-        k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim)
+        q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim,
+                                      data_type=self._cpp_dtype())
+        k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim,
+                                      data_type=self._cpp_dtype())
 
         cfg = self._attn_cfg.clone()
         cfg.window_size = self._window_sizes[layer]
@@ -197,7 +199,11 @@ class GptOssSpec(TextModelSpec):
         gate_bias = self._get(f'{pfx}.router.bias')
         if gate_bias is not None:
             tensors['bias'] = gate_bias
-        m.add_gate('gate', Linear(tensors), model_dtype=dtype)
+        m.add_gate('gate', Linear(
+            tensors,
+            weight_format=TRIVIAL_FORMAT,
+            data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype()),
+        ), model_dtype=dtype)
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
@@ -242,8 +248,10 @@ class GptOssSpec(TextModelSpec):
         for kind, t in lin.tensors.items():
             gate_t[kind] = t[..., ::2].contiguous()
             up_t[kind]   = t[..., 1::2].contiguous()
-        return (Linear(tensors=gate_t, weight_format=lin.weight_format),
-                Linear(tensors=up_t,   weight_format=lin.weight_format))
+        return (Linear(tensors=gate_t, weight_format=lin.weight_format,
+                       data_format=lin.data_format),
+                Linear(tensors=up_t,   weight_format=lin.weight_format,
+                       data_format=lin.data_format))
 
     def _packed_expert_ffn(self, expert_pfx: str, expert_inter: int):
         base_pfx = expert_pfx.rsplit('.', 1)[0]
