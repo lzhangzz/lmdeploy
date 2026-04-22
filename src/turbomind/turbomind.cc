@@ -152,43 +152,16 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     data_type_ = config.data_type;
     TM_CHECK(data_type_ == kBfloat16 || data_type_ == kHalf);
 
-    engine_param_.cache_block_seq_len = config.cache_block_seq_len;
-    engine_param_.quant_policy        = config.quant_policy;
-    engine_param_.tune_layer_num      = config.tune_layer_num;
-
-    engine_param_.max_batch_size = config.max_batch_size;
-    auto max_forward_token_num   = config.max_prefill_token_num;
-    max_forward_token_num       += engine_param_.max_batch_size;
-
-    engine_param_.max_context_token_num = config.max_context_token_num;
-    engine_param_.session_len           = config.session_len;
-
-    engine_param_.cache_max_block_count = config.cache_max_block_count;
-    engine_param_.cache_chunk_size      = config.cache_chunk_size;
-    engine_param_.enable_prefix_caching = config.enable_prefix_caching;
-    engine_param_.enable_metrics        = config.enable_metrics;
-
-    engine_param_.num_tokens_per_iter = config.num_tokens_per_iter;
-    engine_param_.max_prefill_iters   = config.max_prefill_iters;
+    // Copy config into the EngineConfig base of engine_param_
+    static_cast<EngineConfig&>(engine_param_) = config;
 
     phases_ = config.async_ ? 2 : 1;
 
-    engine_param_.outer_dp_size = config.outer_dp_size;
-
-    engine_param_.attn_dp_size = config.attn_dp_size;
-    engine_param_.attn_tp_size = config.attn_tp_size;
-    engine_param_.attn_cp_size = config.attn_cp_size;
-
-    engine_param_.mlp_tp_size = config.mlp_tp_size;
-
-    engine_param_.devices = std::move(config.devices);
-
-    // multi-node information
-    engine_param_.nnodes    = config.nnodes;
-    engine_param_.node_rank = config.node_rank;
+    auto max_forward_token_num = config.max_prefill_token_num;
+    max_forward_token_num += engine_param_.max_batch_size;
 
     {
-        auto sp                             = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
+        auto sp = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + sp - 1) / sp * sp;
     }
 
