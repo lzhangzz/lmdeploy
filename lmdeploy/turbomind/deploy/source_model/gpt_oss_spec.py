@@ -39,8 +39,8 @@ class GptOssSpec(TextModelSpec):
     # re-detection by TextModelSpec.set_params.
     _pin_layer_prefix = True
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, group_size: int = 0):
-        super().__init__(hf_cfg, engine_cfg, group_size=group_size)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
+        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
 
         self._layer_prefix = 'model.layers'
         self._embed_key = 'model.embed_tokens.weight'
@@ -231,8 +231,7 @@ class GptOssSpec(TextModelSpec):
     def _read_packed_expert(self, prefix: str, expert: int):
         lin = build_linear(self.params, prefix, index=expert,
                            data_type=self._cpp_dtype(),
-                           block_in=self._group_size,
-                           block_out=self._group_size)
+                           weight_format=self._weight_format)
         if lin is None:
             return None
         if lin.weight_format.name == 'trivial':

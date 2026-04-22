@@ -544,34 +544,24 @@ def build_linear(
     params: dict[str, torch.Tensor],
     prefix: str,
     *,
-    data_type,                      # the model activation dtype
+    data_type,
+    weight_format: WeightFormat,
     index: int | None = None,
-    block_in: int = 0,
-    block_out: int = 0,
 ) -> Linear | None:
     """Build a ``Linear`` bundle from checkpoint tensors at *prefix*.
 
     Probes every known checkpoint suffix (union of all format suffix maps),
-    classifies the format by running each ``WeightFormat.accepts`` predicate
-    in ``FORMAT_PRIORITY`` order, then normalises the collected tensors with
-    the winning format's normalizer.
+    classifies the format by checking whether *weight_format* accepts the
+    available tensors, falling back to ``TRIVIAL_FORMAT`` when the expected
+    quantized tensors are absent (e.g. a gate/router linear in a quantized
+    model).  Returns ``None`` when no tensors are found at all.
 
     When *index* is given, each collected tensor is sliced by ``[index]``
     before classification and normalisation (used for packed expert tensors
     where the expert dimension is the leading axis).
 
-    ``block_in`` and ``block_out`` resolve the format's quantization block
-    sizes at conversion time.  A format with ``block_in == 0`` (AWQ, GPTQ,
-    compressed-tensors) declares "use the runtime group_size".  The caller
-    passes that value; we clone the format with ``dataclasses.replace`` so
-    the returned ``Linear`` carries an authoritative ``WeightFormat``.  The
-    same mechanism applies to ``block_out == 0``, reserved for future
-    formats.  Passing ``0`` means "no runtime value available" and leaves
-    the format's declared sentinel in place.
-
     The returned ``Linear`` is in TM layout ``[in, out]`` and carries the
     detected ``WeightFormat`` for downstream use in ``_commit_linear``.
-    Returns ``None`` if no tensors are found at *prefix*.
     """
     from .linear import Linear
 
@@ -581,17 +571,12 @@ def build_linear(
     if index is not None:
         available = {s: t[index] for s, t in available.items()}
 
-    fmt = next((f for f in FORMAT_PRIORITY if f.accepts(available)), None)
-    if fmt is None:
+    if weight_format.accepts(available):
+        fmt = weight_format
+    elif TRIVIAL_FORMAT.accepts(available):
+        fmt = TRIVIAL_FORMAT
+    else:
         return None
-
-    replacements: dict[str, int] = {}
-    if fmt.block_in == 0 and block_in > 0:
-        replacements['block_in'] = block_in
-    if fmt.block_out == 0 and block_out > 0:
-        replacements['block_out'] = block_out
-    if replacements:
-        fmt = replace(fmt, **replacements)
 
     tensors: dict[str, torch.Tensor] = {
         kind: fmt.normalizer(available[s], kind)

@@ -26,8 +26,8 @@ class Glm4MoeLiteSpec(TextModelSpec):
     # re-detection by TextModelSpec.set_params.
     _pin_layer_prefix = True
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, group_size: int = 0):
-        super().__init__(hf_cfg, engine_cfg, group_size=group_size)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
+        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
 
         self._layer_prefix = 'model.layers'
         self._embed_key = 'model.embed_tokens.weight'

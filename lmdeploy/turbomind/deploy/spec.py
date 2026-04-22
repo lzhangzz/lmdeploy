@@ -50,21 +50,20 @@ class TextModelSpec(ABC):
     # ------------------------------------------------------------------
 
     def __init__(self, hf_cfg: dict, engine_cfg: 'TurbomindEngineConfig',
-                 *, group_size: int = 0):
+                 *, weight_format):
         """Parse HF config into orchestration scalars.
 
-        ``group_size`` is the quantization group size the converter resolves
-        from ``engine_cfg.model_format`` plus any user override. It lands on
-        ``self._group_size`` so build_linear() can use it during weight
-        loading. (It's not on ``TurbomindEngineConfig`` today, so we take
-        it as an explicit kwarg.)
+        ``weight_format`` is the resolved `WeightFormat` for the model's
+        quantization format, produced by the converter. It lands on
+        ``self._weight_format`` so ``build_linear()`` can use it during
+        weight loading.
 
         Subclasses override `_parse_base` (or extend in their own __init__)
         then construct C++ config templates and per-layer lists.
         """
         self.hf_cfg = hf_cfg
         self.engine_cfg = engine_cfg
-        self._group_size = group_size
+        self._weight_format = weight_format
         self._parse_base(hf_cfg)
 
     def _parse_base(self, cfg: dict):
@@ -148,8 +147,7 @@ class TextModelSpec(ABC):
         from .kind_map import build_linear
         return build_linear(self.params, pfx,
                             data_type=self._cpp_dtype(),
-                            block_in=self._group_size,
-                            block_out=self._group_size)
+                            weight_format=self._weight_format)
 
     def _cpp_dtype(self):
         return _cd(self.engine_cfg.dtype)

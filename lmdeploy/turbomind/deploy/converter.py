@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import replace
+
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -7,6 +9,7 @@ from lmdeploy.utils import get_logger
 
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
+from .kind_map import get_weight_format
 from .source_model.base import INPUT_MODELS
 from .source_model.utils import load_model_config
 
@@ -155,6 +158,13 @@ def get_tm_config(model_path,
     if engine_config.model_format is None:
         engine_config.model_format = 'hf'
 
+    # Resolve the active WeightFormat before the CT->AWQ rename below, so
+    # compressed-tensors models still get COMPRESSED_TENSOR_FORMAT (correct
+    # suffixes) rather than AWQ_FORMAT after the rename.
+    weight_format = get_weight_format(engine_config.model_format)
+    if weight_format.block_in == 0:
+        weight_format = replace(weight_format, block_in=group_size)
+
     # 3. Resolve dtype and format overrides.
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
     if engine_config.model_format in ('awq', 'gptq', 'compressed-tensors'):
@@ -180,6 +190,6 @@ def get_tm_config(model_path,
         _deep_merge(hf_cfg, engine_config.hf_overrides)
     spec_name = get_spec_registered_name(model_path, engine_config.model_format)
     spec_cls = INPUT_MODELS.get(spec_name)
-    spec = spec_cls(hf_cfg, engine_config, group_size=group_size or 0)
+    spec = spec_cls(hf_cfg, engine_config, weight_format=weight_format)
 
     return spec, model_path

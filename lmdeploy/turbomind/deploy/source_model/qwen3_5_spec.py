@@ -42,8 +42,8 @@ class Qwen3_5Spec(TextModelSpec):
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_packed_qwen35_experts]
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, group_size: int = 0):
-        super().__init__(hf_cfg, engine_cfg, group_size=group_size)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
+        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
 
         # partial_rotary_factor adjusts rope_dim
         rope_params = hf_cfg.get('rope_parameters', {})
@@ -299,13 +299,11 @@ class Qwen3_5Spec(TextModelSpec):
         gate_up_lin = build_linear(self.params, f'{pfx}.gate_up_proj',
                                    index=expert_idx,
                                    data_type=self._cpp_dtype(),
-                                   block_in=self._group_size,
-                                   block_out=self._group_size)
+                                   weight_format=self._weight_format)
         down_lin = build_linear(self.params, f'{pfx}.down_proj',
                                 index=expert_idx,
                                 data_type=self._cpp_dtype(),
-                                block_in=self._group_size,
-                                block_out=self._group_size)
+                                weight_format=self._weight_format)
         if gate_up_lin is None or down_lin is None:
             return None
 
