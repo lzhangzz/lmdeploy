@@ -449,7 +449,6 @@ class Builder:
             f"by a fusion helper with explicit data_type.")
         weight_cpp_dtype = linear.data_format.dtype
         fmt = linear.weight_format
-        block_in = fmt.block_in or 0
 
         tp = self._tp if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
@@ -463,10 +462,11 @@ class Builder:
         compute_dtype = (model_dtype if model_dtype is not None
                          else _infer_compute_dtype(linear))
         lin_cfg = _tm.LinearConfig()
-        lin_cfg.input_dim = in_dim
+        lin_cfg.input_dim  = in_dim
         lin_cfg.output_dim = out_dim
-        lin_cfg.data_type = compute_dtype or _tm.DataType.TYPE_INVALID
-        lin_cfg.has_bias = 'bias' in linear.tensors
+        lin_cfg.data_type  = compute_dtype or _tm.DataType.TYPE_INVALID
+        lin_cfg.format     = linear.data_format
+        lin_cfg.has_bias   = 'bias' in linear.tensors
 
         packer = fmt.packer if fmt else None
         if packer is not None:
@@ -504,7 +504,6 @@ class Builder:
                 # get-or-create: create_child fires only on the first commit for this name
                 linear_mod = (handle.child(name)
                               or handle.create_child(name, lin_cfg))
-                linear_mod.set_weight_spec(weight_cpp_dtype, block_in)
 
                 for kind, tensor in tensors.items():
                     shard = _shard(tensor, kind_split_dims[kind], tp, rank)

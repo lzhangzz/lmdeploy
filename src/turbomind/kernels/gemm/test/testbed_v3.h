@@ -81,15 +81,7 @@ static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, Linear
 {
     const auto& e0 = *experts(0);
 
-    d.input_dim   = e0.input_dim;
-    d.output_dim  = e0.output_dim;
-    d.group_size  = e0.group_size;
-    d.data_type   = e0.data_type;
-    d.weight_format = e0.weight_format;
-    d.resolved_     = e0.resolved_;
-    d.k_desc       = e0.k_desc;
-    d.q_desc       = e0.q_desc;
-    d.epilogue     = e0.epilogue;
+    e0.copy_metadata_to(d);
 
     d.k_desc.num = d.q_desc.num = n;
 
@@ -113,7 +105,7 @@ static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, Linear
 
     auto stream = core::Context::stream().handle();
 
-    if (d.weight_format == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
+    if (d.weight_format.dtype == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
@@ -125,7 +117,7 @@ static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, Linear
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
+        d.weight() = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
         if (e0.scales()) {
             d.scales() = Tensor{make_strided_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         }
@@ -295,16 +287,23 @@ struct Testbed_v3: Parameter {
     // - dequantize weight
     void GenerateWeight(LinearWeight& original, LinearWeight& quant, LinearWeight& dequant)
     {
-        original.configure(input_dim, output_dim, data_type, false);
-        original.set_weight_spec(data_type, group_size);
+        auto make_cfg = [&](DataType wt) -> core::LinearConfig {
+            core::LinearConfig cfg;
+            cfg.input_dim  = input_dim;
+            cfg.output_dim = output_dim;
+            cfg.data_type  = data_type;
+            cfg.format     = ResolveLinearWeightFormat(data_type, wt, group_size, 1);
+            cfg.has_bias   = false;
+            return cfg;
+        };
+
+        new (&original) LinearWeight(make_cfg(data_type));
         original.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
         rng_.NormalFloat(original.weight(), 1., .1);
 
-        quant.configure(input_dim, output_dim, data_type, false);
-        quant.set_weight_spec(weight_type, group_size);
+        new (&quant) LinearWeight(make_cfg(weight_type));
         quant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, weight_type);
-        dequant.configure(input_dim, output_dim, data_type, false);
-        dequant.set_weight_spec(data_type, group_size);
+        new (&dequant) LinearWeight(make_cfg(data_type));
         dequant.param("weight").alloc({(size_t)input_dim, (size_t)output_dim}, data_type);
 
         Buffer_<unsigned> rbits;

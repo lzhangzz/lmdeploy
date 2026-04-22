@@ -16,115 +16,83 @@
 namespace turbomind {
 
 LinearWeight::LinearWeight(const core::LinearConfig& cfg)
+    : input_dim(cfg.input_dim)
+    , output_dim(cfg.output_dim)
+    , data_type(cfg.data_type)
+    , weight_format(cfg.format)
+    , has_bias_(cfg.has_bias)
 {
-    configure(cfg.input_dim, cfg.output_dim, cfg.data_type, cfg.has_bias);
+    std::tie(input_format, output_format) =
+        DeriveActivationFormats(weight_format, data_type, getSMVersion());
 }
 
-LinearPolicy ResolveLinearPolicy(const DataFormat& format, DataType data_type, int sm)
+std::pair<DataFormat, DataFormat>
+DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int sm)
 {
-    LinearPolicy p;
-    p.output_dtype = data_type;
-    p.input_dtype  = data_type;
+    DataFormat in_fmt;
+    DataFormat out_fmt;
+    in_fmt.dtype       = data_type;
+    in_fmt.block_sizes  = {1, 1};
+    out_fmt.dtype      = data_type;
+    out_fmt.block_sizes = {1, 1};
 
-    if (!format.is_quantized()) {
-        return p;
+    // Empty weight_format (from LinearBuilder.set_weight path for embeddings /
+    // lm_head): treat as trivial. No quantization on I/O.
+    if (weight_format.dtype == DataType{}) {
+        return {in_fmt, out_fmt};
     }
 
-    if (format.dtype == kFloat8_e4m3) {
-        int gs = format.block_sizes[0];
-        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kB, gs};
+    if (!weight_format.is_quantized()) {
+        return {in_fmt, out_fmt};
+    }
+
+    if (weight_format.dtype == kFloat8_e4m3) {
         if (sm == 90) {
-            p.input_dtype  = kFloat8_e4m3;
-            p.input_quant  = gemm::QuantDesc{gemm::QuantType::kK, gs};
+            int gs = weight_format.block_sizes[0];          // K-axis, tensor-shape order
+            in_fmt.dtype        = kFloat8_e4m3;
+            in_fmt.block_sizes  = {gs, 1};
+            in_fmt.scales.dtype = kFloat;
         }
-        return p;
+        return {in_fmt, out_fmt};
     }
 
-    if (format.dtype == kFloat4_e2m1) {
-        int gs = format.block_sizes[0];
-        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
-        return p;
-    }
-
-    if (format.dtype == kUint4 || format.dtype == kUint8) {
-        int gs = format.block_sizes[0];
-        p.weight_quant = gemm::QuantDesc{gemm::QuantType::kK, gs};
-        return p;
-    }
-
-    TM_CHECK(0) << "Unsupported weight format for policy: " << to_string(format.dtype);
-    return p;
+    // FP4 / U4 / U8: input stays in model activation dtype — the GEMM
+    // upcasts / dequants on the fly. output_format is also activation dtype.
+    return {in_fmt, out_fmt};
 }
 
-// ======================================================================
-// configure
-// ======================================================================
-
-void LinearWeight::configure(int input_dim, int output_dim, DataType data_type, bool has_bias)
+gemm::QuantDesc MakeQuantDesc(const DataFormat& fmt)
 {
-    this->data_type   = data_type;
-    this->input_dim   = input_dim;
-    this->output_dim  = output_dim;
-    has_bias_         = has_bias;
-    // Default policy for trivial (non-quantized) weights.
-    // Overridden by ResolveLinearPolicy in set_weight_spec for quantized formats.
-    policy.input_dtype  = data_type;
-    policy.output_dtype = data_type;
+    if (!fmt.is_quantized()) {
+        return {gemm::QuantType::kNone, 0};
+    }
+    int gs = (fmt.block_sizes.size() > 0) ? fmt.block_sizes[0] : 1;
+
+    if (fmt.dtype == kFloat8_e4m3) {
+        // Weight format has bidirectional blocking {128, 128} → B-type.
+        // Activation format has K-axis-only blocking {gs, 1} → K-type.
+        if (fmt.block_sizes.size() > 1 && fmt.block_sizes[1] > 1) {
+            return {gemm::QuantType::kB, gs};
+        }
+        return {gemm::QuantType::kK, gs};
+    }
+    // FP4 / U4 / U8: K-grouped quantization
+    return {gemm::QuantType::kK, gs};
 }
 
 void LinearWeight::copy_metadata_to(LinearWeight& dst) const
 {
     dst.input_dim     = input_dim;
     dst.output_dim    = output_dim;
-    dst.group_size    = group_size;
     dst.data_type     = data_type;
     dst.weight_format = weight_format;
-    dst.format       = format;
-    dst.policy       = policy;
+    dst.input_format  = input_format;
+    dst.output_format = output_format;
     dst.epilogue      = epilogue;
     dst.has_bias_     = has_bias_;
     dst.is_grouped_   = is_grouped_;
     dst.k_desc        = k_desc;
     dst.q_desc        = q_desc;
-}
-
-// ======================================================================
-// set_weight_spec
-// ======================================================================
-
-void LinearWeight::set_weight_spec(DataType weight_dtype, int group_size)
-{
-    // For trivial float weights, coerce to model compute dtype
-    if (weight_dtype != data_type && IsTrivialFloatType(weight_dtype) && IsTrivialFloatType(data_type)) {
-        weight_dtype = data_type;
-    }
-    weight_format = weight_dtype;
-    this->group_size = group_size;
-
-    // Translate the legacy single-arg group_size to explicit (block_in, block_out).
-    // This shim survives only until Task 4 deletes set_weight_spec entirely.
-    int block_in, block_out;
-    if (IsTrivialFloatType(weight_dtype)) {
-        block_in = block_out = 1;
-    }
-    else if (weight_dtype == kFloat8_e4m3) {
-        block_in = block_out = 128;
-    }
-    else {  // kFloat4_e2m1 / kUint4 / kUint8 — K-grouped
-        block_in = group_size;
-        block_out = 1;
-    }
-    format = ResolveLinearWeightFormat(data_type, weight_format, block_in, block_out);
-    policy = ResolveLinearPolicy(format, data_type, getSMVersion());
-}
-
-// ======================================================================
-// preprocess — now a no-op (blockscale→groupscale handled in Python)
-// ======================================================================
-
-void LinearWeight::preprocess()
-{
-    // No-op: blockscale-to-groupscale conversion is done on the Python side.
 }
 
 // ======================================================================
@@ -146,7 +114,7 @@ void LinearWeight::prepare()
 
     // No format conversion needed if weight_spec was never set (trivial weights
     // loaded via commit_tensor, e.g. tok_embeddings, output head).
-    if (weight_format == DataType{}) {
+    if (weight_format.dtype == DataType{}) {
         EnsureFloatDtype(weight, data_type);
         if (weight.dtype() == data_type) {
             k_desc.type = data_type;
@@ -156,7 +124,7 @@ void LinearWeight::prepare()
 
     auto stream = core::Context::stream().handle();
 
-    if (weight_format == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
+    if (weight_format.dtype == kFloat8_e4m3 && input_dtype() == kFloat8_e4m3) {
         // FP8 native path: transpose weight and scales for native kernels.
         auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
             using T = decltype(dtype);
@@ -175,7 +143,7 @@ void LinearWeight::prepare()
         TM_CHECK_EQ(scales.dtype(), kFloat);
         process(scales, q_desc, float{});
     }
-    else if (weight_format == kFloat8_e4m3) {
+    else if (weight_format.dtype == kFloat8_e4m3) {
         // FP8 non-native path (non-SM90)
     }
     else {
@@ -183,14 +151,14 @@ void LinearWeight::prepare()
         using namespace gemm;
 
         auto [conv_w, conv_s] =
-            GetConverters(data_type, weight_format, input_dtype(), is_grouped_, getSMVersion());
+            GetConverters(data_type, weight_format.dtype, input_dtype(), is_grouped_, getSMVersion());
 
         if (conv_w) {
             const auto order_w = conv_w->order;
             const bool is_A    = get_operand_tag(conv_w->pack) == OPERAND_A;
             const bool is_B    = !is_A;
 
-            const int bits = byte_size(weight_format, 8);
+            const int bits = byte_size(weight_format.dtype, 8);
 
             Tensor_<uint16_t> tmp{{input_dim, output_dim}, kDEVICE};
 
@@ -227,7 +195,7 @@ void LinearWeight::prepare()
             }
 
             MatrixLayout kd = w_desc;
-            kd.type = weight_format;
+            kd.type = weight_format.dtype;
             if (bits == 4) {
                 kd.type = data_type_v<uint4_t>;
             }
@@ -240,7 +208,7 @@ void LinearWeight::prepare()
             TM_CHECK(conv_w->Convert(tmp.data(), w_desc, weight.raw_data(), kd, stream) == 0);
             sync_check_cuda_error();
 
-            kd.type = weight_format;
+            kd.type = weight_format.dtype;
             if (is_A) {
                 kd = transpose(kd);
             }
@@ -263,7 +231,7 @@ void LinearWeight::prepare()
                 zeros    = {};
                 scales   = empty_like(tmp_q);
             }
-            else if (weight_format == kFloat8_e4m3) {
+            else if (weight_format.dtype == kFloat8_e4m3) {
                 tmp_q = empty_like(scales);
                 Copy(scales, tmp_q);
                 scale_type = kUint16;
@@ -274,16 +242,17 @@ void LinearWeight::prepare()
                 scale_type = kUint8;
             }
 
-            if (data_type == kHalf && weight_format == kFloat4_e2m1) {
+            if (data_type == kHalf && weight_format.dtype == kFloat4_e2m1) {
                 AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
                 sync_check_cuda_error();
             }
 
+            int gs = weight_format.block_sizes[0];  // K-axis, tensor-shape order
             MatrixLayout s_desc{
                 scale_type,
                 order_s,
                 (int)output_dim,
-                (int)input_dim / group_size,
+                (int)input_dim / gs,
                 (int)output_dim,
             };
 

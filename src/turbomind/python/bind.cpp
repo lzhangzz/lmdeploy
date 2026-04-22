@@ -669,13 +669,7 @@ PYBIND11_MODULE(_turbomind, m)
         "config"_a);
 
     // LinearWeight — specific interface for weight loading
-    py::class_<turbomind::LinearWeight, ft::core::Module>(m, "LinearWeight")
-        .def("set_weight_spec",
-             [](turbomind::LinearWeight& lw, ft::DataType dtype, int group_size) {
-                 lw.set_weight_spec(dtype, group_size);
-             },
-             "dtype"_a,
-             "group_size"_a);
+    py::class_<turbomind::LinearWeight, ft::core::Module>(m, "LinearWeight");
 
     // transformer model
     using ft::TurboMind;

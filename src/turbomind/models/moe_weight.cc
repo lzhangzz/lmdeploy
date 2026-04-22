@@ -62,7 +62,7 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
 
     auto stream = core::Context::stream().handle();
 
-    if (d.weight_format == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
+    if (d.weight_format.dtype == kFloat8_e4m3 && d.input_dtype() == kFloat8_e4m3) {
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
@@ -74,7 +74,7 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
         auto make_strided_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeStridedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format, kDEVICE};
+        d.weight = Tensor{make_strided_ptr(weights), {n}, d.weight_format.dtype, kDEVICE};
         if (e0.scales) {
             d.scales = Tensor{make_strided_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
         }
