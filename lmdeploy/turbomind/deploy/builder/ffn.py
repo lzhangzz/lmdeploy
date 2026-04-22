@@ -12,15 +12,49 @@ import math
 
 import torch
 
-from ..linear import (Linear, chunk_linears as _chunk_linears,
-                       interleave_linears as _interleave_linears,
-                       pad_in_dim, pad_out_dim)
-from ._base import Builder, SplitSide
+from ..linear import Linear, pad_in_dim, pad_out_dim
+from ._base import Builder, SplitSide, transform_input_dim, transform_output_dim
 
 __all__ = [
     'FfnBuilder',
-    'fuse_ffn_linears',
+    'fuse_w1w3',
 ]
+
+# ---------------------------------------------------------------------------
+# @transform_output_dim / @transform_input_dim helpers
+# ---------------------------------------------------------------------------
+
+
+@transform_output_dim
+def _interleave_w1w3(w1: torch.Tensor, w3: torch.Tensor) -> torch.Tensor:
+    """Interleave w1 and w3 along output dim for fused SiLU epilogue."""
+    return torch.stack([w1, w3], dim=-1).reshape(w1.shape[:-1] + (-1,)).contiguous()
+
+
+@transform_output_dim
+def _chunk_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
+                tp: int) -> torch.Tensor:
+    """Concatenate w1 and w3 along output dim with TP interleaving."""
+    if tp <= 1:
+        return torch.cat([w1, w3], dim=-1).contiguous()
+    d = w1.dim() - 1
+    r1 = w1.reshape(w1.shape[:d] + [tp, w1.shape[d] // tp])
+    r3 = w3.reshape(w3.shape[:d] + [tp, w3.shape[d] // tp])
+    combined = torch.cat([r1, r3], dim=d + 1)
+    return combined.reshape(w1.shape[:d] + [-1]).contiguous()
+
+
+@transform_output_dim
+def _pad_out(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
+    """Pad output dimension to target size."""
+    return pad_out_dim(tensor, target, dim=tensor.dim() - 1)
+
+
+@transform_input_dim
+def _pad_in(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
+    """Pad input dimension to target size (1-D tensors pass through)."""
+    return pad_in_dim(tensor, target, dim=0)
+
 
 # ---------------------------------------------------------------------------
 # FFN fusion helpers
@@ -74,7 +108,7 @@ def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
     return (w.size(-1) // tp) % fmt.block_out == 0
 
 
-def fuse_ffn_linears(
+def fuse_w1w3(
     w1: Linear,
     w3: Linear,
     tp: int,
@@ -96,9 +130,9 @@ def fuse_ffn_linears(
 
     if can_fuse:
         if fused_silu:
-            w1w3 = _interleave_linears(w1, w3)
+            w1w3 = _interleave_w1w3(w1, w3)
         else:
-            w1w3 = _chunk_linears(w1, w3, tp)
+            w1w3 = _chunk_w1w3(w1, w3, tp=tp)
         return (w1w3, fused_silu)
     else:
         return (None, fused_silu)
@@ -111,11 +145,7 @@ def fuse_ffn_linears(
 
 def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
                      tp: int) -> tuple[Linear, Linear, Linear]:
-    """Pad w1/w3 output dim and w2 input dim for TP sharding.
-
-    Returns the padded (w1, w2, w3).
-    Padding uses lcm(block_in, block_out) * tp as the alignment target.
-    """
+    """Pad w1/w3 output dim and w2 input dim for TP sharding."""
     raw_inter = w1.tensors['weight'].size(-1)
 
     if tp <= 1:
@@ -125,38 +155,15 @@ def _pad_ffn_for_tp(w1: Linear, w2: Linear, w3: Linear,
     block_in = (fmt.block_in or 1) if fmt else 1
     effective_block = math.lcm(block_in, block_out) if block_in != block_out else block_out
 
-    # Pad inter_size so it is divisible by effective_block * tp.
     groups = (raw_inter + effective_block - 1) // effective_block
     groups_per_rank = (groups + tp - 1) // tp
     padded_inter = groups_per_rank * effective_block * tp
     if padded_inter == raw_inter:
         return w1, w2, w3
 
-    # Pad w1/w3 output dim (axis -1)
-    def _pad_linear_out(lin: Linear, target: int) -> Linear:
-        new_tensors = {}
-        for kind, t in lin.tensors.items():
-            dim = t.dim() - 1
-            new_tensors[kind] = pad_out_dim(t, target, dim=dim)
-        return Linear(tensors=new_tensors,
-                       weight_format=lin.weight_format,
-                       data_format=lin.data_format)
-
-    # Pad w2 input dim (axis 0)
-    def _pad_linear_in(lin: Linear, target: int) -> Linear:
-        new_tensors = {}
-        for kind, t in lin.tensors.items():
-            if t.dim() < 2:
-                new_tensors[kind] = t
-            else:
-                new_tensors[kind] = pad_in_dim(t, target, dim=0)
-        return Linear(tensors=new_tensors,
-                       weight_format=lin.weight_format,
-                       data_format=lin.data_format)
-
-    w1 = _pad_linear_out(w1, padded_inter)
-    w3 = _pad_linear_out(w3, padded_inter)
-    w2 = _pad_linear_in(w2, padded_inter)
+    w1 = _pad_out(w1, target=padded_inter)
+    w3 = _pad_out(w3, target=padded_inter)
+    w2 = _pad_in(w2, target=padded_inter)
     return w1, w2, w3
 
 
@@ -181,7 +188,7 @@ class FfnBuilder(Builder):
         act_type = getattr(self.config, 'act_type', 0)
         if isinstance(act_type, int):
             act_type = {0: 'silu', 1: 'gpt-oss'}.get(act_type, 'silu')
-        fused, fused_silu = fuse_ffn_linears(
+        fused, fused_silu = fuse_w1w3(
             w1, w3, self._tp, act_type,
             is_moe=getattr(self.config, 'fused_moe', False))
 
