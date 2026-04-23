@@ -17,7 +17,7 @@ from ..kind_map import TRIVIAL_FORMAT
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import layer_progress, reorder_rotary_emb, reorder_rotary_emb_linear
+from .utils import layer_progress, reorder_rotary_emb
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -138,10 +138,10 @@ class Qwen3TextSpec(TextModelSpec):
         v = self._linear(f'{pfx}.v_proj')
         o = self._linear(f'{pfx}.o_proj')
 
-        q = reorder_rotary_emb_linear(q, self._head_dim, self._rope.dim,
-                                      data_type=self._cpp_dtype())
-        k = reorder_rotary_emb_linear(k, self._head_dim, self._rope.dim,
-                                      data_type=self._cpp_dtype())
+        q = reorder_rotary_emb(q, self._head_dim, self._rope.dim,
+                               data_type=self._cpp_dtype())
+        k = reorder_rotary_emb(k, self._head_dim, self._rope.dim,
+                               data_type=self._cpp_dtype())
 
         cfg = self._attn_cfg.clone()
         # No per-layer attention fields for Qwen3 (no sliding window).
