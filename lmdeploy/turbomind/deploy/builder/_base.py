@@ -10,8 +10,6 @@ import _turbomind as _tm
 
 from ..kind_map import TRIVIAL_FORMAT
 from ..linear import Linear, pad_out_dim
-# make_norm_config imported locally in _add_norm_child to avoid circular import
-# (_base -> norm -> _base)
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -559,34 +557,6 @@ class Builder:
                 shard = _shard(tensor, split_dim, tp, rank)
                 _copy_shard_to_param(handle, name, shard,
                                      alloc_dtype=model_dtype)
-
-    def _add_norm_child(self, name: str, tensor: torch.Tensor,
-                        data_type=None, *, norm_eps):
-        """Create a NormConfig child and commit weight tensor.
-
-        Parameters
-        ----------
-        name : str
-            Child module name (e.g. ``"attention_norm"``).
-        tensor : torch.Tensor
-            The norm weight tensor.
-        data_type : C++ DataType value | None
-            Compute dtype for the norm.  Defaults to FP32 if not set.
-        norm_eps : float
-            RMS norm epsilon.  Required.
-        """
-        self._ensure_handles()
-        from .norm import make_norm_config
-        if data_type is None:
-            data_type = _tm.DataType.TYPE_FP32
-        norm_cfg = make_norm_config(dim=tensor.shape[-1],
-                                    data_type=data_type,
-                                    norm_eps=norm_eps)
-
-        for i, handle in enumerate(self._handles):
-            with self._contexts[i]:
-                child = handle.create_child(name, norm_cfg)
-                _copy_shard_to_param(child, 'weight', tensor)
 
 
 # ---------------------------------------------------------------------------

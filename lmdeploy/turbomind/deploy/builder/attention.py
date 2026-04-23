@@ -125,11 +125,6 @@ class AttentionBuilder(Builder):
         self._commit_linear('wo', o, SplitSide.INPUT,
                             model_dtype=self.config.data_type)
 
-    def add_qk_norm(self, q, k, *, norm_eps):
-        """Create NormConfig children for q_norm, k_norm, commit tensors."""
-        self._add_norm_child('q_norm', q, data_type=self.config.data_type, norm_eps=norm_eps)
-        self._add_norm_child('k_norm', k, data_type=self.config.data_type, norm_eps=norm_eps)
-
     def add_param(self, name, tensor):
         """Commit a direct parameter. Builder determines split side."""
         split_side = self._PARAM_TP_RULES.get(name)

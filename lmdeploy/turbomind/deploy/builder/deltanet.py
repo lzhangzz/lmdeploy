@@ -147,6 +147,3 @@ class DeltaNetBuilder(Builder):
         conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self._tp)
         self._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
 
-    def add_norm(self, norm_weight, data_type, *, norm_eps):
-        """Add inline norm child."""
-        self._add_norm_child("norm", norm_weight, data_type=data_type, norm_eps=norm_eps)
