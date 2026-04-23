@@ -20,7 +20,8 @@ either a `Linear` or a `torch.Tensor` and does the right thing.
 
 - **`reorder_rotary_emb(x, head_dim, rope_dim, *, data_type=None)`** — public
   function. Checks `isinstance(x, Linear)`:
-  - **Linear path**: quantization-aware logic (block alignment check,
+  - **Linear path**: raises `TypeError` if `data_type is None` (dequantization
+    requires it). Then the quantization-aware logic (block alignment check,
     dequantization fallback, per-tensor iteration calling
     `_reorder_rotary_emb_core` for each). This is the current
     `reorder_rotary_emb_linear` body inlined.

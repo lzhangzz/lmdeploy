@@ -19,7 +19,7 @@ from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, reorder_rotary_emb, reorder_rotary_emb_linear
 
-_LAYER_PATTERN = r'(?:model\.language_model\.|model\.)layers\.([0-9]+)\.'
+_LAYER_PATTERN = r'model\.language_model\.layers\.([0-9]+)\.'
 
 
 def map_packed_qwen35_experts(name: str) -> str:
