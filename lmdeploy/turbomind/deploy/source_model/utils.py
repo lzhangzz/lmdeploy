@@ -243,30 +243,6 @@ def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
     return kv_head_num
 
 
-# --- Layer-prefix detection ------------------------------------------------
-
-def detect_layer_prefix(params: dict | None, cfg: dict) -> tuple[str, str, str]:
-    """Return (layer_prefix, embed_key, norm_key) for a HF checkpoint.
-
-    Models that wrap the decoder in a ``language_model`` submodule (Molmo,
-    some multimodal variants, Qwen3.5 when packaged as a multimodal root)
-    store weights under ``model.language_model.*``. Plain decoder models
-    use ``model.*``.
-
-    If ``params`` is None (spec hasn't loaded weights yet), fall back to the
-    standard ``model.*`` layout. Specs that need early disambiguation can
-    override this during their own parsing.
-    """
-    if params is not None and any(
-            k.startswith('model.language_model.') for k in params):
-        return ('model.language_model.layers',
-                'model.language_model.embed_tokens.weight',
-                'model.language_model.norm.weight')
-    return ('model.layers',
-            'model.embed_tokens.weight',
-            'model.norm.weight')
-
-
 def layer_progress(num_layers: int):
     """tqdm iterable for spec.layers() per-layer conversion loops.
 
