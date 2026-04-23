@@ -14,7 +14,7 @@ either a `Linear` or a `torch.Tensor` and does the right thing.
 
 ### Naming
 
-- **`_reorder_rotary_emb_core(x, head_dim, rope_dim)`** — private helper.
+- **`_reorder_rotary_emb(x, head_dim, rope_dim)`** — private helper.
   Contains the current element-level interleave-transpose logic (partial RoPE
   vs full RoPE code paths). No "linear" or "tensor" in the name.
 
@@ -23,9 +23,9 @@ either a `Linear` or a `torch.Tensor` and does the right thing.
   - **Linear path**: raises `TypeError` if `data_type is None` (dequantization
     requires it). Then the quantization-aware logic (block alignment check,
     dequantization fallback, per-tensor iteration calling
-    `_reorder_rotary_emb_core` for each). This is the current
+    `_reorder_rotary_emb` for each). This is the current
     `reorder_rotary_emb_linear` body inlined.
-  - **Otherwise**: delegates to `_reorder_rotary_emb_core`.
+  - **Otherwise**: delegates to `_reorder_rotary_emb`.
 
 - **`reorder_rotary_emb_linear`** is deleted entirely.
 
@@ -48,7 +48,7 @@ In `qwen3_spec.py`, `qwen3_5_spec.py`, `gpt_oss_spec.py`:
 
 | File | Change |
 |------|--------|
-| `lmdeploy/turbomind/deploy/source_model/utils.py` | Rename tensor function to `_reorder_rotary_emb_core`, inline Linear logic into `reorder_rotary_emb`, delete `reorder_rotary_emb_linear` |
+| `lmdeploy/turbomind/deploy/source_model/utils.py` | Rename tensor function to `_reorder_rotary_emb`, inline Linear logic into `reorder_rotary_emb`, delete `reorder_rotary_emb_linear` |
 | `lmdeploy/turbomind/deploy/source_model/qwen3_spec.py` | Update imports, unify calls to `reorder_rotary_emb` |
 | `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py` | Update imports, unify calls to `reorder_rotary_emb` |
 | `lmdeploy/turbomind/deploy/source_model/gpt_oss_spec.py` | Update imports, unify calls to `reorder_rotary_emb` |
