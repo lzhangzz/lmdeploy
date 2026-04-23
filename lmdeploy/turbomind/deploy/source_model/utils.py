@@ -9,7 +9,8 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..kind_map import TRIVIAL_FORMAT
+from ..kind_map import TRIVIAL_FORMAT, build_linear
+from ..linear import Linear
 from ..builder._base import _dequant_linear
 
 
@@ -258,3 +259,63 @@ def layer_progress(num_layers: int):
     """
     from tqdm import tqdm
     return tqdm(range(num_layers), desc='Loading', leave=False)
+
+
+def read_packed_moe_expert(
+    params: dict,
+    gate_up_pfx: str,
+    down_pfx: str,
+    expert_idx: int,
+    *,
+    data_type,
+    weight_format,
+    interleaved: bool = False,
+    trans: bool = False,
+) -> tuple[Linear, Linear, Linear]:
+    """Read one packed MoE expert's fused gate_up + down and split into
+    (w1, w2, w3) Linears in TM layout.
+
+    ``gate_up_pfx`` and ``down_pfx`` are the full prefixes to the two
+    packed tensors (e.g. ``'model.layers.5.mlp.experts.gate_up_proj'``).
+    The caller composes these strings; this helper concatenates nothing.
+
+    Parameters
+    ----------
+    interleaved : bool
+        Split scheme for the fused gate_up output dim.
+        ``False`` -> contiguous ``[..., :half]`` / ``[..., half:]`` (qwen3.5).
+        ``True``  -> stride-2 interleaved ``[..., ::2]`` / ``[..., 1::2]`` (gpt-oss).
+    trans : bool
+        For trivial-format checkpoints that store the packed tensor in
+        ``[n_experts, in, out]`` layout (gpt-oss), transposes the 2D
+        ``weight`` tensor to undo the HF-to-TM transpose applied by
+        ``_normalize_trivial``. Only affects the ``weight`` kind on
+        trivial-format linears; quantized formats use their own normalizers.
+    """
+    gate_up = build_linear(params, gate_up_pfx, index=expert_idx,
+                           data_type=data_type, weight_format=weight_format)
+    down    = build_linear(params, down_pfx,    index=expert_idx,
+                           data_type=data_type, weight_format=weight_format)
+
+    if trans:
+        for lin in (gate_up, down):
+            if lin.weight_format.name == 'trivial':
+                w = lin.tensors.get('weight')
+                if w is not None and w.dim() == 2:
+                    lin.tensors['weight'] = w.t().contiguous()
+
+    w1_t: dict[str, torch.Tensor] = {}
+    w3_t: dict[str, torch.Tensor] = {}
+    for kind, t in gate_up.tensors.items():
+        if interleaved:
+            w1_t[kind] = t[..., ::2].contiguous()
+            w3_t[kind] = t[..., 1::2].contiguous()
+        else:
+            half = t.shape[-1] // 2
+            w1_t[kind] = t[..., :half].contiguous()
+            w3_t[kind] = t[..., half:].contiguous()
+    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format,
+                data_format=gate_up.data_format)
+    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format,
+                data_format=gate_up.data_format)
+    return w1, down, w3
