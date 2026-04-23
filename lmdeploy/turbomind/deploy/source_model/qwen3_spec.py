@@ -110,6 +110,7 @@ class Qwen3TextSpec(TextModelSpec):
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
         root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
         root.layers = self.layers(self._layer_prefix)
+        root.build()
 
     # ------------------------------------------------------------------
     # Attention / FFN / MoE factories
@@ -140,7 +141,7 @@ class Qwen3TextSpec(TextModelSpec):
         attn.k_norm = self.qk_norm(self._get(f'{pfx}.k_norm.weight'),
                                    head_dim=self._head_dim, rope_dim=self._rope.dim)
 
-        return attn
+        return attn.build()
 
     def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
         w1 = self._linear(f'{pfx}.gate_proj')
@@ -157,7 +158,7 @@ class Qwen3TextSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
         m.add_ffn(w1, w2, w3)
-        return m
+        return m.build()
 
     def moe(self, pfx, layer):
         if self.num_experts(layer) <= 0:
@@ -180,8 +181,8 @@ class Qwen3TextSpec(TextModelSpec):
             experts[str(e)] = self.ffn(
                 f'{pfx}.experts.{e}', layer,
                 inter_size=self._expert_inter_size, fused_moe=True)
-        m.experts = experts
-        return m
+        m.experts = experts.build()
+        return m.build()
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
@@ -196,8 +197,8 @@ class Qwen3TextSpec(TextModelSpec):
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             else:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d
-        return layers
+            layers[str(i)] = d.build()
+        return layers.build()
 
     def num_experts(self, layer: int) -> int:
         return self._n_experts

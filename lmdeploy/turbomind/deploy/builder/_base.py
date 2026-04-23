@@ -325,6 +325,25 @@ def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int,
 # ---------------------------------------------------------------------------
 
 
+class BuiltModule:
+    """Opaque handle bundle returned by ``Builder.build()``.
+
+    Wraps a list of per-GPU C++ module handles.  Iteration and len delegate
+    to the underlying list so callers can ``zip(BuiltModule, contexts)`` etc.
+    """
+
+    __slots__ = ('handles',)
+
+    def __init__(self, handles):
+        object.__setattr__(self, 'handles', handles)
+
+    def __iter__(self):
+        return iter(self.handles)
+
+    def __len__(self):
+        return len(self.handles)
+
+
 class Builder:
     """Wraps N GPU handles for a single logical module.
 
@@ -333,15 +352,19 @@ class Builder:
 
     Subclasses specialize for particular module types (e.g. attention,
     FFN, MoE).
+
+    Lifecycle: stage commits -> build() -> BuiltModule (frozen).
+    After ``build()`` the Builder is inert — further commits or child
+    attachments raise.
     """
 
     def __init__(self, config, contexts, tp=1, ranks=None):
-        """Create C++ modules via ``_tm.create_module`` on each GPU context.
+        """Initialise the builder with staging dicts (no C++ creation yet).
 
         Parameters
         ----------
         config : C++ config struct
-            Config with ``to_cpp()`` method and optionally ``for_rank(rank)``.
+            Config with ``clone()`` method and optionally ``tp_rank`` field.
         contexts : list
             GPU context managers (one per GPU).
         tp : int
@@ -353,40 +376,40 @@ class Builder:
         object.__setattr__(self, '_contexts', contexts)
         object.__setattr__(self, '_tp', tp)
         object.__setattr__(self, '_ranks', ranks)
-        object.__setattr__(self, '_children', {})
         object.__setattr__(self, 'config', config)
-
+        object.__setattr__(self, '_pending_linears', {})
+        object.__setattr__(self, '_pending_tensors', {})
+        object.__setattr__(self, '_pending_children', {})
         object.__setattr__(self, '_handles', None)
-        object.__setattr__(self, '_handles_created', False)
+        object.__setattr__(self, '_built', False)
 
     # ------------------------------------------------------------------
     # Child binding via attribute / item assignment
     # ------------------------------------------------------------------
 
     def __setattr__(self, name: str, value):
-        """If *value* is a Builder, bind its handles as named children."""
+        if self._built:
+            raise RuntimeError(
+                f"{type(self).__name__} is built; cannot assign {name!r}")
         if isinstance(value, Builder):
-            self._ensure_handles()
-            value._ensure_handles()
-            for i, (parent_h, child_h) in enumerate(
-                    zip(self._handles, value._handles)):
-                with self._contexts[i]:
-                    parent_h.add_child_raw(name, child_h)
-            self._children[name] = value
-        else:
-            object.__setattr__(self, name, value)
+            raise TypeError(
+                f"{type(self).__name__}.{name}: assign .build() output "
+                f"(BuiltModule), not the Builder itself")
+        if isinstance(value, BuiltModule):
+            self._pending_children[name] = value.handles
+            return
+        object.__setattr__(self, name, value)
 
-    def __setitem__(self, index: int, value):
-        """Bind a Builder as an indexed child (for ModuleList children)."""
-        name = str(index)
+    def __setitem__(self, index, value):
+        if self._built:
+            raise RuntimeError(
+                f"{type(self).__name__} is built; cannot set index {index}")
         if isinstance(value, Builder):
-            self._ensure_handles()
-            value._ensure_handles()
-            for i, (parent_h, child_h) in enumerate(
-                    zip(self._handles, value._handles)):
-                with self._contexts[i]:
-                    parent_h.add_child_raw(name, child_h)
-            self._children[name] = value
+            raise TypeError(
+                f"{type(self).__name__}[{index}]: call .build() first")
+        assert isinstance(value, BuiltModule), (
+            f"{type(self).__name__}[{index}] requires a BuiltModule")
+        self._pending_children[str(index)] = value.handles
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -401,38 +424,99 @@ class Builder:
             return self._ranks[gpu_idx]
         return 0
 
-    def _ensure_handles(self):
-        """Lazily create C++ module handles on first access."""
-        if self._handles_created:
-            return
-        handles = []
-        for i, ctx in enumerate(self._contexts):
-            with ctx:
-                if self._tp > 1 and hasattr(self.config, 'tp_rank'):
-                    cfg = self.config.clone()
-                    cfg.tp_rank = self._ranks[i]
-                else:
-                    cfg = self.config
-                handle = _tm.create_module(cfg)
-                handles.append(handle)
-        object.__setattr__(self, '_handles', handles)
-        object.__setattr__(self, '_handles_created', True)
-
     # ------------------------------------------------------------------
-    # Commit methods (distributed across all GPUs)
+    # Staging methods (pre-build only)
     # ------------------------------------------------------------------
 
     def _commit_linear(self, name: str, linear: Linear,
                        split_side: SplitSide | None = None,
                        model_dtype=None):
+        """Stage a ``Linear`` commit under ``name``.  Applied during
+        ``build()`` in ``_apply_linear``.
+        """
+        assert not self._built, (
+            f"{type(self).__name__} is built; commit '{name}' rejected")
+        self._pending_linears[name] = (linear, split_side, model_dtype)
+
+    def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
+                       split_side: SplitSide | None = None, *,
+                       model_dtype=None):
+        """Stage a raw-tensor commit under ``name``.  Applied during
+        ``build()`` in ``_apply_tensor``.
+        """
+        assert not self._built, (
+            f"{type(self).__name__} is built; commit '{name}' rejected")
+        if tensor is not None:
+            self._pending_tensors[name] = (tensor, split_side, model_dtype)
+
+    # ------------------------------------------------------------------
+    # build() — create handles, drain staged state, return BuiltModule
+    # ------------------------------------------------------------------
+
+    def build(self) -> BuiltModule:
+        """Create C++ module handles and drain all staged state.
+
+        Idempotent on second call — returns the same ``BuiltModule``.
+        """
+        if self._built:
+            return BuiltModule(self._handles)
+
+        self._create_handles()
+
+        object.__setattr__(self, '_built', True)
+
+        # Drain staged linears
+        for name, (linear, split_side, model_dtype) in self._pending_linears.items():
+            self._apply_linear(name, linear, split_side, model_dtype)
+
+        # Drain staged tensors
+        for name, (tensor, split_side, model_dtype) in self._pending_tensors.items():
+            self._apply_tensor(name, tensor, split_side, model_dtype)
+
+        # Drain staged children
+        for name, child_handles in self._pending_children.items():
+            self._attach_handles(name, child_handles)
+
+        return BuiltModule(self._handles)
+
+    def _create_handles(self):
+        """Create one C++ module per context via ``_tm.create_module(cfg)``."""
+        handles = []
+        for i, ctx in enumerate(self._contexts):
+            with ctx:
+                cfg = self._cfg_for_rank(i)
+                handle = _tm.create_module(cfg)
+                handles.append(handle)
+        object.__setattr__(self, '_handles', handles)
+
+    def _cfg_for_rank(self, gpu_idx: int):
+        """Clone config and set tp_rank if tp > 1."""
+        if self._tp > 1 and hasattr(self.config, 'tp_rank'):
+            cfg = self.config.clone()
+            cfg.tp_rank = self._ranks[gpu_idx]
+            return cfg
+        return self.config
+
+    def _attach_handles(self, name: str, child_handles: list):
+        """Attach a child's handles to this module's handles."""
+        for i, (parent_h, child_h) in enumerate(
+                zip(self._handles, child_handles)):
+            with self._contexts[i]:
+                parent_h.add_child_raw(name, child_h)
+
+    # ------------------------------------------------------------------
+    # Apply methods (GPU-invariant prep + per-GPU commit)
+    # ------------------------------------------------------------------
+
+    def _apply_linear(self, name: str, linear: Linear,
+                      split_side: SplitSide | None = None,
+                      model_dtype=None):
         """Commit a ``Linear`` bundle to a named child on all GPUs.
 
-        On first call for a given ``name`` the child ``LinearWeight`` is
-        created via ``handle.create_child`` using a ``LinearConfig``
-        derived from the linear's dimensions and compute dtype; on
-        subsequent calls the existing child is reused.  Tensor data is
-        then sharded per rank (for TP) and copied to the C++ slots via
-        ``_copy_shard_to_param``.
+        Creates a ``LinearWeight`` child via ``handle.create_child`` using
+        a ``LinearConfig`` derived from the linear's dimensions and compute
+        dtype.  Tensor data is sharded per rank (for TP) and copied to the
+        C++ slots via ``_copy_shard_to_param``.
 
         Parameters
         ----------
@@ -443,13 +527,8 @@ class Builder:
         split_side : SplitSide | None
             TP split semantics.  ``None`` means broadcast (no split).
         model_dtype : C++ DataType value | None
-            The model's configured compute dtype.  When set, trivial
-            (non-quantized) weights use this dtype instead of the weight
-            tensor's dtype, preventing mismatches when the checkpoint
-            stores weights in a different precision than the model
-            config (e.g. BF16 weights in an FP16 model).
+            The model's configured compute dtype.
         """
-        self._ensure_handles()
         w = linear.tensors.get('weight')
         if w is None:
             return
@@ -527,24 +606,22 @@ class Builder:
                                          alloc_shape=alloc_shape,
                                          alloc_dtype=alloc_dtype)
 
-    def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
-                       split_side: SplitSide | None = None, *,
-                       model_dtype=None):
+    def _apply_tensor(self, name: str, tensor: torch.Tensor,
+                      split_side: SplitSide | None = None,
+                      model_dtype=None):
         """Commit a raw tensor to a named parameter on all GPUs.
 
         Parameters
         ----------
         name : str
             Parameter name within the module.
-        tensor : torch.Tensor | None
-            The tensor data.  ``None`` is a no-op.
+        tensor : torch.Tensor
+            The tensor data.
         split_side : SplitSide | None
             TP split semantics.  ``None`` means broadcast.
+        model_dtype : C++ DataType value | None
+            Override dtype for the C++ allocation.
         """
-        self._ensure_handles()
-        if tensor is None:
-            return
-
         tp = self._tp if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
 
@@ -574,16 +651,16 @@ class TextModelBuilder(Builder):
 
     def __init__(self, handles, contexts, *,
                  tp, ranks, vocab_size, data_type):
-        # Bypass Builder.__init__ which calls _tm.create_module.
-        object.__setattr__(self, '_handles', handles)
-        object.__setattr__(self, '_contexts', contexts)
-        object.__setattr__(self, '_tp', tp)
-        object.__setattr__(self, '_ranks', ranks)
+        # Delegate to Builder.__init__ with config=None (no create_module).
+        super().__init__(config=None, contexts=contexts, tp=tp, ranks=ranks)
         object.__setattr__(self, '_vocab_size', vocab_size)
         object.__setattr__(self, '_data_type', data_type)
-        object.__setattr__(self, '_children', {})
-        object.__setattr__(self, '_handles_created', True)
-        object.__setattr__(self, 'config', None)
+        object.__setattr__(self, '_handles', handles)
+
+    def _create_handles(self):
+        """Root handles already exist — no-op."""
+        assert self._handles is not None, (
+            "TextModelBuilder._handles must be set before build()")
 
     def add_token_embeds(self, tensor):
         """Commit the raw embedding lookup as the ``tok_embeddings`` root param.

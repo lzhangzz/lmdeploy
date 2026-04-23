@@ -182,8 +182,11 @@ class FfnBuilder(Builder):
         Updating ``self.config.fuse_silu`` **before** any ``_commit_linear``
         call ensures the C++ module is lazily created with the correct flag.
         """
-        # Pad weights for TP alignment before any fusion or sharding
+        # Pad weights for TP alignment before any fusion or sharding.
+        # After padding, push the padded-global inter_size onto config so
+        # that C++ module creation sees the correct dimension.
         w1, w2, w3 = _pad_ffn_for_tp(w1, w2, w3, self._tp)
+        self.config.inter_size = w1.tensors['weight'].size(-1)
 
         act_type = getattr(self.config, 'act_type', 0)
         if isinstance(act_type, int):

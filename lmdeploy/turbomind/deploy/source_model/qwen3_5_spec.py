@@ -151,6 +151,7 @@ class Qwen3_5Spec(TextModelSpec):
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
         root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
         root.layers = self.layers(self._layer_prefix)
+        root.build()
 
     # ------------------------------------------------------------------
     # Zero-centered norm
@@ -193,7 +194,7 @@ class Qwen3_5Spec(TextModelSpec):
                                    head_dim=self._head_dim, rope_dim=self._rope.dim)
         attn.k_norm = self.qk_norm(self._get(f'{pfx}.k_norm.weight'),
                                    head_dim=self._head_dim, rope_dim=self._rope.dim)
-        return attn
+        return attn.build()
 
     def linear_attn(self, pfx, layer):
         cfg = self._dn_cfg.clone()
@@ -215,7 +216,7 @@ class Qwen3_5Spec(TextModelSpec):
             self._get(f'{pfx}.conv1d.weight'),
             qkv_split=self._linear_qkv_split)
         builder.norm = self.norm(self._get(f'{pfx}.norm.weight'))
-        return builder
+        return builder.build()
 
     # ------------------------------------------------------------------
     # FFN / MoE factories
@@ -245,7 +246,7 @@ class Qwen3_5Spec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
         m.add_ffn(w1, w2, w3)
-        return m
+        return m.build()
 
     def moe(self, pfx, layer):
         if self.num_experts(layer) <= 0:
@@ -271,8 +272,8 @@ class Qwen3_5Spec(TextModelSpec):
             experts[str(e)] = self._moe_expert_ffn(
                 pfx, layer, e, self._expert_inter_size)
 
-        m.experts = experts
-        return m
+        m.experts = experts.build()
+        return m.build()
 
     def _packed_moe_ffn(self, mlp_pfx, expert_idx, inter_size):
         w1, w2, w3 = read_packed_moe_expert(
@@ -290,7 +291,7 @@ class Qwen3_5Spec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
         m.add_ffn(w1, w2, w3)
-        return m
+        return m.build()
 
     def _moe_expert_ffn(self, mlp_pfx, layer, expert_idx, inter_size):
         expert_pfx = f'{mlp_pfx}.experts.{expert_idx}'
@@ -317,5 +318,5 @@ class Qwen3_5Spec(TextModelSpec):
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             else:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d
-        return layers
+            layers[str(i)] = d.build()
+        return layers.build()

@@ -157,6 +157,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         root.norm = self.norm(self._get(self._norm_key))
         root.add_lm_head(self._linear('lm_head'))  # GLM: never tied
         root.layers = self.layers(self._layer_prefix)
+        root.build()
 
     # ------------------------------------------------------------------
     # MLA attention (uses MLABuilder + self._attn_cfg clone)
@@ -164,6 +165,9 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     def attn(self, pfx, layer):
         cfg = self._attn_cfg.clone()
+        # MLA nudge: kv_head_num must be >= attn_tp_size for TP
+        if cfg.kv_lora_rank > 0 and cfg.kv_head_num < self.engine_cfg.attn_tp_size:
+            cfg.kv_head_num = self.engine_cfg.attn_tp_size
         builder = MLABuilder(cfg, self._contexts,
                              tp=self.engine_cfg.attn_tp_size,
                              ranks=self._attn_ranks)
@@ -179,7 +183,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
         )
         builder.q_a_layernorm  = self.norm(self._get(f'{pfx}.q_a_layernorm.weight'))
         builder.kv_a_layernorm = self.norm(self._get(f'{pfx}.kv_a_layernorm.weight'))
-        return builder
+        return builder.build()
 
     # ------------------------------------------------------------------
     # FFN / MoE factories
@@ -200,7 +204,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
         m.add_ffn(w1, w2, w3)
-        return m
+        return m.build()
 
     def moe(self, pfx, layer):
         if self.num_experts(layer) <= 0:
@@ -226,8 +230,8 @@ class Glm4MoeLiteSpec(TextModelSpec):
             experts[str(e)] = self.ffn(
                 f'{pfx}.experts.{e}', layer,
                 inter_size=self._expert_inter_size, fused_moe=True)
-        m.experts = experts
-        return m
+        m.experts = experts.build()
+        return m.build()
 
     def layers(self, pfx):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
@@ -241,5 +245,5 @@ class Glm4MoeLiteSpec(TextModelSpec):
             else:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp.shared_experts', i)
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d
-        return layers
+            layers[str(i)] = d.build()
+        return layers.build()

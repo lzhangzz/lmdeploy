@@ -169,7 +169,7 @@ class TextModelSpec(ABC):
         )
         m = NormBuilder(cfg, self._contexts)
         m.set_weight(weight)
-        return m
+        return m.build()
 
     def qk_norm(self, weight, *, head_dim, rope_dim):
         """Build a per-head NormBuilder that follows the Q/K RoPE layout.

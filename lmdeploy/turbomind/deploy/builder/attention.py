@@ -116,6 +116,9 @@ class AttentionBuilder(Builder):
         q, k, v, gate = dequant_mixed(q, k, v, gate, data_type=self.config.data_type)
         k, v = repeat_kv_for_tp(k, v, tp=self._tp,
                                 head_dim=self.config.head_dim)
+        # After KV head repeat, push the padded-global kv_head_num onto
+        # config so that C++ module creation sees the correct head count.
+        self.config.kv_head_num = _infer_heads(k, self.config.head_dim)
         merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)
         self._commit_linear('w_qkv', merged, SplitSide.OUTPUT,
                             model_dtype=self.config.data_type)
