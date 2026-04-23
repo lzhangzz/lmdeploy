@@ -3,7 +3,6 @@
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/kernels/core/math.h"
 
 namespace turbomind {
 
@@ -42,7 +41,7 @@ void ModelWeight::prepare()
     vocab_size        = tok_embeddings.shape(0);
     embedding_size    = vocab_size;
     num_layer         = layers->size();
-    vocab_size_padded = round_up((size_t)vocab_size, (size_t)tp_size);
+    vocab_size_padded = TM_CHECK_NOTNULL(output)->output_dim * tp_size;
 
     layer_types.resize(num_layer);
     for (int i = 0; i < num_layer; ++i) {
