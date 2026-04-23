@@ -155,7 +155,7 @@ def get_yarn_params(rope_scaling: dict) -> tuple[float, float]:
     return attention_factor, softmax_scale
 
 
-def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
+def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
     """Reorder rotary embedding layout for TurboMind's RoPE kernel."""
     if rope_dim < head_dim:
         output_dims = x.size(-1)
@@ -176,48 +176,54 @@ def reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def reorder_rotary_emb_linear(linear, head_dim: int, rope_dim: int, *, data_type):
-    """Apply RoPE permutation to all tensors in a Linear.
+def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, data_type=None):
+    """Apply RoPE layout permutation.
 
-    Quantization-aware:
-    - If quantized and block_out % head_dim != 0, dequantizes first
-      (permuting within a head would cross block boundaries).
-    - For weight/bias: element-level RoPE permutation.
-    - For scales/zeros when block_out % head_dim == 0: block-level channel
-      shuffling. Each head maps to (block_out / head_dim) complete blocks,
-      so we apply the same interleave pattern at block granularity.
-    - For scales/zeros when dequantized: skipped (trivial format has none).
+    Accepts either a ``Linear`` or a raw ``torch.Tensor``.
+
+    For ``Linear`` inputs the permutation is applied to every tensor in the
+    bundle with quantization awareness (block-alignment check, dequant
+    fallback, block-level shuffling for scales/zeros).  ``data_type`` is
+    required and must not be ``None``.
+
+    For ``torch.Tensor`` inputs the element-level interleave-transpose is
+    applied directly.  ``data_type`` is ignored.
     """
     from ..linear import Linear
 
-    wfmt = linear.weight_format
-    block_out = wfmt.block_out or 0
+    if isinstance(x, Linear):
+        if data_type is None:
+            raise TypeError(
+                "data_type is required when passing a Linear to reorder_rotary_emb"
+            )
+        wfmt = x.weight_format
+        block_out = wfmt.block_out or 0
 
-    # If blocks don't align with heads, dequant first
-    if block_out and block_out % head_dim != 0:
-        linear = _dequant_linear(linear, data_type=data_type)
-        block_out = 0
+        # If blocks don't align with heads, dequant first
+        if block_out and block_out % head_dim != 0:
+            x = _dequant_linear(x, data_type=data_type)
+            block_out = 0
 
-    new_tensors = {}
-    for kind, tensor in linear.tensors.items():
-        if kind in ("scales", "zeros") and block_out > 0:
-            # Block-level shuffle: apply RoPE at block granularity.
-            # scales/zeros have shape [in_blocks, n_heads * blocks_per_head].
-            # reorder_rotary_emb handles this: head_num = last_dim // blocks_per_head.
-            blocks_per_head = block_out // head_dim
-            if blocks_per_head <= 1:
-                # Each scale entry IS a full head — no block-level reorder needed.
-                new_tensors[kind] = tensor
+        new_tensors = {}
+        for kind, tensor in x.tensors.items():
+            if kind in ("scales", "zeros") and block_out > 0:
+                # Block-level shuffle: reinterpret each block as a "head"
+                # so _reorder_rotary_emb shuffles at block granularity.
+                blocks_per_head = block_out // head_dim
+                if blocks_per_head <= 1:
+                    new_tensors[kind] = tensor
+                else:
+                    rope_dim_blocks = rope_dim * blocks_per_head // head_dim
+                    new_tensors[kind] = _reorder_rotary_emb(tensor, blocks_per_head, rope_dim_blocks)
+            elif tensor.size(-1) % head_dim == 0:
+                new_tensors[kind] = _reorder_rotary_emb(tensor, head_dim, rope_dim)
             else:
-                rope_dim_blocks = rope_dim * blocks_per_head // head_dim
-                new_tensors[kind] = reorder_rotary_emb(tensor, blocks_per_head, rope_dim_blocks)
-        elif tensor.size(-1) % head_dim == 0:
-            new_tensors[kind] = reorder_rotary_emb(tensor, head_dim, rope_dim)
-        else:
-            new_tensors[kind] = tensor
+                new_tensors[kind] = tensor
 
-    return Linear(tensors=new_tensors, weight_format=linear.weight_format,
-                  data_format=linear.data_format)
+        return Linear(tensors=new_tensors, weight_format=x.weight_format,
+                      data_format=x.data_format)
+
+    return _reorder_rotary_emb(x, head_dim, rope_dim)
 
 
 # --- TP padding helpers ----------------------------------------------------
