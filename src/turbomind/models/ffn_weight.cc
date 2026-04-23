@@ -9,7 +9,7 @@ namespace turbomind {
 
 FfnWeight::FfnWeight(const core::FfnConfig& cfg)
     : hidden_dim_{cfg.hidden_dim}
-    , inter_size_{cfg.inter_size}
+    , inter_size_{cfg.inter_size / cfg.tp_size}
     , bias_{cfg.has_bias}
     , tp_size_{cfg.tp_size}
     , tp_rank_{cfg.tp_rank}
@@ -22,16 +22,6 @@ FfnWeight::FfnWeight(const core::FfnConfig& cfg)
 
 void FfnWeight::prepare()
 {
-    // Derive per-rank inter_size from actual weight dimensions.
-    // Weight tensors are already TP-sharded by the Python builder,
-    // so w1 output_dim equals per-rank inter_size.  For fused w1w3,
-    // output_dim = 2 * inter_size (gate + up).
-    if (w1w3) {
-        inter_size_ = w1w3->output_dim / 2;
-    } else if (w1) {
-        inter_size_ = w1->output_dim;
-    }
-
     // Set epilogue on existing w1w3 child if fused silu is active.
     if (w1w3) {
         auto* fused = static_cast<LinearWeight*>(w1w3.get());
