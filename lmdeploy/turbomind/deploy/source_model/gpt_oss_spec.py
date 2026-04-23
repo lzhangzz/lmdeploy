@@ -117,22 +117,11 @@ class GptOssSpec(TextModelSpec):
             vocab_size=self._vocab_size,
             data_type=self._cpp_dtype())
         root.add_token_embeds(self._get(self._embed_key))
-        root.norm = self.output_norm(self._norm_key)
+        root.norm = self.norm(self._get(self._norm_key))
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
         root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
         root.layers = self.layers(self._layer_prefix)
 
-    # Standard RMSNorm
-    def output_norm(self, key):
-        from ..builder import NormBuilder, make_norm_config
-        w = self._get(key)
-        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
-        m = NormBuilder(cfg, self._contexts)
-        m.set_weight(w)
-        return m
-
-    def norm(self, key):
-        return self.output_norm(key)
 
     # ------------------------------------------------------------------
     # Attention factory — sets per-layer window_size on the clone
@@ -209,9 +198,9 @@ class GptOssSpec(TextModelSpec):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for i in layer_progress(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
-            d.attention_norm = self.norm(f'{pfx}.{i}.input_layernorm.weight')
+            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
             d.attention = self.attn(f'{pfx}.{i}.self_attn', i)
-            d.ffn_norm = self.norm(f'{pfx}.{i}.post_attention_layernorm.weight')
+            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
             if self.num_experts(i) > 0:
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             layers[str(i)] = d
