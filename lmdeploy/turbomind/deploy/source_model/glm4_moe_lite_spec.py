@@ -22,9 +22,6 @@ class Glm4MoeLiteSpec(TextModelSpec):
     """Weight spec for GLM-4 MoE Lite (e.g. GLM-4.7-Flash)."""
 
     _layer_pattern = _LAYER_PATTERN
-    # GLM-4 always uses the plain `model.*` layout — pin to skip on-load
-    # re-detection by TextModelSpec.set_params.
-    _pin_layer_prefix = True
 
     def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
         super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)

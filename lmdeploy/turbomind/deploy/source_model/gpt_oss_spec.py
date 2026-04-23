@@ -35,9 +35,6 @@ class GptOssSpec(TextModelSpec):
 
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_experts]
-    # gpt-oss always uses the plain `model.*` layout — pin to skip on-load
-    # re-detection by TextModelSpec.set_params.
-    _pin_layer_prefix = True
 
     def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
         super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
