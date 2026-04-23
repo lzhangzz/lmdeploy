@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-import torch
-
 import _turbomind as _tm
 
 from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
@@ -13,11 +11,9 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
                        TextModelBuilder, _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..builder.attention import split_output_gate
-from ..kind_map import build_linear
-from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import layer_progress, reorder_rotary_emb
+from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
 
 _LAYER_PATTERN = r'model\.language_model\.layers\.([0-9]+)\.'
 
@@ -271,48 +267,29 @@ class Qwen3_5Spec(TextModelSpec):
         m.experts = experts
         return m
 
-    def _moe_expert_ffn(self, pfx, layer, expert_idx, inter_size):
-        expert_pfx = f'{pfx}.experts.{expert_idx}'
-        result = self.ffn(expert_pfx, layer,
-                          inter_size=inter_size, fused_moe=True)
-        if result is not None:
-            return result
-        packed_pfx = f'{pfx}.experts'
-        return self._packed_moe_expert_indexed(packed_pfx, expert_idx, inter_size)
-
-    def _packed_moe_expert_indexed(self, pfx, expert_idx, inter_size):
-        gate_up_lin = build_linear(self.params, f'{pfx}.gate_up_proj',
-                                   index=expert_idx,
-                                   data_type=self._cpp_dtype(),
-                                   weight_format=self._weight_format)
-        down_lin = build_linear(self.params, f'{pfx}.down_proj',
-                                index=expert_idx,
-                                data_type=self._cpp_dtype(),
-                                weight_format=self._weight_format)
-        if gate_up_lin is None or down_lin is None:
-            return None
-
-        gate_tensors: dict[str, torch.Tensor] = {}
-        up_tensors: dict[str, torch.Tensor] = {}
-        for kind, t in gate_up_lin.tensors.items():
-            half = t.shape[-1] // 2
-            gate_tensors[kind] = t[..., :half].contiguous()
-            up_tensors[kind] = t[..., half:].contiguous()
-
+    def _packed_moe_ffn(self, mlp_pfx, expert_idx, inter_size):
+        w1, w2, w3 = read_packed_moe_expert(
+            self.params,
+            f'{mlp_pfx}.experts.gate_up_proj',
+            f'{mlp_pfx}.experts.down_proj',
+            expert_idx,
+            data_type=self._cpp_dtype(),
+            weight_format=self._weight_format,
+        )
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
         cfg.fuse_silu  = False
         cfg.fused_moe  = True
-
         m = FfnBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
-        w1 = Linear(tensors=gate_tensors, weight_format=gate_up_lin.weight_format,
-                    data_format=gate_up_lin.data_format)
-        w3 = Linear(tensors=up_tensors,   weight_format=gate_up_lin.weight_format,
-                    data_format=gate_up_lin.data_format)
-        m.add_ffn(w1, down_lin, w3)
+        m.add_ffn(w1, w2, w3)
         return m
+
+    def _moe_expert_ffn(self, mlp_pfx, layer, expert_idx, inter_size):
+        expert_pfx = f'{mlp_pfx}.experts.{expert_idx}'
+        return (self.ffn(expert_pfx, layer, inter_size=inter_size, fused_moe=True)
+                or self._packed_moe_ffn(mlp_pfx, expert_idx, inter_size))
 
     # ------------------------------------------------------------------
     # layers() — dispatch by layer type
