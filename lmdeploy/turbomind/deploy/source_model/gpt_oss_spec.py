@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import re
 
-import torch
-
 import _turbomind as _tm
 
 from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
                        _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..kind_map import build_linear
-from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
-from .utils import layer_progress, reorder_rotary_emb
+from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
 
 _LAYER_PATTERN = r'model\.layers\.([0-9]+).'
 
@@ -189,8 +185,8 @@ class GptOssSpec(TextModelSpec):
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            experts[str(e)] = self._packed_expert_ffn(
-                f'{pfx}.experts.{e}', self._expert_inter_size)
+            experts[str(e)] = self._packed_moe_ffn(
+                pfx, e, self._expert_inter_size)
         m.experts = experts
         return m
 
@@ -206,53 +202,23 @@ class GptOssSpec(TextModelSpec):
             layers[str(i)] = d
         return layers
 
-    # ------------------------------------------------------------------
-    # Packed-expert decoding (gate_up interleaved, TM layout)
-    # ------------------------------------------------------------------
-
-    def _read_packed_expert(self, prefix: str, expert: int):
-        lin = build_linear(self.params, prefix, index=expert,
-                           data_type=self._cpp_dtype(),
-                           weight_format=self._weight_format)
-        if lin is None:
-            return None
-        if lin.weight_format.name == 'trivial':
-            w = lin.tensors.get('weight')
-            if w is not None and w.dim() == 2:
-                lin.tensors['weight'] = w.t().contiguous()
-        return lin
-
-    @staticmethod
-    def _deinterleave(lin: Linear):
-        gate_t: dict[str, torch.Tensor] = {}
-        up_t: dict[str, torch.Tensor] = {}
-        for kind, t in lin.tensors.items():
-            gate_t[kind] = t[..., ::2].contiguous()
-            up_t[kind]   = t[..., 1::2].contiguous()
-        return (Linear(tensors=gate_t, weight_format=lin.weight_format,
-                       data_format=lin.data_format),
-                Linear(tensors=up_t,   weight_format=lin.weight_format,
-                       data_format=lin.data_format))
-
-    def _packed_expert_ffn(self, expert_pfx: str, expert_inter: int):
-        base_pfx = expert_pfx.rsplit('.', 1)[0]
-        expert_id = int(expert_pfx.rsplit('.', 1)[1])
-        gate_up_lin = self._read_packed_expert(
-            f'{base_pfx}.gate_up_proj', expert_id)
-        down_lin = self._read_packed_expert(
-            f'{base_pfx}.down_proj', expert_id)
-        if gate_up_lin is None or down_lin is None:
-            return None
-
-        w1, w3 = self._deinterleave(gate_up_lin)
-
+    def _packed_moe_ffn(self, mlp_pfx, expert_idx, inter_size):
+        w1, w2, w3 = read_packed_moe_expert(
+            self.params,
+            f'{mlp_pfx}.experts.gate_up_proj',
+            f'{mlp_pfx}.experts.down_proj',
+            expert_idx,
+            data_type=self._cpp_dtype(),
+            weight_format=self._weight_format,
+            interleaved=True,
+            trans=True,
+        )
         cfg = self._ffn_cfg.clone()
-        cfg.inter_size = expert_inter
+        cfg.inter_size = inter_size
         cfg.fuse_silu  = False
         cfg.fused_moe  = True
-
         m = FfnBuilder(cfg, self._contexts,
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
-        m.add_ffn(w1, down_lin, w3)
+        m.add_ffn(w1, w2, w3)
         return m
