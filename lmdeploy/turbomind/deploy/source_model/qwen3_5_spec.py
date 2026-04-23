@@ -30,20 +30,17 @@ def map_packed_qwen35_experts(name: str) -> str:
 @INPUT_MODELS.register_module(name='qwen3_5-moe')
 @INPUT_MODELS.register_module(name='qwen3_5')
 class Qwen3_5Spec(TextModelSpec):
-    """Weight spec for Qwen3.5 (dense + linear-attn + optional MoE).
-
-    ``_pin_layer_prefix`` is intentionally left at its default False — Qwen3.5
-    may be packaged as a multimodal root where the decoder lives under
-    ``model.language_model.*``. The base-class ``set_params`` re-runs
-    ``detect_layer_prefix`` when weights arrive to resolve the correct
-    prefix.
-    """
+    """Weight spec for Qwen3.5 (dense + linear-attn + optional MoE)."""
 
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_packed_qwen35_experts]
 
     def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
         super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
+
+        self._layer_prefix = 'model.language_model.layers'
+        self._embed_key = 'model.language_model.embed_tokens.weight'
+        self._norm_key = 'model.language_model.norm.weight'
 
         # partial_rotary_factor adjusts rope_dim
         rope_params = hf_cfg.get('rope_parameters', {})
