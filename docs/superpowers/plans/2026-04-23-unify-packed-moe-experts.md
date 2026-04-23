@@ -14,8 +14,8 @@
 
 **Files:**
 - Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:12` (extend kind_map import)
-- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:13` (add linear import)
-- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:261` (append function at EOF)
+- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:13` (insert linear import)
+- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py` (append function at EOF; file currently ends at line 260)
 
 - [ ] **Step 1: Extend the `..kind_map` import**
 
@@ -140,22 +140,42 @@ EOF
 ### Task 2: Refactor `qwen3_5_spec.py` to use the helper
 
 **Files:**
+- Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:7` (drop `torch` import)
+- Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:16` (drop `build_linear` import)
 - Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:17` (drop `Linear` import)
 - Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:20` (add `read_packed_moe_expert`)
 - Modify: `lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py:274-315` (replace `_moe_expert_ffn` + delete `_packed_moe_expert_indexed`)
 
-- [ ] **Step 1: Drop the `Linear` import**
+- [ ] **Step 1: Drop the `torch` import**
+
+Line 7 before:
+```python
+import torch
+```
+
+After: delete the line entirely. After Step 5 (deletion of `_packed_moe_expert_indexed`), `torch` has no remaining uses in this file — its only current use is the `dict[str, torch.Tensor]` type annotations inside the deleted method.
+
+- [ ] **Step 2: Drop the `build_linear` import**
+
+Line 16 before:
+```python
+from ..kind_map import build_linear
+```
+
+After: delete the line entirely. After Step 5 (deletion of `_packed_moe_expert_indexed`), `build_linear` has no remaining uses in this file — all other reads go through `self._linear(...)`, which does the `build_linear` call internally.
+
+- [ ] **Step 3: Drop the `Linear` import**
 
 Line 17 before:
 ```python
 from ..linear import Linear
 ```
 
-After: delete the line entirely. `Linear` is no longer referenced in this file once `_packed_moe_expert_indexed` is deleted in Step 3.
+After: delete the line entirely. `Linear` is no longer referenced in this file once `_packed_moe_expert_indexed` is deleted in Step 5.
 
-- [ ] **Step 2: Add `read_packed_moe_expert` to the utils import**
+- [ ] **Step 4: Add `read_packed_moe_expert` to the utils import**
 
-Line 20 (post-deletion of Line 17 it will be line 19) before:
+The `from .utils import` line is currently line 20 but shifts upward with each of Steps 1-3's deletions — locate by content, not number. Before:
 ```python
 from .utils import layer_progress, reorder_rotary_emb
 ```
@@ -165,7 +185,7 @@ After:
 from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
 ```
 
-- [ ] **Step 3: Replace `_moe_expert_ffn` and delete `_packed_moe_expert_indexed`**
+- [ ] **Step 5: Replace `_moe_expert_ffn` and delete `_packed_moe_expert_indexed`**
 
 Lines 274-315 before (the two methods together):
 ```python
@@ -244,19 +264,24 @@ Note: the `pfx` positional arg was renamed to `mlp_pfx` for clarity (it is the `
 
 The `or`-fallback preserves today's exact semantics: `self.ffn(...)` returns a truthy `FfnBuilder` when any of `gate_proj` / `up_proj` / `down_proj` exists at the per-expert prefix, otherwise it returns `None` and the packed path fires.
 
-- [ ] **Step 4: Sanity-check the file imports and has no stale references**
+- [ ] **Step 6: Sanity-check the file imports and has no stale references**
 
 ```bash
 python -c "from lmdeploy.turbomind.deploy.source_model import qwen3_5_spec; print('OK')"
 ```
-Expected output: `OK`.
+Expected output: `OK`. A `NameError` for `Linear`, `build_linear`, or `torch` means an edit was incomplete.
 
 ```bash
-rg -n '_packed_moe_expert_indexed|^from \.\.linear import Linear' lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py
+rg -n '_packed_moe_expert_indexed' lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py
 ```
-Expected: zero matches. Either match means the refactor is incomplete.
+Expected: zero matches.
 
-- [ ] **Step 5: Commit**
+```bash
+rg -n '^import torch|^from \.\.kind_map import build_linear|^from \.\.linear import Linear' lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py
+```
+Expected: zero matches — all three dropped imports are gone.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add lmdeploy/turbomind/deploy/source_model/qwen3_5_spec.py
@@ -266,7 +291,7 @@ deploy: collapse qwen3_5 packed MoE experts via read_packed_moe_expert
 Replaces the 33-line _packed_moe_expert_indexed helper with a call to
 the shared read_packed_moe_expert utility. The unpacked->packed fallback
 is preserved via a compact `or`-expression in place of the explicit None
-ladder.
+ladder. Drops now-unused torch, build_linear, and Linear imports.
 EOF
 )"
 ```
