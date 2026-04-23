@@ -151,7 +151,7 @@ class Qwen3_5Spec(TextModelSpec):
             vocab_size=self._vocab_size,
             data_type=self._cpp_dtype())
         root.add_token_embeds(self._get(self._embed_key))
-        root.norm = self.output_norm(self._norm_key)
+        root.norm = self.norm(self._get(self._norm_key))
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
         root.add_lm_head(self._linear(lm_key.removesuffix('.weight')))
         root.layers = self.layers(self._layer_prefix)
@@ -160,16 +160,9 @@ class Qwen3_5Spec(TextModelSpec):
     # Zero-centered norm
     # ------------------------------------------------------------------
 
-    def output_norm(self, key):
-        from ..builder import NormBuilder, make_norm_config
-        w = self._zero_centered(self._get(key))
-        cfg = make_norm_config(dim=self._hidden_units, data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
-        m = NormBuilder(cfg, self._contexts)
-        m.set_weight(w)
-        return m
-
-    def norm(self, key):
-        return self.output_norm(key)
+    def norm(self, weight, *, dim=None, data_type=None):
+        return super().norm(self._zero_centered(weight),
+                            dim=dim, data_type=data_type)
 
     def _zero_centered(self, w):
         if w is not None:
@@ -200,11 +193,10 @@ class Qwen3_5Spec(TextModelSpec):
         attn.add_qkv_proj(q, k, v, gate=gate)
         attn.add_o_proj(o)
 
-        q_norm = self._zero_centered(self._get(f'{pfx}.q_norm.weight'))
-        k_norm = self._zero_centered(self._get(f'{pfx}.k_norm.weight'))
-        q_norm = reorder_rotary_emb(q_norm, self._head_dim, self._rope.dim)
-        k_norm = reorder_rotary_emb(k_norm, self._head_dim, self._rope.dim)
-        attn.add_qk_norm(q_norm, k_norm, norm_eps=self._norm_eps)
+        attn.q_norm = self.qk_norm(self._get(f'{pfx}.q_norm.weight'),
+                                   head_dim=self._head_dim, rope_dim=self._rope.dim)
+        attn.k_norm = self.qk_norm(self._get(f'{pfx}.k_norm.weight'),
+                                   head_dim=self._head_dim, rope_dim=self._rope.dim)
         return attn
 
     def linear_attn(self, pfx, layer):
@@ -226,8 +218,7 @@ class Qwen3_5Spec(TextModelSpec):
         builder.add_conv1d(
             self._get(f'{pfx}.conv1d.weight'),
             qkv_split=self._linear_qkv_split)
-        builder.add_norm(
-            self._get(f'{pfx}.norm.weight'), data_type=self._cpp_dtype(), norm_eps=self._norm_eps)
+        builder.norm = self.norm(self._get(f'{pfx}.norm.weight'))
         return builder
 
     # ------------------------------------------------------------------
@@ -331,12 +322,12 @@ class Qwen3_5Spec(TextModelSpec):
         layers = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for i in layer_progress(self._num_layer):
             d = DecoderLayerBuilder(DecoderLayerConfig(), self._contexts)
-            d.attention_norm = self.norm(f'{pfx}.{i}.input_layernorm.weight')
+            d.attention_norm = self.norm(self._get(f'{pfx}.{i}.input_layernorm.weight'))
             if self._is_linear_attn(i):
                 d.linear_attn = self.linear_attn(f'{pfx}.{i}.linear_attn', i)
             else:
                 d.attention = self.attn(f'{pfx}.{i}.self_attn', i)
-            d.ffn_norm = self.norm(f'{pfx}.{i}.post_attention_layernorm.weight')
+            d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
             if self.num_experts(i) > 0:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp.shared_expert', i)
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
