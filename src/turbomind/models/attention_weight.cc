@@ -34,23 +34,6 @@ AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg)
 void AttentionWeight::prepare()
 {
     Module::prepare();
-
-    if (!w_qkv) {
-        // MLA models use separate q_a/q_b/kv_a projections.
-        // The compressed KV latent is not sharded across TP ranks, so
-        // pad kv_head_num to tp_size to survive the engine's division.
-        if (kv_lora_rank > 0 && kv_head_num < tp_size) {
-            kv_head_num = tp_size;
-        }
-        return;
-    }
-
-    // Derive kv_head_num from actual weight tensor dimensions.
-    // Python's repeat_kv_for_tp() physically pads KV heads, and w_qkv
-    // is TP-sharded, so output_dim is per-shard.
-    int local_total = w_qkv->output_dim / head_dim;
-    int q_parts     = attn_output_gate ? 2 : 1;  // [Q|K|V] vs [Q|K|V|Gate]
-    kv_head_num = (local_total * tp_size - q_parts * head_num) / 2;
 }
 
 void init_rope_kernel_param(const core::RopeConfig& rope, RopeKernelParam& rope_kernel)
