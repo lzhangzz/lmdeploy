@@ -9,7 +9,7 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .builder import _cpp_dtype as _cd, NormBuilder, make_norm_config
+from .builder import NormBuilder, make_norm_config
 from .source_model.utils import (parse_rope_param, rope_type_to_int,
                                  reorder_rotary_emb)
 
@@ -44,20 +44,20 @@ class TextModelSpec(ABC):
     # ------------------------------------------------------------------
 
     def __init__(self, hf_cfg: dict, engine_cfg: 'TurbomindEngineConfig',
-                 *, weight_format):
+                 *, resolver):
         """Parse HF config into orchestration scalars.
 
-        ``weight_format`` is the resolved `WeightFormat` for the model's
-        quantization format, produced by the converter. It lands on
-        ``self._weight_format`` so ``build_linear()`` can use it during
-        weight loading.
+        ``resolver`` is a ``WeightFormatResolver`` built by the converter.
+        It carries the model compute dtype and the ordered list of
+        candidate weight formats; ``self._linear()`` delegates to
+        ``resolver.resolve()`` at weight-loading time.
 
         Subclasses override `_parse_base` (or extend in their own __init__)
         then construct C++ config templates and per-layer lists.
         """
         self.hf_cfg = hf_cfg
         self.engine_cfg = engine_cfg
-        self._weight_format = weight_format
+        self._resolver = resolver
         self._parse_base(hf_cfg)
 
     def _parse_base(self, cfg: dict):
@@ -128,14 +128,11 @@ class TextModelSpec(ABC):
     def _get(self, key: str) -> torch.Tensor | None:
         return self.params.get(key)
 
-    def _linear(self, pfx: str):
-        from .kind_map import build_linear
-        return build_linear(self.params, pfx,
-                            data_type=self._cpp_dtype(),
-                            weight_format=self._weight_format)
+    def _linear(self, pfx: str, *, optional: bool = False):
+        return self._resolver.resolve(self.params, pfx, optional=optional)
 
     def _cpp_dtype(self):
-        return _cd(self.engine_cfg.dtype)
+        return self._resolver.data_type
 
     def _apply_rope(self, rope_cfg):
         """Copy self._rope fields into a C++ rope config object."""

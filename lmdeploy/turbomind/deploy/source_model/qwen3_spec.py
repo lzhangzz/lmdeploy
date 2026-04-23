@@ -27,8 +27,8 @@ class Qwen3TextSpec(TextModelSpec):
 
     _layer_pattern = _LAYER_PATTERN
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
-        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, resolver):
+        super().__init__(hf_cfg, engine_cfg, resolver=resolver)
 
         # Fixed layer prefix for Qwen3
         self._layer_prefix = 'model.layers'
@@ -122,9 +122,9 @@ class Qwen3TextSpec(TextModelSpec):
         o = self._linear(f'{pfx}.o_proj')
 
         q = reorder_rotary_emb(q, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
         k = reorder_rotary_emb(k, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
 
         cfg = self._attn_cfg.clone()
         # No per-layer attention fields for Qwen3 (no sliding window).

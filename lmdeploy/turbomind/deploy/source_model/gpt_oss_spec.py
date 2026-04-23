@@ -32,8 +32,8 @@ class GptOssSpec(TextModelSpec):
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_experts]
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
-        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, resolver):
+        super().__init__(hf_cfg, engine_cfg, resolver=resolver)
 
         self._layer_prefix = 'model.layers'
         self._embed_key = 'model.embed_tokens.weight'
@@ -130,9 +130,9 @@ class GptOssSpec(TextModelSpec):
         o = self._linear(f'{pfx}.o_proj')
 
         q = reorder_rotary_emb(q, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
         k = reorder_rotary_emb(k, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
 
         cfg = self._attn_cfg.clone()
         cfg.window_size = self._window_sizes[layer]
@@ -208,8 +208,7 @@ class GptOssSpec(TextModelSpec):
             f'{mlp_pfx}.experts.gate_up_proj',
             f'{mlp_pfx}.experts.down_proj',
             expert_idx,
-            data_type=self._cpp_dtype(),
-            weight_format=self._weight_format,
+            resolver=self._resolver,
             interleaved=True,
             trans=True,
         )

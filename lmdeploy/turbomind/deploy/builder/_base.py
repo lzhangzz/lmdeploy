@@ -8,7 +8,7 @@ import torch
 
 import _turbomind as _tm
 
-from ..kind_map import TRIVIAL_FORMAT
+from ..weight_format import TrivialFormat
 from ..linear import Linear, pad_out_dim
 
 # ---------------------------------------------------------------------------
@@ -120,20 +120,21 @@ def _infer_compute_dtype(linear: Linear):
 
 
 def _dequant_linear(linear: Linear, *, data_type) -> Linear:
-    """Dequantize a quantized Linear to trivial when the format provides ``dequant``.
+    """Dequantize a quantized Linear to trivial.
 
-    *data_type* is the model's activation dtype; used to construct the new
-    trivial ``data_format`` on the result and is threaded into the dequant
-    callable so e.g. FP8 produces weights in the caller's activation dtype.
+    ``TrivialFormat.dequant`` is identity, so already-trivial inputs round-trip
+    safely. ``AWQFormat.dequant`` and ``FP8Format.dequant`` do real work.
+    GPTQ / CompressedTensor / MXFP4 inherit the base-class
+    ``NotImplementedError`` — calling ``_dequant_linear`` on one of those is a
+    broken-fusion-group configuration, and the raise names it at the call site.
     """
     fmt = linear.weight_format
-    if fmt.dequant is None:
-        return linear
     new_tensors = fmt.dequant(linear.tensors, data_type)
+    trivial = TrivialFormat()
     return Linear(
         tensors=new_tensors,
-        weight_format=TRIVIAL_FORMAT,
-        data_format=TRIVIAL_FORMAT.make_data_format(data_type),
+        weight_format=trivial,
+        data_format=trivial.make_data_format(data_type),
     )
 
 
@@ -478,11 +479,7 @@ class Builder:
         lin_cfg.format     = linear.data_format
         lin_cfg.has_bias   = 'bias' in linear.tensors
 
-        packer = fmt.packer if fmt else None
-        if packer is not None:
-            tensors = {k: packer(t, k) for k, t in linear.tensors.items()}
-        else:
-            tensors = linear.tensors
+        tensors = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
         is_quantized = linear.data_format.is_quantized()
 
         kind_split_dims = {

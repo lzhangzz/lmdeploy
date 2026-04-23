@@ -31,8 +31,8 @@ class Qwen3_5Spec(TextModelSpec):
     _layer_pattern = _LAYER_PATTERN
     _loader_mappings = [map_packed_qwen35_experts]
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
-        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, resolver):
+        super().__init__(hf_cfg, engine_cfg, resolver=resolver)
 
         self._layer_prefix = 'model.language_model.layers'
         self._embed_key = 'model.language_model.embed_tokens.weight'
@@ -176,9 +176,9 @@ class Qwen3_5Spec(TextModelSpec):
         o = self._linear(f'{pfx}.o_proj')
 
         q = reorder_rotary_emb(q, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
         k = reorder_rotary_emb(k, self._head_dim, self._rope.dim,
-                               data_type=self._cpp_dtype())
+                               resolver=self._resolver)
 
         q, gate = split_output_gate(q, head_dim=self._head_dim)
 
@@ -221,12 +221,19 @@ class Qwen3_5Spec(TextModelSpec):
     # FFN / MoE factories
     # ------------------------------------------------------------------
 
-    def ffn(self, pfx, layer, inter_size=None, fused_moe=False):
-        w1 = self._linear(f'{pfx}.gate_proj')
-        w3 = self._linear(f'{pfx}.up_proj')
-        w2 = self._linear(f'{pfx}.down_proj')
-        if w1 is None and w2 is None and w3 is None:
-            return None
+    def ffn(self, pfx, layer, inter_size=None, fused_moe=False, *,
+            optional: bool = False):
+        w1 = self._linear(f'{pfx}.gate_proj', optional=optional)
+        w3 = self._linear(f'{pfx}.up_proj',   optional=optional)
+        w2 = self._linear(f'{pfx}.down_proj', optional=optional)
+
+        present = [t is not None for t in (w1, w3, w2)]
+        if not any(present):
+            return None                                     # all absent → fallback signal
+        if not all(present):
+            raise ValueError(
+                f'{pfx}: partial FFN checkpoint '
+                f'(gate_proj={present[0]}, up_proj={present[1]}, down_proj={present[2]})')
 
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = (inter_size if inter_size is not None
@@ -273,8 +280,7 @@ class Qwen3_5Spec(TextModelSpec):
             f'{mlp_pfx}.experts.gate_up_proj',
             f'{mlp_pfx}.experts.down_proj',
             expert_idx,
-            data_type=self._cpp_dtype(),
-            weight_format=self._weight_format,
+            resolver=self._resolver,
         )
         cfg = self._ffn_cfg.clone()
         cfg.inter_size = inter_size
@@ -288,7 +294,8 @@ class Qwen3_5Spec(TextModelSpec):
 
     def _moe_expert_ffn(self, mlp_pfx, layer, expert_idx, inter_size):
         expert_pfx = f'{mlp_pfx}.experts.{expert_idx}'
-        return (self.ffn(expert_pfx, layer, inter_size=inter_size, fused_moe=True)
+        return (self.ffn(expert_pfx, layer, inter_size=inter_size,
+                         fused_moe=True, optional=True)
                 or self._packed_moe_ffn(mlp_pfx, expert_idx, inter_size))
 
     # ------------------------------------------------------------------

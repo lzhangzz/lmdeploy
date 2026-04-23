@@ -9,7 +9,6 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..kind_map import TRIVIAL_FORMAT, build_linear
 from ..linear import Linear
 from ..builder._base import _dequant_linear
 
@@ -177,26 +176,28 @@ def _reorder_rotary_emb(x: torch.Tensor, head_dim: int, rope_dim: int):
         return x.view(-1, head_num, 2, head_dim // 2).transpose(2, 3).reshape(x.shape)
 
 
-def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, data_type=None):
+def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
     """Apply RoPE layout permutation.
 
     Accepts either a ``Linear`` or a raw ``torch.Tensor``.
 
     For ``Linear`` inputs the permutation is applied to every tensor in the
     bundle with quantization awareness (block-alignment check, dequant
-    fallback, block-level shuffling for scales/zeros).  ``data_type`` is
-    required and must not be ``None``.
+    fallback, block-level shuffling for scales/zeros). ``resolver`` is
+    required and must not be ``None`` — it supplies the compute dtype
+    threaded into ``_dequant_linear``.
 
     For ``torch.Tensor`` inputs the element-level interleave-transpose is
-    applied directly.  ``data_type`` is ignored.
+    applied directly. ``resolver`` is ignored.
     """
     from ..linear import Linear
 
     if isinstance(x, Linear):
-        if data_type is None:
+        if resolver is None:
             raise TypeError(
-                "data_type is required when passing a Linear to reorder_rotary_emb"
+                "resolver is required when passing a Linear to reorder_rotary_emb"
             )
+        data_type = resolver.data_type
         wfmt = x.weight_format
         block_out = wfmt.block_out or 0
 
@@ -267,8 +268,7 @@ def read_packed_moe_expert(
     down_pfx: str,
     expert_idx: int,
     *,
-    data_type,
-    weight_format,
+    resolver,
     interleaved: bool = False,
     trans: bool = False,
 ) -> tuple[Linear, Linear, Linear]:
@@ -289,13 +289,11 @@ def read_packed_moe_expert(
         For trivial-format checkpoints that store the packed tensor in
         ``[n_experts, in, out]`` layout (gpt-oss), transposes the 2D
         ``weight`` tensor to undo the HF-to-TM transpose applied by
-        ``_normalize_trivial``. Only affects the ``weight`` kind on
+        ``TrivialFormat.normalize``. Only affects the ``weight`` kind on
         trivial-format linears; quantized formats use their own normalizers.
     """
-    gate_up = build_linear(params, gate_up_pfx, index=expert_idx,
-                           data_type=data_type, weight_format=weight_format)
-    down    = build_linear(params, down_pfx,    index=expert_idx,
-                           data_type=data_type, weight_format=weight_format)
+    gate_up = resolver.resolve(params, gate_up_pfx, index=expert_idx)
+    down    = resolver.resolve(params, down_pfx,    index=expert_idx)
 
     if trans:
         for lin in (gate_up, down):

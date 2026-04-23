@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from dataclasses import replace
 
 import torch
 
@@ -9,12 +8,42 @@ from lmdeploy.utils import get_logger
 
 from ...utils import _get_and_verify_max_len, is_bf16_supported
 from ..supported_models import SUPPORTED_ARCHS
-from .kind_map import get_weight_format
+from .builder import _cpp_dtype
 from .source_model.base import INPUT_MODELS
 from .source_model.utils import load_model_config
+from .weight_format import (AWQFormat, CompressedTensorFormat, FP8Format,
+                            GPTQFormat, MXFP4Format, TrivialFormat,
+                            WeightFormat, WeightFormatResolver)
 
 SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
+
+
+def _build_resolver(model_format: str | None,
+                    group_size: int | None,
+                    data_type: "_tm.DataType") -> WeightFormatResolver:
+    """Build the active resolver: quantized format (if any) + trivial fallback.
+
+    Called after the int4 fp16 force but before the ``compressed-tensors →
+    awq`` rename, so compressed-tensors models get ``CompressedTensorFormat``.
+    """
+    formats: list[WeightFormat] = []
+    if model_format in (None, 'hf'):
+        pass
+    elif model_format == 'awq':
+        formats.append(AWQFormat(block_in=group_size))
+    elif model_format == 'gptq':
+        formats.append(GPTQFormat(block_in=group_size))
+    elif model_format == 'compressed-tensors':
+        formats.append(CompressedTensorFormat(block_in=group_size))
+    elif model_format == 'fp8':
+        formats.append(FP8Format())
+    elif model_format == 'mxfp4':
+        formats.append(MXFP4Format())
+    else:
+        raise ValueError(f"unknown model_format: {model_format!r}")
+    formats.append(TrivialFormat())
+    return WeightFormatResolver(data_type=data_type, formats=formats)
 
 
 def _deep_merge(base: dict, override: dict, path: str = '') -> dict:
@@ -158,25 +187,25 @@ def get_tm_config(model_path,
     if engine_config.model_format is None:
         engine_config.model_format = 'hf'
 
-    # Resolve the active WeightFormat before the CT->AWQ rename below, so
-    # compressed-tensors models still get COMPRESSED_TENSOR_FORMAT (correct
-    # suffixes) rather than AWQ_FORMAT after the rename.
-    weight_format = get_weight_format(engine_config.model_format)
-    if weight_format.block_in == 0:
-        weight_format = replace(weight_format, block_in=group_size)
-
     # 3. Resolve dtype and format overrides.
     dtype = _resolve_dtype(engine_config.dtype, hf_model_cfg)
     if engine_config.model_format in ('awq', 'gptq', 'compressed-tensors'):
         dtype = 'float16'
-        if engine_config.model_format == 'compressed-tensors':
-            engine_config.model_format = 'awq'
+    engine_config.dtype = dtype
+
+    # Build resolver after dtype is finalized but before the CT→AWQ rename,
+    # so compressed-tensors models instantiate CompressedTensorFormat.
+    resolver = _build_resolver(engine_config.model_format,
+                               group_size, _cpp_dtype(dtype))
+
+    # C++-side label rename (does not affect resolver).
+    if engine_config.model_format == 'compressed-tensors':
+        engine_config.model_format = 'awq'
 
     # 4. Resolve session_len default.
     session_len_default = _get_and_verify_max_len(hf_model_cfg, None)
 
-    # 5. Mutate engine_config with resolved values.
-    engine_config.dtype = dtype
+    # 5. Mutate engine_config with remaining resolved values.
     if engine_config.session_len is None:
         engine_config.session_len = session_len_default
     engine_config.attn_tp_size = engine_config.attn_tp_size or 1
@@ -190,6 +219,6 @@ def get_tm_config(model_path,
         _deep_merge(hf_cfg, engine_config.hf_overrides)
     spec_name = get_spec_registered_name(model_path, engine_config.model_format)
     spec_cls = INPUT_MODELS.get(spec_name)
-    spec = spec_cls(hf_cfg, engine_config, weight_format=weight_format)
+    spec = spec_cls(hf_cfg, engine_config, resolver=resolver)
 
     return spec, model_path

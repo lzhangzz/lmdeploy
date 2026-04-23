@@ -30,7 +30,7 @@ from torch import Tensor
 import _turbomind as _tm
 
 if TYPE_CHECKING:
-    from .kind_map import WeightFormat
+    from .weight_format import WeightFormat
 
 
 # ---------------------------------------------------------------------------

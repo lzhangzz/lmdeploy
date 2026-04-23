@@ -36,12 +36,16 @@ def _setup_fake_tm():
         TYPE_INT64 = 5
         TYPE_INT8 = 6
         TYPE_UINT8 = 7
+        TYPE_UINT4 = 8
+        TYPE_FP8_E4M3 = 9
+        TYPE_FP4_E2M1 = 10
 
     tm.DataType = DataType
 
     # Stub functions / classes referenced throughout deploy/
     tm.create_module = lambda cfg: None
     tm.LinearConfig = type('LinearConfig', (), {})()
+    tm.ResolveLinearWeightFormat = lambda *a, **kw: None
 
     sys.modules['_turbomind'] = tm
 
@@ -82,14 +86,14 @@ def _load_module_from_file(mod_name: str, file_path: str):
     return mod
 
 
-# Load kind_map first (needed by linear and _base)
-_kind_map_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'kind_map.py')
-_load_module_from_file('lmdeploy.turbomind.deploy.kind_map', _kind_map_path)
-
-# Load linear.py
+# Load linear.py first — weight_format.py imports from .linear at module level.
 _linear_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'linear.py')
 _linear_mod = _load_module_from_file('lmdeploy.turbomind.deploy.linear', _linear_path)
 Linear = _linear_mod.Linear
+
+# Load weight_format (needed by _base for TrivialFormat)
+_wf_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'weight_format.py')
+_load_module_from_file('lmdeploy.turbomind.deploy.weight_format', _wf_path)
 
 # Load builder/_base.py
 _base_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'builder', '_base.py')

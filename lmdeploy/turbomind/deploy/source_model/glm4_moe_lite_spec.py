@@ -21,8 +21,8 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
     _layer_pattern = _LAYER_PATTERN
 
-    def __init__(self, hf_cfg: dict, engine_cfg, *, weight_format):
-        super().__init__(hf_cfg, engine_cfg, weight_format=weight_format)
+    def __init__(self, hf_cfg: dict, engine_cfg, *, resolver):
+        super().__init__(hf_cfg, engine_cfg, resolver=resolver)
 
         self._layer_prefix = 'model.layers'
         self._embed_key = 'model.embed_tokens.weight'
@@ -168,7 +168,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
                              tp=self.engine_cfg.attn_tp_size,
                              ranks=self._attn_ranks)
 
-        q_b = (self._linear(f'{pfx}.q_b_proj') or
+        q_b = (self._linear(f'{pfx}.q_b_proj', optional=True) or
                self._linear(f'{pfx}.q_proj'))
         builder.add_projections(
             q_a_proj=self._linear(f'{pfx}.q_a_proj'),
