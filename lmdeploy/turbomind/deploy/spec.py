@@ -9,8 +9,9 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .builder import _cpp_dtype as _cd
-from .source_model.utils import (parse_rope_param, rope_type_to_int)
+from .builder import _cpp_dtype as _cd, NormBuilder, make_norm_config
+from .source_model.utils import (parse_rope_param, rope_type_to_int,
+                                 reorder_rotary_emb)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -153,3 +154,30 @@ class TextModelSpec(ABC):
             rope_cfg.llama3_original_max_position_embeddings = self._rope.original_max_position_embeddings
         elif self._rope.type == 'mrope':
             rope_cfg.mrope_section = self._rope.mrope_section
+
+    # ------------------------------------------------------------------
+    # Norm factories (shared across all specs)
+    # ------------------------------------------------------------------
+
+    def norm(self, weight, *, dim=None, data_type=None):
+        """Build a NormBuilder for *weight* under this spec's contexts.
+
+        ``dim`` defaults to ``weight.shape[-1]``. ``data_type`` defaults to
+        the spec's compute dtype.
+        """
+        cfg = make_norm_config(
+            dim=dim if dim is not None else weight.shape[-1],
+            data_type=data_type if data_type is not None else self._cpp_dtype(),
+            norm_eps=self._norm_eps,
+        )
+        m = NormBuilder(cfg, self._contexts)
+        m.set_weight(weight)
+        return m
+
+    def qk_norm(self, weight, *, head_dim, rope_dim):
+        """Build a per-head NormBuilder that follows the Q/K RoPE layout.
+
+        ``head_dim`` and ``rope_dim`` match the values passed to
+        ``reorder_rotary_emb`` on the sibling Q/K projections.
+        """
+        return self.norm(reorder_rotary_emb(weight, head_dim, rope_dim))
