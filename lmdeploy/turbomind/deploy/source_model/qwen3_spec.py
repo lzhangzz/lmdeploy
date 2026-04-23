@@ -13,8 +13,6 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
                        _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..kind_map import TRIVIAL_FORMAT
-from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, reorder_rotary_emb
@@ -190,11 +188,7 @@ class Qwen3TextSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        gate_w = self._get(f'{pfx}.gate.weight')
-        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-        m.add_gate('gate', Linear({'weight': gate_w},
-                                  weight_format=TRIVIAL_FORMAT,
-                                  data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype())),
+        m.add_gate('gate', self._linear(f'{pfx}.gate'),
                    model_dtype=self._cpp_dtype())
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)

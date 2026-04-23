@@ -13,7 +13,7 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
                        TextModelBuilder, _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
 from ..builder.attention import split_output_gate
-from ..kind_map import TRIVIAL_FORMAT, build_linear
+from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
@@ -266,20 +266,11 @@ class Qwen3_5Spec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        dtype = self._cpp_dtype()
-        gate_w = self._get(f'{pfx}.gate.weight')
-        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-        m.add_gate('gate', Linear({'weight': gate_w},
-                                  weight_format=TRIVIAL_FORMAT,
-                                  data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype())),
-                   model_dtype=dtype)
+        m.add_gate('gate', self._linear(f'{pfx}.gate'),
+                   model_dtype=self._cpp_dtype())
 
-        sg = self._get(f'{pfx}.shared_expert_gate.weight')
-        sg = sg.t() if sg.dim() > 1 else sg
-        m.add_gate('shared_gate', Linear({'weight': sg},
-                                         weight_format=TRIVIAL_FORMAT,
-                                         data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype())),
-                   model_dtype=dtype)
+        m.add_gate('shared_gate', self._linear(f'{pfx}.shared_expert_gate'),
+                   model_dtype=self._cpp_dtype())
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):

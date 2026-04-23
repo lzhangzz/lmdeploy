@@ -8,8 +8,6 @@ from ..builder import (DecoderLayerBuilder, FfnBuilder, MLABuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
                        _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..kind_map import TRIVIAL_FORMAT
-from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import get_yarn_params, layer_progress, parse_rope_param
@@ -233,18 +231,8 @@ class Glm4MoeLiteSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        dtype = self._cpp_dtype()
-        gate_w = self._get(f'{pfx}.gate.weight')
-        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-        tensors = {'weight': gate_w}
-        gate_bias = self._get(f'{pfx}.gate.bias')
-        if gate_bias is not None:
-            tensors['bias'] = gate_bias
-        m.add_gate('gate', Linear(
-            tensors,
-            weight_format=TRIVIAL_FORMAT,
-            data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype()),
-        ), model_dtype=dtype)
+        m.add_gate('gate', self._linear(f'{pfx}.gate'),
+                   model_dtype=self._cpp_dtype())
 
         correction = self._get(f'{pfx}.gate.e_score_correction_bias')
         m.add_param('score_correction_bias', correction)

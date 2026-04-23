@@ -12,7 +12,7 @@ from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
                        _act_type_id)
 from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..kind_map import TRIVIAL_FORMAT, build_linear
+from ..kind_map import build_linear
 from ..linear import Linear
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
@@ -195,18 +195,8 @@ class GptOssSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        dtype = self._cpp_dtype()
-        gate_w = self._get(f'{pfx}.router.weight')
-        gate_w = gate_w.t() if gate_w.dim() > 1 else gate_w
-        tensors = {'weight': gate_w}
-        gate_bias = self._get(f'{pfx}.router.bias')
-        if gate_bias is not None:
-            tensors['bias'] = gate_bias
-        m.add_gate('gate', Linear(
-            tensors,
-            weight_format=TRIVIAL_FORMAT,
-            data_format=TRIVIAL_FORMAT.make_data_format(self._cpp_dtype()),
-        ), model_dtype=dtype)
+        m.add_gate('gate', self._linear(f'{pfx}.router'),
+                   model_dtype=self._cpp_dtype())
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
