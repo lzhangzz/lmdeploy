@@ -10,8 +10,7 @@ import torch
 from lmdeploy.utils import get_logger
 
 from .builder import _cpp_dtype as _cd
-from .source_model.utils import (detect_layer_prefix,
-                                 parse_rope_param, rope_type_to_int)
+from .source_model.utils import (parse_rope_param, rope_type_to_int)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -38,12 +37,6 @@ class TextModelSpec(ABC):
     _layer_pattern: str = ''
     _loader_mappings: list = []
 
-    # If True, the subclass's __init__ has pinned _layer_prefix / _embed_key /
-    # _norm_key to fixed values; set_params() will NOT re-detect from params.
-    # Subclasses that need on-load detection (e.g. multimodal wrappers where
-    # the decoder lives under model.language_model.*) leave this False and
-    # let the base class re-detect when weights arrive.
-    _pin_layer_prefix: bool = False
 
     # ------------------------------------------------------------------
     # Construction / parsing
@@ -72,9 +65,8 @@ class TextModelSpec(ABC):
         Populated:
           _num_layer, _vocab_size, _norm_eps, _head_num, _kv_head_num,
           _head_dim, _hidden_units, _rope,
-          _max_position_embeddings, _tie_embeddings, _layer_prefix,
-          _embed_key, _norm_key, _model_name, _tune_layer_num,
-          _embedding_size.
+          _max_position_embeddings, _tie_embeddings,
+          _model_name, _tune_layer_num, _embedding_size.
 
         Subclass responsibilities (not set here):
           _softmax_scale (subclass default 0, MLA+YaRN overrides)
@@ -110,11 +102,6 @@ class TextModelSpec(ABC):
                 '`--rope-scaling-factor` will be removed in a future release. '
                 'Please instead use `--hf-overrides`.')
 
-        # Layer-prefix detection deferred until weights loaded; default now.
-        # Subclasses that know their prefix unconditionally can override.
-        self._layer_prefix, self._embed_key, self._norm_key = \
-            detect_layer_prefix(None, cfg)
-
         # Default subclass can override (e.g. MLA+YaRN)
         self._softmax_scale = 0.0
 
@@ -132,11 +119,6 @@ class TextModelSpec(ABC):
 
     def set_params(self, params: dict):
         self.params = params
-        # Re-detect layer prefix from the actual checkpoint keys, unless the
-        # subclass has pinned its prefix (class-level _pin_layer_prefix = True).
-        if not self._pin_layer_prefix:
-            self._layer_prefix, self._embed_key, self._norm_key = \
-                detect_layer_prefix(params, self.hf_cfg)
 
     # ------------------------------------------------------------------
     # Checkpoint access helpers
