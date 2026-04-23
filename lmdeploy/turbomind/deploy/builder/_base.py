@@ -456,8 +456,8 @@ class Builder:
 
         # --- GPU-invariant preparation -------------------------------------
         assert linear.data_format is not None, (
-            f"{name}: Linear.data_format must be populated by build_linear or "
-            f"by a fusion helper with explicit data_type.")
+            f"{name}: Linear.data_format must be populated by "
+            f"WeightFormatResolver.resolve or a fusion helper.")
         weight_cpp_dtype = linear.data_format.dtype
         fmt = linear.weight_format
 
