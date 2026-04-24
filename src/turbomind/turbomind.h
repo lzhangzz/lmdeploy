@@ -23,7 +23,8 @@ public:
 
     TurboMind(std::string model_dir, EngineConfig config, FFICtxFactory ffi_ctx_factory);
 
-    void CreateWeights(int index);
+    void          CreateContext(int index);
+    core::Module* CreateRoot(int index);
 
     /// Returns the root `Module` for GPU `index`'s weight tree.
     core::Module* root(int index);

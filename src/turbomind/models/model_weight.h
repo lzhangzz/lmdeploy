@@ -5,9 +5,25 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/norm_weight.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 #include <vector>
+
+namespace turbomind::core {
+
+struct ModelWeightConfig: ModuleConfig {
+    ModelWeightConfig(): ModuleConfig{"ModelWeight"} {}
+
+#define MODEL_WEIGHT_FIELDS(X) \
+    X(int, tp_size) \
+    X(int, tp_rank)
+
+    MODEL_WEIGHT_FIELDS(TM_MEMBER)
+    TM_FOR_EACH(ModelWeightConfig, MODEL_WEIGHT_FIELDS)
+
+#undef MODEL_WEIGHT_FIELDS
+};
+
+}  // namespace turbomind::core
 
 namespace turbomind {
 
@@ -20,18 +36,10 @@ public:
 
     ModelWeight() = default;
 
-    explicit ModelWeight(const EngineParam& engine_param);
+    explicit ModelWeight(const core::ModelWeightConfig& cfg);
 
     void                    prepare() override;
     bool                    verify(std::vector<std::string>& missing) override;
-
-    core::ContextGuard context() const
-    {
-        return core::ContextGuard{stream_, alloca_};
-    }
-
-    const core::Stream&    stream() const    { return stream_; }
-    const core::Allocator& allocator() const { return alloca_; }
 
     // --- X-macro field lists ---
 #define MODEL_WEIGHT_CHILDREN(X)         \
@@ -59,14 +67,11 @@ public:
     int         kv_head_num{};
     std::vector<int> layer_types;
 
-    // --- From EngineParam at construction ---
+    // --- From ModelWeightConfig at construction ---
     int         tp_size{};
     int         tp_rank{};
 
 private:
-    core::Stream    stream_{};
-    core::Allocator alloca_{};
-
     mutable std::vector<DecoderLayerWeight*> layers_cache_;
 };
 

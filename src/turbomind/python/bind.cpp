@@ -459,6 +459,7 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::ModuleListConfig>(m, "ModuleListConfig");
     bind_config<turbomind::core::NormConfig>(m, "NormConfig");
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
+    bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
 
     // tensor
     py::class_<Tensor, std::shared_ptr<Tensor>>(m, "Tensor")
@@ -695,7 +696,17 @@ PYBIND11_MODULE(_turbomind, m)
             "create_request",
             [](TurboMind* model) { return model->CreateRequest(); },
             py::call_guard<py::gil_scoped_release>())
-        .def("create_weights", &TurboMind::CreateWeights, py::call_guard<py::gil_scoped_release>(), "index"_a)
+        .def("create_context",
+             &TurboMind::CreateContext,
+             py::call_guard<py::gil_scoped_release>(),
+             "index"_a)
+        .def("create_root",
+             [](TurboMind* model, int index) -> ft::core::Module* {
+                 return model->CreateRoot(index);
+             },
+             py::return_value_policy::reference,
+             py::call_guard<py::gil_scoped_release>(),
+             "index"_a)
         .def(
             "root",
             [](TurboMind* model, int index) -> ft::core::Module* { return model->root(index); },

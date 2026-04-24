@@ -18,6 +18,7 @@
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -53,7 +54,7 @@ struct TurboMind::Impl {
     vector<int> global_rank_;
 
     // Weights & engine instances for the ranks
-    vector<shared_ptr<ModelWeight>> weights_;
+    vector<shared_ptr<ModelRoot>>   weights_;
     vector<shared_ptr<Context>>     contexts_;
     vector<Engine>                  engines_;
 
@@ -74,17 +75,17 @@ struct TurboMind::Impl {
         return std::make_unique<ModelRequest>(gateway_.get(),  //
                                               data_type_,
                                               engine_param_.session_len,
-                                              weights_[0]->vocab_size,
-                                              weights_[0]->hidden_units);
+                                              weights_[0]->text_model_ptr()->vocab_size,
+                                              weights_[0]->text_model_ptr()->hidden_units);
     }
 
-    void CreateWeights(int index)
+    core::Module* CreateRoot(int index)
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-
-        CreateContext(index);
-
-        weights_[index] = std::make_shared<ModelWeight>(engine_params_.at(index));
+        TM_CHECK(contexts_[index] != nullptr)
+            << "CreateContext(" << index << ") must run before CreateRoot";
+        weights_[index] = std::make_shared<ModelRoot>();
+        return weights_[index].get();
     }
 
     void ProcessWeights(int index)
@@ -277,13 +278,13 @@ void TurboMind::Impl::CreateEngine(int index)
     // create model
     LanguageModel model{param,
                         ctx,
-                        *weights_[index],
+                        *weights_[index]->text_model_ptr(),
                         phases_};
 
     // create engine
     engines_[index] = Engine{param,
                              std::move(model),
-                             *weights_[index],
+                             *weights_[index]->text_model_ptr(),
                              ctx,
                              *gateway_,
                              engine_param_.devices[index],
@@ -365,7 +366,7 @@ void TurboMind::Impl::WarmUp(int index)
             const auto                         max_bs = *std::max_element(bss.begin(), bss.end());
             Buffer_<int>                       input_ids(max_bs, kCPU);
             std::mt19937                       g{};
-            std::uniform_int_distribution<int> d{0, (int)weights_[index]->vocab_size - 1};
+            std::uniform_int_distribution<int> d{0, (int)weights_[index]->text_model_ptr()->vocab_size - 1};
             for (auto& x : input_ids) {
                 x = d(g);
             }
@@ -444,9 +445,14 @@ TurboMind::TurboMind(string model_dir, EngineConfig config, FFICtxFactory ffi_ct
 {
 }
 
-void TurboMind::CreateWeights(int index)
+void TurboMind::CreateContext(int index)
 {
-    return impl_->CreateWeights(index);
+    return impl_->CreateContext(index);
+}
+
+core::Module* TurboMind::CreateRoot(int index)
+{
+    return impl_->CreateRoot(index);
 }
 
 core::Module* TurboMind::root(int index)
@@ -456,9 +462,9 @@ core::Module* TurboMind::root(int index)
 
 std::pair<core::Stream, core::Allocator> TurboMind::weight_context(int index)
 {
-    auto& mw = impl_->weights_.at(index);
-    TM_CHECK(mw != nullptr);
-    return {mw->stream(), mw->allocator()};
+    auto& root = impl_->weights_.at(index);
+    TM_CHECK(root != nullptr);
+    return {root->stream(), root->allocator()};
 }
 
 void TurboMind::ProcessWeights(int index)

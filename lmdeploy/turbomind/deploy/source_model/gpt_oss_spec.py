@@ -106,8 +106,11 @@ class GptOssSpec(TextModelSpec):
 
     def model(self):
         ec = self.engine_cfg
+        cfg = _tm.ModelWeightConfig()
+        cfg.tp_size = ec.attn_tp_size * ec.attn_cp_size
         root = TextModelBuilder(
-            self._root_handles, self._contexts,
+            cfg, self._contexts,
+            root_handles=self._root_handles,
             tp=ec.attn_tp_size * ec.attn_cp_size,
             ranks=self._model_tp_ranks,
             vocab_size=self._vocab_size,

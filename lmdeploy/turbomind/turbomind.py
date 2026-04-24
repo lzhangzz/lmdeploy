@@ -190,11 +190,18 @@ class TurboMind:
         self._engine_created = True
 
     def _create_weight(self, model_comm):
-        """Allocate weight buffer, load params if from_workspace."""
+        """Create per-GPU Context + empty ModelRoot sentinel.
 
-        # create weight
+        Runs both C++ init steps sequentially per device, inside a
+        ThreadPoolExecutor so all ranks enter ``create_context``
+        concurrently and hit its ``h_global->Sync()`` barriers together.
+        ``create_root`` itself has no collectives, so it can follow
+        synchronously on each thread.
+        """
+
         def _create_weight_func(device_id):
-            model_comm.create_weights(device_id)
+            model_comm.create_context(device_id)
+            model_comm.create_root(device_id)
 
         with ThreadPoolExecutor(max_workers=self.gpu_count) as executor:
             futures = []

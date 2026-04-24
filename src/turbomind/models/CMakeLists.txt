@@ -12,6 +12,7 @@ add_library(models STATIC
         delta_net_weight.cc
         decoder_layer_weight.cc
         model_weight.cc
+        model_root.cc
         llama/LlamaLinear.cu
         llama/BlockManager.cc
         llama/BlockTrie.cc

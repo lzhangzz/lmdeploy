@@ -3,17 +3,15 @@
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/core/registry.h"
 
 namespace turbomind {
 
-ModelWeight::ModelWeight(const EngineParam& engine_param)
-    : tp_size(engine_param.attn_tp_size * engine_param.attn_cp_size)
-    , tp_rank(engine_param.attn_tp_rank)
+ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg)
+    : tp_size(cfg.tp_size)
+    , tp_rank(cfg.tp_rank)
 {
-    // Initialize GPU stream and allocator for tensor allocation during weight loading.
-    // The CUDA device is already set by CudaDeviceGuard in TurboMind::CreateWeights.
-    stream_ = core::Stream::create();
-    alloca_ = core::Allocator{stream_, /*use_default_pool=*/true};
+    // Stream/allocator moved to ModelRoot; nothing to allocate here.
 }
 
 void ModelWeight::prepare()
@@ -83,6 +81,20 @@ bool ModelWeight::verify(std::vector<std::string>& missing)
     }
     return missing.empty();
 }
+
+namespace {
+struct ModelWeightRegistrar {
+    ModelWeightRegistrar() {
+        core::ModuleRegistry::instance().register_type(
+            "ModelWeight",
+            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
+                return std::make_unique<ModelWeight>(
+                    static_cast<const core::ModelWeightConfig&>(cfg));
+            });
+    }
+};
+static ModelWeightRegistrar _model_weight_reg;
+}  // anonymous namespace
 
 TM_MODULE_METHODS(ModelWeight, MODEL_WEIGHT_CHILDREN, MODEL_WEIGHT_PARAMS)
 
