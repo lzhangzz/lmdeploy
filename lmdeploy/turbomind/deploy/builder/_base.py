@@ -335,7 +335,7 @@ class BuiltModule:
     __slots__ = ('handles',)
 
     def __init__(self, handles):
-        object.__setattr__(self, 'handles', handles)
+        self.handles = handles
 
     def __iter__(self):
         return iter(self.handles)
@@ -372,16 +372,18 @@ class Builder:
         ranks : list[int] | None
             Per-GPU TP ranks.
         """
-        # Use object.__setattr__ to avoid triggering our custom __setattr__
-        object.__setattr__(self, '_contexts', contexts)
-        object.__setattr__(self, '_tp', tp)
-        object.__setattr__(self, '_ranks', ranks)
-        object.__setattr__(self, 'config', config)
-        object.__setattr__(self, '_pending_linears', {})
-        object.__setattr__(self, '_pending_tensors', {})
-        object.__setattr__(self, '_pending_children', {})
-        object.__setattr__(self, '_handles', None)
+        # Fields read unconditionally by __setattr__ (e.g. the _built guard)
+        # must be initialized via object.__setattr__ so that subsequent normal
+        # assignment (self.x = y) can pass through __setattr__ without error.
         object.__setattr__(self, '_built', False)
+        self._contexts = contexts
+        self._tp = tp
+        self._ranks = ranks
+        self.config = config
+        self._pending_linears = {}
+        self._pending_tensors = {}
+        self._pending_children = {}
+        self._handles = None
 
     # ------------------------------------------------------------------
     # Child binding via attribute / item assignment
@@ -463,6 +465,7 @@ class Builder:
 
         self._create_handles()
 
+        # Bypass the frozen-after-build guard for the state transition itself
         object.__setattr__(self, '_built', True)
 
         # Drain staged linears
@@ -487,7 +490,7 @@ class Builder:
                 cfg = self._cfg_for_rank(i)
                 handle = _tm.create_module(cfg)
                 handles.append(handle)
-        object.__setattr__(self, '_handles', handles)
+        self._handles = handles
 
     def _cfg_for_rank(self, gpu_idx: int):
         """Clone config and set tp_rank if tp > 1."""
@@ -653,9 +656,9 @@ class TextModelBuilder(Builder):
                  tp, ranks, vocab_size, data_type):
         # Delegate to Builder.__init__ with config=None (no create_module).
         super().__init__(config=None, contexts=contexts, tp=tp, ranks=ranks)
-        object.__setattr__(self, '_vocab_size', vocab_size)
-        object.__setattr__(self, '_data_type', data_type)
-        object.__setattr__(self, '_handles', handles)
+        self._vocab_size = vocab_size
+        self._data_type = data_type
+        self._handles = handles
 
     def _create_handles(self):
         """Root handles already exist — no-op."""
