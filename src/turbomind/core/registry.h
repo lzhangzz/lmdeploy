@@ -23,6 +23,17 @@ public:
     /// Duplicate names overwrite silently.
     void register_type(const std::string& name, Factory factory);
 
+    /// Convenience overload: derive the factory lambda from the concrete types.
+    /// `CfgT` defaults to `ModuleConfig` so callers that accept the base config
+    /// need not specify it explicitly.
+    template<typename T, typename CfgT = ModuleConfig>
+    void register_type(const std::string& name)
+    {
+        register_type(name, [](const ModuleConfig& cfg) -> std::unique_ptr<Module> {
+            return std::make_unique<T>(static_cast<const CfgT&>(cfg));
+        });
+    }
+
     /// Create a module instance by type name and typed config.
     /// Returns nullptr if type name is not registered.
     std::unique_ptr<Module> create(const std::string& type,
@@ -37,3 +48,12 @@ private:
 };
 
 }  // namespace turbomind::core
+
+#define TM_MODULE_REGISTER(ModuleClass, ConfigType)                              \
+    namespace {                                                                   \
+    static const bool _tm_module_registered_ = [] {                              \
+        ::turbomind::core::ModuleRegistry::instance()                             \
+            .register_type<ModuleClass, ConfigType>(#ModuleClass);                \
+        return true;                                                              \
+    }();                                                                          \
+    }
