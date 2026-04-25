@@ -152,9 +152,9 @@ With:
         return PackedTensor(tensor, None, None)
 ```
 
-- [ ] **Step 5: Add FP8Format.pack override (after line 352)**
+- [ ] **Step 5: Add FP8Format.pack override (after line 368)**
 
-FP8Format currently inherits identity `pack()` but has `weight_dtype = TYPE_FP8_E4M3`. Its normalize converts float8 to uint8 (view), and pack should remain identity while surfacing the alloc_dtype override. Insert after line 352 (after `dequant`):
+FP8Format currently inherits identity `pack()` but has `weight_dtype = TYPE_FP8_E4M3`. Its normalize converts float8 to uint8 (view), and pack should remain identity while surfacing the alloc_dtype override. Insert after line 368 (end of `dequant`), before the blank line that precedes MXFP4Format:
 
 ```python
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
