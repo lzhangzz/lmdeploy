@@ -424,12 +424,88 @@ class Builder:
     def _commit_linear(self, name: str, linear: Linear,
                        split_side: SplitSide | None = None,
                        model_dtype=None):
-        """Stage a ``Linear`` commit under ``name``.  Applied during
-        ``build()`` in ``_apply_linear``.
+        """Create standalone LinearWeight modules and copy tensor data.
+
+        Creates per-GPU LinearWeight modules via ``_tm.create_module``
+        at commit time.  Attachment to the parent module is deferred to
+        ``build()`` via ``_apply_child``.
         """
         assert not self._built, (
             f"{type(self).__name__} is built; commit '{name}' rejected")
-        self._pending_linears[name] = (linear, split_side, model_dtype)
+
+        w = linear.tensors.get('weight')
+        if w is None:
+            return
+
+        # --- GPU-invariant preparation -------------------------------------
+        assert linear.data_format is not None, (
+            f"{name}: Linear.data_format must be populated by "
+            f"WeightFormatResolver.resolve or a fusion helper.")
+        weight_cpp_dtype = linear.data_format.dtype
+        fmt = linear.weight_format
+
+        tp = self._tp if split_side else 1
+        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
+
+        in_dim, out_dim = w.shape[0], w.shape[-1]
+        if split_side == SplitSide.OUTPUT:
+            out_dim //= tp
+        elif split_side == SplitSide.INPUT:
+            in_dim //= tp
+
+        compute_dtype = (model_dtype if model_dtype is not None
+                         else _infer_compute_dtype(linear))
+        lin_cfg = _tm.LinearConfig()
+        lin_cfg.input_dim  = in_dim
+        lin_cfg.output_dim = out_dim
+        lin_cfg.data_type  = compute_dtype or _tm.DataType.TYPE_INVALID
+        lin_cfg.format     = linear.data_format
+        lin_cfg.has_bias   = 'bias' in linear.tensors
+
+        tensors = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
+        is_quantized = linear.data_format.is_quantized()
+
+        kind_split_dims = {
+            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
+                  else split_dim
+            for kind in tensors
+        }
+
+        if tp > 1 and split_dim is not None:
+            for kind, tensor in tensors.items():
+                kind_split_dim = kind_split_dims[kind]
+                if kind_split_dim is not None:
+                    d = tensor.shape[kind_split_dim]
+                    assert d % tp == 0, (
+                        f"TP split: {name}.{kind} dim {kind_split_dim} "
+                        f"has size {d}, not divisible by tp={tp}.")
+
+        # --- Per-GPU: standalone creation + tensor copy --------------------
+        handles = []
+        for i, ctx in enumerate(self._contexts):
+            with ctx:
+                rank = self._rank_for(i) if tp > 1 else 0
+
+                mod = _tm.create_module(lin_cfg)
+
+                for kind, tensor in tensors.items():
+                    shard = _shard(tensor, kind_split_dims[kind], tp, rank)
+
+                    if kind == 'weight' and is_quantized:
+                        alloc_shape, alloc_dtype = ([in_dim, out_dim],
+                                                    weight_cpp_dtype)
+                    elif kind == 'weight' and model_dtype is not None:
+                        alloc_shape, alloc_dtype = None, model_dtype
+                    else:
+                        alloc_shape, alloc_dtype = None, None
+
+                    _copy_shard_to_param(mod, kind, shard,
+                                         alloc_shape=alloc_shape,
+                                         alloc_dtype=alloc_dtype)
+
+                handles.append(mod)
+
+        self._commit_child(name, handles)
 
     def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
                        split_side: SplitSide | None = None, *,
