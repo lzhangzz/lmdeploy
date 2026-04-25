@@ -197,14 +197,9 @@ class FfnBuilder(Builder):
 
         self.config.fuse_silu = fused_silu
 
-        model_dtype = self.config.data_type
         if fused is not None:
-            self._add_linear('w1w3', fused, SplitSide.OUTPUT,
-                                model_dtype=model_dtype)
+            self._add_linear('w1w3', fused, SplitSide.OUTPUT)
         else:
-            self._add_linear('w1', w1, SplitSide.OUTPUT,
-                                model_dtype=model_dtype)
-            self._add_linear('w3', w3, SplitSide.OUTPUT,
-                                model_dtype=model_dtype)
-        self._add_linear('w2', w2, SplitSide.INPUT,
-                            model_dtype=model_dtype)
+            self._add_linear('w1', w1, SplitSide.OUTPUT)
+            self._add_linear('w3', w3, SplitSide.OUTPUT)
+        self._add_linear('w2', w2, SplitSide.INPUT)

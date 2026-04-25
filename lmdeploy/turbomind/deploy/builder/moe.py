@@ -12,10 +12,9 @@ from ._base import Builder, SplitSide
 class MoeBuilder(Builder):
     """MoE weight loading builder."""
 
-    def add_gate(self, name, linear, model_dtype=None):
+    def add_gate(self, name, linear):
         """Commit a gate linear (broadcast, no split)."""
-        self._add_linear(name, linear, split_side=None,
-                            model_dtype=model_dtype)
+        self._add_linear(name, linear, split_side=None)
 
     def add_param(self, name, tensor, split_side=None):
         """Commit a non-expert MoE parameter."""

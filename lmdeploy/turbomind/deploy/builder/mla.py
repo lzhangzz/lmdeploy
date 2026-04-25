@@ -90,13 +90,11 @@ class MLABuilder(Builder):
         q_b_proj, wo = fold_kv_b(q_b_proj, kv_b_proj, wo, cfg=self.config)
         wo = pad_wo_input(wo, cfg=self.config)
 
-        model_dtype = self.config.data_type
         for name, lin, side in [
             ("q_a_proj", q_a_proj, None),
             ("q_b_proj", q_b_proj, SplitSide.OUTPUT),
             ("kv_a_proj", kv_a_proj, None),
             ("wo", wo, SplitSide.INPUT),
         ]:
-            self._add_linear(name, lin, split_side=side,
-                                model_dtype=model_dtype)
+            self._add_linear(name, lin, split_side=side)
 

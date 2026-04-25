@@ -120,13 +120,11 @@ class AttentionBuilder(Builder):
         # config so that C++ module creation sees the correct head count.
         self.config.kv_head_num = _infer_heads(k, self.config.head_dim)
         merged = fuse_qkv(q, k, v, tp=self._tp, gate=gate)
-        self._add_linear('w_qkv', merged, SplitSide.OUTPUT,
-                            model_dtype=self.config.data_type)
+        self._add_linear('w_qkv', merged, SplitSide.OUTPUT)
 
     def add_o_proj(self, o):
         """Shard along input dim, commit."""
-        self._add_linear('wo', o, SplitSide.INPUT,
-                            model_dtype=self.config.data_type)
+        self._add_linear('wo', o, SplitSide.INPUT)
 
     def add_param(self, name, tensor):
         """Commit a direct parameter. Builder determines split side."""

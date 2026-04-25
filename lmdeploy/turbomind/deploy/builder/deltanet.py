@@ -126,11 +126,9 @@ class DeltaNetBuilder(Builder):
         fused = fuse_gdn(group["q"], group["k"], group["v"],
                          group["z"], group["b"], group["a"],
                          tp=self._tp)
-        self._add_linear("in_proj_all", fused, SplitSide.OUTPUT,
-                            model_dtype=self.config.data_type)
+        self._add_linear("in_proj_all", fused, SplitSide.OUTPUT)
         if out_proj is not None:
-            self._add_linear("out_proj", out_proj, SplitSide.INPUT,
-                                model_dtype=self.config.data_type)
+            self._add_linear("out_proj", out_proj, SplitSide.INPUT)
 
     def add_scalar_params(self, a_log=None, dt_bias=None):
         """Commit A_log and dt_bias as OUTPUT-split tensors."""
