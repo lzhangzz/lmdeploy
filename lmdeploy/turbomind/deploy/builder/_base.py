@@ -440,7 +440,7 @@ class Builder:
         assert linear.data_format is not None, (
             f"{name}: Linear.data_format must be populated by "
             f"WeightFormatResolver.resolve or a fusion helper.")
-        weight_cpp_dtype = linear.data_format.dtype
+
         fmt = linear.weight_format
 
         tp = self._tp if split_side else 1
@@ -461,8 +461,8 @@ class Builder:
         lin_cfg.format     = linear.data_format
         lin_cfg.has_bias   = 'bias' in linear.tensors
 
-        tensors = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
-        is_quantized = linear.data_format.is_quantized()
+        packed = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
+        tensors = {k: p.tensor for k, p in packed.items()}
 
         kind_split_dims = {
             kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
@@ -490,13 +490,11 @@ class Builder:
                 for kind, tensor in tensors.items():
                     shard = _shard(tensor, kind_split_dims[kind], tp, rank)
 
-                    if kind == 'weight' and is_quantized:
-                        alloc_shape, alloc_dtype = ([in_dim, out_dim],
-                                                    weight_cpp_dtype)
-                    elif kind == 'weight' and model_dtype is not None:
-                        alloc_shape, alloc_dtype = None, model_dtype
-                    else:
-                        alloc_shape, alloc_dtype = None, None
+                    alloc_shape, alloc_dtype = packed[kind].alloc_shape, \
+                                               packed[kind].alloc_dtype
+                    if alloc_dtype is None and kind == 'weight' \
+                            and model_dtype is not None:
+                        alloc_dtype = model_dtype
 
                     _copy_shard_to_param(mod, kind, shard,
                                          alloc_shape=alloc_shape,
