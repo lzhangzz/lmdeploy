@@ -598,11 +598,10 @@ class TextModelBuilder(Builder):
     """
 
     def __init__(self, config, contexts, *, root_handles,
-                 tp, ranks, vocab_size, data_type):
+                 tp, ranks, vocab_size):
         super().__init__(config=config, contexts=contexts, tp=tp, ranks=ranks)
         self._root_handles = root_handles
         self._vocab_size = vocab_size
-        self._data_type = data_type
 
     def build(self) -> BuiltModule:
         """Create ModelWeight via _tm.create_module (via super), then
@@ -623,8 +622,7 @@ class TextModelBuilder(Builder):
         embedding lookup never indexes past ``vocab - 1``.
         """
         self._add_tensor('tok_embeddings', tensor,
-                            split_side=SplitSide.OUTPUT,
-                            model_dtype=self._data_type)
+                            split_side=SplitSide.OUTPUT)
 
     def add_lm_head(self, linear):
         """Pad output dim to ``round_up(vocab_size, tp)`` and commit to the
@@ -645,5 +643,4 @@ class TextModelBuilder(Builder):
             weight_format=linear.weight_format,
             data_format=linear.data_format)
         self._add_linear('output', padded,
-                            split_side=SplitSide.OUTPUT,
-                            model_dtype=self._data_type)
+                            split_side=SplitSide.OUTPUT)
