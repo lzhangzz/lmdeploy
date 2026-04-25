@@ -566,29 +566,35 @@ m.add_gate('gate', self._linear(f'{pfx}.gate'))
 Run: `ninja` from the `build` directory
 Expected: Success
 
-- [ ] **Step 2: Run model test — dense (Qwen3)**
+- [ ] **Step 2: Find model paths and cache dirs**
 
-```bash
-python scripts/test_turbomind_model.py --model qwen3 --tp 1
-```
+Use the `list_models` and `get_model_cache_path` MCP tools to find available Qwen3 and Qwen3-MoE models and their cache directories.
 
-Expected: model loads and produces meaningful text (at least 128 tokens, non-gibberish)
-
-- [ ] **Step 3: Run model test — MoE (Qwen3-MoE)**
-
-```bash
-python scripts/test_turbomind_model.py --model qwen3-moe --tp 1
-```
-
-Expected: model loads and produces meaningful text (at least 128 tokens, non-gibberish)
-
-- [ ] **Step 4: Verify no remaining `model_dtype` references**
+- [ ] **Step 3: Verify no remaining `model_dtype` references**
 
 ```bash
 grep -rn "model_dtype" lmdeploy/turbomind/deploy/ --include="*.py"
 ```
 
-Expected: zero matches
+Expected: zero matches. If any remain (e.g., in comment or unrelated), verify they are not parameter-passing usages.
+
+- [ ] **Step 4: Run model test — dense (e.g., Qwen3) with TP=1**
+
+Check `get_gpu_usage` for an empty GPU first, then:
+
+```bash
+python scripts/test_turbomind_model.py <model_path> <cache_dir> 1 <gpu_id>
+```
+
+Note: `<model_path>`, `<cache_dir>`, and `<gpu_id>` come from Step 2 and `get_gpu_usage`.
+
+Expected: model loads and produces meaningful text (at least 128 tokens, non-gibberish). Check the `--- response begin ---` section in stdout.
+
+- [ ] **Step 5: Run model test — MoE (e.g., Qwen3-MoE) with TP=1**
+
+Same workflow as Step 4 with a MoE variant model.
+
+Expected: model loads and produces meaningful text (at least 128 tokens, non-gibberish).
 
 ---
 
