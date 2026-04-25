@@ -15,6 +15,7 @@ struct ModelWeightConfig: ModuleConfig {
 
 #define MODEL_WEIGHT_FIELDS(X) \
     X(int, tp_size) \
+    X(DataType, data_type) \
     X(int, tp_rank)
 
     MODEL_WEIGHT_FIELDS(TM_MEMBER)

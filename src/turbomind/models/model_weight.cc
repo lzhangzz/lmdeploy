@@ -9,6 +9,7 @@ namespace turbomind {
 
 ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg)
     : tp_size(cfg.tp_size)
+    , data_type(cfg.data_type)
     , tp_rank(cfg.tp_rank)
 {
     // Stream/allocator moved to ModelRoot; nothing to allocate here.
