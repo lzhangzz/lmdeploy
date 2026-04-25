@@ -24,21 +24,8 @@ NormWeight::NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType de
 }
 
 NormWeight::NormWeight(const core::NormConfig& cfg)
+    : shape_{cfg.dim}, dtype_{cfg.data_type}, norm_eps_{cfg.norm_eps}
 {
-    configure(cfg.dim, cfg.data_type);
-    norm_eps_ = cfg.norm_eps;
-}
-
-void NormWeight::configure(int dim, DataType dtype)
-{
-    shape_ = {dim};
-    dtype_ = dtype;
-}
-
-void NormWeight::configure(std::vector<ssize_t> shape, DataType dtype)
-{
-    shape_ = std::move(shape);
-    dtype_ = dtype;
 }
 
 void NormWeight::prepare()

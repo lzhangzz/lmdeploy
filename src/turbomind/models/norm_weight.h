@@ -37,12 +37,6 @@ public:
     /// Construct with arbitrary shape.
     NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType device = kDEVICE);
 
-    /// Configure dimensions (deferred — no allocation).
-    void configure(int dim, DataType dtype);
-
-    /// Configure with arbitrary shape (deferred — no allocation).
-    void configure(std::vector<ssize_t> shape, DataType dtype);
-
     /// Post-load: cast weight to configured dtype if needed.
     void prepare() override;
 
