@@ -24,7 +24,7 @@ Exports:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import torch
 from torch import Tensor
@@ -32,6 +32,12 @@ from torch import Tensor
 import _turbomind as _tm
 
 from .linear import Linear
+
+
+class PackedTensor(NamedTuple):
+    tensor:      torch.Tensor
+    alloc_shape: list[int] | None       # None = inherit from packed tensor
+    alloc_dtype: "_tm.DataType | None"  # None = inherit from packed tensor
 
 
 # ---------------------------------------------------------------------------
