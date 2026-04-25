@@ -5,6 +5,7 @@
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 #include <vector>
 
@@ -15,8 +16,9 @@ struct ModelWeightConfig: ModuleConfig {
 
 #define MODEL_WEIGHT_FIELDS(X) \
     X(int, tp_size) \
+    X(int, tp_rank) \
     X(DataType, data_type) \
-    X(int, tp_rank)
+    X(int, hidden_units)
 
     MODEL_WEIGHT_FIELDS(TM_MEMBER)
     TM_FOR_EACH(ModelWeightConfig, MODEL_WEIGHT_FIELDS)

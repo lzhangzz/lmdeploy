@@ -143,6 +143,7 @@ class Qwen3_5Spec(TextModelSpec):
         cfg = _tm.ModelWeightConfig()
         cfg.tp_size = ec.attn_tp_size * ec.attn_cp_size
         cfg.data_type = self._dtype
+        cfg.hidden_units = self._hidden_units
         root = TextModelBuilder(
             cfg, self._contexts,
             root_handles=self._root_handles,

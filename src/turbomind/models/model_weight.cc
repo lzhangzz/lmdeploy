@@ -9,11 +9,10 @@ namespace turbomind {
 
 ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg)
     : tp_size(cfg.tp_size)
-    , data_type(cfg.data_type)
     , tp_rank(cfg.tp_rank)
-{
-    // Stream/allocator moved to ModelRoot; nothing to allocate here.
-}
+    , data_type(cfg.data_type)
+    , hidden_units(cfg.hidden_units)
+{}
 
 void ModelWeight::prepare()
 {
@@ -32,10 +31,8 @@ void ModelWeight::prepare()
         }
     }
     TM_CHECK(attn_layer) << "No full-attention layer found";
-    data_type    = attn_layer->attention->data_type;
-    hidden_units = attn_layer->attention->hidden_dim;
-    head_dim     = attn_layer->attention->head_dim;
-    kv_head_num  = attn_layer->attention->kv_head_num;
+    head_dim    = attn_layer->attention->head_dim;
+    kv_head_num = attn_layer->attention->kv_head_num;
 
     vocab_size        = tok_embeddings.shape(0);
     embedding_size    = vocab_size;
@@ -46,6 +43,8 @@ void ModelWeight::prepare()
     for (int i = 0; i < num_layer; ++i) {
         layer_types[i] = layer(i)->linear_attn ? 1 : 0;
     }
+
+    EnsureFloatDtype(tok_embeddings, data_type);
 }
 
 DecoderLayerWeight* ModelWeight::layer(int i) const
