@@ -188,7 +188,7 @@ class GptOssSpec(TextModelSpec):
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            experts[str(e)] = self._packed_moe_ffn(
+            experts[e] = self._packed_moe_ffn(
                 pfx, e, self._expert_inter_size)
         m.experts = experts.build()
         return m.build()
@@ -202,7 +202,7 @@ class GptOssSpec(TextModelSpec):
             d.ffn_norm = self.norm(self._get(f'{pfx}.{i}.post_attention_layernorm.weight'))
             if self.num_experts(i) > 0:
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d.build()
+            layers[i] = d.build()
         return layers.build()
 
     def _packed_moe_ffn(self, mlp_pfx, expert_idx, inter_size):

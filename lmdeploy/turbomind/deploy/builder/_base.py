@@ -387,7 +387,7 @@ class Builder:
         self._handles = None
 
     # ------------------------------------------------------------------
-    # Child binding via attribute / item assignment
+    # Child binding via attribute assignment
     # ------------------------------------------------------------------
 
     def __setattr__(self, name: str, value):
@@ -403,17 +403,6 @@ class Builder:
             self._pending_children[name] = value.handles
             return
         object.__setattr__(self, name, value)
-
-    def __setitem__(self, index, value):
-        if self._built:
-            raise RuntimeError(
-                f"{type(self).__name__} is built; cannot set index {index}")
-        if isinstance(value, Builder):
-            raise TypeError(
-                f"{type(self).__name__}[{index}]: call .build() first")
-        assert isinstance(value, BuiltModule), (
-            f"{type(self).__name__}[{index}] requires a BuiltModule")
-        self._pending_children[str(index)] = value.handles
 
     # ------------------------------------------------------------------
     # Internal helpers

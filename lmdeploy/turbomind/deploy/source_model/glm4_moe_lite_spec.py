@@ -230,7 +230,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self._n_experts):
-            experts[str(e)] = self.ffn(
+            experts[e] = self.ffn(
                 f'{pfx}.experts.{e}', layer,
                 inter_size=self._expert_inter_size, fused_moe=True)
         m.experts = experts.build()
@@ -248,5 +248,5 @@ class Glm4MoeLiteSpec(TextModelSpec):
             else:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp.shared_experts', i)
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d.build()
+            layers[i] = d.build()
         return layers.build()

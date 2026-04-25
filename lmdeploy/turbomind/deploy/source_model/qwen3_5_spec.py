@@ -272,7 +272,7 @@ class Qwen3_5Spec(TextModelSpec):
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):
-            experts[str(e)] = self._moe_expert_ffn(
+            experts[e] = self._moe_expert_ffn(
                 pfx, layer, e, self._expert_inter_size)
 
         m.experts = experts.build()
@@ -321,5 +321,5 @@ class Qwen3_5Spec(TextModelSpec):
                 d.moe_ffn = self.moe(f'{pfx}.{i}.mlp', i)
             else:
                 d.feed_forward = self.ffn(f'{pfx}.{i}.mlp', i)
-            layers[str(i)] = d.build()
+            layers[i] = d.build()
         return layers.build()
