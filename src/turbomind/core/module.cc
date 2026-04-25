@@ -188,17 +188,6 @@ int ModuleList::size() const
 // ModuleList registry
 // ======================================================================
 
-namespace {
-struct ModuleListRegistrar {
-    ModuleListRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "ModuleList",
-            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
-                return std::make_unique<core::ModuleList>();
-            });
-    }
-};
-static ModuleListRegistrar _module_list_reg;
-} // anonymous namespace
+TM_MODULE_REGISTER(ModuleList, ModuleListConfig);
 
 }  // namespace turbomind::core
