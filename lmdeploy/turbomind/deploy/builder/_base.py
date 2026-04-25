@@ -492,6 +492,10 @@ class Builder:
 
                     alloc_shape, alloc_dtype = packed[kind].alloc_shape, \
                                                packed[kind].alloc_dtype
+                    if alloc_shape is not None and split_dim is not None \
+                            and tp > 1:
+                        alloc_shape = list(alloc_shape)
+                        alloc_shape[split_dim] //= tp
                     if alloc_dtype is None and kind == 'weight' \
                             and model_dtype is not None:
                         alloc_dtype = model_dtype
