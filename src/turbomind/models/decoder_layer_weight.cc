@@ -11,6 +11,8 @@
 
 namespace turbomind {
 
+DecoderLayerWeight::DecoderLayerWeight(const core::ModuleConfig&) {}
+
 DecoderLayerWeight::~DecoderLayerWeight() = default;
 
 bool DecoderLayerWeight::verify(std::vector<std::string>& missing)

@@ -27,6 +27,7 @@ public:
     const char* type() const override { return "DecoderLayerWeight"; }
 
     DecoderLayerWeight() = default;
+    DecoderLayerWeight(const core::ModuleConfig&);
 
     ~DecoderLayerWeight() override;  // defined in .cc where child types are complete
 
