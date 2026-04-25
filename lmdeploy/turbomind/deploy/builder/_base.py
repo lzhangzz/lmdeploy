@@ -443,6 +443,20 @@ class Builder:
             self._pending_tensors[name] = (tensor, split_side, model_dtype)
 
     # ------------------------------------------------------------------
+    # Commit helpers
+    # ------------------------------------------------------------------
+
+    def _commit_child(self, name: str, handles: list):
+        """Stage pre-created per-GPU ``Module*`` handles under ``name``.
+        Applied during ``build()`` in ``_apply_child``.
+        """
+        assert not self._built, (
+            f"{type(self).__name__} is built; commit '{name}' rejected")
+        assert name not in self._pending_children, (
+            f"{type(self).__name__}: duplicate child commit '{name}'")
+        self._pending_children[name] = handles
+
+    # ------------------------------------------------------------------
     # build() — create handles, drain staged state, return BuiltModule
     # ------------------------------------------------------------------
 
@@ -490,6 +504,13 @@ class Builder:
             cfg.tp_rank = self._ranks[gpu_idx]
             return cfg
         return self.config
+
+    def _apply_child(self, name: str, handles: list):
+        """Attach pre-created per-GPU child handles to parent handles."""
+        for i, (parent_h, child_h) in enumerate(
+                zip(self._handles, handles)):
+            with self._contexts[i]:
+                parent_h.add_child_raw(name, child_h)
 
     def _attach_handles(self, name: str, child_handles: list):
         """Attach a child's handles to this module's handles."""
