@@ -359,7 +359,7 @@ class Builder:
     """
 
     def __init__(self, config, contexts, tp=1, ranks=None):
-        """Initialise the builder with staging dicts (no C++ creation yet).
+        """Initialise the builder with staging dicts.
 
         Parameters
         ----------
@@ -381,7 +381,6 @@ class Builder:
         self._tp = tp
         self._ranks = ranks
         self.config = config
-        self._pending_linears = {}
         self._pending_tensors = {}
         self._pending_children = {}
         self._handles = None
@@ -549,17 +548,13 @@ class Builder:
         # True is not BuiltModule; falls through to plain assignment.
         self._built = True
 
-        # Drain staged linears
-        for name, (linear, split_side, model_dtype) in self._pending_linears.items():
-            self._apply_linear(name, linear, split_side, model_dtype)
+        # Drain staged children (linear weights + sub-builder output)
+        for name, handles in self._pending_children.items():
+            self._apply_child(name, handles)
 
         # Drain staged tensors
         for name, (tensor, split_side, model_dtype) in self._pending_tensors.items():
             self._apply_tensor(name, tensor, split_side, model_dtype)
-
-        # Drain staged children
-        for name, child_handles in self._pending_children.items():
-            self._attach_handles(name, child_handles)
 
         return BuiltModule(self._handles)
 
@@ -588,114 +583,9 @@ class Builder:
             with self._contexts[i]:
                 parent_h.add_child_raw(name, child_h)
 
-    def _attach_handles(self, name: str, child_handles: list):
-        """Attach a child's handles to this module's handles."""
-        for i, (parent_h, child_h) in enumerate(
-                zip(self._handles, child_handles)):
-            with self._contexts[i]:
-                parent_h.add_child_raw(name, child_h)
-
     # ------------------------------------------------------------------
     # Apply methods (GPU-invariant prep + per-GPU commit)
     # ------------------------------------------------------------------
-
-    def _apply_linear(self, name: str, linear: Linear,
-                      split_side: SplitSide | None = None,
-                      model_dtype=None):
-        """Commit a ``Linear`` bundle to a named child on all GPUs.
-
-        Creates a ``LinearWeight`` child via ``handle.create_child`` using
-        a ``LinearConfig`` derived from the linear's dimensions and compute
-        dtype.  Tensor data is sharded per rank (for TP) and copied to the
-        C++ slots via ``_copy_shard_to_param``.
-
-        Parameters
-        ----------
-        name : str
-            Child module name (e.g. ``"w_qkv"``).
-        linear : Linear
-            The linear bundle to commit.
-        split_side : SplitSide | None
-            TP split semantics.  ``None`` means broadcast (no split).
-        model_dtype : C++ DataType value | None
-            The model's configured compute dtype.
-        """
-        w = linear.tensors.get('weight')
-        if w is None:
-            return
-
-        # --- GPU-invariant preparation -------------------------------------
-        assert linear.data_format is not None, (
-            f"{name}: Linear.data_format must be populated by "
-            f"WeightFormatResolver.resolve or a fusion helper.")
-        weight_cpp_dtype = linear.data_format.dtype
-        fmt = linear.weight_format
-
-        tp = self._tp if split_side else 1
-        split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
-
-        in_dim, out_dim = w.shape[0], w.shape[-1]
-        if split_side == SplitSide.OUTPUT:
-            out_dim //= tp
-        elif split_side == SplitSide.INPUT:
-            in_dim //= tp
-
-        compute_dtype = (model_dtype if model_dtype is not None
-                         else _infer_compute_dtype(linear))
-        lin_cfg = _tm.LinearConfig()
-        lin_cfg.input_dim  = in_dim
-        lin_cfg.output_dim = out_dim
-        lin_cfg.data_type  = compute_dtype or _tm.DataType.TYPE_INVALID
-        lin_cfg.format     = linear.data_format
-        lin_cfg.has_bias   = 'bias' in linear.tensors
-
-        tensors = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
-        is_quantized = linear.data_format.is_quantized()
-
-        kind_split_dims = {
-            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT)
-                  else split_dim
-            for kind in tensors
-        }
-
-        # Uniform TP-split validation: every kind split along some axis
-        # must have that axis evenly divisible by tp.  Covers weight,
-        # scales, zeros, bias; covers both INPUT and OUTPUT split_side;
-        # respects the bias-on-INPUT no-split rule.  Runs after the
-        # packer hoist so it sees the tensors that will actually be
-        # split.
-        if tp > 1 and split_dim is not None:
-            for kind, tensor in tensors.items():
-                kind_split_dim = kind_split_dims[kind]
-                if kind_split_dim is not None:
-                    d = tensor.shape[kind_split_dim]
-                    assert d % tp == 0, (
-                        f"TP split: {name}.{kind} dim {kind_split_dim} "
-                        f"has size {d}, not divisible by tp={tp}.")
-
-        # --- Per-GPU commit ------------------------------------------------
-        for i, handle in enumerate(self._handles):
-            with self._contexts[i]:
-                rank = self._rank_for(i) if tp > 1 else 0
-
-                # get-or-create: create_child fires only on the first commit for this name
-                linear_mod = (handle.child(name)
-                              or handle.create_child(name, lin_cfg))
-
-                for kind, tensor in tensors.items():
-                    shard = _shard(tensor, kind_split_dims[kind], tp, rank)
-
-                    if kind == 'weight' and is_quantized:
-                        alloc_shape, alloc_dtype = ([in_dim, out_dim],
-                                                    weight_cpp_dtype)
-                    elif kind == 'weight' and model_dtype is not None:
-                        alloc_shape, alloc_dtype = None, model_dtype
-                    else:
-                        alloc_shape, alloc_dtype = None, None
-
-                    _copy_shard_to_param(linear_mod, kind, shard,
-                                         alloc_shape=alloc_shape,
-                                         alloc_dtype=alloc_dtype)
 
     def _apply_tensor(self, name: str, tensor: torch.Tensor,
                       split_side: SplitSide | None = None,
