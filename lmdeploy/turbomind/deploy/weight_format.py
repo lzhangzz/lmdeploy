@@ -139,8 +139,8 @@ class WeightFormat(ABC):
     @abstractmethod
     def normalize(self, tensor: Tensor, kind: str) -> Tensor: ...
 
-    def pack(self, tensor: Tensor, kind: str) -> Tensor:
-        return tensor
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
+        return PackedTensor(tensor, None, None)
 
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         raise NotImplementedError(
