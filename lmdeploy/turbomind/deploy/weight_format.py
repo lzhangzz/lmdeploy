@@ -229,10 +229,11 @@ class AWQFormat(WeightFormat):
             x = x.to(torch.float16)
         return x
 
-    def pack(self, tensor: Tensor, kind: str) -> Tensor:
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         if kind == "weight" and tensor.dtype == torch.uint8:
-            return pack_u4_row(tensor)
-        return tensor
+            return PackedTensor(pack_u4_row(tensor),
+                                list(tensor.shape), self.weight_dtype)
+        return PackedTensor(tensor, None, None)
 
     def dequant(self, tensors, data_type):
         from lmdeploy.pytorch.backends.default.awq_modules import dequantize_gemm
@@ -283,10 +284,11 @@ class GPTQFormat(WeightFormat):
             x = x.to(torch.float16)
         return x
 
-    def pack(self, tensor: Tensor, kind: str) -> Tensor:
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         if kind == "weight" and tensor.dtype == torch.uint8:
-            return pack_u4_row(tensor)
-        return tensor
+            return PackedTensor(pack_u4_row(tensor),
+                                list(tensor.shape), self.weight_dtype)
+        return PackedTensor(tensor, None, None)
 
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         return _zeros_int4_symmetric(scales)
@@ -322,10 +324,11 @@ class CompressedTensorFormat(WeightFormat):
             x = x.t()
         return x
 
-    def pack(self, tensor: Tensor, kind: str) -> Tensor:
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         if kind == "weight" and tensor.dtype == torch.uint8:
-            return pack_u4_row(tensor)
-        return tensor
+            return PackedTensor(pack_u4_row(tensor),
+                                list(tensor.shape), self.weight_dtype)
+        return PackedTensor(tensor, None, None)
 
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         return _zeros_int4_symmetric(scales)
@@ -373,6 +376,11 @@ class FP8Format(WeightFormat):
             result["bias"] = tensors["bias"]
         return result
 
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
+        if kind == "weight":
+            return PackedTensor(tensor, list(tensor.shape), self.weight_dtype)
+        return PackedTensor(tensor, None, None)
+
 
 class MXFP4Format(WeightFormat):
     name           = "mxfp4"
@@ -398,10 +406,11 @@ class MXFP4Format(WeightFormat):
             x = x.t()
         return x
 
-    def pack(self, tensor: Tensor, kind: str) -> Tensor:
+    def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         if kind == "weight" and tensor.dtype == torch.uint8:
-            return pack_u4_row(tensor)
-        return tensor
+            return PackedTensor(pack_u4_row(tensor),
+                                list(tensor.shape), self.weight_dtype)
+        return PackedTensor(tensor, None, None)
 
 
 # ---------------------------------------------------------------------------
