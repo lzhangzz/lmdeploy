@@ -30,19 +30,7 @@ void DeltaNetWeight::prepare()
     EnsureFloatDtype(conv1d, data_type);
 }
 
-namespace {
-struct DeltaNetWeightRegistrar {
-    DeltaNetWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "DeltaNetWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<DeltaNetWeight>(
-                    static_cast<const core::DeltaNetConfig&>(base_cfg));
-            });
-    }
-};
-static DeltaNetWeightRegistrar _delta_net_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(DeltaNetWeight, core::DeltaNetConfig);
 
 TM_MODULE_METHODS(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)
 

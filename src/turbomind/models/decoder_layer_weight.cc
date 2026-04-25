@@ -33,18 +33,7 @@ bool DecoderLayerWeight::verify(std::vector<std::string>& missing)
     return missing.empty();
 }
 
-namespace {
-struct DecoderLayerWeightRegistrar {
-    DecoderLayerWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "DecoderLayerWeight",
-            [](const core::ModuleConfig&) -> std::unique_ptr<core::Module> {
-                return std::make_unique<DecoderLayerWeight>();
-            });
-    }
-};
-static DecoderLayerWeightRegistrar _decoder_layer_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(DecoderLayerWeight, core::ModuleConfig);
 
 TM_MODULE_METHODS(DecoderLayerWeight, DECODER_LAYER_WEIGHT_CHILDREN, DECODER_LAYER_WEIGHT_PARAMS)
 

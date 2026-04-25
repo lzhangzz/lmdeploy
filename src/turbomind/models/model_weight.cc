@@ -82,19 +82,7 @@ bool ModelWeight::verify(std::vector<std::string>& missing)
     return missing.empty();
 }
 
-namespace {
-struct ModelWeightRegistrar {
-    ModelWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "ModelWeight",
-            [](const core::ModuleConfig& cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<ModelWeight>(
-                    static_cast<const core::ModelWeightConfig&>(cfg));
-            });
-    }
-};
-static ModelWeightRegistrar _model_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(ModelWeight, core::ModelWeightConfig);
 
 TM_MODULE_METHODS(ModelWeight, MODEL_WEIGHT_CHILDREN, MODEL_WEIGHT_PARAMS)
 

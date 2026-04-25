@@ -163,19 +163,7 @@ void MoeWeight::prepare()
     }
 }
 
-namespace {
-struct MoeWeightRegistrar {
-    MoeWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "MoeWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<MoeWeight>(
-                    static_cast<const core::MoeConfig&>(base_cfg));
-            });
-    }
-};
-static MoeWeightRegistrar _moe_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(MoeWeight, core::MoeConfig);
 
 TM_MODULE_METHODS(MoeWeight, MOE_WEIGHT_CHILDREN, MOE_WEIGHT_PARAMS)
 

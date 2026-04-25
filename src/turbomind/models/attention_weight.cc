@@ -90,19 +90,7 @@ void init_rope_kernel_param(const core::RopeConfig& rope, RopeKernelParam& rope_
     }
 }
 
-namespace {
-struct AttentionWeightRegistrar {
-    AttentionWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "AttentionWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<AttentionWeight>(
-                    static_cast<const core::AttentionConfig&>(base_cfg));
-            });
-    }
-};
-static AttentionWeightRegistrar _attention_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(AttentionWeight, core::AttentionConfig);
 
 TM_MODULE_METHODS(AttentionWeight, ATTENTION_WEIGHT_CHILDREN, ATTENTION_WEIGHT_PARAMS)
 

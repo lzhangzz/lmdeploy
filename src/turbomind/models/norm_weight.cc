@@ -17,19 +17,7 @@ void NormWeight::prepare()
     EnsureFloatDtype(weight, dtype_);
 }
 
-namespace {
-struct NormWeightRegistrar {
-    NormWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "NormWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<NormWeight>(
-                    static_cast<const core::NormConfig&>(base_cfg));
-            });
-    }
-};
-static NormWeightRegistrar _norm_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(NormWeight, core::NormConfig);
 
 TM_MODULE_METHODS(NormWeight, NORM_WEIGHT_CHILDREN, NORM_WEIGHT_PARAMS)
 

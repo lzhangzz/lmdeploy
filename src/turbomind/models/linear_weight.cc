@@ -275,19 +275,7 @@ void LinearWeight::prepare()
     }
 }
 
-namespace {
-struct LinearWeightRegistrar {
-    LinearWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "LinearWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<LinearWeight>(
-                    static_cast<const core::LinearConfig&>(base_cfg));
-            });
-    }
-};
-static LinearWeightRegistrar _linear_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(LinearWeight, core::LinearConfig);
 
 TM_MODULE_METHODS(LinearWeight, LINEAR_WEIGHT_CHILDREN, LINEAR_WEIGHT_PARAMS)
 

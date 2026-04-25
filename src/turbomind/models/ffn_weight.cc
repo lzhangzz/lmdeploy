@@ -43,19 +43,7 @@ void FfnWeight::prepare()
     Module::prepare();  // recurse into children
 }
 
-namespace {
-struct FfnWeightRegistrar {
-    FfnWeightRegistrar() {
-        core::ModuleRegistry::instance().register_type(
-            "FfnWeight",
-            [](const core::ModuleConfig& base_cfg) -> std::unique_ptr<core::Module> {
-                return std::make_unique<FfnWeight>(
-                    static_cast<const core::FfnConfig&>(base_cfg));
-            });
-    }
-};
-static FfnWeightRegistrar _ffn_weight_reg;
-}  // anonymous namespace
+TM_MODULE_REGISTER(FfnWeight, core::FfnConfig);
 
 TM_MODULE_METHODS(FfnWeight, FFN_WEIGHT_CHILDREN, FFN_WEIGHT_PARAMS)
 
