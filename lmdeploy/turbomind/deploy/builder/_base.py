@@ -400,7 +400,7 @@ class Builder:
                 raise RuntimeError(
                     f"{type(self).__name__} is built; "
                     f"cannot assign {name!r}")
-            self._pending_children[name] = value.handles
+            self._commit_child(name, value.handles)
             return
         object.__setattr__(self, name, value)
 

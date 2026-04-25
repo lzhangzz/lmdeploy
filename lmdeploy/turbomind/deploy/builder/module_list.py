@@ -10,12 +10,15 @@ class ModuleListBuilder(Builder):
     """Builder for ModuleList containers."""
 
     def __setitem__(self, index: int, value):
-        if self._built:
-            raise RuntimeError(
-                f"{type(self).__name__} is built; cannot set index {index}")
         if isinstance(value, Builder):
             raise TypeError(
                 f"{type(self).__name__}[{index}]: call .build() first")
-        assert isinstance(value, BuiltModule), (
+        if isinstance(value, BuiltModule):
+            if self._built:
+                raise RuntimeError(
+                    f"{type(self).__name__} is built; "
+                    f"cannot set index {index}")
+            self._commit_child(str(index), value.handles)
+            return
+        raise TypeError(
             f"{type(self).__name__}[{index}] requires a BuiltModule")
-        self._pending_children[str(index)] = value.handles
