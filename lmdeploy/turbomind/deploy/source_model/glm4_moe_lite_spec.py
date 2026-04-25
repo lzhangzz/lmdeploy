@@ -30,7 +30,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
 
         self._n_experts = hf_cfg.get('n_routed_experts', 0)
         self._dense_layers = hf_cfg.get('first_k_dense_replace', 1)
-        dtype = self._cpp_dtype()
+        dtype = self._dtype
 
         # ---- MLA head geometry (recomputed; differs from _parse_base default) ----
         qk_nope_dim = hf_cfg['qk_nope_head_dim']
@@ -149,13 +149,13 @@ class Glm4MoeLiteSpec(TextModelSpec):
         ec = self.engine_cfg
         cfg = _tm.ModelWeightConfig()
         cfg.tp_size = ec.attn_tp_size * ec.attn_cp_size
+        cfg.data_type = self._dtype
         root = TextModelBuilder(
             cfg, self._contexts,
             root_handles=self._root_handles,
             tp=ec.attn_tp_size * ec.attn_cp_size,
             ranks=self._model_tp_ranks,
-            vocab_size=self._vocab_size,
-            data_type=self._cpp_dtype())
+            vocab_size=self._vocab_size)
         root.add_token_embeds(self._get(self._embed_key))
         root.norm = self.norm(self._get(self._norm_key))
         root.add_lm_head(self._linear('lm_head'))  # GLM: never tied
@@ -222,8 +222,7 @@ class Glm4MoeLiteSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        m.add_gate('gate', self._linear(f'{pfx}.gate'),
-                   model_dtype=self._cpp_dtype())
+        m.add_gate('gate', self._linear(f'{pfx}.gate'))
 
         correction = self._get(f'{pfx}.gate.e_score_correction_bias')
         m.add_param('score_correction_bias', correction)

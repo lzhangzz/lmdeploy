@@ -40,7 +40,7 @@ class GptOssSpec(TextModelSpec):
         self._norm_key = 'model.norm.weight'
 
         self._n_experts = hf_cfg['num_local_experts']
-        dtype = self._cpp_dtype()
+        dtype = self._dtype
 
         # ---- Attention template (sliding window set per layer) ----
         self._attn_cfg = _tm.AttentionConfig()
@@ -108,13 +108,13 @@ class GptOssSpec(TextModelSpec):
         ec = self.engine_cfg
         cfg = _tm.ModelWeightConfig()
         cfg.tp_size = ec.attn_tp_size * ec.attn_cp_size
+        cfg.data_type = self._dtype
         root = TextModelBuilder(
             cfg, self._contexts,
             root_handles=self._root_handles,
             tp=ec.attn_tp_size * ec.attn_cp_size,
             ranks=self._model_tp_ranks,
-            vocab_size=self._vocab_size,
-            data_type=self._cpp_dtype())
+            vocab_size=self._vocab_size)
         root.add_token_embeds(self._get(self._embed_key))
         root.norm = self.norm(self._get(self._norm_key))
         lm_key = self._embed_key if self._tie_embeddings else 'lm_head.weight'
@@ -183,8 +183,7 @@ class GptOssSpec(TextModelSpec):
                        tp=self.engine_cfg.mlp_tp_size,
                        ranks=self._mlp_ranks)
 
-        m.add_gate('gate', self._linear(f'{pfx}.router'),
-                   model_dtype=self._cpp_dtype())
+        m.add_gate('gate', self._linear(f'{pfx}.router'))
 
         experts = ModuleListBuilder(ModuleListConfig(), self._contexts)
         for e in range(self.num_experts(layer)):

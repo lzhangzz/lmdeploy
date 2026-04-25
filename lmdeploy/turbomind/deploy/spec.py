@@ -58,6 +58,7 @@ class TextModelSpec(ABC):
         self.hf_cfg = hf_cfg
         self.engine_cfg = engine_cfg
         self._resolver = resolver
+        self._dtype = self._cpp_dtype()
         self._parse_base(hf_cfg)
 
     def _parse_base(self, cfg: dict):
@@ -164,7 +165,7 @@ class TextModelSpec(ABC):
         """
         cfg = make_norm_config(
             dim=dim if dim is not None else weight.shape[-1],
-            data_type=data_type if data_type is not None else self._cpp_dtype(),
+            data_type=data_type if data_type is not None else self._dtype,
             norm_eps=self._norm_eps,
         )
         m = NormBuilder(cfg, self._contexts)
