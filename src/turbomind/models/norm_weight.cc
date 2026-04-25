@@ -7,22 +7,6 @@
 
 namespace turbomind {
 
-NormWeight::NormWeight(int dim, DataType dtype, DeviceType device)
-    : shape_{dim}, dtype_{dtype}
-{
-    if (device != kDEVICE) {
-        weight = Tensor{shape_, dtype_, device};
-    }
-}
-
-NormWeight::NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType device)
-    : shape_{std::move(shape)}, dtype_{dtype}
-{
-    if (device != kDEVICE) {
-        weight = Tensor{shape_, dtype_, device};
-    }
-}
-
 NormWeight::NormWeight(const core::NormConfig& cfg)
     : shape_{cfg.dim}, dtype_{cfg.data_type}, norm_eps_{cfg.norm_eps}
 {

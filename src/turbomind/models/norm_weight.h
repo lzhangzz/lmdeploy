@@ -32,10 +32,6 @@ public:
 
     explicit NormWeight(const core::NormConfig& cfg);
 
-    NormWeight(int dim, DataType dtype, DeviceType device = kDEVICE);
-
-    /// Construct with arbitrary shape.
-    NormWeight(std::vector<ssize_t> shape, DataType dtype, DeviceType device = kDEVICE);
 
     /// Post-load: cast weight to configured dtype if needed.
     void prepare() override;
