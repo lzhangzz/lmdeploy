@@ -476,15 +476,14 @@ class Builder:
         self._add_child(name, handles)
 
     def _add_tensor(self, name: str, tensor: torch.Tensor | None,
-                       split_side: SplitSide | None = None, *,
-                       model_dtype=None):
+                       split_side: SplitSide | None = None):
         """Stage a raw-tensor commit under ``name``.  Applied during
         ``build()`` in ``_commit_tensor``.
         """
         assert not self._built, (
             f"{type(self).__name__} is built; commit '{name}' rejected")
         if tensor is not None:
-            self._pending_tensors[name] = (tensor, split_side, model_dtype)
+            self._pending_tensors[name] = (tensor, split_side)
 
     # ------------------------------------------------------------------
     # Add helpers
@@ -522,8 +521,8 @@ class Builder:
             self._commit_child(name, handles)
 
         # Drain staged tensors
-        for name, (tensor, split_side, model_dtype) in self._pending_tensors.items():
-            self._commit_tensor(name, tensor, split_side, model_dtype)
+        for name, (tensor, split_side) in self._pending_tensors.items():
+            self._commit_tensor(name, tensor, split_side)
 
         return BuiltModule(self._handles)
 
@@ -557,8 +556,7 @@ class Builder:
     # ------------------------------------------------------------------
 
     def _commit_tensor(self, name: str, tensor: torch.Tensor,
-                      split_side: SplitSide | None = None,
-                      model_dtype=None):
+                      split_side: SplitSide | None = None):
         """Commit a raw tensor to a named parameter on all GPUs.
 
         Parameters
@@ -569,8 +567,6 @@ class Builder:
             The tensor data.
         split_side : SplitSide | None
             TP split semantics.  ``None`` means broadcast.
-        model_dtype : C++ DataType value | None
-            Override dtype for the C++ allocation.
         """
         tp = self._tp if split_side else 1
         split_dim = _SPLIT_SIDE_TO_DIM.get(split_side) if split_side else None
@@ -580,7 +576,7 @@ class Builder:
                 rank = self._rank_for(i) if tp > 1 else 0
                 shard = _shard(tensor, split_dim, tp, rank)
                 _copy_shard_to_param(handle, name, shard,
-                                     alloc_dtype=model_dtype)
+                                     alloc_dtype=None)
 
 
 # ---------------------------------------------------------------------------
