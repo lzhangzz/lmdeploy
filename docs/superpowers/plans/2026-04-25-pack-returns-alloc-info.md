@@ -293,24 +293,29 @@ git commit -m "refactor: builder reads alloc metadata from pack() instead of rec
 
 - [ ] **Step 1: Check GPU availability**
 
-```bash
-python -c "from lmdeploy.turbomind.deploy.builder._base import _tm; g = _tm.GpuAbbr(); print(g)"
-```
+Use the `mcp__gpu-monitor__get_gpu_usage` tool to verify at least one GPU is free (low memory usage, no other processes). If a GPU is occupied by another process, wait or free it before proceeding.
 
-- [ ] **Step 2: Run model test**
+- [ ] **Step 2: List available models**
 
-Pick an available model from `list_models` and run:
+Use the `mcp__model-server__list_models` tool to see which models are cached locally. Pick one unquantized model (e.g., a 7B/8B dense model) for the first test, and one quantized model (AWQ, GPTQ) if available.
+
+- [ ] **Step 3: Test an unquantized model**
+
 ```bash
-python scripts/test_turbomind_model.py <model_id>
+python scripts/test_turbomind_model.py <unquantized_model_id>
 ```
 
 Verify the model responds with meaningful human words for at least 128 tokens.
 
-- [ ] **Step 3: Test a quantized model**
+- [ ] **Step 4: Test a quantized model**
 
-Repeat with a model known to use UINT4 quantization (e.g., an AWQ or GPTQ model from the registry). Verify correct output.
+```bash
+python scripts/test_turbomind_model.py <quantized_model_id>
+```
 
-- [ ] **Step 4: Commit** (only if any fixes were needed)
+Verify the model responds with meaningful human words for at least 128 tokens.
+
+- [ ] **Step 5: Commit** (only if any fixes were needed)
 
 ```bash
 git commit -m "fix: ..."
