@@ -97,6 +97,6 @@ class MLABuilder(Builder):
             ("kv_a_proj", kv_a_proj, None),
             ("wo", wo, SplitSide.INPUT),
         ]:
-            self._commit_linear(name, lin, split_side=side,
+            self._add_linear(name, lin, split_side=side,
                                 model_dtype=model_dtype)
 

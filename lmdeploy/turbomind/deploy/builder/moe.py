@@ -14,11 +14,11 @@ class MoeBuilder(Builder):
 
     def add_gate(self, name, linear, model_dtype=None):
         """Commit a gate linear (broadcast, no split)."""
-        self._commit_linear(name, linear, split_side=None,
+        self._add_linear(name, linear, split_side=None,
                             model_dtype=model_dtype)
 
     def add_param(self, name, tensor, split_side=None):
         """Commit a non-expert MoE parameter."""
         if split_side is not None and not isinstance(split_side, SplitSide):
             split_side = None  # specs may pass None for broadcast
-        self._commit_tensor(name, tensor, split_side)
+        self._add_tensor(name, tensor, split_side)

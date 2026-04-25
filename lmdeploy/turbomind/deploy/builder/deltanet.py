@@ -126,18 +126,18 @@ class DeltaNetBuilder(Builder):
         fused = fuse_gdn(group["q"], group["k"], group["v"],
                          group["z"], group["b"], group["a"],
                          tp=self._tp)
-        self._commit_linear("in_proj_all", fused, SplitSide.OUTPUT,
+        self._add_linear("in_proj_all", fused, SplitSide.OUTPUT,
                             model_dtype=self.config.data_type)
         if out_proj is not None:
-            self._commit_linear("out_proj", out_proj, SplitSide.INPUT,
+            self._add_linear("out_proj", out_proj, SplitSide.INPUT,
                                 model_dtype=self.config.data_type)
 
     def add_scalar_params(self, a_log=None, dt_bias=None):
         """Commit A_log and dt_bias as OUTPUT-split tensors."""
         if a_log is not None:
-            self._commit_tensor("A_log", a_log, split_side=SplitSide.OUTPUT)
+            self._add_tensor("A_log", a_log, split_side=SplitSide.OUTPUT)
         if dt_bias is not None:
-            self._commit_tensor("dt_bias", dt_bias, split_side=SplitSide.OUTPUT)
+            self._add_tensor("dt_bias", dt_bias, split_side=SplitSide.OUTPUT)
 
     def add_conv1d(self, conv1d, qkv_split):
         """Transpose HF layout to TM layout, TP-interleave Q/K/V, commit."""
@@ -145,5 +145,5 @@ class DeltaNetBuilder(Builder):
             conv1d = conv1d.squeeze(1)
         conv1d = conv1d.t().contiguous()
         conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self._tp)
-        self._commit_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
+        self._add_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
 

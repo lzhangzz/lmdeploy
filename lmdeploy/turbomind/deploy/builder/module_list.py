@@ -18,7 +18,7 @@ class ModuleListBuilder(Builder):
                 raise RuntimeError(
                     f"{type(self).__name__} is built; "
                     f"cannot set index {index}")
-            self._commit_child(str(index), value.handles)
+            self._add_child(str(index), value.handles)
             return
         raise TypeError(
             f"{type(self).__name__}[{index}] requires a BuiltModule")

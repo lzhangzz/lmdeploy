@@ -19,4 +19,4 @@ class NormBuilder(Builder):
 
     def set_weight(self, tensor: torch.Tensor):
         """Commit the norm weight tensor to all GPU handles."""
-        self._commit_tensor('weight', tensor)
+        self._add_tensor('weight', tensor)

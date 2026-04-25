@@ -399,7 +399,7 @@ class Builder:
                 raise RuntimeError(
                     f"{type(self).__name__} is built; "
                     f"cannot assign {name!r}")
-            self._commit_child(name, value.handles)
+            self._add_child(name, value.handles)
             return
         object.__setattr__(self, name, value)
 
@@ -417,17 +417,17 @@ class Builder:
         return 0
 
     # ------------------------------------------------------------------
-    # Staging methods (pre-build only)
+    # Add methods — stage into pending dicts (pre-build only)
     # ------------------------------------------------------------------
 
-    def _commit_linear(self, name: str, linear: Linear,
+    def _add_linear(self, name: str, linear: Linear,
                        split_side: SplitSide | None = None,
                        model_dtype=None):
         """Create standalone LinearWeight modules and copy tensor data.
 
         Creates per-GPU LinearWeight modules via ``_tm.create_module``
         at commit time.  Attachment to the parent module is deferred to
-        ``build()`` via ``_apply_child``.
+        ``build()`` via ``_commit_child``.
         """
         assert not self._built, (
             f"{type(self).__name__} is built; commit '{name}' rejected")
@@ -504,13 +504,13 @@ class Builder:
 
                 handles.append(mod)
 
-        self._commit_child(name, handles)
+        self._add_child(name, handles)
 
-    def _commit_tensor(self, name: str, tensor: torch.Tensor | None,
+    def _add_tensor(self, name: str, tensor: torch.Tensor | None,
                        split_side: SplitSide | None = None, *,
                        model_dtype=None):
         """Stage a raw-tensor commit under ``name``.  Applied during
-        ``build()`` in ``_apply_tensor``.
+        ``build()`` in ``_commit_tensor``.
         """
         assert not self._built, (
             f"{type(self).__name__} is built; commit '{name}' rejected")
@@ -518,12 +518,12 @@ class Builder:
             self._pending_tensors[name] = (tensor, split_side, model_dtype)
 
     # ------------------------------------------------------------------
-    # Commit helpers
+    # Add helpers
     # ------------------------------------------------------------------
 
-    def _commit_child(self, name: str, handles: list):
+    def _add_child(self, name: str, handles: list):
         """Stage pre-created per-GPU ``Module*`` handles under ``name``.
-        Applied during ``build()`` in ``_apply_child``.
+        Applied during ``build()`` in ``_commit_child``.
         """
         assert not self._built, (
             f"{type(self).__name__} is built; commit '{name}' rejected")
@@ -550,11 +550,11 @@ class Builder:
 
         # Drain staged children (linear weights + sub-builder output)
         for name, handles in self._pending_children.items():
-            self._apply_child(name, handles)
+            self._commit_child(name, handles)
 
         # Drain staged tensors
         for name, (tensor, split_side, model_dtype) in self._pending_tensors.items():
-            self._apply_tensor(name, tensor, split_side, model_dtype)
+            self._commit_tensor(name, tensor, split_side, model_dtype)
 
         return BuiltModule(self._handles)
 
@@ -576,7 +576,7 @@ class Builder:
             return cfg
         return self.config
 
-    def _apply_child(self, name: str, handles: list):
+    def _commit_child(self, name: str, handles: list):
         """Attach pre-created per-GPU child handles to parent handles."""
         for i, (parent_h, child_h) in enumerate(
                 zip(self._handles, handles)):
@@ -584,10 +584,10 @@ class Builder:
                 parent_h.add_child_raw(name, child_h)
 
     # ------------------------------------------------------------------
-    # Apply methods (GPU-invariant prep + per-GPU commit)
+    # Commit methods — drain pending dicts to C++ modules
     # ------------------------------------------------------------------
 
-    def _apply_tensor(self, name: str, tensor: torch.Tensor,
+    def _commit_tensor(self, name: str, tensor: torch.Tensor,
                       split_side: SplitSide | None = None,
                       model_dtype=None):
         """Commit a raw tensor to a named parameter on all GPUs.
@@ -657,7 +657,7 @@ class TextModelBuilder(Builder):
         Shards along hidden (output) dim by ``self._tp``. No vocab padding —
         embedding lookup never indexes past ``vocab - 1``.
         """
-        self._commit_tensor('tok_embeddings', tensor,
+        self._add_tensor('tok_embeddings', tensor,
                             split_side=SplitSide.OUTPUT,
                             model_dtype=self._data_type)
 
@@ -679,6 +679,6 @@ class TextModelBuilder(Builder):
                      for k, t in linear.tensors.items()},
             weight_format=linear.weight_format,
             data_format=linear.data_format)
-        self._commit_linear('output', padded,
+        self._add_linear('output', padded,
                             split_side=SplitSide.OUTPUT,
                             model_dtype=self._data_type)

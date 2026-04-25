@@ -179,7 +179,7 @@ class FfnBuilder(Builder):
         """Pad weights for TP alignment, fuse w1+w3 if possible, then shard and commit.
 
         The fusion result determines ``fuse_silu`` on the C++ module config.
-        Updating ``self.config.fuse_silu`` **before** any ``_commit_linear``
+        Updating ``self.config.fuse_silu`` **before** any ``_add_linear``
         call ensures the C++ module is lazily created with the correct flag.
         """
         # Pad weights for TP alignment before any fusion or sharding.
@@ -199,12 +199,12 @@ class FfnBuilder(Builder):
 
         model_dtype = self.config.data_type
         if fused is not None:
-            self._commit_linear('w1w3', fused, SplitSide.OUTPUT,
+            self._add_linear('w1w3', fused, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)
         else:
-            self._commit_linear('w1', w1, SplitSide.OUTPUT,
+            self._add_linear('w1', w1, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)
-            self._commit_linear('w3', w3, SplitSide.OUTPUT,
+            self._add_linear('w3', w3, SplitSide.OUTPUT,
                                 model_dtype=model_dtype)
-        self._commit_linear('w2', w2, SplitSide.INPUT,
+        self._add_linear('w2', w2, SplitSide.INPUT,
                             model_dtype=model_dtype)
