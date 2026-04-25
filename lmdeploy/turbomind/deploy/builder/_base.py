@@ -89,30 +89,6 @@ def _cast_shard_for_tm(shard: torch.Tensor, tm_tensor) -> torch.Tensor:
     return shard
 
 
-def _infer_compute_dtype(linear: Linear):
-    """Get the model's compute dtype from a Linear's tensors.
-
-    For trivial formats the weight itself carries the compute dtype.
-    For quantized formats we infer from scales or bias.
-    """
-    w = linear.tensors.get('weight')
-    if w is not None:
-        d = _TORCH_TO_CPP.get(w.dtype)
-        if d is not None:
-            return d
-        # FP8 weights: compute dtype is BF16 (or FP16 depending on model),
-        # not FP32.  Fall through to scales/bias only for non-FP8 dtypes.
-        if w.dtype in _FP8_DTYPES:
-            # FP8 stored as uint8 after normalization; prefer BF16.
-            return _tm.DataType.TYPE_BF16
-    for key in ('scales', 'bias'):
-        t = linear.tensors.get(key)
-        if t is not None:
-            d = _TORCH_TO_CPP.get(t.dtype)
-            if d is not None:
-                return d
-    return None
-
 
 # ---------------------------------------------------------------------------
 # Dequant / format compatibility helpers
@@ -421,8 +397,7 @@ class Builder:
     # ------------------------------------------------------------------
 
     def _add_linear(self, name: str, linear: Linear,
-                       split_side: SplitSide | None = None,
-                       model_dtype=None):
+                       split_side: SplitSide | None = None):
         """Create standalone LinearWeight modules and copy tensor data.
 
         Creates per-GPU LinearWeight modules via ``_tm.create_module``
@@ -452,8 +427,7 @@ class Builder:
         elif split_side == SplitSide.INPUT:
             in_dim //= tp
 
-        compute_dtype = (model_dtype if model_dtype is not None
-                         else _infer_compute_dtype(linear))
+        compute_dtype = self.config.data_type
         lin_cfg = _tm.LinearConfig()
         lin_cfg.input_dim  = in_dim
         lin_cfg.output_dim = out_dim
@@ -496,9 +470,8 @@ class Builder:
                             and tp > 1:
                         alloc_shape = list(alloc_shape)
                         alloc_shape[split_dim] //= tp
-                    if alloc_dtype is None and kind == 'weight' \
-                            and model_dtype is not None:
-                        alloc_dtype = model_dtype
+                    if alloc_dtype is None and kind == 'weight':
+                        alloc_dtype = self.config.data_type
 
                     _copy_shard_to_param(mod, kind, shard,
                                          alloc_shape=alloc_shape,
