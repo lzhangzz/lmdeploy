@@ -49,12 +49,6 @@ _TORCH_TO_CPP: dict[torch.dtype, _tm.DataType] = {
 
 _CPP_TO_TORCH: dict[_tm.DataType, torch.dtype] = {v: k for k, v in _TORCH_TO_CPP.items()}
 
-_FP8_DTYPES: set[torch.dtype] = {torch.uint8}
-for _fp8_attr in ('float8_e4m3fn', 'float8_e5m2fn'):
-    _fp8_dt = getattr(torch, _fp8_attr, None)
-    if _fp8_dt is not None:
-        _FP8_DTYPES.add(_fp8_dt)
-
 _SPLIT_SIDE_TO_DIM: dict[SplitSide, int] = {SplitSide.OUTPUT: -1, SplitSide.INPUT: 0}
 
 
