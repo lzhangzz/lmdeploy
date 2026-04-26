@@ -41,12 +41,10 @@ Remove lines 409-411:
 - [ ] **Step 3: Verify the module loads**
 
 ```bash
-python -c "from lmdeploy.turbomind.deploy.linear import Linear; from lmdeploy.turbomind.deploy.builder._base import Builder"
+python -c "from lmdeploy.turbomind.deploy.linear import Linear; from lmdeploy.turbomind.deploy.builder import Builder"
 ```
 
-Expected: clean import, no errors.
-
-At this point `data_format` is still on `Linear` and still set by all construction sites, but no longer consumed.
+Expected: clean import, no errors. At this point `data_format` is still on `Linear` and still set by all construction sites, but no longer consumed.
 
 - [ ] **Step 4: Commit**
 
@@ -56,223 +54,26 @@ git commit -m "$(cat <<'EOF'
 refactor: derive data_format from weight_format at commit time
 
 Replace linear.data_format with linear.weight_format.make_data_format(compute_dtype)
-in _add_linear. Drop the now-redundant assertion. data_format field still present
-on Linear but no longer consumed.
+in _add_linear. Drop the now-redundant assertion.
 EOF
 )"
 ```
 
 ---
 
-### Task 2: Strip `data_format=` from all Linear construction sites
+### Task 2: Remove `data_format` from `Linear` and all call sites
+
+**Why one commit:** `data_format` is a required field on the `Linear` dataclass (no default). You cannot remove it from construction sites without removing the field, and vice versa. Both must change atomically.
 
 **Files:**
-- Modify: `lmdeploy/turbomind/deploy/builder/_base.py:107,115-128,180,241,644`
-- Modify: `lmdeploy/turbomind/deploy/builder/mla.py:47,50,64`
-- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:226,316,318`
-- Modify: `lmdeploy/turbomind/deploy/builder/deltanet.py:42,93`
-- Modify: `lmdeploy/turbomind/deploy/weight_format.py:494`
+- Modify: `lmdeploy/turbomind/deploy/linear.py:89,99-106`
+- Modify: `lmdeploy/turbomind/deploy/builder/_base.py:107,111-128,180,241,644`
+- Modify: `lmdeploy/turbomind/deploy/builder/mla.py:46-50,62-64`
+- Modify: `lmdeploy/turbomind/deploy/source_model/utils.py:225-226,315-318`
+- Modify: `lmdeploy/turbomind/deploy/builder/deltanet.py:40-42,92-93`
+- Modify: `lmdeploy/turbomind/deploy/weight_format.py:492-494`
 
-- [ ] **Step 1: `_dequant_linear` in `_base.py` (line 104-108)**
-
-```python
-# Before
-    return Linear(
-        tensors=new_tensors,
-        weight_format=trivial,
-        data_format=trivial.make_data_format(data_type),
-    )
-
-# After
-    return Linear(
-        tensors=new_tensors,
-        weight_format=trivial,
-    )
-```
-
-- [ ] **Step 2: `_ensure_compatible_formats` in `_base.py` (lines 111-128)**
-
-Replace the whole function body with a simplified version that only dequants for mixed weight formats (no data_format normalization):
-
-```python
-def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
-    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
-    formats = {name: lin.weight_format.name for name, lin in linears.items()}
-    if len(set(formats.values())) <= 1:
-        return linears
-    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
-```
-
-- [ ] **Step 3: `transform_output_dim` in `_base.py` (line 180)**
-
-```python
-# Before
-            Linear(ts, weight_format=first.weight_format,
-                   data_format=first.data_format)
-
-# After
-            Linear(ts, weight_format=first.weight_format)
-```
-
-- [ ] **Step 4: `transform_input_dim` in `_base.py` (line 241)**
-
-```python
-# Before
-            Linear(ts, weight_format=first.weight_format,
-                   data_format=first.data_format)
-
-# After
-            Linear(ts, weight_format=first.weight_format)
-```
-
-- [ ] **Step 5: `add_lm_head` in `_base.py` (lines 640-646)**
-
-```python
-# Before
-        padded = Linear(
-            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
-                     for k, t in linear.tensors.items()},
-            weight_format=linear.weight_format,
-            data_format=linear.data_format)
-
-# After
-        padded = Linear(
-            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
-                     for k, t in linear.tensors.items()},
-            weight_format=linear.weight_format)
-```
-
-- [ ] **Step 6: `fold_kv_b` in `mla.py` (lines 45-50)**
-
-```python
-# Before
-    return (Linear(tensors={"weight": q_folded.contiguous()},
-                   weight_format=q_b.weight_format,
-                   data_format=q_b.data_format),
-            Linear(tensors={"weight": o_folded.contiguous()},
-                   weight_format=wo.weight_format,
-                   data_format=wo.data_format))
-
-# After
-    return (Linear(tensors={"weight": q_folded.contiguous()},
-                   weight_format=q_b.weight_format),
-            Linear(tensors={"weight": o_folded.contiguous()},
-                   weight_format=wo.weight_format))
-```
-
-- [ ] **Step 7: `pad_wo_input` in `mla.py` (lines 62-64)**
-
-```python
-# Before
-    return Linear(tensors={"weight": w.contiguous()},
-                  weight_format=wo.weight_format,
-                  data_format=wo.data_format)
-
-# After
-    return Linear(tensors={"weight": w.contiguous()},
-                  weight_format=wo.weight_format)
-```
-
-- [ ] **Step 8: `split_qkv` in `deltanet.py` (lines 40-42)**
-
-```python
-# Before
-        new_linears.append(Linear(tensors=tensors,
-                                  weight_format=linear.weight_format,
-                                  data_format=linear.data_format))
-
-# After
-        new_linears.append(Linear(tensors=tensors,
-                                  weight_format=linear.weight_format))
-```
-
-- [ ] **Step 9: `fuse_gdn` in `deltanet.py` (lines 92-93)**
-
-```python
-# Before
-    return Linear(tensors=fused_tensors, weight_format=first.weight_format,
-                  data_format=first.data_format)
-
-# After
-    return Linear(tensors=fused_tensors, weight_format=first.weight_format)
-```
-
-- [ ] **Step 10: `reorder_rotary_emb` in `utils.py` (lines 225-226)**
-
-```python
-# Before
-        return Linear(tensors=new_tensors, weight_format=x.weight_format,
-                      data_format=x.data_format)
-
-# After
-        return Linear(tensors=new_tensors, weight_format=x.weight_format)
-```
-
-- [ ] **Step 11: `read_packed_moe_expert` in `utils.py` (lines 315-318)**
-
-```python
-# Before
-    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format,
-                data_format=gate_up.data_format)
-    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format,
-                data_format=gate_up.data_format)
-
-# After
-    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format)
-    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format)
-```
-
-- [ ] **Step 12: `_build_linear` in `weight_format.py` (lines 492-494)**
-
-```python
-# Before
-        return Linear(tensors=tensors,
-                      weight_format=fmt,
-                      data_format=fmt.make_data_format(self._data_type))
-
-# After
-        return Linear(tensors=tensors,
-                      weight_format=fmt)
-```
-
-- [ ] **Step 13: Verify module loading**
-
-```bash
-python -c "
-from lmdeploy.turbomind.deploy.linear import Linear
-from lmdeploy.turbomind.deploy.weight_format import WeightFormatResolver
-from lmdeploy.turbomind.deploy.builder._base import Builder
-from lmdeploy.turbomind.deploy.builder.mla import MLABuilder
-from lmdeploy.turbomind.deploy.builder.deltanet import DeltaNetBuilder
-print('All modules loaded')
-"
-```
-
-- [ ] **Step 14: Commit**
-
-```bash
-git add lmdeploy/turbomind/deploy/builder/_base.py \
-        lmdeploy/turbomind/deploy/builder/mla.py \
-        lmdeploy/turbomind/deploy/source_model/utils.py \
-        lmdeploy/turbomind/deploy/builder/deltanet.py \
-        lmdeploy/turbomind/deploy/weight_format.py
-git commit -m "$(cat <<'EOF'
-refactor: strip data_format threading from all Linear construction sites
-
-Remove data_format= keyword from every Linear() call site. The value is
-now derived at commit time from weight_format + data_type.
-EOF
-)"
-```
-
----
-
-### Task 3: Remove `data_format` field from `Linear` dataclass
-
-**Files:**
-- Modify: `lmdeploy/turbomind/deploy/linear.py:89,100-106`
-
-- [ ] **Step 1: Remove the field declaration (line 89)**
+- [ ] **Step 1: Remove field from `Linear` dataclass (`linear.py:89`)**
 
 ```python
 # Before
@@ -285,7 +86,7 @@ EOF
     weight_format: "WeightFormat" = field(compare=False, repr=False)
 ```
 
-- [ ] **Step 2: Simplify `concat_out_dim` (lines 99-106)**
+- [ ] **Step 2: Simplify `concat_out_dim` — remove data_format uniformity check (`linear.py:99-106`)**
 
 ```python
 # Before
@@ -307,28 +108,227 @@ EOF
                       weight_format=next(iter(wfmts)))
 ```
 
-- [ ] **Step 3: Verify module loading**
+- [ ] **Step 3: Strip `data_format=` from `_dequant_linear` (`_base.py:104-108`)**
 
-```bash
-python -c "from lmdeploy.turbomind.deploy.linear import Linear; lin = Linear({'weight': None}, weight_format='test'); print('OK')"
+```python
+# Before
+    return Linear(
+        tensors=new_tensors,
+        weight_format=trivial,
+        data_format=trivial.make_data_format(data_type),
+    )
+
+# After
+    return Linear(
+        tensors=new_tensors,
+        weight_format=trivial,
+    )
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Simplify `_ensure_compatible_formats` — drop data_format normalization (`_base.py:111-128`)**
+
+Replace the entire function body:
+
+```python
+# Before
+def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
+    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
+    formats = {name: lin.weight_format.name for name, lin in linears.items()}
+    if len(set(formats.values())) <= 1:
+        # Weight formats agree; normalize data_format to a single shared object.
+        target_df = next(iter(linears.values())).data_format
+        return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
+                              data_format=target_df)
+                       if lin.data_format is not target_df else lin)
+                for name, lin in linears.items()}
+    result = {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
+    # Normalize data_format after dequant — each _dequant_linear may produce
+    # a distinct DataFormat object even when they represent the same dtype.
+    target_df = next(iter(result.values())).data_format
+    return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
+                          data_format=target_df)
+                   if lin.data_format is not target_df else lin)
+            for name, lin in result.items()}
+
+# After
+def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
+    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
+    formats = {name: lin.weight_format.name for name, lin in linears.items()}
+    if len(set(formats.values())) <= 1:
+        return linears
+    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
+```
+
+- [ ] **Step 5: Strip `data_format=` from `transform_output_dim` (`_base.py:180`)**
+
+```python
+# Before
+            Linear(ts, weight_format=first.weight_format,
+                   data_format=first.data_format)
+
+# After
+            Linear(ts, weight_format=first.weight_format)
+```
+
+- [ ] **Step 6: Strip `data_format=` from `transform_input_dim` (`_base.py:241`)**
+
+```python
+# Before
+            Linear(ts, weight_format=first.weight_format,
+                   data_format=first.data_format)
+
+# After
+            Linear(ts, weight_format=first.weight_format)
+```
+
+- [ ] **Step 7: Strip `data_format=` from `add_lm_head` (`_base.py:644`)**
+
+```python
+# Before
+        padded = Linear(
+            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
+                     for k, t in linear.tensors.items()},
+            weight_format=linear.weight_format,
+            data_format=linear.data_format)
+
+# After
+        padded = Linear(
+            tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
+                     for k, t in linear.tensors.items()},
+            weight_format=linear.weight_format)
+```
+
+- [ ] **Step 8: Strip `data_format=` from `fold_kv_b` return (`mla.py:46-50`)**
+
+```python
+# Before
+    return (Linear(tensors={"weight": q_folded.contiguous()},
+                   weight_format=q_b.weight_format,
+                   data_format=q_b.data_format),
+            Linear(tensors={"weight": o_folded.contiguous()},
+                   weight_format=wo.weight_format,
+                   data_format=wo.data_format))
+
+# After
+    return (Linear(tensors={"weight": q_folded.contiguous()},
+                   weight_format=q_b.weight_format),
+            Linear(tensors={"weight": o_folded.contiguous()},
+                   weight_format=wo.weight_format))
+```
+
+- [ ] **Step 9: Strip `data_format=` from `pad_wo_input` return (`mla.py:62-64`)**
+
+```python
+# Before
+    return Linear(tensors={"weight": w.contiguous()},
+                  weight_format=wo.weight_format,
+                  data_format=wo.data_format)
+
+# After
+    return Linear(tensors={"weight": w.contiguous()},
+                  weight_format=wo.weight_format)
+```
+
+- [ ] **Step 10: Strip `data_format=` from `split_qkv` (`deltanet.py:40-42`)**
+
+```python
+# Before
+        new_linears.append(Linear(tensors=tensors,
+                                  weight_format=linear.weight_format,
+                                  data_format=linear.data_format))
+
+# After
+        new_linears.append(Linear(tensors=tensors,
+                                  weight_format=linear.weight_format))
+```
+
+- [ ] **Step 11: Strip `data_format=` from `fuse_gdn` return (`deltanet.py:92-93`)**
+
+```python
+# Before
+    return Linear(tensors=fused_tensors, weight_format=first.weight_format,
+                  data_format=first.data_format)
+
+# After
+    return Linear(tensors=fused_tensors, weight_format=first.weight_format)
+```
+
+- [ ] **Step 12: Strip `data_format=` from `reorder_rotary_emb` (`utils.py:225-226`)**
+
+```python
+# Before
+        return Linear(tensors=new_tensors, weight_format=x.weight_format,
+                      data_format=x.data_format)
+
+# After
+        return Linear(tensors=new_tensors, weight_format=x.weight_format)
+```
+
+- [ ] **Step 13: Strip `data_format=` from `read_packed_moe_expert` (`utils.py:315-318`)**
+
+```python
+# Before
+    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format,
+                data_format=gate_up.data_format)
+    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format,
+                data_format=gate_up.data_format)
+
+# After
+    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format)
+    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format)
+```
+
+- [ ] **Step 14: Strip `data_format=` from `_build_linear` return (`weight_format.py:492-494`)**
+
+```python
+# Before
+        return Linear(tensors=tensors,
+                      weight_format=fmt,
+                      data_format=fmt.make_data_format(self._data_type))
+
+# After
+        return Linear(tensors=tensors,
+                      weight_format=fmt)
+```
+
+- [ ] **Step 15: Verify all modules load**
 
 ```bash
-git add lmdeploy/turbomind/deploy/linear.py
-git commit -m "$(cat <<'EOF'
-refactor: remove data_format field from Linear dataclass
+python -c "
+from lmdeploy.turbomind.deploy.linear import Linear
+from lmdeploy.turbomind.deploy.weight_format import TrivialFormat, WeightFormatResolver
+from lmdeploy.turbomind.deploy.builder._base import Builder, transform_output_dim, transform_input_dim
+from lmdeploy.turbomind.deploy.builder.mla import MLABuilder, fold_kv_b, pad_wo_input
+from lmdeploy.turbomind.deploy.builder.deltanet import DeltaNetBuilder, split_qkv, fuse_gdn
+from lmdeploy.turbomind.deploy.source_model.utils import reorder_rotary_emb, read_packed_moe_expert
+print('All modules loaded')
+"
+```
 
-data_format is now derived at commit time. Remove the field and simplify
-concat_out_dim uniformity check to only cover weight_format.
+Expected: clean import, no errors.
+
+- [ ] **Step 16: Commit**
+
+```bash
+git add lmdeploy/turbomind/deploy/linear.py \
+        lmdeploy/turbomind/deploy/builder/_base.py \
+        lmdeploy/turbomind/deploy/builder/mla.py \
+        lmdeploy/turbomind/deploy/source_model/utils.py \
+        lmdeploy/turbomind/deploy/builder/deltanet.py \
+        lmdeploy/turbomind/deploy/weight_format.py
+git commit -m "$(cat <<'EOF'
+refactor: remove data_format from Linear dataclass
+
+data_format is now derived at commit time from weight_format + data_type.
+Remove the field from the dataclass, strip it from all construction sites,
+and simplify concat_out_dim / _ensure_compatible_formats.
 EOF
 )"
 ```
 
 ---
 
-### Task 4: Update tests
+### Task 3: Update tests
 
 **Files:**
 - Modify: `tests/test_lmdeploy/test_turbomind/test_transform_tensors.py:134,280-293`
@@ -346,7 +346,7 @@ EOF
                   weight_format='placeholder')
 ```
 
-- [ ] **Step 2: Update `test_format_propagation` to only test weight_format (lines 280-293)**
+- [ ] **Step 2: Update `test_format_propagation` — only test weight_format (lines 280-293)**
 
 ```python
 # Before
@@ -379,7 +379,7 @@ EOF
         assert result.weight_format == 'fake_fmt'
 ```
 
-- [ ] **Step 3: Run the tests**
+- [ ] **Step 3: Run the transform tensor tests**
 
 ```bash
 python -m pytest tests/test_lmdeploy/test_turbomind/test_transform_tensors.py -v
@@ -395,7 +395,19 @@ python -m pytest tests/test_lmdeploy/test_turbomind/test_weight_format_resolver.
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Verify a minimal construction**
+
+```bash
+python -c "
+from lmdeploy.turbomind.deploy.linear import Linear
+lin = Linear(tensors={'weight': None}, weight_format='test')
+print('Linear() OK:', lin)
+"
+```
+
+Expected: clean output, no errors.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add tests/test_lmdeploy/test_turbomind/test_transform_tensors.py
@@ -410,30 +422,36 @@ EOF
 
 ---
 
-### Task 5: End-to-end model verification
+### Task 4: End-to-end model verification
 
-- [ ] **Step 1: Run a model test to verify nothing is broken**
+- [ ] **Step 1: Check GPU availability**
 
 ```bash
-python scripts/test_turbomind_model.py
+python -c "
+from lmdeploy.turbomind.deploy.builder import _tm
+# If _turbomind loads, we can test
+print('_turbomind loaded')
+"
 ```
 
-Expected: model loads and produces coherent text (at least 128 tokens of meaningful response).
+- [ ] **Step 2: Run a model test**
 
-- [ ] **Step 2: Commit any remaining changes if needed**
+Use `scripts/test_turbomind_model.py` to verify a model loads and produces coherent output (at least 128 tokens of meaningful response).
+
+- [ ] **Step 3: Commit any remaining changes if needed**
 
 ---
 
 ### Summary of Changes
 
-| File | Lines changed |
+| File | What changed |
 |---|---|
-| `lmdeploy/turbomind/deploy/builder/_base.py` | 1 behavioral change + ~20 removed |
-| `lmdeploy/turbomind/deploy/builder/mla.py` | 3 lines removed |
-| `lmdeploy/turbomind/deploy/source_model/utils.py` | 3 lines removed |
-| `lmdeploy/turbomind/deploy/builder/deltanet.py` | 2 lines removed |
-| `lmdeploy/turbomind/deploy/weight_format.py` | 1 line removed |
-| `lmdeploy/turbomind/deploy/linear.py` | ~8 lines removed/simplified |
-| `tests/test_lmdeploy/test_turbomind/test_transform_tensors.py` | 3 lines removed |
+| `lmdeploy/turbomind/deploy/linear.py` | Remove `data_format` field; simplify `concat_out_dim` |
+| `lmdeploy/turbomind/deploy/builder/_base.py` | 1 behavioral line + drop assertion + strip from 5 call sites + simplify `_ensure_compatible_formats` |
+| `lmdeploy/turbomind/deploy/builder/mla.py` | Strip `data_format=` from 2 functions |
+| `lmdeploy/turbomind/deploy/source_model/utils.py` | Strip `data_format=` from 2 functions |
+| `lmdeploy/turbomind/deploy/builder/deltanet.py` | Strip `data_format=` from 2 functions |
+| `lmdeploy/turbomind/deploy/weight_format.py` | Strip `data_format=` from `_build_linear` |
+| `tests/.../test_transform_tensors.py` | Remove `data_format` fixture and assertion |
 
 Net: ~1 line changed, ~35 lines deleted across 7 files.
