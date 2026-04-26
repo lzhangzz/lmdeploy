@@ -9,4 +9,4 @@ from __future__ import annotations
 from mmengine import Registry
 
 INPUT_MODELS = Registry('source model',
-                        locations=['lmdeploy.turbomind.models.base'])
+                        locations=['lmdeploy.turbomind.deploy.models.base'])
