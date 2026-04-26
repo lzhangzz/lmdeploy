@@ -13,7 +13,7 @@ import torch
 
 # ---------------------------------------------------------------------------
 # Bootstrap: make _turbomind available as a lightweight stub so that
-# ``lmdeploy.turbomind.deploy.linear`` and ``_base`` can be imported without
+# ``lmdeploy.turbomind.linear`` and ``_base`` can be imported without
 # the real C extension.
 # ---------------------------------------------------------------------------
 
@@ -69,12 +69,7 @@ if _turbomind_pkg is None:
     _turbomind_pkg.__package__ = 'lmdeploy.turbomind'
     sys.modules['lmdeploy.turbomind'] = _turbomind_pkg
 
-_turbomind_deploy = sys.modules.get('lmdeploy.turbomind.deploy')
-if _turbomind_deploy is None:
-    _turbomind_deploy = types.ModuleType('lmdeploy.turbomind.deploy')
-    _turbomind_deploy.__path__ = [os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy')]
-    _turbomind_deploy.__package__ = 'lmdeploy.turbomind.deploy'
-    sys.modules['lmdeploy.turbomind.deploy'] = _turbomind_deploy
+# (No longer need 'lmdeploy.turbomind.deploy' stub -- deploy/ was promoted.)
 
 
 def _load_module_from_file(mod_name: str, file_path: str):
@@ -87,27 +82,27 @@ def _load_module_from_file(mod_name: str, file_path: str):
 
 
 # Load linear.py first — weight_format.py imports from .linear at module level.
-_linear_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'linear.py')
-_linear_mod = _load_module_from_file('lmdeploy.turbomind.deploy.linear', _linear_path)
+_linear_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'linear.py')
+_linear_mod = _load_module_from_file('lmdeploy.turbomind.linear', _linear_path)
 Linear = _linear_mod.Linear
 
 # Load weight_format (needed by _base for TrivialFormat)
-_wf_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'weight_format.py')
-_load_module_from_file('lmdeploy.turbomind.deploy.weight_format', _wf_path)
+_wf_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'weight_format.py')
+_load_module_from_file('lmdeploy.turbomind.weight_format', _wf_path)
 
 # Load builder/_base.py
-_base_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'builder', '_base.py')
-_base_mod = _load_module_from_file('lmdeploy.turbomind.deploy.builder._base', _base_path)
+_base_path = os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'builders', '_base.py')
+_base_mod = _load_module_from_file('lmdeploy.turbomind.builders._base', _base_path)
 transform_output_dim = _base_mod.transform_output_dim
 transform_input_dim = _base_mod.transform_input_dim
 
 # Register builder sub-package
-_builder_pkg = sys.modules.get('lmdeploy.turbomind.deploy.builder')
+_builder_pkg = sys.modules.get('lmdeploy.turbomind.builders')
 if _builder_pkg is None:
-    _builder_pkg = types.ModuleType('lmdeploy.turbomind.deploy.builder')
-    _builder_pkg.__path__ = [os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'deploy', 'builder')]
-    _builder_pkg.__package__ = 'lmdeploy.turbomind.deploy.builder'
-    sys.modules['lmdeploy.turbomind.deploy.builder'] = _builder_pkg
+    _builder_pkg = types.ModuleType('lmdeploy.turbomind.builders')
+    _builder_pkg.__path__ = [os.path.join(_repo_root, 'lmdeploy', 'turbomind', 'builders')]
+    _builder_pkg.__package__ = 'lmdeploy.turbomind.builders'
+    sys.modules['lmdeploy.turbomind.builders'] = _builder_pkg
 
 
 # ---------------------------------------------------------------------------

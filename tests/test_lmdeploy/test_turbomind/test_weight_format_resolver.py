@@ -60,7 +60,7 @@ _setup_fake_tm()
 
 # Register package stubs.
 import lmdeploy  # noqa: F401
-for _pkg in ('lmdeploy.turbomind', 'lmdeploy.turbomind.deploy'):
+for _pkg in ('lmdeploy.turbomind',):
     if _pkg not in sys.modules:
         mod = types.ModuleType(_pkg)
         mod.__path__ = [os.path.join(_repo_root, *_pkg.split('.'))]
@@ -77,10 +77,10 @@ def _load(mod_name, file_rel_path):
     return mod
 
 
-_linear_mod = _load('lmdeploy.turbomind.deploy.linear',
-                    'lmdeploy/turbomind/deploy/linear.py')
-_wf_mod = _load('lmdeploy.turbomind.deploy.weight_format',
-                'lmdeploy/turbomind/deploy/weight_format.py')
+_linear_mod = _load('lmdeploy.turbomind.linear',
+                    'lmdeploy/turbomind/linear.py')
+_wf_mod = _load('lmdeploy.turbomind.weight_format',
+                'lmdeploy/turbomind/weight_format.py')
 
 Linear = _linear_mod.Linear
 WeightFormat = _wf_mod.WeightFormat

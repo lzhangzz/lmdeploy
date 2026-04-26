@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from lmdeploy.turbomind.deploy.converter import _deep_merge
+from lmdeploy.turbomind.converter import _deep_merge
 
 
 @pytest.fixture(autouse=True)
