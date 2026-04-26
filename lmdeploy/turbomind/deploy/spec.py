@@ -108,7 +108,7 @@ class TextModelSpec(ABC):
         self._softmax_scale = 0.0
 
     # ------------------------------------------------------------------
-    # Runtime binding (called by TextModelLoader after model_comm exists)
+    # Runtime binding (called by ModelLoader after model_comm exists)
     # ------------------------------------------------------------------
 
     def bind_runtime(self, *, contexts, root_handles,
