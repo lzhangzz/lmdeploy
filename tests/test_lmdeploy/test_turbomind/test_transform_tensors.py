@@ -42,7 +42,7 @@ def _setup_fake_tm():
 
     tm.DataType = DataType
 
-    # Stub functions / classes referenced throughout deploy/
+    # Stub functions / classes referenced throughout turbomind/
     tm.create_module = lambda cfg: None
     tm.LinearConfig = type('LinearConfig', (), {})()
     tm.ResolveLinearWeightFormat = lambda *a, **kw: None
