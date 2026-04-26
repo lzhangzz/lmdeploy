@@ -174,7 +174,7 @@ class TurboMind:
     def _load_weights(self):
         """Load weights."""
         with torch.cuda.device(self.devices[0]):
-            self._tm_model.export()
+            self._model_loader.export()
 
     def _process_weights(self):
         """Process weight."""
@@ -217,7 +217,7 @@ class TurboMind:
             'Plz try pytorch engine instead.')
 
         from .deploy.converter import get_tm_config
-        from .deploy.target_model.base import OUTPUT_MODELS
+        from .deploy.model_loader import ModelLoader
 
         spec, model_path = get_tm_config(model_path, engine_config)
 
@@ -263,7 +263,7 @@ class TurboMind:
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
 
-        self._tm_model = OUTPUT_MODELS.get('tm')(
+        self._model_loader = ModelLoader(
             spec=spec,
             model_comm=model_comm,
             gpu_count=self.gpu_count,
@@ -305,12 +305,10 @@ class TurboMind:
 
         if not hasattr(self, '_export_iter'):
             que = Queue()
-            tm_model = self._tm_model
-            # update_params replaces the on-disk checkpoint source with a Queue; the
-            # OutputModel now owns model_path directly (input_model was removed).
-            tm_model.model_path = que
+            ml = self._model_loader
+            ml.model_path = que
             self._update_params_que = que
-            self._export_iter = tm_model.export_iter()
+            self._export_iter = ml.export_iter()
 
         with torch.cuda.device(self.devices[0]):
             if isinstance(request.serialized_named_tensors, str):
