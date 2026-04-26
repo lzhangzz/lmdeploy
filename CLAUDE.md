@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## General guidelines
+
+- DO NOT use worktree unless asked **explicitly**
+
 ## Build
 
 Build in the `build` folder:
@@ -31,6 +35,9 @@ os.environ['HF_HUB_CACHE'] = '...'
 Verify TurboMind with `scripts/test_turbomind_model.py`
 
 **You MUST verify the response every time you test a model.** The model must respond with meaningful human words relevant to your test prompt. Gibberish responses indicate a bug. Also the requested response length should be **at least 128 tokens** for testing a model.
+
+- DO NOT batch the testing by wrapping the test script in bash for loop
+- DO NOT modify the test script, the script MUST be used AS IS
 
 ## Debugging
 
@@ -64,4 +71,4 @@ We use an in-tree development style. Installing lmdeploy via setup scripts bring
 
 - NEVER install lmdeploy as a pip package
 - NEVER run the `setup.py` script
-- DON'T even think about it
+- DO NOT even think about it
