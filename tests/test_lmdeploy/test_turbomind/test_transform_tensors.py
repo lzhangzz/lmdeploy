@@ -130,8 +130,7 @@ def _make_linear(out_dim: int, in_dim: int | None = None,
     if has_bias:
         tensors['bias'] = torch.randn(out_dim)
     return Linear(tensors=tensors,
-                  weight_format='placeholder',
-                  data_format='placeholder')
+                  weight_format='placeholder')
 
 
 # ---------------------------------------------------------------------------
@@ -278,19 +277,16 @@ class TestTransformTensors:
     # -- format propagation --------------------------------------------------
 
     def test_format_propagation(self):
-        """Output inherits weight_format and data_format from first input."""
+        """Output inherits weight_format from first input."""
 
         @transform_output_dim
         def identity(x: torch.Tensor) -> torch.Tensor:
             return x
 
         lin = _make_linear(out_dim=4, in_dim=3)
-        # Set dummy formats
         object.__setattr__(lin, 'weight_format', 'fake_fmt')
-        object.__setattr__(lin, 'data_format', 'fake_data')
         result = identity(lin)
         assert result.weight_format == 'fake_fmt'
-        assert result.data_format == 'fake_data'
 
     # -- kwargs passthrough ---------------------------------------------------
 
