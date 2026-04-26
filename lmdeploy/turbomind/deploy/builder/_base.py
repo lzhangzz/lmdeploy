@@ -406,10 +406,6 @@ class Builder:
             return
 
         # --- GPU-invariant preparation -------------------------------------
-        assert linear.data_format is not None, (
-            f"{name}: Linear.data_format must be populated by "
-            f"WeightFormatResolver.resolve or a fusion helper.")
-
         fmt = linear.weight_format
 
         tp = self._tp if split_side else 1
@@ -426,7 +422,7 @@ class Builder:
         lin_cfg.input_dim  = in_dim
         lin_cfg.output_dim = out_dim
         lin_cfg.data_type  = compute_dtype or _tm.DataType.TYPE_INVALID
-        lin_cfg.format     = linear.data_format
+        lin_cfg.format     = linear.weight_format.make_data_format(compute_dtype)
         lin_cfg.has_bias   = 'bias' in linear.tensors
 
         packed = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
