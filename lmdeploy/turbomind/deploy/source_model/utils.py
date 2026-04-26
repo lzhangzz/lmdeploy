@@ -222,8 +222,7 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
             else:
                 new_tensors[kind] = tensor
 
-        return Linear(tensors=new_tensors, weight_format=x.weight_format,
-                      data_format=x.data_format)
+        return Linear(tensors=new_tensors, weight_format=x.weight_format)
 
     return _reorder_rotary_emb(x, head_dim, rope_dim)
 
@@ -312,8 +311,6 @@ def read_packed_moe_expert(
             half = t.shape[-1] // 2
             w1_t[kind] = t[..., :half].contiguous()
             w3_t[kind] = t[..., half:].contiguous()
-    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format,
-                data_format=gate_up.data_format)
-    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format,
-                data_format=gate_up.data_format)
+    w1 = Linear(tensors=w1_t, weight_format=gate_up.weight_format)
+    w3 = Linear(tensors=w3_t, weight_format=gate_up.weight_format)
     return w1, down, w3

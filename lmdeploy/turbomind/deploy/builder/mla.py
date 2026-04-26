@@ -43,11 +43,9 @@ def fold_kv_b(q_b: Linear, kv_b: Linear, wo: Linear, *,
                             ).reshape(H * R, -1)
 
     return (Linear(tensors={"weight": q_folded.contiguous()},
-                   weight_format=q_b.weight_format,
-                   data_format=q_b.data_format),
+                   weight_format=q_b.weight_format),
             Linear(tensors={"weight": o_folded.contiguous()},
-                   weight_format=wo.weight_format,
-                   data_format=wo.data_format))
+                   weight_format=wo.weight_format))
 
 
 def pad_wo_input(wo: Linear, *, cfg) -> Linear:
@@ -60,8 +58,7 @@ def pad_wo_input(wo: Linear, *, cfg) -> Linear:
     w = torch.nn.functional.pad(w, (0, 0, size_per_head - cur_dim, 0))
     w = w.reshape(head_num * size_per_head, -1)
     return Linear(tensors={"weight": w.contiguous()},
-                  weight_format=wo.weight_format,
-                  data_format=wo.data_format)
+                  weight_format=wo.weight_format)
 
 
 # ---------------------------------------------------------------------------

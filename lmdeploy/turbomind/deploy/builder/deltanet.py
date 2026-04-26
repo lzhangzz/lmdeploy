@@ -38,8 +38,7 @@ def split_qkv(linear: Linear,
             else:
                 tensors[kind] = t.narrow(out_dim, offset, dim).contiguous()
         new_linears.append(Linear(tensors=tensors,
-                                  weight_format=linear.weight_format,
-                                  data_format=linear.data_format))
+                                  weight_format=linear.weight_format))
         offset += dim
     return tuple(new_linears)
 
@@ -89,8 +88,7 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
             final = shape[:d] + [shape[d] * shape[d + 1]] + shape[d + 2:]
             fused_tensors[kind] = fused.reshape(final)
 
-    return Linear(tensors=fused_tensors, weight_format=first.weight_format,
-                  data_format=first.data_format)
+    return Linear(tensors=fused_tensors, weight_format=first.weight_format)
 
 
 def fuse_qkv_conv1d(t: torch.Tensor, qkv_split: tuple[int, int, int],

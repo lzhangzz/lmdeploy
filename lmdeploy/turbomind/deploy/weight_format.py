@@ -490,5 +490,4 @@ class WeightFormatResolver:
         if fmt.has_zero_point and "zeros" not in tensors:
             tensors["zeros"] = fmt.synthesize_zeros(tensors["scales"])
         return Linear(tensors=tensors,
-                      weight_format=fmt,
-                      data_format=fmt.make_data_format(self._data_type))
+                      weight_format=fmt)

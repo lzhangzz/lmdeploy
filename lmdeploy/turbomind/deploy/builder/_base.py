@@ -104,7 +104,6 @@ def _dequant_linear(linear: Linear, *, data_type) -> Linear:
     return Linear(
         tensors=new_tensors,
         weight_format=trivial,
-        data_format=trivial.make_data_format(data_type),
     )
 
 
@@ -112,20 +111,8 @@ def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict
     """Dequant linears to a common trivial format if a fusion group has mixed formats."""
     formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
-        # Weight formats agree; normalize data_format to a single shared object.
-        target_df = next(iter(linears.values())).data_format
-        return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
-                              data_format=target_df)
-                       if lin.data_format is not target_df else lin)
-                for name, lin in linears.items()}
-    result = {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
-    # Normalize data_format after dequant — each _dequant_linear may produce
-    # a distinct DataFormat object even when they represent the same dtype.
-    target_df = next(iter(result.values())).data_format
-    return {name: (Linear(lin.tensors, weight_format=lin.weight_format,
-                          data_format=target_df)
-                   if lin.data_format is not target_df else lin)
-            for name, lin in result.items()}
+        return linears
+    return {name: _dequant_linear(lin, data_type=data_type) for name, lin in linears.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +163,7 @@ def transform_output_dim(fn):
                 out_buckets[i][kind] = item.squeeze(0) if was_1d else item
 
         outputs = tuple(
-            Linear(ts, weight_format=first.weight_format,
-                   data_format=first.data_format)
+            Linear(ts, weight_format=first.weight_format)
             for ts in out_buckets)
         return outputs if len(outputs) > 1 else outputs[0]
 
@@ -237,8 +223,7 @@ def transform_input_dim(fn):
                 bucket[kind] = first.tensors[kind]
 
         outputs = tuple(
-            Linear(ts, weight_format=first.weight_format,
-                   data_format=first.data_format)
+            Linear(ts, weight_format=first.weight_format)
             for ts in out_buckets)
         return outputs if len(outputs) > 1 else outputs[0]
 
@@ -636,7 +621,6 @@ class TextModelBuilder(Builder):
         padded = Linear(
             tensors={k: pad_out_dim(t, padded_vocab, dim=-1)
                      for k, t in linear.tensors.items()},
-            weight_format=linear.weight_format,
-            data_format=linear.data_format)
+            weight_format=linear.weight_format)
         self._add_linear('output', padded,
                             split_side=SplitSide.OUTPUT)

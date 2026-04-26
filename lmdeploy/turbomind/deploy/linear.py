@@ -86,8 +86,6 @@ class Linear:
 
     tensors: dict[str, Tensor]
     weight_format: "WeightFormat" = field(compare=False, repr=False)
-    data_format: "_tm.DataFormat" = field(compare=False, repr=False)
-
     @classmethod
     def concat_out_dim(cls, xs: list[Linear]) -> Linear:
         """Concatenate along output dim."""
@@ -97,11 +95,9 @@ class Linear:
             t = first.tensors[kind]
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
         wfmts = {x.weight_format for x in xs}
-        dfmts = {x.data_format  for x in xs}
-        assert len(wfmts) == 1 and len(dfmts) == 1, (
-            "concat_out_dim requires uniform weight_format and data_format; "
+        assert len(wfmts) == 1, (
+            "concat_out_dim requires uniform weight_format; "
             "call dequant_mixed first if formats differ.")
         return Linear(tensors=result,
-                      weight_format=next(iter(wfmts)),
-                      data_format=next(iter(dfmts)))
+                      weight_format=next(iter(wfmts)))
 
