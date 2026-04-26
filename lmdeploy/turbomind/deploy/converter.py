@@ -15,7 +15,6 @@ from .weight_format import (AWQFormat, CompressedTensorFormat, FP8Format,
                             GPTQFormat, MXFP4Format, TrivialFormat,
                             WeightFormat, WeightFormatResolver)
 
-SUPPORTED_FORMATS = ['hf', 'awq', 'gptq', 'compressed-tensors', 'fp8', 'mxfp4', None]
 logger = get_logger('lmdeploy')
 
 
