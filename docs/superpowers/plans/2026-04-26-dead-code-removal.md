@@ -141,7 +141,7 @@ to:
 ### Task 5: Clean stale `__pycache__` files
 
 **Files:**
-- Delete: 13 stale `.pyc` files with no corresponding `.py`
+- Delete: 13 stale `.pyc` files (gitignored, not tracked — local cleanup only)
 
 - [ ] **Step 1: Delete stale `.pyc` files**
 
@@ -171,6 +171,8 @@ done
 ```
 Expected: no output.
 
+> `.pyc` files are gitignored — no commit needed for this step.
+
 ---
 
 ### Task 6: Build, test, and commit
@@ -199,27 +201,13 @@ Expected: model responds with meaningful human words, at least 128 tokens.
 git add lmdeploy/turbomind/deploy/converter.py \
         lmdeploy/turbomind/deploy/format_ops.py \
         lmdeploy/turbomind/deploy/linear.py \
-        lmdeploy/turbomind/deploy/weight_format.py \
-        lmdeploy/turbomind/deploy/__pycache__/format_ops.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/config.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/module.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/kind_map.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/policy.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/parameter.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/load_context.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/transforms.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/commit.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/configs.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/distributor.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/__pycache__/builder.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/builder/__pycache__/_old.cpython-312.pyc \
-        lmdeploy/turbomind/deploy/builder/__pycache__/linear.cpython-312.pyc
+        lmdeploy/turbomind/deploy/weight_format.py
 git commit -m "$(cat <<'EOF'
 chore: remove dead code from deploy directory
 
 Remove SUPPORTED_FORMATS constant, format_ops.py module, dead
-standalone functions and Linear methods in linear.py, stale
-__pycache__ files, and update a stale comment in weight_format.py.
+standalone functions and Linear methods in linear.py, and update
+a stale comment in weight_format.py.
 EOF
 )"
 ```
