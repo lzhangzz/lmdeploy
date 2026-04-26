@@ -10,7 +10,7 @@ import torch
 from lmdeploy.archs import get_model_arch
 
 from ..linear import Linear
-from ..builder._base import _dequant_linear
+from ..builders._base import _dequant_linear
 
 
 def load_model_config(model_path: str) -> dict:

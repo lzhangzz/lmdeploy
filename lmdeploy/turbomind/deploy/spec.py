@@ -9,9 +9,9 @@ import torch
 
 from lmdeploy.utils import get_logger
 
-from .builder import NormBuilder, make_norm_config
-from .source_model.utils import (parse_rope_param, rope_type_to_int,
-                                 reorder_rotary_emb)
+from .builders import NormBuilder, make_norm_config
+from .models.utils import (parse_rope_param, rope_type_to_int,
+                           reorder_rotary_emb)
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig

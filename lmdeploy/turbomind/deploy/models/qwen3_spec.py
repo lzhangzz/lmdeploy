@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import _turbomind as _tm
 
-from ..builder import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
-                       MoeBuilder, ModuleListBuilder, TextModelBuilder,
-                       _act_type_id)
-from ..builder import DecoderLayerConfig, ModuleListConfig
+from ..builders import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
+                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
+                        _act_type_id)
+from ..builders import DecoderLayerConfig, ModuleListConfig
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, reorder_rotary_emb

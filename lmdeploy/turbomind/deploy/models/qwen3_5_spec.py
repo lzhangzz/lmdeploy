@@ -6,11 +6,11 @@ import re
 
 import _turbomind as _tm
 
-from ..builder import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
-                       FfnBuilder, MoeBuilder, ModuleListBuilder,
-                       TextModelBuilder, _act_type_id)
-from ..builder import DecoderLayerConfig, ModuleListConfig
-from ..builder.attention import split_output_gate
+from ..builders import (AttentionBuilder, DecoderLayerBuilder, DeltaNetBuilder,
+                        FfnBuilder, MoeBuilder, ModuleListBuilder,
+                        TextModelBuilder, _act_type_id)
+from ..builders import DecoderLayerConfig, ModuleListConfig
+from ..builders.attention import split_output_gate
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb
