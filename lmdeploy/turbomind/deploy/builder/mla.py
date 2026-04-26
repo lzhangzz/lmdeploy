@@ -20,39 +20,27 @@ def fold_kv_b(q_b: Linear, kv_b: Linear, wo: Linear, *,
     Folds vc into wo via matmul (vc @ wo per head).
     All arithmetic in TM layout [in, out].
     """
-    head_num = cfg.head_num
-    qk_rope_dim = cfg.qk_rope_dim
-    size_per_head = cfg.head_dim
+    H = cfg.head_num
+    P = cfg.qk_nope_dim
+    S = cfg.qk_rope_dim
+    R_q = cfg.q_lora_rank   # q_b input dim
+    R = cfg.kv_lora_rank    # kv_b input dim, also fold expansion target
+    V = wo.tensors["weight"].shape[0] // H  # v_head_dim (cfg value overridden)
 
-    q_b_w = q_b.tensors["weight"]
-    kv_b_w = kv_b.tensors["weight"]
-    o_w = wo.tensors["weight"]
+    q_b_h = q_b.tensors["weight"].reshape(R_q, H, P + S)
+    kc, vc = kv_b.tensors["weight"].reshape(R, H, P + V).split([P, V], dim=-1)
+    q_nope, q_rope = q_b_h.split([P, S], dim=-1)
 
-    # Derive original dimensions from tensor shapes
-    orig_q_head_dim = q_b_w.shape[-1] // head_num
-    orig_qk_nope_dim = orig_q_head_dim - qk_rope_dim
-    orig_v_head_dim = o_w.shape[0] // head_num
+    # q_nope @ kc^T per head: [R_q, H, P] × [R, H, P] → [R_q, H, R]
+    q_folded = torch.cat([
+        torch.einsum("ihp,jhp->ihj", q_nope, kc),  # [R_q, H, R]
+        q_rope,                                      # [R_q, H, S]
+    ], dim=-1).reshape(R_q, H * (R + S))
 
-    # Split kv_b into kc and vc: [kv_lora_rank, head_num, dim]
-    kv_b_h = kv_b_w.reshape(kv_b_w.shape[0], head_num, -1)
-    kc = kv_b_h[:, :, :orig_qk_nope_dim]
-    vc = kv_b_h[:, :, orig_qk_nope_dim:]
-
-    # Fold kc into q_b: q_nope @ kc^T per head
-    q_b_h = q_b_w.reshape(q_b_w.shape[0], head_num, orig_q_head_dim)
-    q_nope = q_b_h[:, :, :orig_qk_nope_dim].permute(1, 0, 2)   # [H, R, P]
-    q_rope = q_b_h[:, :, orig_qk_nope_dim:].permute(1, 0, 2)   # [H, R, S]
-    kc_t = kc.permute(1, 2, 0)                                  # [H, P, R]
-    q_expanded = torch.bmm(q_nope, kc_t)                        # [H, R, R]
-    q_folded = torch.cat([q_expanded, q_rope], dim=-1)          # [H, R, sp]
-    q_folded = q_folded.permute(1, 0, 2).reshape(
-        q_b_w.shape[0], head_num * size_per_head)
-
-    # Fold vc into wo: vc @ wo per head
-    vc_b = vc.permute(1, 0, 2)                                  # [H, R, V]
-    o_h = o_w.reshape(head_num, orig_v_head_dim, -1)            # [H, V, N]
-    o_folded = torch.bmm(vc_b, o_h)                             # [H, R, N]
-    o_folded = o_folded.reshape(head_num * o_folded.shape[1], -1)
+    # vc @ wo per head
+    o_folded = torch.einsum("rhv,hvn->hrn", vc,
+                            wo.tensors["weight"].reshape(H, V, -1)
+                            ).reshape(H * R, -1)
 
     return (Linear(tensors={"weight": q_folded.contiguous()},
                    weight_format=q_b.weight_format,
