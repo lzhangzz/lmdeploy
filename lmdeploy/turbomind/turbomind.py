@@ -216,8 +216,8 @@ class TurboMind:
             f'turbomind does not support {model_path}. '
             'Plz try pytorch engine instead.')
 
-        from .deploy.converter import get_tm_config
-        from .deploy.model_loader import ModelLoader
+        from .converter import get_tm_config
+        from .model_loader import ModelLoader
 
         spec, model_path = get_tm_config(model_path, engine_config)
 

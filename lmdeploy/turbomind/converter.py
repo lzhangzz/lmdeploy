@@ -6,11 +6,11 @@ from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.utils import get_logger
 
-from ...utils import _get_and_verify_max_len, is_bf16_supported
-from ..supported_models import SUPPORTED_ARCHS
-from .builder import _cpp_dtype
-from .source_model.base import INPUT_MODELS
-from .source_model.utils import load_model_config
+from ..utils import _get_and_verify_max_len, is_bf16_supported
+from .supported_models import SUPPORTED_ARCHS
+from .builders import _cpp_dtype
+from .models.base import INPUT_MODELS
+from .models.utils import load_model_config
 from .weight_format import (AWQFormat, CompressedTensorFormat, FP8Format,
                             GPTQFormat, MXFP4Format, TrivialFormat,
                             WeightFormat, WeightFormatResolver)

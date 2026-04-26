@@ -360,7 +360,7 @@ class FP8Format(WeightFormat):
         return x
 
     def dequant(self, tensors, data_type):
-        from .builder._base import _CPP_TO_TORCH
+        from .builders._base import _CPP_TO_TORCH
 
         weight = tensors["weight"]
         scales = tensors["scales"]
