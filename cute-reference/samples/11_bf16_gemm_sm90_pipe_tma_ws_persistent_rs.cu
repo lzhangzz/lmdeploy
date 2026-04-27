@@ -211,12 +211,18 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
     // RS variant: A is register-source (ALayout_64x16), B is smem-source (GMMA descriptor).
     // partition_A yields smem views for each thread's S2R copy (no descriptor).
-    // make_fragment_A allocates register storage — 32 bf16 values/thread (4 K-tiles x 8 val).
-    // B is unchanged from SS: 4 GMMA descriptors (one per K-tile of 16).
+    //
+    // CRITICAL: Fragment created WITHOUT the PIPE dimension (Int<0> strips it).
+    // If PIPE were included, each thread would hold 3 stages × 32 bf16 = 96 bf16
+    // (192 bytes ≈ 48 registers) just for A, causing severe register spilling.
+    // Instead, the fragment holds ONE pipe stage (32 bf16 ≈ 16 registers) and is
+    // overwritten each iteration with copy(tCsA(_,_,_,pipe_idx), tCrA).
+    //
+    // B is unchanged from SS: 4 GMMA descriptors per pipe stage.
     Tensor tCsA = thr_mma.partition_A(sA);                                  // (MMA, MMA_M, MMA_K, PIPE)
     Tensor tCsB = thr_mma.partition_B(sB);                                  // (MMA, MMA_N, MMA_K, PIPE)
-    Tensor tCrA = thr_mma.make_fragment_A(tCsA);                            // register bf16 fragment
-    Tensor tCrB = thr_mma.make_fragment_B(tCsB);                            // GMMA descriptors
+    Tensor tCrA = thr_mma.make_fragment_A(tCsA(_,_,_,Int<0>{}));            // (MMA, MMA_M, MMA_K) — NO PIPE
+    Tensor tCrB = thr_mma.make_fragment_B(tCsB);                            // GMMA descriptors (has PIPE)
 
     // tCrC from a static-shape dummy tile (layout only matters, not the data)
     Tensor gC_dummy = make_tensor(make_gmem_ptr(C),
