@@ -373,9 +373,10 @@ bf16_gemm_persistent(int m, int n, int k,
   Tensor tC = make_tensor(C, make_shape(M, N), dC);                         // (M,N) for TMA inspection
   auto tma_store_c = make_tma_copy(SM90_TMA_STORE{}, tC, sC_layout, make_shape(bM, bN), Int<1>{});
 
-  // TiledMMA — SM90 WGMMA (warpgroup-level, smem descriptors, no S2R copies)
+  // TiledMMA — SM90 WGMMA RS variant (A in registers, B via smem descriptor)
+  // RS requires A to be K-major (static_assert enforced in the arch atom).
   TiledMMA mma = make_tiled_mma(
-      SM90_64x256x16_F32BF16BF16_SS<GMMA::Major::K, GMMA::Major::K>{},
+      SM90_64x256x16_F32BF16BF16_RS<GMMA::Major::K, GMMA::Major::K>{},
       Layout<Shape<_2, _1>>{});
 
   static_assert(decltype(size(mma))::value == 256, "Expected 256 threads");
