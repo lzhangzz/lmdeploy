@@ -1,15 +1,22 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""gpt-oss TextModelSpec for the new pipeline."""
+"""Gpt-oss TextModelSpec for the new pipeline."""
 from __future__ import annotations
 
 import re
 
 import _turbomind as _tm
 
-from ..builders import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
-                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
-                        _act_type_id)
-from ..builders import DecoderLayerConfig, ModuleListConfig
+from ..builders import (
+    AttentionBuilder,
+    DecoderLayerBuilder,
+    DecoderLayerConfig,
+    FfnBuilder,
+    ModuleListBuilder,
+    ModuleListConfig,
+    MoeBuilder,
+    TextModelBuilder,
+    _act_type_id,
+)
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, read_packed_moe_expert, reorder_rotary_emb

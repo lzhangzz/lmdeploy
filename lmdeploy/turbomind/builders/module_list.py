@@ -12,13 +12,13 @@ class ModuleListBuilder(Builder):
     def __setitem__(self, index: int, value):
         if isinstance(value, Builder):
             raise TypeError(
-                f"{type(self).__name__}[{index}]: call .build() first")
+                f'{type(self).__name__}[{index}]: call .build() first')
         if isinstance(value, BuiltModule):
             if self._built:
                 raise RuntimeError(
-                    f"{type(self).__name__} is built; "
-                    f"cannot set index {index}")
+                    f'{type(self).__name__} is built; '
+                    f'cannot set index {index}')
             self._add_child(str(index), value.handles)
             return
         raise TypeError(
-            f"{type(self).__name__}[{index}] requires a BuiltModule")
+            f'{type(self).__name__}[{index}] requires a BuiltModule')

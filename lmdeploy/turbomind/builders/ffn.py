@@ -64,21 +64,21 @@ def _pad_in(tensor: torch.Tensor, *, target: int) -> torch.Tensor:
 def _should_fuse_silu(w1_linear: Linear, act_type: str, is_moe: bool = False) -> bool:
     """Determine if fused SiLU (interleave) should be used for w1+w3 fusion.
 
-    Gold standard condition (from GEMM kernel constraints — trust it):
-        act_type == SiLU && (int4 || mxfp4 || fp8 || moe) && !(fp8 && SM90)
+    Gold standard condition (from GEMM kernel constraints — trust it):     act_type == SiLU && (int4 || mxfp4 || fp8 ||
+    moe) && !(fp8 && SM90)
     """
     if act_type not in ('', 'silu', 'SiLU'):
         return False
 
     # Dense bf16/fp16 without MoE -> chunk, not interleave
-    weight = w1_linear.tensors.get("weight")
+    weight = w1_linear.tensors.get('weight')
     is_quantized = weight is not None and weight.element_size() < 2
     if not is_quantized and not is_moe:
         return False
 
     # FP8 on SM90 -> chunk
     fmt = w1_linear.weight_format
-    if fmt is not None and fmt.name == "fp8":
+    if fmt is not None and fmt.name == 'fp8':
         if torch.cuda.is_available():
             cap = torch.cuda.get_device_capability()
             if cap == (9, 0):
@@ -102,7 +102,7 @@ def _can_fuse_w1w3(w1: Linear, tp: int) -> bool:
     fmt = w1.weight_format
     if fmt is None or fmt.block_out is None:
         return True
-    w = w1.tensors.get("weight")
+    w = w1.tensors.get('weight')
     if w is None:
         return True
     return (w.size(-1) // tp) % fmt.block_out == 0
@@ -176,7 +176,8 @@ class FfnBuilder(Builder):
     """FFN weight loading builder with w1+w3 fusion."""
 
     def add_ffn(self, w1, w2, w3):
-        """Pad weights for TP alignment, fuse w1+w3 if possible, then shard and commit.
+        """Pad weights for TP alignment, fuse w1+w3 if possible, then shard and
+        commit.
 
         The fusion result determines ``fuse_silu`` on the C++ module config.
         Updating ``self.config.fuse_silu`` **before** any ``_add_linear``

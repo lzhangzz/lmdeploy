@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import _turbomind as _tm
 
-from ..builders import (DecoderLayerBuilder, FfnBuilder, MLABuilder,
-                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
-                        _act_type_id)
-from ..builders import DecoderLayerConfig, ModuleListConfig
+from ..builders import (
+    DecoderLayerBuilder,
+    DecoderLayerConfig,
+    FfnBuilder,
+    MLABuilder,
+    ModuleListBuilder,
+    ModuleListConfig,
+    MoeBuilder,
+    TextModelBuilder,
+    _act_type_id,
+)
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import get_yarn_params, layer_progress, parse_rope_param

@@ -16,9 +16,8 @@ ModelRoot::~ModelRoot() = default;
 
 void ModelRoot::prepare()
 {
-    TM_CHECK(text_model)
-        << "ModelRoot::prepare: text_model not attached; did the spec "
-           "forget root.build()?";
+    TM_CHECK(text_model) << "ModelRoot::prepare: text_model not attached; did the spec "
+                            "forget root.build()?";
     Module::prepare();
 }
 

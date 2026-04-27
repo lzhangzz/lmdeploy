@@ -17,12 +17,12 @@
 #include "src/turbomind/engine/request.h"
 
 #include "src/turbomind/core/copy.h"
-#include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
-#include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/SequenceManager.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/utils/logger.h"
 #include "src/turbomind/utils/metrics.h"
 
@@ -56,14 +56,14 @@ struct Engine::Impl {
     using Requests = vector<shared_ptr<Request>>;
     using Signal   = std::function<void()>;
 
-    Impl(EngineParam         param,
-         LanguageModel        model,
-         const ModelWeight&   weights,
-         Context&             ctx,
-         Gateway&             gateway,
-         int                  device_id,
-         int                  queue_id,
-         int                  phases);
+    Impl(EngineParam        param,
+         LanguageModel      model,
+         const ModelWeight& weights,
+         Context&           ctx,
+         Gateway&           gateway,
+         int                device_id,
+         int                queue_id,
+         int                phases);
 
     void CreateSequenceManager();
 
@@ -128,9 +128,9 @@ struct Engine::Impl {
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
 
-    LanguageModel model_;
+    LanguageModel      model_;
     const ModelWeight& weights_;
-    ModelExecutor executor_;
+    ModelExecutor      executor_;
 
     std::thread internal_thread_;
 
@@ -175,14 +175,14 @@ Engine::Impl::~Impl()
     executor_ = {};
 }
 
-Engine::Impl::Impl(EngineParam         param,
-                   LanguageModel        model,
-                   const ModelWeight&   weights,
-                   Context&             ctx,
-                   Gateway&             gateway,
-                   int                  device_id,
-                   int                  queue_id,
-                   int                  phases):
+Engine::Impl::Impl(EngineParam        param,
+                   LanguageModel      model,
+                   const ModelWeight& weights,
+                   Context&           ctx,
+                   Gateway&           gateway,
+                   int                device_id,
+                   int                queue_id,
+                   int                phases):
     param_{param},
     gateway_{gateway},
     tp_group_{ctx.comm.h_tp_group},
@@ -207,10 +207,9 @@ Engine::Impl::Impl(EngineParam         param,
 
     CreateSequenceManager();  // initializes `session_len_trunc_`
 
-    const ssize_t max_batch_block_num =
-        param.max_batch_size * cdiv(session_len_trunc_, param_.cache_block_seq_len);
-    block_ptrs_buf_         = {max_batch_block_num, kCPUpinned};
-    block_ptrs_offsets_buf_ = {param.max_batch_size + 1, kCPUpinned};
+    const ssize_t max_batch_block_num = param.max_batch_size * cdiv(session_len_trunc_, param_.cache_block_seq_len);
+    block_ptrs_buf_                   = {max_batch_block_num, kCPUpinned};
+    block_ptrs_offsets_buf_           = {param.max_batch_size + 1, kCPUpinned};
 }
 
 void Engine::Impl::CreateSequenceManager()
@@ -219,16 +218,16 @@ void Engine::Impl::CreateSequenceManager()
 
     // Derive DeltaNet fields if linear attention exists
     bool has_linear_attention = false;
-    int linear_key_head_dim = 0, linear_value_head_dim = 0;
-    int linear_conv_kernel_dim = 0, linear_num_key_heads = 0, linear_num_value_heads = 0;
+    int  linear_key_head_dim = 0, linear_value_head_dim = 0;
+    int  linear_conv_kernel_dim = 0, linear_num_key_heads = 0, linear_num_value_heads = 0;
     for (int i = 0; i < weights_.num_layer; ++i) {
         if (auto* dn = weights_.layer(i)->linear_attn.get()) {
-            has_linear_attention    = true;
-            linear_key_head_dim     = dn->key_head_dim;
-            linear_value_head_dim   = dn->value_head_dim;
-            linear_conv_kernel_dim  = dn->d_conv;
-            linear_num_key_heads    = dn->num_k_heads * param_.attn_tp_size;
-            linear_num_value_heads  = dn->num_v_heads * param_.attn_tp_size;
+            has_linear_attention   = true;
+            linear_key_head_dim    = dn->key_head_dim;
+            linear_value_head_dim  = dn->value_head_dim;
+            linear_conv_kernel_dim = dn->d_conv;
+            linear_num_key_heads   = dn->num_k_heads * param_.attn_tp_size;
+            linear_num_value_heads = dn->num_v_heads * param_.attn_tp_size;
             break;
         }
     }
@@ -243,29 +242,28 @@ void Engine::Impl::CreateSequenceManager()
         return AllReduce(tp_group_, free, comm::RedOp::kMin);
     };
 
-    seq_mgr_ = std::make_unique<SequenceManager>(
-        weights_.head_dim,
-        weights_.kv_head_num / param_.attn_tp_size,
-        weights_.num_layer,
-        weights_.layer_types,
-        param_.quant_policy,
-        weights_.data_type,
-        weights_.data_type,   // runtime_dtype = data_type
-        linear_key_head_dim,
-        linear_value_head_dim,
-        linear_conv_kernel_dim,
-        linear_num_key_heads,
-        linear_num_value_heads,
-        cache_block_seq_len,
-        param_.attn_tp_size,
-        param_.max_batch_size,
-        param_.cache_max_block_count,
-        param_.cache_chunk_size,
-        param_.enable_prefix_caching,
-        tp_rank_,
-        param_.attn_cp_size,
-        core::Context::alloc(kDEVICE),
-        get_free_size);
+    seq_mgr_ = std::make_unique<SequenceManager>(weights_.head_dim,
+                                                 weights_.kv_head_num / param_.attn_tp_size,
+                                                 weights_.num_layer,
+                                                 weights_.layer_types,
+                                                 param_.quant_policy,
+                                                 weights_.data_type,
+                                                 weights_.data_type,  // runtime_dtype = data_type
+                                                 linear_key_head_dim,
+                                                 linear_value_head_dim,
+                                                 linear_conv_kernel_dim,
+                                                 linear_num_key_heads,
+                                                 linear_num_value_heads,
+                                                 cache_block_seq_len,
+                                                 param_.attn_tp_size,
+                                                 param_.max_batch_size,
+                                                 param_.cache_max_block_count,
+                                                 param_.cache_chunk_size,
+                                                 param_.enable_prefix_caching,
+                                                 tp_rank_,
+                                                 param_.attn_cp_size,
+                                                 core::Context::alloc(kDEVICE),
+                                                 get_free_size);
 
     const auto max_cached_tokens = seq_mgr_->max_block_count() * (size_t)cache_block_seq_len * param_.attn_cp_size;
     session_len_trunc_           = std::min(max_cached_tokens, (size_t)param_.session_len);
@@ -282,7 +280,10 @@ void Engine::Impl::Validate(Requests& infer_reqs, Requests& kill_reqs)
 
     bool has_linear_attention = false;
     for (auto t : weights_.layer_types) {
-        if (t == 1) { has_linear_attention = true; break; }
+        if (t == 1) {
+            has_linear_attention = true;
+            break;
+        }
     }
 
     auto count = [&occur](const auto& reqs) {
@@ -909,14 +910,14 @@ Engine::Engine()                  = default;
 Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
-Engine::Engine(EngineParam         param,
-               LanguageModel        model,
-               const ModelWeight&   weights,
-               Context&             ctx,
-               Gateway&             gateway,
-               int                  device_id,
-               int                  dp_rank,
-               int                  phases):
+Engine::Engine(EngineParam        param,
+               LanguageModel      model,
+               const ModelWeight& weights,
+               Context&           ctx,
+               Gateway&           gateway,
+               int                device_id,
+               int                dp_rank,
+               int                phases):
     impl_{std::make_unique<Impl>(param, std::move(model), weights, ctx, gateway, device_id, dp_rank, phases)}
 {
 }

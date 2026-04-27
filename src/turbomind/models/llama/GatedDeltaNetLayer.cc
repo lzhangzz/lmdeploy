@@ -14,12 +14,9 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(DataType                state_dtype,
                                        const EngineParam&      engine,
                                        const Context&          ctx,
                                        int                     phases):
-    tp_size_(engine.attn_tp_size),
-    num_linear_layers_(0),
-    state_dtype_(state_dtype),
-    linear_(*ctx.linear)
+    tp_size_(engine.attn_tp_size), num_linear_layers_(0), state_dtype_(state_dtype), linear_(*ctx.linear)
 {
-    layer_types_       = layer_types;
+    layer_types_ = layer_types;
     for (auto t : layer_types_) {
         if (t == 1)
             ++num_linear_layers_;
@@ -139,15 +136,15 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
     auto dispatch = [&](auto t) {
         using T = decltype(t);
 
-        const auto& w             = *p.weights;
-        const int   num_k_heads   = w.num_k_heads / tp_size_;
-        const int   num_v_heads   = w.num_v_heads / tp_size_;
-        const int   key_head_dim  = w.key_head_dim;
+        const auto& w              = *p.weights;
+        const int   num_k_heads    = w.num_k_heads / tp_size_;
+        const int   num_v_heads    = w.num_v_heads / tp_size_;
+        const int   key_head_dim   = w.key_head_dim;
         const int   value_head_dim = w.value_head_dim;
-        const int   d_conv        = w.d_conv;
-        const int   key_dim       = num_k_heads * key_head_dim;
-        const int   value_dim     = num_v_heads * value_head_dim;
-        const int   conv_dim      = key_dim * 2 + value_dim;
+        const int   d_conv         = w.d_conv;
+        const int   key_dim        = num_k_heads * key_head_dim;
+        const int   value_dim      = num_v_heads * value_head_dim;
+        const int   conv_dim       = key_dim * 2 + value_dim;
 
         // =================================================================
         // 1. Single fused input projection: reads p.input once from HBM.
@@ -173,8 +170,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // =================================================================
         const int bg_total = token_num * num_v_heads;
 
-        const int b_offset = conv_dim + value_dim;  // column offset to b logits
-        const int a_offset = b_offset + v_heads_tp;   // column offset to a logits
+        const int b_offset = conv_dim + value_dim;   // column offset to b logits
+        const int a_offset = b_offset + v_heads_tp;  // column offset to a logits
 
         Tensor beta{{token_num, num_v_heads}, dtype, device};
         Tensor g{{token_num, num_v_heads}, dtype, device};

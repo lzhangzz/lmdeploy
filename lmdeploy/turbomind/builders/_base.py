@@ -4,12 +4,11 @@ import enum
 import functools
 import inspect
 
+import _turbomind as _tm
 import torch
 
-import _turbomind as _tm
-
-from ..weight_format import TrivialFormat
 from ..linear import Linear, pad_out_dim
+from ..weight_format import TrivialFormat
 
 # ---------------------------------------------------------------------------
 # SplitSide enum (internal -- not exposed to specs)
@@ -23,8 +22,8 @@ class SplitSide(enum.Enum):
     INPUT  -- row-parallel:    split along the input dimension  (axis  0)
     """
 
-    OUTPUT = "output"
-    INPUT = "input"
+    OUTPUT = 'output'
+    INPUT = 'input'
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +107,8 @@ def _dequant_linear(linear: Linear, *, data_type) -> Linear:
 
 
 def _ensure_compatible_formats(linears: dict[str, Linear], *, data_type) -> dict[str, Linear]:
-    """Dequant linears to a common trivial format if a fusion group has mixed formats."""
+    """Dequant linears to a common trivial format if a fusion group has mixed
+    formats."""
     formats = {name: lin.weight_format.name for name, lin in linears.items()}
     if len(set(formats.values())) <= 1:
         return linears
@@ -257,14 +257,15 @@ def _copy_shard_to_param(handle, param_name: str, shard: torch.Tensor, *,
     dst = handle.param(param_name).alloc(alloc_shape, alloc_dtype)
     shard = _cast_shard_for_tm(shard, dst)
     assert dst.byte_size == shard.nbytes, (
-        f"{param_name}: alloc byte_size={dst.byte_size} != "
-        f"shard.nbytes={shard.nbytes}")
+        f'{param_name}: alloc byte_size={dst.byte_size} != '
+        f'shard.nbytes={shard.nbytes}')
     dst.copy_from(shard)
 
 
 def _shard(tensor: torch.Tensor, split_dim: int | None, tp: int,
            rank: int) -> torch.Tensor:
-    """Return the ``rank``-th split along ``split_dim``, or the tensor unchanged.
+    """Return the ``rank``-th split along ``split_dim``, or the tensor
+    unchanged.
 
     Used wherever a TP shard is selected from a broadcast-by-default
     tensor.  A ``split_dim`` of ``None`` or ``tp <= 1`` returns the tensor
@@ -347,13 +348,13 @@ class Builder:
     def __setattr__(self, name: str, value):
         if isinstance(value, Builder):
             raise TypeError(
-                f"{type(self).__name__}.{name}: assign .build() output "
-                f"(BuiltModule), not the Builder itself")
+                f'{type(self).__name__}.{name}: assign .build() output '
+                f'(BuiltModule), not the Builder itself')
         if isinstance(value, BuiltModule):
             if self._built:
                 raise RuntimeError(
-                    f"{type(self).__name__} is built; "
-                    f"cannot assign {name!r}")
+                    f'{type(self).__name__} is built; '
+                    f'cannot assign {name!r}')
             self._add_child(name, value.handles)
             return
         object.__setattr__(self, name, value)
@@ -425,8 +426,8 @@ class Builder:
                 if kind_split_dim is not None:
                     d = tensor.shape[kind_split_dim]
                     assert d % tp == 0, (
-                        f"TP split: {name}.{kind} dim {kind_split_dim} "
-                        f"has size {d}, not divisible by tp={tp}.")
+                        f'TP split: {name}.{kind} dim {kind_split_dim} '
+                        f'has size {d}, not divisible by tp={tp}.')
 
         # --- Per-GPU: standalone creation + tensor copy --------------------
         handles = []
@@ -458,7 +459,9 @@ class Builder:
 
     def _add_tensor(self, name: str, tensor: torch.Tensor | None,
                        split_side: SplitSide | None = None):
-        """Stage a raw-tensor commit under ``name``.  Applied during
+        """Stage a raw-tensor commit under ``name``.
+
+        Applied during
         ``build()`` in ``_commit_tensor``.
         """
         assert not self._built, (
@@ -472,6 +475,7 @@ class Builder:
 
     def _add_child(self, name: str, handles: list):
         """Stage pre-created per-GPU ``Module*`` handles under ``name``.
+
         Applied during ``build()`` in ``_commit_child``.
         """
         assert not self._built, (
@@ -585,10 +589,9 @@ class TextModelBuilder(Builder):
         self._vocab_size = vocab_size
 
     def build(self) -> BuiltModule:
-        """Create ModelWeight via _tm.create_module (via super), then
-        attach each per-GPU ModelWeight handle to its sentinel root
-        via add_child_raw.
-        """
+        """Create ModelWeight via _tm.create_module (via super), then attach
+        each per-GPU ModelWeight handle to its sentinel root via
+        add_child_raw."""
         built = super().build()
         for i, (root, text_model) in enumerate(
                 zip(self._root_handles, built.handles)):
@@ -597,7 +600,8 @@ class TextModelBuilder(Builder):
         return built
 
     def add_token_embeds(self, tensor):
-        """Commit the raw embedding lookup as the ``tok_embeddings`` root param.
+        """Commit the raw embedding lookup as the ``tok_embeddings`` root
+        param.
 
         Shards along hidden (output) dim by ``self._tp``. No vocab padding —
         embedding lookup never indexes past ``vocab - 1``.

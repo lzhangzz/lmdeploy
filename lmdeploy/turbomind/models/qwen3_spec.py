@@ -1,18 +1,24 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Qwen3 TextModelSpec for the new pipeline.
 
-Qwen3 is a standard Llama-like model with QK norm and optional MoE.
-No shared expert in the MoE variant, no linear attention, no zero-centered
-norm.
+Qwen3 is a standard Llama-like model with QK norm and optional MoE. No shared expert in the MoE variant, no linear
+attention, no zero-centered norm.
 """
 from __future__ import annotations
 
 import _turbomind as _tm
 
-from ..builders import (AttentionBuilder, DecoderLayerBuilder, FfnBuilder,
-                        MoeBuilder, ModuleListBuilder, TextModelBuilder,
-                        _act_type_id)
-from ..builders import DecoderLayerConfig, ModuleListConfig
+from ..builders import (
+    AttentionBuilder,
+    DecoderLayerBuilder,
+    DecoderLayerConfig,
+    FfnBuilder,
+    ModuleListBuilder,
+    ModuleListConfig,
+    MoeBuilder,
+    TextModelBuilder,
+    _act_type_id,
+)
 from ..spec import TextModelSpec
 from .base import INPUT_MODELS
 from .utils import layer_progress, reorder_rotary_emb

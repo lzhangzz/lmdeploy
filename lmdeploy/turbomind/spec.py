@@ -10,8 +10,7 @@ import torch
 from lmdeploy.utils import get_logger
 
 from .builders import NormBuilder, make_norm_config
-from .models.utils import (parse_rope_param, rope_type_to_int,
-                           reorder_rotary_emb)
+from .models.utils import parse_rope_param, reorder_rotary_emb, rope_type_to_int
 
 if TYPE_CHECKING:
     from lmdeploy.messages import TurbomindEngineConfig
@@ -43,7 +42,7 @@ class TextModelSpec(ABC):
     # Construction / parsing
     # ------------------------------------------------------------------
 
-    def __init__(self, hf_cfg: dict, engine_cfg: 'TurbomindEngineConfig',
+    def __init__(self, hf_cfg: dict, engine_cfg: TurbomindEngineConfig,
                  *, resolver):
         """Parse HF config into orchestration scalars.
 

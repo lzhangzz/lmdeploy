@@ -8,12 +8,12 @@
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
-#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -32,10 +32,10 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
-                               const Context&      ctx,
-                               int                 phases,
-                               const ModelWeight&  model_weight):
+UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
+                               const Context&     ctx,
+                               int                phases,
+                               const ModelWeight& model_weight):
     layer_num_(model_weight.num_layer),
     hidden_units_(model_weight.hidden_units),
     attn_tp_size_(engine.attn_tp_size),
@@ -66,24 +66,25 @@ UnifiedDecoder::UnifiedDecoder(const EngineParam&  engine,
         }
     }
 
-    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(
-        engine.quant_policy,
-        model_weight.layer_types,
-        model_weight.num_layer,
-        attn_weights,
-        engine,
-        ctx,
-        phases,
-        (bool)moe_ffn_layer_);
+    attn_layer_ = std::make_unique<UnifiedAttentionLayer>(engine.quant_policy,
+                                                          model_weight.layer_types,
+                                                          model_weight.num_layer,
+                                                          attn_weights,
+                                                          engine,
+                                                          ctx,
+                                                          phases,
+                                                          (bool)moe_ffn_layer_);
 
     bool has_linear_attn = false;
     for (auto t : model_weight.layer_types) {
-        if (t == 1) { has_linear_attn = true; break; }
+        if (t == 1) {
+            has_linear_attn = true;
+            break;
+        }
     }
     if (has_linear_attn) {
-        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(
-            model_weight.data_type, model_weight.layer_types,
-            engine, ctx, phases);
+        linear_attn_layer_ =
+            std::make_unique<GatedDeltaNetLayer>(model_weight.data_type, model_weight.layer_types, engine, ctx, phases);
     }
 
     bool has_ffn = false;
@@ -213,12 +214,13 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     TM_DEBUG_TENSOR(local_residual, "res", 1);
 
-
-
-
     const auto stream = core::Context::stream().handle();
 
-    invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->attention_norm->weight, weights.at(0)->attention_norm->norm_eps_, stream);
+    invokeRMSNorm(local_hidden_states,
+                  local_residual,
+                  weights.at(0)->attention_norm->weight,
+                  weights.at(0)->attention_norm->norm_eps_,
+                  stream);
 
     sync_check_cuda_error();
 
@@ -239,7 +241,6 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
             continue;
         }
 
-
         /////////////////////////////////////////////
         /// self-attention or linear-attention
         if (weights.at(layer)->linear_attn) {
@@ -248,8 +249,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         }
         else {
             auto* attn = weights.at(layer)->attention.get();
-            attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, attn, layer});
+            attn_layer_->Forward({phase, local_hidden_states, local_hidden_states, attn, layer});
         }
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);

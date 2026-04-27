@@ -23,8 +23,6 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor
 
-import _turbomind as _tm
-
 if TYPE_CHECKING:
     from .weight_format import WeightFormat
 
@@ -47,7 +45,7 @@ def _pad_1d(t: Tensor, dim: int, target: int) -> Tensor:
     pad = [0] * (2 * t.dim())
     # F.pad expects pairs in reverse dim order
     pad[2 * (t.dim() - 1 - dim) + 1] = deficit
-    return torch.nn.functional.pad(t, pad, "constant", 0)
+    return torch.nn.functional.pad(t, pad, 'constant', 0)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +83,7 @@ class Linear:
     """
 
     tensors: dict[str, Tensor]
-    weight_format: "WeightFormat" = field(compare=False, repr=False)
+    weight_format: WeightFormat = field(compare=False, repr=False)
     @classmethod
     def concat_out_dim(cls, xs: list[Linear]) -> Linear:
         """Concatenate along output dim."""
@@ -96,8 +94,7 @@ class Linear:
             result[kind] = torch.cat([x.tensors[kind] for x in xs], dim=t.dim() - 1)
         wfmts = {x.weight_format for x in xs}
         assert len(wfmts) == 1, (
-            "concat_out_dim requires uniform weight_format; "
-            "call dequant_mixed first if formats differ.")
+            'concat_out_dim requires uniform weight_format; '
+            'call dequant_mixed first if formats differ.')
         return Linear(tensors=result,
                       weight_format=next(iter(wfmts)))
-

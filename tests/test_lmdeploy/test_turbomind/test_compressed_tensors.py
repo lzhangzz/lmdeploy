@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
-
 from lmdeploy.turbomind.deploy.parameter import QuantWeightOnly, pack_u4_row
 from lmdeploy.turbomind.deploy.source_model.qwen import Qwen3_5ReaderMixin
 

@@ -9,15 +9,14 @@ import torch
 
 from lmdeploy.archs import get_model_arch
 
-from ..linear import Linear
 from ..builders._base import _dequant_linear
+from ..linear import Linear
 
 
 def load_model_config(model_path: str) -> dict:
     """Load and normalise the HuggingFace model config to a plain dict.
 
-    Handles nested configs (text_config, llm_config) and transformers
-    AutoConfig objects that expose a to_dict() method.
+    Handles nested configs (text_config, llm_config) and transformers AutoConfig objects that expose a to_dict() method.
     """
     _, model_config = get_model_arch(model_path)
     if hasattr(model_config, 'text_config'):
@@ -195,7 +194,7 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
     if isinstance(x, Linear):
         if resolver is None:
             raise TypeError(
-                "resolver is required when passing a Linear to reorder_rotary_emb"
+                'resolver is required when passing a Linear to reorder_rotary_emb'
             )
         data_type = resolver.data_type
         wfmt = x.weight_format
@@ -208,7 +207,7 @@ def reorder_rotary_emb(x, head_dim: int, rope_dim: int, *, resolver=None):
 
         new_tensors = {}
         for kind, tensor in x.tensors.items():
-            if kind in ("scales", "zeros") and block_out > 0:
+            if kind in ('scales', 'zeros') and block_out > 0:
                 # Block-level shuffle: reinterpret each block as a "head"
                 # so _reorder_rotary_emb shuffles at block granularity.
                 blocks_per_head = block_out // head_dim
@@ -251,7 +250,7 @@ def _pad_kv_head(kv_head_num: int, attn_tp: int) -> int:
 
 
 def layer_progress(num_layers: int):
-    """tqdm iterable for spec.layers() per-layer conversion loops.
+    """Tqdm iterable for spec.layers() per-layer conversion loops.
 
     Yields the layer indices 0..num_layers-1, displaying a single-line
     progress bar on stderr. ``leave=False`` clears the bar when the loop
@@ -271,8 +270,8 @@ def read_packed_moe_expert(
     interleaved: bool = False,
     trans: bool = False,
 ) -> tuple[Linear, Linear, Linear]:
-    """Read one packed MoE expert's fused gate_up + down and split into
-    (w1, w2, w3) Linears in TM layout.
+    """Read one packed MoE expert's fused gate_up + down and split into (w1,
+    w2, w3) Linears in TM layout.
 
     ``gate_up_pfx`` and ``down_pfx`` are the full prefixes to the two
     packed tensors (e.g. ``'model.layers.5.mlp.experts.gate_up_proj'``).

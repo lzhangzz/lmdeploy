@@ -17,10 +17,10 @@
 #include "src/turbomind/engine/model_request.h"
 
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/model_weight.h"
-#include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/model_root.h"
+#include "src/turbomind/models/model_weight.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -37,9 +37,9 @@ using std::shared_ptr;
 using std::unique_ptr;
 
 struct TurboMind::Impl {
-    DataType       data_type_;
-    EngineParam    engine_param_;
-    size_t         comm_size_;
+    DataType    data_type_;
+    EngineParam engine_param_;
+    size_t      comm_size_;
 
     vector<EngineParam> engine_params_;
 
@@ -54,9 +54,9 @@ struct TurboMind::Impl {
     vector<int> global_rank_;
 
     // Weights & engine instances for the ranks
-    vector<shared_ptr<ModelRoot>>   weights_;
-    vector<shared_ptr<Context>>     contexts_;
-    vector<Engine>                  engines_;
+    vector<shared_ptr<ModelRoot>> weights_;
+    vector<shared_ptr<Context>>   contexts_;
+    vector<Engine>                engines_;
 
     string model_dir_;
 
@@ -82,8 +82,7 @@ struct TurboMind::Impl {
     core::Module* CreateRoot(int index)
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
-        TM_CHECK(contexts_[index] != nullptr)
-            << "CreateContext(" << index << ") must run before CreateRoot";
+        TM_CHECK(contexts_[index] != nullptr) << "CreateContext(" << index << ") must run before CreateRoot";
         weights_[index] = std::make_shared<ModelRoot>();
         return weights_[index].get();
     }
@@ -162,7 +161,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     max_forward_token_num += engine_param_.max_batch_size;
 
     {
-        auto sp = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
+        auto sp                             = engine_param_.attn_tp_size * engine_param_.attn_cp_size;
         engine_param_.max_forward_token_num = ((size_t)max_forward_token_num + sp - 1) / sp * sp;
     }
 
@@ -276,10 +275,7 @@ void TurboMind::Impl::CreateEngine(int index)
     ctx.comm.h_comm->Sync();
 
     // create model
-    LanguageModel model{param,
-                        ctx,
-                        *weights_[index]->text_model_ptr(),
-                        phases_};
+    LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
     // create engine
     engines_[index] = Engine{param,

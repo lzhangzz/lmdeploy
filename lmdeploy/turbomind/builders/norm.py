@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import torch
-
 import _turbomind as _tm
+import torch
 
 from ._base import Builder
 

@@ -111,11 +111,11 @@ struct LlamaLinear::Impl {
         return {A, desc_A, U, desc_U};
     }
 
-    void Forward(Tensor&                 output,
-                 const Tensor&           input,  //
+    void Forward(Tensor&             output,
+                 const Tensor&       input,  //
                  const LinearWeight& weight,
-                 const Buffer_<int>&     indices,
-                 const Buffer_<int>&     offsets)
+                 const Buffer_<int>& indices,
+                 const Buffer_<int>& offsets)
     {
         using namespace gemm;
 
@@ -181,18 +181,18 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LinearWeight& weight,
-                            std::optional<Tensor>   output)
+Tensor LlamaLinear::Forward(const Tensor&         input,  //
+                            const LinearWeight&   weight,
+                            std::optional<Tensor> output)
 {
     return Forward(input, weight, {}, {}, output);
 }
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LinearWeight& weight,
-                            const Buffer_<int>&     indices,
-                            const Buffer_<int>&     offsets,
-                            std::optional<Tensor>   output)
+Tensor LlamaLinear::Forward(const Tensor&         input,  //
+                            const LinearWeight&   weight,
+                            const Buffer_<int>&   indices,
+                            const Buffer_<int>&   offsets,
+                            std::optional<Tensor> output)
 {
     Tensor in = input.view({-1, input.shape(-1)});
     Tensor out;

@@ -91,14 +91,14 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(int                               quant_policy,
-                                             const std::vector<int>&           layer_types,
-                                             int                               layer_num,
-                                             std::vector<AttentionWeight*>     attn_weights,
-                                             const EngineParam&                engine,
-                                             const Context&                    ctx,
-                                             int                               phases,
-                                             bool                              init):
+UnifiedAttentionLayer::UnifiedAttentionLayer(int                           quant_policy,
+                                             const std::vector<int>&       layer_types,
+                                             int                           layer_num,
+                                             std::vector<AttentionWeight*> attn_weights,
+                                             const EngineParam&            engine,
+                                             const Context&                ctx,
+                                             int                           phases,
+                                             bool                          init):
     quant_policy_{quant_policy},
     rope_{attn_weights[0]->rope},
     engine_param_{engine},
@@ -158,7 +158,7 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(int                               q
 
     // Eagerly initialize workspace buffers (was previously lazy in Init())
     {
-        const auto& w = *attn_weights[0];
+        const auto& w              = *attn_weights[0];
         const int   tp_size        = w.tp_size;
         const int   local_head_num = w.head_num / tp_size;
         const int   size_per_head  = w.head_dim;
@@ -322,7 +322,6 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     Tensor qkv;
 
-
     auto& d = *data_.at(p.phase);
 
     // if (d.dbg_size) {
@@ -351,19 +350,18 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     Tensor attn = [&]() -> Tensor { TM_DISPATCH_PRIMARY_DTYPES_RET(qkv.dtype(), invoke); }();
 
-
     // Apply sigmoid gating: attn *= sigmoid(gate)
     // Gate is stored at the end of each token's QKV: [Q|K|V|Gate]
     if (weights.attn_output_gate) {
-        const int tp_size           = weights.tp_size;
-        const int local_head_num    = weights.head_num / tp_size;
-        const int local_kv_head_num = weights.kv_head_num / tp_size;
-        const int size_per_head     = weights.head_dim;
-        const int q_count           = qkv.shape(0);
-        const int attn_dim          = local_head_num * size_per_head;
-        const int gate_offset       = (local_head_num + 2 * local_kv_head_num) * size_per_head;
-        const int qkv_stride        = (2 * local_head_num + 2 * local_kv_head_num) * size_per_head;
-        const auto stream           = core::Context::stream().handle();
+        const int  tp_size           = weights.tp_size;
+        const int  local_head_num    = weights.head_num / tp_size;
+        const int  local_kv_head_num = weights.kv_head_num / tp_size;
+        const int  size_per_head     = weights.head_dim;
+        const int  q_count           = qkv.shape(0);
+        const int  attn_dim          = local_head_num * size_per_head;
+        const int  gate_offset       = (local_head_num + 2 * local_kv_head_num) * size_per_head;
+        const int  qkv_stride        = (2 * local_head_num + 2 * local_kv_head_num) * size_per_head;
+        const auto stream            = core::Context::stream().handle();
         invokeSigmoidGateMultiply(attn.raw_data(),
                                   (const char*)qkv.raw_data() + gate_offset * byte_size(qkv.dtype(), 1),
                                   attn_dim,
@@ -416,8 +414,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     const bool is_mla = weights.is_mla();
 
-    Tensor tmp_kv{
-        {local_kv_head_num, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, size_per_head}, dtype, device};
+    Tensor tmp_kv{{local_kv_head_num, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, size_per_head}, dtype, device};
 
     const int cache_layer_id = cache_layer_ids_[p.layer_id];
 
@@ -475,7 +472,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.linear_iter_params = LinearIteratorParams{
                 tmp_kv.raw_data(),               // flattened KV
                 stat.k_sum * size_per_head * 2,  // stride to next head
-                stat.k_sum * size_per_head        // stride from K to V
+                stat.k_sum * size_per_head       // stride from K to V
             };
         }
 

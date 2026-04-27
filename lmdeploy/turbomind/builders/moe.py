@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from ._base import Builder, SplitSide
 
-
 # ---------------------------------------------------------------------------
 # MoeBuilder -- gate, non-expert params
 # ---------------------------------------------------------------------------

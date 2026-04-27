@@ -22,15 +22,8 @@ struct OutputProcessor::Impl {
 
     std::function<Tensor(const Tensor&)> lm_head_;
 
-    Impl(int                                  vocab_size,
-         int                                  max_logits_len,
-         int                                  tp_rank,
-         int                                  phases,
-         std::function<Tensor(const Tensor&)> lm_head):
-        vocab_size_{vocab_size},
-        max_logits_len_{max_logits_len},
-        tp_rank_{tp_rank},
-        lm_head_{std::move(lm_head)}
+    Impl(int vocab_size, int max_logits_len, int tp_rank, int phases, std::function<Tensor(const Tensor&)> lm_head):
+        vocab_size_{vocab_size}, max_logits_len_{max_logits_len}, tp_rank_{tp_rank}, lm_head_{std::move(lm_head)}
     {
         for (int i = 0; i < phases; ++i) {
             data_.emplace_back();

@@ -114,8 +114,8 @@ def _make_linear(out_dim: int, in_dim: int | None = None,
                  has_bias: bool = False) -> Linear:
     """Create a trivial Linear for testing.
 
-    If *in_dim* is given the weight is 2-D (in_dim, out_dim); otherwise
-    it is 1-D (out_dim,) -- simulating a bias-only tensor.
+    If *in_dim* is given the weight is 2-D (in_dim, out_dim); otherwise it is 1-D (out_dim,) -- simulating a bias-only
+    tensor.
     """
     tensors: dict[str, torch.Tensor] = {}
     if in_dim is not None:

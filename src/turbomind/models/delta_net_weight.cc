@@ -7,17 +7,17 @@
 
 namespace turbomind {
 
-DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg)
-    : hidden_dim(cfg.hidden_dim)
-    , num_k_heads(cfg.num_k_heads)
-    , num_v_heads(cfg.num_v_heads)
-    , key_head_dim(cfg.key_head_dim)
-    , value_head_dim(cfg.value_head_dim)
-    , d_conv(cfg.d_conv)
-    , bias(cfg.has_bias)
-    , tp_size(cfg.tp_size)
-    , tp_rank(cfg.tp_rank)
-    , data_type(cfg.data_type)
+DeltaNetWeight::DeltaNetWeight(const core::DeltaNetConfig& cfg):
+    hidden_dim(cfg.hidden_dim),
+    num_k_heads(cfg.num_k_heads),
+    num_v_heads(cfg.num_v_heads),
+    key_head_dim(cfg.key_head_dim),
+    value_head_dim(cfg.value_head_dim),
+    d_conv(cfg.d_conv),
+    bias(cfg.has_bias),
+    tp_size(cfg.tp_size),
+    tp_rank(cfg.tp_rank),
+    data_type(cfg.data_type)
 {
 }
 

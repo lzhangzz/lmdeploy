@@ -24,10 +24,7 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    LanguageModel(const EngineParam&    engine,
-                  const Context&        ctx,
-                  const ModelWeight&    weights,
-                  int                   phases);
+    LanguageModel(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

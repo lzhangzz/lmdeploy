@@ -22,9 +22,8 @@ from ._base import Builder, SplitSide, _dequant_linear, transform_output_dim
 def dequant_mixed(*linears: Linear, data_type) -> tuple[Linear, ...]:
     """Dequantize to trivial if any arg is in trivial format.
 
-    When any Linear has trivial weight format (e.g. from RoPE reordering),
-    dequantize all non-trivial args so formats match for fusion.
-    None args pass through unchanged.
+    When any Linear has trivial weight format (e.g. from RoPE reordering), dequantize all non-trivial args so formats
+    match for fusion. None args pass through unchanged.
     """
     has_trivial = any(
         l is not None
@@ -54,7 +53,7 @@ def _repeat_kv_heads(tensor: torch.Tensor, *, tp: int,
         return tensor
     target_heads = ((heads + tp - 1) // tp) * tp
     assert target_heads % heads == 0, (
-        f"target_heads={target_heads} must be divisible by heads={heads}")
+        f'target_heads={target_heads} must be divisible by heads={heads}')
     n_repeat = target_heads // heads
     per_head = tensor.size(-1) // heads
     t = tensor.view(tensor.size(0), heads, per_head)
@@ -74,8 +73,7 @@ def split_output_gate(tensor: torch.Tensor, *, head_dim: int
                       ) -> tuple[torch.Tensor, torch.Tensor]:
     """Split output gate from Q projection (Qwen3.5).
 
-    Q's output dim is 2 * head_num * head_dim. Reshape to
-    [batch, head_num, 2, head_dim], split into q_real and gate.
+    Q's output dim is 2 * head_num * head_dim. Reshape to [batch, head_num, 2, head_dim], split into q_real and gate.
     """
     head_num = tensor.size(-1) // (head_dim * 2)
     q, gate = tensor.view(-1, head_num, 2, head_dim).unbind(2)
@@ -127,6 +125,9 @@ class AttentionBuilder(Builder):
         self._add_linear('wo', o, SplitSide.INPUT)
 
     def add_param(self, name, tensor):
-        """Commit a direct parameter. Builder determines split side."""
+        """Commit a direct parameter.
+
+        Builder determines split side.
+        """
         split_side = self._PARAM_TP_RULES.get(name)
         self._add_tensor(name, tensor, split_side)

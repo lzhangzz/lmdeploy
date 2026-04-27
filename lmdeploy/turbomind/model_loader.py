@@ -8,10 +8,9 @@ from .loader import create_loader
 class ModelLoader:
     """Coordinates loading a spec's weights into the TurboMind runtime.
 
-    Holds the spec, model_comm handle, and model_path. Extracts GPU topology
-    handles from model_comm and binds them onto the spec at construction time.
-    Provides export() and export_iter() to load checkpoint weights and commit
-    them to the C++ runtime.
+    Holds the spec, model_comm handle, and model_path. Extracts GPU topology handles from model_comm and binds them onto
+    the spec at construction time. Provides export() and export_iter() to load checkpoint weights and commit them to the
+    C++ runtime.
     """
 
     def __init__(self, spec, model_comm, gpu_count, model_path):

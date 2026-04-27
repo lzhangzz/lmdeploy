@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <cuda_runtime.h>
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/tensor.h"
+#include <cuda_runtime.h>
 
 namespace turbomind {
 
@@ -27,7 +27,8 @@ void invokeInPlaceTranspose102(
     T* data, T* workspace, const int dim0, const int dim1, const int dim2, bool copy = true, cudaStream_t stream = 0);
 
 /// Element-wise dtype cast kernel.  Supports fp32 <-> fp16 <-> bf16.
-void invokeDtypeCast(void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream = 0);
+void invokeDtypeCast(
+    void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream = 0);
 
 /// If *tensor* is a trivial float type that differs from *target_dtype*, cast
 /// it in-place (allocates a temporary, casts, move-assigns).  Uses

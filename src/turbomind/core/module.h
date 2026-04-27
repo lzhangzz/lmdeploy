@@ -23,12 +23,13 @@ namespace turbomind::core {
 // ======================================================================
 
 #define TM_MEMBER(Type, name, ...) Type name{__VA_ARGS__};
-#define TM_PTR(Type, name, ...)    visitor(#name, &Config::name);
-#define TM_FOR_EACH(ClassName, field_list) \
-    template<typename Visitor> \
-    static void for_each(Visitor&& visitor) { \
-        using Config = ClassName; \
-        field_list(TM_PTR) \
+#define TM_PTR(Type, name, ...) visitor(#name, &Config::name);
+#define TM_FOR_EACH(ClassName, field_list)                                                                             \
+    template<typename Visitor>                                                                                         \
+    static void for_each(Visitor&& visitor)                                                                            \
+    {                                                                                                                  \
+        using Config = ClassName;                                                                                      \
+        field_list(TM_PTR)                                                                                             \
     }
 
 // ======================================================================
@@ -42,7 +43,9 @@ struct ModuleConfig {
 struct ModuleListConfig: ModuleConfig {
     ModuleListConfig(): ModuleConfig{"ModuleList"} {}
     template<typename Visitor>
-    static void for_each(Visitor&&) {}
+    static void for_each(Visitor&&)
+    {
+    }
 };
 
 // ======================================================================
@@ -87,72 +90,65 @@ struct ModuleListConfig: ModuleConfig {
 
 /// Fragment for add_child() override body: matches name and stores child.
 /// Assumes member `std::unique_ptr<Type> name` and local `std::string name_str`.
-#define TM_ADD_CHILD_CASE(Type, name)                        \
-    if (name_str == #name) {                                 \
-        TM_CHECK_EQ(child->type(), Type().type());           \
-        name.reset(static_cast<Type*>(child.release()));     \
-        attach_child_(name.get(), this, std::move(name_str));\
-        return name.get();                                   \
+#define TM_ADD_CHILD_CASE(Type, name)                                                                                  \
+    if (name_str == #name) {                                                                                           \
+        TM_CHECK_EQ(child->type(), Type().type());                                                                     \
+        name.reset(static_cast<Type*>(child.release()));                                                               \
+        attach_child_(name.get(), this, std::move(name_str));                                                          \
+        return name.get();                                                                                             \
     }
 
 /// Fragment for child() override body: matches name and returns pointer.
-#define TM_CHILD_CASE(Type, name)    \
-    if (name_str == #name) {         \
-        return name.get();           \
+#define TM_CHILD_CASE(Type, name)                                                                                      \
+    if (name_str == #name) {                                                                                           \
+        return name.get();                                                                                             \
     }
 
 /// Fragment for param() override body: matches name and returns Param handle.
-#define TM_PARAM_CASE(name)          \
-    if (name_str == #name) {         \
-        return core::Param{&name};  \
+#define TM_PARAM_CASE(name)                                                                                            \
+    if (name_str == #name) {                                                                                           \
+        return core::Param{&name};                                                                                     \
     }
 
 /// Fragment for for_each_child() override body: visits child.
-#define TM_VISIT_CHILD(Type, name)    \
-    visitor(#name, name.get());
+#define TM_VISIT_CHILD(Type, name) visitor(#name, name.get());
 
 /// Fragment for for_each_param() override body: visits param.
-#define TM_VISIT_PARAM(name)          \
-    visitor(#name, name);
+#define TM_VISIT_PARAM(name) visitor(#name, name);
 
 /// Declares data members (children + params) and virtual method overrides.
 /// Used in the public section of a derived class.
-#define TM_MODULE_DECLARE(Class, ChildrenX, ParamsX)                         \
-    ChildrenX(TM_CHILD_MEMBER)                                                \
-    ParamsX(TM_PARAM_MEMBER)                                                  \
-    core::Module* add_child(std::string name,                                 \
-                            std::unique_ptr<Module> child) override;          \
-    core::Module* child(const std::string& name) const override;              \
-    core::Param param(const std::string& name) override;                       \
-    void          for_each_child(std::function<void(const char*, Module*)>    \
-                                    visitor) const override;                  \
-    void          for_each_param(std::function<void(const char*, core::Tensor&)>    \
-                                    visitor) override;
+#define TM_MODULE_DECLARE(Class, ChildrenX, ParamsX)                                                                   \
+    ChildrenX(TM_CHILD_MEMBER) ParamsX(TM_PARAM_MEMBER) core::Module* add_child(                                       \
+        std::string name, std::unique_ptr<Module> child) override;                                                     \
+    core::Module* child(const std::string& name) const override;                                                       \
+    core::Param   param(const std::string& name) override;                                                             \
+    void          for_each_child(std::function<void(const char*, Module*)> visitor) const override;                    \
+    void          for_each_param(std::function<void(const char*, core::Tensor&)> visitor) override;
 
 /// Defines all X-macro generated method bodies for a derived module class.
 /// Used in the .cc file.  ChildrenX/ParamsX may be empty macros.
-#define TM_MODULE_METHODS(Class, ChildrenX, ParamsX)                          \
-    core::Module* Class::add_child(std::string name,                          \
-                                   std::unique_ptr<core::Module> child) {     \
-        std::string name_str = std::move(name);                                \
-        ChildrenX(TM_ADD_CHILD_CASE)                                            \
-        return nullptr;                                                         \
-    }                                                                           \
-    core::Module* Class::child(const std::string& name_str) const {            \
-        ChildrenX(TM_CHILD_CASE)                                                \
-        return nullptr;                                                         \
-    }                                                                           \
-    core::Param Class::param(const std::string& name_str) {                     \
-        ParamsX(TM_PARAM_CASE)                                                  \
-        return {};                                                              \
-    }                                                                           \
-    void Class::for_each_child(                                                 \
-        std::function<void(const char*, core::Module*)> visitor) const {       \
-        ChildrenX(TM_VISIT_CHILD)                                               \
-    }                                                                           \
-    void Class::for_each_param(                                                 \
-        std::function<void(const char*, core::Tensor&)> visitor) {             \
-        ParamsX(TM_VISIT_PARAM)                                                 \
+#define TM_MODULE_METHODS(Class, ChildrenX, ParamsX)                                                                   \
+    core::Module* Class::add_child(std::string name, std::unique_ptr<core::Module> child)                              \
+    {                                                                                                                  \
+        std::string name_str = std::move(name);                                                                        \
+        ChildrenX(TM_ADD_CHILD_CASE) return nullptr;                                                                   \
+    }                                                                                                                  \
+    core::Module* Class::child(const std::string& name_str) const                                                      \
+    {                                                                                                                  \
+        ChildrenX(TM_CHILD_CASE) return nullptr;                                                                       \
+    }                                                                                                                  \
+    core::Param Class::param(const std::string& name_str)                                                              \
+    {                                                                                                                  \
+        ParamsX(TM_PARAM_CASE) return {};                                                                              \
+    }                                                                                                                  \
+    void Class::for_each_child(std::function<void(const char*, core::Module*)> visitor) const                          \
+    {                                                                                                                  \
+        ChildrenX(TM_VISIT_CHILD)                                                                                      \
+    }                                                                                                                  \
+    void Class::for_each_param(std::function<void(const char*, core::Tensor&)> visitor)                                \
+    {                                                                                                                  \
+        ParamsX(TM_VISIT_PARAM)                                                                                        \
     }
 
 // ======================================================================
@@ -165,21 +161,27 @@ class Param {
     Tensor* slot_;
 
 public:
-    Param(Tensor* slot = nullptr) : slot_(slot) {}
+    Param(Tensor* slot = nullptr): slot_(slot) {}
 
     /// Allocate the tensor with explicit shape/dtype. Returns the tensor for data copy.
     Tensor alloc(const std::vector<size_t>& shape, DataType dtype)
     {
         TM_CHECK(slot_ != nullptr);
         auto layout = Layout{std::vector<ssize_t>(shape.begin(), shape.end())};
-        *slot_ = Tensor{std::move(layout), dtype, kDEVICE};
+        *slot_      = Tensor{std::move(layout), dtype, kDEVICE};
         return *slot_;
     }
 
     /// Get current tensor (empty if not yet allocated).
-    Tensor get() const { return slot_ ? *slot_ : Tensor{}; }
+    Tensor get() const
+    {
+        return slot_ ? *slot_ : Tensor{};
+    }
 
-    explicit operator bool() const { return slot_ && static_cast<bool>(*slot_); }
+    explicit operator bool() const
+    {
+        return slot_ && static_cast<bool>(*slot_);
+    }
 };
 
 // ======================================================================
@@ -198,15 +200,16 @@ public:
 /// virtual lookup methods to match by name.
 class Module {
     friend class ModuleList;
+
 public:
     virtual ~Module();
 
     Module();
 
-    Module(const Module&)            = delete;
+    Module(const Module&) = delete;
     Module& operator=(const Module&) = delete;
     Module(Module&&)                 = delete;
-    Module& operator=(Module&&)      = delete;
+    Module& operator=(Module&&) = delete;
 
     // ----- Type info -----
 
@@ -248,12 +251,12 @@ public:
     /// Create a child module using the type registry and attach it.
     /// Uses config.module_type to look up the factory.
     /// Returns pointer to the created child, or nullptr on failure.
-    Module* create_child(const std::string& name,
-                         const ModuleConfig& config = {});
+    Module* create_child(const std::string& name, const ModuleConfig& config = {});
 
     /// Typed child accessor. Aborts if child not found.
     template<typename T>
-    T* get(const std::string& name) const {
+    T* get(const std::string& name) const
+    {
         auto* c = child(name);
         TM_CHECK(c != nullptr) << "child '" << name << "' not found in " << type();
         return static_cast<T*>(c);
@@ -287,8 +290,8 @@ public:
     }
 
 protected:
-    Module*    parent_ = nullptr;
-    std::string   name_;
+    Module*     parent_ = nullptr;
+    std::string name_;
 
     /// Helper for add_child() overrides: sets parent and name on a child module.
     /// This is needed because derived classes cannot access protected members
@@ -331,7 +334,7 @@ public:
 
 private:
     std::vector<std::pair<std::string, std::unique_ptr<Module>>> items_;
-    std::vector<Module*> indexed_;
+    std::vector<Module*>                                         indexed_;
 };
 
 }  // namespace turbomind::core

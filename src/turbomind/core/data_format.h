@@ -17,7 +17,10 @@ struct QuantParamDesc {
     DataType dtype{};       // kNull means "not present"
     bool     transposed{};  // stored transposed w.r.t. data tensor
 
-    bool present() const noexcept { return dtype != kNull; }
+    bool present() const noexcept
+    {
+        return dtype != kNull;
+    }
 };
 
 /// Universal descriptor for the storage format of a (possibly quantized) tensor.
@@ -31,7 +34,10 @@ struct DataFormat {
     bool is_quantized() const noexcept;
 
     /// Number of dimensions described by this format.
-    int rank() const noexcept { return static_cast<int>(block_sizes.size()); }
+    int rank() const noexcept
+    {
+        return static_cast<int>(block_sizes.size());
+    }
 };
 
 /// Construct the DataFormat for a linear weight tensor in TM [in, out] layout.
@@ -39,9 +45,6 @@ struct DataFormat {
 /// block_sizes[0] is the K-axis group size and block_sizes[1] is the N-axis.
 /// Scales / zeros dtypes are derived from (data_type, weight_dtype) per the
 /// format's GEMM convention. Validates that the combination is supported.
-DataFormat ResolveLinearWeightFormat(DataType data_type,
-                                     DataType weight_dtype,
-                                     int      block_in,
-                                     int      block_out);
+DataFormat ResolveLinearWeightFormat(DataType data_type, DataType weight_dtype, int block_in, int block_out);
 
 }  // namespace turbomind

@@ -7,16 +7,16 @@
 
 namespace turbomind {
 
-FfnWeight::FfnWeight(const core::FfnConfig& cfg)
-    : hidden_dim_{cfg.hidden_dim}
-    , inter_size_{cfg.inter_size / cfg.tp_size}
-    , bias_{cfg.has_bias}
-    , tp_size_{cfg.tp_size}
-    , tp_rank_{cfg.tp_rank}
-    , data_type_{cfg.data_type}
-    , act_type_{static_cast<ActivationType>(cfg.act_type)}
-    , is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(cfg.act_type) == ActivationType::kSilu}
-    , is_fused_moe_{cfg.fused_moe}
+FfnWeight::FfnWeight(const core::FfnConfig& cfg):
+    hidden_dim_{cfg.hidden_dim},
+    inter_size_{cfg.inter_size / cfg.tp_size},
+    bias_{cfg.has_bias},
+    tp_size_{cfg.tp_size},
+    tp_rank_{cfg.tp_rank},
+    data_type_{cfg.data_type},
+    act_type_{static_cast<ActivationType>(cfg.act_type)},
+    is_fused_silu_{cfg.fuse_silu && static_cast<ActivationType>(cfg.act_type) == ActivationType::kSilu},
+    is_fused_moe_{cfg.fused_moe}
 {
 }
 

@@ -58,7 +58,8 @@ void Module::for_each_param(std::function<void(const char*, Tensor&)> /*visitor*
 void Module::prepare()
 {
     for_each_child([](const char* /*name*/, Module* child) {
-        if (child) child->prepare();
+        if (child)
+            child->prepare();
     });
 }
 
@@ -69,8 +70,7 @@ std::unique_ptr<Module> Module::create(const ModuleConfig& config)
     return ModuleRegistry::instance().create(std::string(config.module_type), config);
 }
 
-Module* Module::create_child(const std::string& name,
-                             const ModuleConfig& config)
+Module* Module::create_child(const std::string& name, const ModuleConfig& config)
 {
     auto mod = create(config);
     if (!mod) {
@@ -94,7 +94,8 @@ bool Module::verify(std::vector<std::string>& missing)
 {
     // Recurse into children
     for_each_child([&](const char* /*name*/, Module* child) {
-        if (child) child->verify(missing);
+        if (child)
+            child->verify(missing);
     });
 
     // Check parameters are initialized

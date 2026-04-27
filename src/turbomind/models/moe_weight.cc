@@ -10,27 +10,27 @@ namespace turbomind {
 
 MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 {
-    layer_id_ = cfg.layer_id;
-    method_ = static_cast<MoeMethod>(cfg.method);
+    layer_id_         = cfg.layer_id;
+    method_           = static_cast<MoeMethod>(cfg.method);
     experts_per_token = cfg.experts_per_token;
-    norm_topk_prob = cfg.norm_topk_prob;
-    use_shared_gate = cfg.shared_gate;
-    routed_scale = static_cast<float>(cfg.routed_scale);
-    router_bias = cfg.router_bias;
-    topk_group = cfg.topk_group;
-    topk_method = cfg.topk_method;
-    n_group = cfg.n_group;
-    scoring_func = cfg.scoring_func;
-    router_n_groups = cfg.router_n_groups;
-    hidden_dim = cfg.hidden_dim;
-    inter_size = cfg.inter_size;
-    mlp_bias_ = cfg.mlp_bias;
-    data_type_ = cfg.data_type;
-    tp_size_ = cfg.tp_size;
-    tp_rank_ = cfg.tp_rank;
-    act_type_ = static_cast<ActivationType>(cfg.act_type);
-    fuse_silu_act_ = cfg.fuse_silu;
-    expert_num = cfg.expert_num;
+    norm_topk_prob    = cfg.norm_topk_prob;
+    use_shared_gate   = cfg.shared_gate;
+    routed_scale      = static_cast<float>(cfg.routed_scale);
+    router_bias       = cfg.router_bias;
+    topk_group        = cfg.topk_group;
+    topk_method       = cfg.topk_method;
+    n_group           = cfg.n_group;
+    scoring_func      = cfg.scoring_func;
+    router_n_groups   = cfg.router_n_groups;
+    hidden_dim        = cfg.hidden_dim;
+    inter_size        = cfg.inter_size;
+    mlp_bias_         = cfg.mlp_bias;
+    data_type_        = cfg.data_type;
+    tp_size_          = cfg.tp_size;
+    tp_rank_          = cfg.tp_rank;
+    act_type_         = static_cast<ActivationType>(cfg.act_type);
+    fuse_silu_act_    = cfg.fuse_silu;
+    expert_num        = cfg.expert_num;
 }
 
 // Adapted from LinkExperts for LinearWeight
@@ -66,8 +66,8 @@ static void LinkLinearExperts(std::function<LinearWeight*(int)> experts, int n, 
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
-        d.scales = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
+        d.weight         = Tensor{make_blocked_ptr(weights), {n}, e0.weight.dtype(), kDEVICE};
+        d.scales         = Tensor{make_blocked_ptr(scales), {n}, e0.scales.dtype(), kDEVICE};
         d.k_desc.offsets = d.q_desc.offsets = (int*)1;
     }
     else {
@@ -111,7 +111,7 @@ void MoeWeight::prepare()
         block_cfg.data_type  = data_type_;
         block_cfg.act_type   = static_cast<int>(act_type_);
         block_cfg.fuse_silu  = fuse_silu_act_;
-        block_ = std::make_unique<FfnWeight>(block_cfg);
+        block_               = std::make_unique<FfnWeight>(block_cfg);
 
         // Link each linear in the block to the corresponding expert linears
         auto get_expert_w1w3 = [this](int i) -> LinearWeight* {

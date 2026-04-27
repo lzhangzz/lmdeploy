@@ -28,15 +28,13 @@ namespace turbomind {
 
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const Context& ctx): linear_(*ctx.linear)
-    {
-    }
+    LlamaFfnLayer(const Context& ctx): linear_(*ctx.linear) {}
 
     struct ForwardParam {
-        Tensor                input;
-        Tensor                output;
+        Tensor           input;
+        Tensor           output;
         const FfnWeight* weights;
-        int                   layer_id;
+        int              layer_id;
     };
 
     void forward(ForwardParam param);

@@ -7,9 +7,9 @@
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
+#include "src/turbomind/models/moe_weight.h"
 
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -34,8 +34,7 @@ void MoeFfnLayer::Init(ForwardParam& p)
 
     h_offsets_ = {expert_num + 1, kCPU};
 
-    const int pad_token_num =
-        (max_token_num_ + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
+    const int pad_token_num = (max_token_num_ + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
     masks_   = {expert_num * pad_token_num, kDEVICE};
     f2n_     = {experts_per_token * max_token_num_, kDEVICE};

@@ -4,9 +4,9 @@
 
 #include "src/turbomind/kernels/gemm/context.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
-#include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/moe_weight.h"
 
 namespace turbomind {
 
@@ -15,11 +15,11 @@ public:
     MoeFfnLayer(const EngineParam& engine, const Context& ctx);
 
     struct ForwardParam {
-        Tensor              input;
-        Tensor              output;
+        Tensor           input;
+        Tensor           output;
         const MoeWeight* weights;
-        float               scale;
-        int                 layer_id;
+        float            scale;
+        int              layer_id;
     };
 
     void Forward(ForwardParam& p);

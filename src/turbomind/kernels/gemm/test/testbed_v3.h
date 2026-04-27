@@ -21,7 +21,7 @@ namespace turbomind {
 using std::vector;
 using std::unique_ptr;
 
-using Linear      = LlamaLinear;
+using Linear = LlamaLinear;
 
 using namespace gemm;
 
@@ -109,8 +109,8 @@ static void LinkExperts(std::function<LinearWeight*(int)> experts, int n, Linear
         auto make_blocked_ptr = [&](const auto& ptrs) {
             return std::shared_ptr<void>{gemm::MakeBlockedPtrs(ptrs, stream), [](auto p) { cudaFree(p); }};
         };
-        d.weight() = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
-        d.scales() = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
+        d.weight()       = Tensor{make_blocked_ptr(weights), {n}, e0.weight().dtype(), kDEVICE};
+        d.scales()       = Tensor{make_blocked_ptr(scales), {n}, e0.scales().dtype(), kDEVICE};
         d.k_desc.offsets = d.q_desc.offsets = (int*)1;
     }
     else {

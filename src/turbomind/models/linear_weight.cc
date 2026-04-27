@@ -3,8 +3,8 @@
 #include "src/turbomind/models/linear_weight.h"
 
 #include "src/turbomind/core/allocator.h"
-#include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/registry.h"
 #include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -15,25 +15,23 @@
 
 namespace turbomind {
 
-LinearWeight::LinearWeight(const core::LinearConfig& cfg)
-    : input_dim(cfg.input_dim)
-    , output_dim(cfg.output_dim)
-    , data_type(cfg.data_type)
-    , weight_format(cfg.format)
-    , has_bias_(cfg.has_bias)
+LinearWeight::LinearWeight(const core::LinearConfig& cfg):
+    input_dim(cfg.input_dim),
+    output_dim(cfg.output_dim),
+    data_type(cfg.data_type),
+    weight_format(cfg.format),
+    has_bias_(cfg.has_bias)
 {
-    std::tie(input_format, output_format) =
-        DeriveActivationFormats(weight_format, data_type, getSMVersion());
+    std::tie(input_format, output_format) = DeriveActivationFormats(weight_format, data_type, getSMVersion());
 }
 
-std::pair<DataFormat, DataFormat>
-DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int sm)
+std::pair<DataFormat, DataFormat> DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int sm)
 {
     DataFormat in_fmt;
     DataFormat out_fmt;
-    in_fmt.dtype       = data_type;
+    in_fmt.dtype        = data_type;
     in_fmt.block_sizes  = {1, 1};
-    out_fmt.dtype      = data_type;
+    out_fmt.dtype       = data_type;
     out_fmt.block_sizes = {1, 1};
 
     // Empty weight_format (from LinearBuilder.set_weight path for embeddings /
@@ -48,7 +46,7 @@ DeriveActivationFormats(const DataFormat& weight_format, DataType data_type, int
 
     if (weight_format.dtype == kFloat8_e4m3) {
         if (sm == 90) {
-            int gs = weight_format.block_sizes[0];          // K-axis, tensor-shape order
+            int gs              = weight_format.block_sizes[0];  // K-axis, tensor-shape order
             in_fmt.dtype        = kFloat8_e4m3;
             in_fmt.block_sizes  = {gs, 1};
             in_fmt.scales.dtype = kFloat;
@@ -195,7 +193,7 @@ void LinearWeight::prepare()
             }
 
             MatrixLayout kd = w_desc;
-            kd.type = weight_format.dtype;
+            kd.type         = weight_format.dtype;
             if (bits == 4) {
                 kd.type = data_type_v<uint4_t>;
             }
@@ -228,8 +226,8 @@ void LinearWeight::prepare()
                 fuse_scales_and_zeros(
                     tmp_q.data<half>(), scales.data<half>(), zeros.data<half>(), scales.size(), stream);
                 scale_type = kUint32;
-                zeros    = {};
-                scales   = empty_like(tmp_q);
+                zeros      = {};
+                scales     = empty_like(tmp_q);
             }
             else if (weight_format.dtype == kFloat8_e4m3) {
                 tmp_q = empty_like(scales);
@@ -247,7 +245,7 @@ void LinearWeight::prepare()
                 sync_check_cuda_error();
             }
 
-            int gs = weight_format.block_sizes[0];  // K-axis, tensor-shape order
+            int          gs = weight_format.block_sizes[0];  // K-axis, tensor-shape order
             MatrixLayout s_desc{
                 scale_type,
                 order_s,

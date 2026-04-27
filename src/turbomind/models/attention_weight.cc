@@ -8,26 +8,26 @@
 
 namespace turbomind {
 
-AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg)
-    : hidden_dim(cfg.hidden_dim)
-    , head_dim(cfg.head_dim)
-    , head_num(cfg.head_num)
-    , kv_head_num(cfg.kv_head_num)
-    , kv_lora_rank(cfg.kv_lora_rank)
-    , q_lora_rank(cfg.q_lora_rank)
-    , qk_rope_dim(cfg.qk_rope_dim)
-    , v_head_dim(cfg.v_head_dim)
-    , bias(cfg.has_bias)
-    , qk_norm(cfg.qk_norm)
-    , tp_size(cfg.tp_size)
-    , tp_rank(cfg.tp_rank)
-    , data_type(cfg.data_type)
-    , window_size(cfg.window_size)
-    , sink(cfg.attn_sink)
-    , attn_output_gate(cfg.attn_output_gate)
-    , softmax_scale(cfg.softmax_scale)
-    , use_logn_attn(cfg.use_logn_attn)
-    , rope(cfg.rope)
+AttentionWeight::AttentionWeight(const core::AttentionConfig& cfg):
+    hidden_dim(cfg.hidden_dim),
+    head_dim(cfg.head_dim),
+    head_num(cfg.head_num),
+    kv_head_num(cfg.kv_head_num),
+    kv_lora_rank(cfg.kv_lora_rank),
+    q_lora_rank(cfg.q_lora_rank),
+    qk_rope_dim(cfg.qk_rope_dim),
+    v_head_dim(cfg.v_head_dim),
+    bias(cfg.has_bias),
+    qk_norm(cfg.qk_norm),
+    tp_size(cfg.tp_size),
+    tp_rank(cfg.tp_rank),
+    data_type(cfg.data_type),
+    window_size(cfg.window_size),
+    sink(cfg.attn_sink),
+    attn_output_gate(cfg.attn_output_gate),
+    softmax_scale(cfg.softmax_scale),
+    use_logn_attn(cfg.use_logn_attn),
+    rope(cfg.rope)
 {
 }
 
@@ -79,8 +79,8 @@ void init_rope_kernel_param(const core::RopeConfig& rope, RopeKernelParam& rope_
         auto& dst = rope_kernel.llama3;
 
         float inv_diff_freq_factor = 1.0 / (rope.llama3_high_freq_factor - rope.llama3_low_freq_factor);
-        dst.alpha                  = rope.llama3_original_max_position_embeddings / (2 * 3.14159265358979323846) * inv_diff_freq_factor;
-        dst.beta                   = rope.llama3_low_freq_factor * inv_diff_freq_factor;
+        dst.alpha = rope.llama3_original_max_position_embeddings / (2 * 3.14159265358979323846) * inv_diff_freq_factor;
+        dst.beta  = rope.llama3_low_freq_factor * inv_diff_freq_factor;
     }
     else if (rope_type == RopeType::kMrope) {
         auto& dst     = rope_kernel.mrope;

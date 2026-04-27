@@ -55,14 +55,14 @@ public:
 
     ~UnifiedAttentionLayer();
 
-    UnifiedAttentionLayer(int                               quant_policy,
-                          const std::vector<int>&           layer_types,
-                          int                               layer_num,
-                          std::vector<AttentionWeight*>     attn_weights,
-                          const EngineParam&                engine,
-                          const Context&                    context,
-                          int                               phases,
-                          bool                              init);
+    UnifiedAttentionLayer(int                           quant_policy,
+                          const std::vector<int>&       layer_types,
+                          int                           layer_num,
+                          std::vector<AttentionWeight*> attn_weights,
+                          const EngineParam&            engine,
+                          const Context&                context,
+                          int                           phases,
+                          bool                          init);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -80,12 +80,12 @@ private:
     void qk_norm(Tensor& qkv, const WeightType& weights);
 
 private:
-    const int           quant_policy_;
+    const int              quant_policy_;
     const core::RopeConfig rope_;
-    const EngineParam   engine_param_;
-    const Context&      context_;
-    int&                is_warm_up_;
-    const bool          init_;
+    const EngineParam      engine_param_;
+    const Context&         context_;
+    int&                   is_warm_up_;
+    const bool             init_;
 
     LlamaLinear& linear_;
     const int    arch_{};

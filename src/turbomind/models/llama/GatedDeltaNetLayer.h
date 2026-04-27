@@ -12,11 +12,11 @@ namespace turbomind {
 class GatedDeltaNetLayer {
 public:
     struct ForwardParam {
-        int                        phase;
-        Tensor                     input;
-        Tensor                     output;
+        int                   phase;
+        Tensor                input;
+        Tensor                output;
         const DeltaNetWeight* weights;
-        int                        layer_id;
+        int                   layer_id;
     };
 
     GatedDeltaNetLayer(DataType                state_dtype,

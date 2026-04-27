@@ -11,22 +11,22 @@ namespace turbomind::core {
 struct DeltaNetConfig: ModuleConfig {
     DeltaNetConfig(): ModuleConfig{"DeltaNetWeight"} {}
 
-    #define DELTANET_FIELDS(X) \
-        X(int,      hidden_dim) \
-        X(int,      num_k_heads) \
-        X(int,      num_v_heads) \
-        X(int,      key_head_dim) \
-        X(int,      value_head_dim) \
-        X(int,      d_conv, 4) \
-        X(bool,     has_bias) \
-        X(int,      tp_size) \
-        X(int,      tp_rank) \
-        X(DataType, data_type)
+#define DELTANET_FIELDS(X)                                                                                             \
+    X(int, hidden_dim)                                                                                                 \
+    X(int, num_k_heads)                                                                                                \
+    X(int, num_v_heads)                                                                                                \
+    X(int, key_head_dim)                                                                                               \
+    X(int, value_head_dim)                                                                                             \
+    X(int, d_conv, 4)                                                                                                  \
+    X(bool, has_bias)                                                                                                  \
+    X(int, tp_size)                                                                                                    \
+    X(int, tp_rank)                                                                                                    \
+    X(DataType, data_type)
 
     DELTANET_FIELDS(TM_MEMBER)
     TM_FOR_EACH(DeltaNetConfig, DELTANET_FIELDS)
 
-    #undef DELTANET_FIELDS
+#undef DELTANET_FIELDS
 };
 
 }  // namespace turbomind::core
@@ -36,7 +36,10 @@ namespace turbomind {
 /// Weight module for Gated DeltaNet (linear attention) layers.
 class DeltaNetWeight: public core::Module {
 public:
-    const char* type() const override { return "DeltaNetWeight"; }
+    const char* type() const override
+    {
+        return "DeltaNetWeight";
+    }
 
     DeltaNetWeight() = default;
 
@@ -45,14 +48,14 @@ public:
     void prepare() override;
 
     // --- X-macro field lists ---
-#define DELTA_NET_WEIGHT_CHILDREN(X) \
-    X(LinearWeight, in_proj_all) \
-    X(LinearWeight, out_proj)    \
-    X(NormWeight,   norm)
+#define DELTA_NET_WEIGHT_CHILDREN(X)                                                                                   \
+    X(LinearWeight, in_proj_all)                                                                                       \
+    X(LinearWeight, out_proj)                                                                                          \
+    X(NormWeight, norm)
 
-#define DELTA_NET_WEIGHT_PARAMS(X) \
-    X(conv1d) \
-    X(A_log)  \
+#define DELTA_NET_WEIGHT_PARAMS(X)                                                                                     \
+    X(conv1d)                                                                                                          \
+    X(A_log)                                                                                                           \
     X(dt_bias)
 
     TM_MODULE_DECLARE(DeltaNetWeight, DELTA_NET_WEIGHT_CHILDREN, DELTA_NET_WEIGHT_PARAMS)

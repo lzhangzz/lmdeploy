@@ -31,7 +31,7 @@ def split_qkv(linear: Linear,
         tensors = {}
         for kind, t in linear.tensors.items():
             out_dim = t.dim() - 1
-            if kind in ("scales", "zeros") and block_out > 0:
+            if kind in ('scales', 'zeros') and block_out > 0:
                 block_offset = offset // block_out
                 block_len = dim // block_out
                 tensors[kind] = t.narrow(out_dim, block_offset, block_len).contiguous()
@@ -70,8 +70,8 @@ def fuse_gdn(q: Linear, k: Linear, v: Linear,
                 this_d = t.dim() - 1
                 if d >= 0 and this_d != d:
                     raise ValueError(
-                        f"Inconsistent tensor dims for kind={kind}: "
-                        f"{this_d} vs {d}")
+                        f'Inconsistent tensor dims for kind={kind}: '
+                        f'{this_d} vs {d}')
                 d = this_d
                 all_1d = False
                 parts.append(tp_interleave_tensor(t, tp, d))
@@ -119,21 +119,21 @@ class DeltaNetBuilder(Builder):
         """
         q, k, v = split_qkv(in_proj_qkv, qkv_split)
         group = _ensure_compatible_formats(
-            {"q": q, "k": k, "v": v, "z": in_proj_z, "b": in_proj_b, "a": in_proj_a},
+            {'q': q, 'k': k, 'v': v, 'z': in_proj_z, 'b': in_proj_b, 'a': in_proj_a},
             data_type=self.config.data_type)
-        fused = fuse_gdn(group["q"], group["k"], group["v"],
-                         group["z"], group["b"], group["a"],
+        fused = fuse_gdn(group['q'], group['k'], group['v'],
+                         group['z'], group['b'], group['a'],
                          tp=self._tp)
-        self._add_linear("in_proj_all", fused, SplitSide.OUTPUT)
+        self._add_linear('in_proj_all', fused, SplitSide.OUTPUT)
         if out_proj is not None:
-            self._add_linear("out_proj", out_proj, SplitSide.INPUT)
+            self._add_linear('out_proj', out_proj, SplitSide.INPUT)
 
     def add_scalar_params(self, a_log=None, dt_bias=None):
         """Commit A_log and dt_bias as OUTPUT-split tensors."""
         if a_log is not None:
-            self._add_tensor("A_log", a_log, split_side=SplitSide.OUTPUT)
+            self._add_tensor('A_log', a_log, split_side=SplitSide.OUTPUT)
         if dt_bias is not None:
-            self._add_tensor("dt_bias", dt_bias, split_side=SplitSide.OUTPUT)
+            self._add_tensor('dt_bias', dt_bias, split_side=SplitSide.OUTPUT)
 
     def add_conv1d(self, conv1d, qkv_split):
         """Transpose HF layout to TM layout, TP-interleave Q/K/V, commit."""
@@ -141,5 +141,4 @@ class DeltaNetBuilder(Builder):
             conv1d = conv1d.squeeze(1)
         conv1d = conv1d.t().contiguous()
         conv1d = fuse_qkv_conv1d(conv1d, qkv_split, self._tp)
-        self._add_tensor("conv1d", conv1d, split_side=SplitSide.OUTPUT)
-
+        self._add_tensor('conv1d', conv1d, split_side=SplitSide.OUTPUT)

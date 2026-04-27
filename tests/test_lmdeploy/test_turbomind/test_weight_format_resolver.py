@@ -25,7 +25,9 @@ _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',
 
 def _setup_fake_tm():
     """Ensure ``_turbomind`` in sys.modules has every attribute the resolver
-    and weight_format class bodies touch. Idempotent: augments whatever is
+    and weight_format class bodies touch.
+
+    Idempotent: augments whatever is
     already there so running after test_transform_tensors.py (which sets up
     a minimal stub) still leaves a usable module.
     """
@@ -60,6 +62,7 @@ _setup_fake_tm()
 
 # Register package stubs.
 import lmdeploy  # noqa: F401
+
 for _pkg in ('lmdeploy.turbomind',):
     if _pkg not in sys.modules:
         mod = types.ModuleType(_pkg)
@@ -93,7 +96,10 @@ WeightFormatResolver = _wf_mod.WeightFormatResolver
 
 
 class _FakeQuant(WeightFormat):
-    """Accepts when a ``.qfoo`` tensor is present. ``normalize`` is identity."""
+    """Accepts when a ``.qfoo`` tensor is present.
+
+    ``normalize`` is identity.
+    """
     name = 'fakeq'
     suffix_map = {'.qfoo': 'weight', '.scales': 'scales', '.bias': 'bias'}
     weight_dtype = 0  # TYPE_FP32 from our stub

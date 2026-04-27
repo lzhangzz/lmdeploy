@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "src/turbomind/macro.h"
+#include "src/turbomind/core/context.h"
 #include "src/turbomind/core/data_format.h"
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/core/context.h"
+#include "src/turbomind/macro.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -74,7 +74,8 @@ __global__ void dtype_cast_kernel(To* dst, const Ti* src, size_t n)
     }
 }
 
-void invokeDtypeCast(void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream)
+void invokeDtypeCast(
+    void* dst, const void* src, size_t count, DataType dst_dtype, DataType src_dtype, cudaStream_t stream)
 {
     const int block = 512;
     const int grid  = std::min((count + block - 1) / block, (size_t)8192);
@@ -120,10 +121,9 @@ void EnsureFloatDtype(core::Tensor& tensor, DataType target_dtype)
     if (!IsTrivialFloatType(tensor.dtype()) || !IsTrivialFloatType(target_dtype)) {
         return;
     }
-    auto stream = core::Context::stream().handle();
+    auto         stream = core::Context::stream().handle();
     core::Tensor casted{tensor.shape(), target_dtype, tensor.device()};
-    invokeDtypeCast(casted.raw_data(), tensor.raw_data(), tensor.size(),
-                    target_dtype, tensor.dtype(), stream);
+    invokeDtypeCast(casted.raw_data(), tensor.raw_data(), tensor.size(), target_dtype, tensor.dtype(), stream);
     tensor = std::move(casted);
 }
 

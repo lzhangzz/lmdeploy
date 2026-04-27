@@ -15,11 +15,11 @@
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/models/input_processor.h"
-#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
+#include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/output_processor.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -99,10 +99,7 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(const EngineParam&    engine,
-         const Context&        ctx,
-         const ModelWeight&    weights,
-         int                   phases);
+    Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -114,10 +111,7 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(const EngineParam&    engine,
-                          const Context&        ctx,
-                          const ModelWeight&    weights,
-                          int                   phases):
+LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -153,13 +147,8 @@ LanguageModel::Impl::Impl(const EngineParam&    engine,
 
     const int vocab_size = weights_.output->output_dim * tp_size_;
 
-    generation_ = std::make_unique<Generation>(kFloat32,
-                                               engine.max_batch_size,
-                                               engine.session_len,
-                                               weights_.vocab_size,
-                                               vocab_size,
-                                               comm_.h_tp_group,
-                                               phases);
+    generation_ = std::make_unique<Generation>(
+        kFloat32, engine.max_batch_size, engine.session_len, weights_.vocab_size, vocab_size, comm_.h_tp_group, phases);
 
     const ssize_t max_fwd_tokens = engine.max_forward_token_num;
 
@@ -169,7 +158,8 @@ LanguageModel::Impl::Impl(const EngineParam&    engine,
         TM_CHECK(engine.max_forward_token_num % tp_size_ == 0);
 
         ssize_t bytes{};
-        bytes = std::max(bytes, byte_size(weights_.data_type, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units));
+        bytes = std::max(bytes,
+                         byte_size(weights_.data_type, max_fwd_tokens * engine.attn_dp_size * weights_.hidden_units));
         bytes = std::max(bytes, byte_size(weights_.data_type, engine.max_batch_size * vocab_size));
 
         symm_buf_ = {bytes, symm_alloc};
@@ -238,7 +228,8 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         invokeEmbeddingLookup(local, input_ids, embedding_table, st);
         sync_check_cuda_error();
 
-        comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
+        comm_.d_comm->AllGather(
+            local.raw_data(), temp.raw_data(), local.size(), weights_.data_type, comm_.d_tp_group, st);
         sync_check_cuda_error();
 
         invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
@@ -430,7 +421,6 @@ void LanguageModel::Impl::Forward(int phase, TensorMap& env)
 
     unified_decoder_->Forward(phase, env, weights_.layers_list());
 
-
     // env.at("batch").data<BatchData*>()[0]->Notify();
 
     output_processor_->OutputHiddenStatesAndLogits(phase, env, 2);
@@ -479,10 +469,7 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(const EngineParam&    engine,
-                             const Context&        ctx,
-                             const ModelWeight&    weights,
-                             int                   phases)
+LanguageModel::LanguageModel(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
     impl_ = std::make_unique<Impl>(engine, ctx, weights, phases);
 }

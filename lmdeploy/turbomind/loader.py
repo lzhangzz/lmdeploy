@@ -201,7 +201,7 @@ class StateDictLoader:
             self.que.task_done()
 
     def all_items(self) -> dict:
-        raise NotImplementedError("StateDictLoader does not support all_items()")
+        raise NotImplementedError('StateDictLoader does not support all_items()')
 
 
 def create_loader(model_path: str | Queue, pattern: str, mappings: list) -> BaseLoader:

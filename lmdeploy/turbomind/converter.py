@@ -7,20 +7,27 @@ from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len, is_bf16_supported
-from .supported_models import SUPPORTED_ARCHS
 from .builders import _cpp_dtype
 from .models.base import INPUT_MODELS
 from .models.utils import load_model_config
-from .weight_format import (AWQFormat, CompressedTensorFormat, FP8Format,
-                            GPTQFormat, MXFP4Format, TrivialFormat,
-                            WeightFormat, WeightFormatResolver)
+from .supported_models import SUPPORTED_ARCHS
+from .weight_format import (
+    AWQFormat,
+    CompressedTensorFormat,
+    FP8Format,
+    GPTQFormat,
+    MXFP4Format,
+    TrivialFormat,
+    WeightFormat,
+    WeightFormatResolver,
+)
 
 logger = get_logger('lmdeploy')
 
 
 def _build_resolver(model_format: str | None,
                     group_size: int | None,
-                    data_type: "_tm.DataType") -> WeightFormatResolver:
+                    data_type: '_tm.DataType') -> WeightFormatResolver:
     """Build the active resolver: quantized format (if any) + trivial fallback.
 
     Called after the int4 fp16 force but before the ``compressed-tensors →
@@ -40,7 +47,7 @@ def _build_resolver(model_format: str | None,
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     else:
-        raise ValueError(f"unknown model_format: {model_format!r}")
+        raise ValueError(f'unknown model_format: {model_format!r}')
     formats.append(TrivialFormat())
     return WeightFormatResolver(data_type=data_type, formats=formats)
 

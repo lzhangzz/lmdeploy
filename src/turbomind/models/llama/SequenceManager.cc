@@ -31,28 +31,28 @@ std::string vector2string(const std::vector<T>& data)
     return ss.str();
 }
 
-SequenceManager::SequenceManager(int               head_dim,
-                                 int               kv_head_num,
-                                 int               num_layer,
+SequenceManager::SequenceManager(int                     head_dim,
+                                 int                     kv_head_num,
+                                 int                     num_layer,
                                  const std::vector<int>& layer_types,
-                                 int               quant_policy,
-                                 DataType          data_type,
-                                 DataType          runtime_dtype,
-                                 int               linear_key_head_dim,
-                                 int               linear_value_head_dim,
-                                 int               linear_conv_kernel_dim,
-                                 int               linear_num_key_heads,
-                                 int               linear_num_value_heads,
-                                 int               cache_block_seq_len,
-                                 int               attn_tp_size,
-                                 int               max_batch_size,
-                                 double            block_count,
-                                 int               chunk_size,
-                                 bool              enable_prefix_caching,
-                                 int               rank,
-                                 int               attn_cp_size,
-                                 core::Allocator   allocator,
-                                 GetFreeMemSize    get_free_size):
+                                 int                     quant_policy,
+                                 DataType                data_type,
+                                 DataType                runtime_dtype,
+                                 int                     linear_key_head_dim,
+                                 int                     linear_value_head_dim,
+                                 int                     linear_conv_kernel_dim,
+                                 int                     linear_num_key_heads,
+                                 int                     linear_num_value_heads,
+                                 int                     cache_block_seq_len,
+                                 int                     attn_tp_size,
+                                 int                     max_batch_size,
+                                 double                  block_count,
+                                 int                     chunk_size,
+                                 bool                    enable_prefix_caching,
+                                 int                     rank,
+                                 int                     attn_cp_size,
+                                 core::Allocator         allocator,
+                                 GetFreeMemSize          get_free_size):
     block_seq_len_(cache_block_seq_len), rank_(rank), attn_cp_size_(attn_cp_size)
 {
     TM_CHECK_GT(attn_tp_size, 0);
@@ -71,22 +71,19 @@ SequenceManager::SequenceManager(int               head_dim,
 
     if (num_linear_layers > 0) {
 
-        const int key_head_dim =
-            linear_key_head_dim > 0 ? linear_key_head_dim : head_dim;
-        const int value_head_dim =
-            linear_value_head_dim > 0 ? linear_value_head_dim : head_dim;
-        const int d_conv      = linear_conv_kernel_dim > 0 ? linear_conv_kernel_dim : 4;
-        const int num_k_heads = linear_num_key_heads / attn_tp_size;
-        const int num_v_heads = linear_num_value_heads / attn_tp_size;
-        const int key_dim     = num_k_heads * key_head_dim;
-        const int value_dim   = num_v_heads * value_head_dim;
-        const int conv_dim    = key_dim * 2 + value_dim;
+        const int key_head_dim   = linear_key_head_dim > 0 ? linear_key_head_dim : head_dim;
+        const int value_head_dim = linear_value_head_dim > 0 ? linear_value_head_dim : head_dim;
+        const int d_conv         = linear_conv_kernel_dim > 0 ? linear_conv_kernel_dim : 4;
+        const int num_k_heads    = linear_num_key_heads / attn_tp_size;
+        const int num_v_heads    = linear_num_value_heads / attn_tp_size;
+        const int key_dim        = num_k_heads * key_head_dim;
+        const int value_dim      = num_v_heads * value_head_dim;
+        const int conv_dim       = key_dim * 2 + value_dim;
 
         TM_CHECK_GT(max_batch_size, 0);
-        pooled_conv_states_ = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, data_type, kDEVICE};
-        pooled_recurrent_states_ = {{max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim},
-                                    data_type,
-                                    kDEVICE};
+        pooled_conv_states_      = {{max_batch_size, num_linear_layers, d_conv, conv_dim}, data_type, kDEVICE};
+        pooled_recurrent_states_ = {
+            {max_batch_size, num_linear_layers, num_v_heads, key_head_dim, value_head_dim}, data_type, kDEVICE};
 
         free_linear_state_slots_.reserve(max_batch_size);
         for (int slot = max_batch_size - 1; slot >= 0; --slot) {
@@ -104,8 +101,8 @@ SequenceManager::SequenceManager(int               head_dim,
                     (pooled_conv_states_.byte_size() + pooled_recurrent_states_.byte_size()) * mb);
     }
 
-    const int  dbits        = byte_size(runtime_dtype, 8);
-    const int  elem_bits    = quant_policy ? quant_policy : dbits;
+    const int dbits     = byte_size(runtime_dtype, 8);
+    const int elem_bits = quant_policy ? quant_policy : dbits;
 
     BlockConfig block_config{
         head_dim,

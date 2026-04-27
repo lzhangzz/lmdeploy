@@ -36,8 +36,7 @@ public:
 
     /// Create a module instance by type name and typed config.
     /// Returns nullptr if type name is not registered.
-    std::unique_ptr<Module> create(const std::string& type,
-                                    const ModuleConfig& config) const;
+    std::unique_ptr<Module> create(const std::string& type, const ModuleConfig& config) const;
 
     /// Check if a type name is registered.
     bool has_type(const std::string& name) const;
@@ -49,11 +48,10 @@ private:
 
 }  // namespace turbomind::core
 
-#define TM_MODULE_REGISTER(ModuleClass, ConfigType)                              \
-    namespace {                                                                   \
-    static const bool _tm_module_registered_ = [] {                              \
-        ::turbomind::core::ModuleRegistry::instance()                             \
-            .register_type<ModuleClass, ConfigType>(#ModuleClass);                \
-        return true;                                                              \
-    }();                                                                          \
+#define TM_MODULE_REGISTER(ModuleClass, ConfigType)                                                                    \
+    namespace {                                                                                                        \
+    static const bool _tm_module_registered_ = [] {                                                                    \
+        ::turbomind::core::ModuleRegistry::instance().register_type<ModuleClass, ConfigType>(#ModuleClass);            \
+        return true;                                                                                                   \
+    }();                                                                                                               \
     }

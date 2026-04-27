@@ -13,7 +13,10 @@ namespace turbomind {
 /// attaches it as the `text_model` child via add_child_raw.
 class ModelRoot: public core::Module {
 public:
-    const char* type() const override { return "ModelRoot"; }
+    const char* type() const override
+    {
+        return "ModelRoot";
+    }
 
     ModelRoot();
     ~ModelRoot() override;
@@ -25,15 +28,23 @@ public:
         return core::ContextGuard{stream_, alloca_};
     }
 
-    const core::Stream&    stream() const    { return stream_; }
-    const core::Allocator& allocator() const { return alloca_; }
+    const core::Stream& stream() const
+    {
+        return stream_;
+    }
+    const core::Allocator& allocator() const
+    {
+        return alloca_;
+    }
 
     /// Convenience accessor.  Nullptr before Python attaches via
     /// `add_child_raw('text_model', ...)`.
-    ModelWeight* text_model_ptr() const { return text_model.get(); }
+    ModelWeight* text_model_ptr() const
+    {
+        return text_model.get();
+    }
 
-#define MODEL_ROOT_CHILDREN(X) \
-    X(ModelWeight, text_model)
+#define MODEL_ROOT_CHILDREN(X) X(ModelWeight, text_model)
 
 #define MODEL_ROOT_PARAMS(X)
 
