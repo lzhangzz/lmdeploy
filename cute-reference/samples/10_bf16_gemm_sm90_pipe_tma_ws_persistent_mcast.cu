@@ -208,11 +208,14 @@ bf16_gemm_persistent_device(ClusterShape cluster_shape,
   typename MainloopPipeline::PipelineState smem_pipe_read;
   typename MainloopPipeline::PipelineState smem_pipe_release;
 
-  // Persistent scheduling at cluster granularity:
-  // linear_idx is per-cluster (all CTAs in a cluster have the same starting linear_idx).
-  // num_clusters = total_grid_CTAs / cluster_size.
-  uint64_t linear_idx = blockIdx.x / cluster_size;
-  uint64_t num_clusters = gridDim.x / cluster_size;
+  // Persistent scheduling at cluster granularity with 2D grid.
+  // The host launches a 2D grid where gridDim.x % cluster_m == 0 and
+  // gridDim.y % cluster_n == 0, matching the physical cluster layout.
+  // All CTAs in a cluster share the same starting linear_idx.
+  int clusters_per_row = gridDim.x / size<0>(cluster_shape);
+  uint64_t linear_idx = (blockIdx.x / size<0>(cluster_shape))
+                      + (blockIdx.y / size<1>(cluster_shape)) * clusters_per_row;
+  uint64_t num_clusters = clusters_per_row * (gridDim.y / size<1>(cluster_shape));
 
   if (warp_group_idx == 2) {
     // ==================================================================
@@ -500,8 +503,7 @@ bf16_gemm_persistent(int m, int n, int k,
       mma);
 
   // ---- Grid and block dimensions ----
-  // Persistent grid: launch enough CTAs to fill all SMs, grouped into clusters.
-  // dimGrid is in units of CTAs (not clusters) — launch_kernel_on_cluster handles grouping.
+  // Persistent grid: launch enough clusters to fill all SMs.
   int num_SMs = 0;
   CUTE_CHECK_ERROR(cudaDeviceGetAttribute(&num_SMs, cudaDevAttrMultiProcessorCount, 0));
 
@@ -512,13 +514,14 @@ bf16_gemm_persistent(int m, int n, int k,
   int total_cluster_tiles = cluster_m_tiles * cluster_n_tiles;
 
   dim3 dimBlock(size(mma) * 3 / 2);  // 384 threads: 256 MMA + 128 producer
-  dim3 dimCluster(cluster_m, cluster_n, 1);
-  dim3 dimGrid(std::min(num_SMs / cluster_size, total_cluster_tiles) * cluster_size);
 
-  // Shared memory (unchanged per-CTA smem)
+  // Physical cluster layout must match logical ClusterShape.
+  dim3 dimCluster(cluster_m, cluster_n, 1);
+
+  // Shared memory size (needed early for occupancy query)
   int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, bf16_t, decltype(sA), decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sA){})>));
 
-  // Kernel function pointer (ClusterShape added as first template arg)
+  // Kernel function pointer (needed early for occupancy query)
   auto* kernel_ptr = &bf16_gemm_persistent_device<
       ClusterShape,
       decltype(prob_shape), decltype(cta_tiler),
@@ -528,7 +531,7 @@ bf16_gemm_persistent(int m, int n, int k,
       decltype(tma_store_c), decltype(r2s_copy), decltype(dC), decltype(mma),
       Alpha, Beta>;
 
-  // Set shared memory attributes
+  // Set shared memory attributes before occupancy query
   CUTE_CHECK_ERROR(cudaFuncSetAttribute(
       (void const*)kernel_ptr,
       cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -538,6 +541,29 @@ bf16_gemm_persistent(int m, int n, int k,
       (void const*)kernel_ptr,
       cudaFuncAttributePreferredSharedMemoryCarveout,
       100));
+
+  // Use occupancy API to determine the maximum number of concurrent clusters.
+  int max_active_clusters = 0;
+  if constexpr (cluster_size > 1) {
+    cudaLaunchAttribute launch_attrs[1];
+    launch_attrs[0].id = cudaLaunchAttributeClusterDimension;
+    launch_attrs[0].val.clusterDim.x = cluster_m;
+    launch_attrs[0].val.clusterDim.y = cluster_n;
+    launch_attrs[0].val.clusterDim.z = 1;
+    cudaLaunchConfig_t launch_config = {dimCluster, dimBlock, (size_t)smem_size, 0, launch_attrs, 1};
+    CUTE_CHECK_ERROR(cudaOccupancyMaxActiveClusters(&max_active_clusters,
+        (void const*)kernel_ptr, &launch_config));
+  } else {
+    int max_ctas = 0;
+    CUTE_CHECK_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_ctas, (void const*)kernel_ptr, dimBlock.x, smem_size));
+    max_active_clusters = max_ctas * num_SMs;
+  }
+  int target_clusters = std::min(max_active_clusters, total_cluster_tiles);
+
+  int grid_clusters_m = std::min(cluster_m_tiles, target_clusters);
+  int grid_clusters_n = std::min(cluster_n_tiles, target_clusters / std::max(1, grid_clusters_m));
+  dim3 dimGrid(grid_clusters_m * cluster_m, grid_clusters_n * cluster_n, 1);
 
   // Launch via cluster launch API (required for TMA and for multi-CTA clusters)
   cutlass::ClusterLaunchParams params = {dimGrid, dimBlock, dimCluster, smem_size};

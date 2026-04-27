@@ -80,8 +80,17 @@ int cluster_size = size<0>(cluster_shape) * size<1>(cluster_shape);
 int cluster_m_tiles = m_tiles / size<0>(cluster_shape);
 int cluster_n_tiles = n_tiles / size<1>(cluster_shape);
 int total_cluster_tiles = cluster_m_tiles * cluster_n_tiles;
-dim3 dimGrid(std::min(num_SMs / cluster_size, total_cluster_tiles));
+
 dim3 dimCluster(size<0>(cluster_shape), size<1>(cluster_shape), 1);
+
+// 2D grid: both dimensions must be multiples of cluster dimensions.
+// This matches CUTLASS's approach and ensures PipelineTmaAsync's
+// is_same_row_or_col() works correctly with block_id_in_cluster().
+int target_clusters = std::min(num_SMs / cluster_size, total_cluster_tiles);
+int grid_clusters_m = std::min(cluster_m_tiles, target_clusters);
+int grid_clusters_n = std::min(cluster_n_tiles,
+    (target_clusters + grid_clusters_m - 1) / grid_clusters_m);
+dim3 dimGrid(grid_clusters_m * cluster_m, grid_clusters_n * cluster_n, 1);
 ```
 
 Shared memory layout is unchanged — each CTA has its own smem buffers.

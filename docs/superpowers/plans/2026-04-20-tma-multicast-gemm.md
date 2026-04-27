@@ -277,9 +277,11 @@ With:
 
   // Persistent scheduling: each CLUSTER processes a sequence of cluster-tiles.
   // linear_idx is per-cluster (each CTA in the cluster has the same starting linear_idx).
-  // num_clusters = total CTAs / cluster_size.
-  uint64_t linear_idx = blockIdx.x / cluster_size;
-  uint64_t num_clusters = gridDim.x / cluster_size;
+  // With 2D grid, derive cluster index from blockIdx (x,y) and cluster dimensions.
+  int clusters_per_row = gridDim.x / size<0>(cluster_shape);
+  uint64_t linear_idx = (blockIdx.x / size<0>(cluster_shape))
+                      + (blockIdx.y / size<1>(cluster_shape)) * clusters_per_row;
+  uint64_t num_clusters = clusters_per_row * (gridDim.y / size<1>(cluster_shape));
 ```
 
 - [ ] **Step 8: Update producer branch — tma_partition and multicast copy**
@@ -738,7 +740,15 @@ bf16_gemm_persistent(int m, int n, int k,
 
   dim3 dimBlock(size(mma) * 3 / 2);  // 384 threads: 256 MMA + 128 producer
   dim3 dimCluster(cluster_m, cluster_n, 1);
-  dim3 dimGrid(std::min(num_SMs / cluster_size, total_cluster_tiles) * cluster_size);
+
+  // 2D grid: both dimensions must be multiples of cluster dimensions.
+  // This matches CUTLASS's approach and ensures PipelineTmaAsync's
+  // is_same_row_or_col() works correctly with block_id_in_cluster().
+  int target_clusters = std::min(num_SMs / cluster_size, total_cluster_tiles);
+  int grid_clusters_m = std::min(cluster_m_tiles, target_clusters);
+  int grid_clusters_n = std::min(cluster_n_tiles,
+      (target_clusters + grid_clusters_m - 1) / grid_clusters_m);
+  dim3 dimGrid(grid_clusters_m * cluster_m, grid_clusters_n * cluster_n, 1);
 
   // Shared memory
   int smem_size = int(sizeof(SharedStorage<bf16_t, bf16_t, bf16_t, decltype(sA), decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sA){})>));
