@@ -9,9 +9,11 @@ add_library(core STATIC
         context.cc
         buffer.cc
         layout.cc
+        data_format.cc
         tensor.cc
         tensor.cu
         module.cc
+        registry.cc
         copy.cc)
 
 target_link_libraries(core PUBLIC cuda_utils logger CUDA::cudart CUDA::cuda_driver)
@@ -24,4 +26,7 @@ target_compile_options(core PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>)
 if (BUILD_TEST)
     add_executable(test_core test_core.cc)
     target_link_libraries(test_core PRIVATE core logger Catch2::Catch2WithMain)
+
+    add_executable(test_data_format test_data_format.cc)
+    target_link_libraries(test_data_format PRIVATE core logger Catch2::Catch2WithMain)
 endif ()
