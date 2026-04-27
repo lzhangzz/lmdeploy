@@ -1,16 +1,23 @@
 /***************************************************************************************************
- * BF16 GEMM using SM90 WGMMA tensor cores with CuTe — Persistent Warp-Specialized TMA GEMM
+ * BF16 GEMM using SM90 WGMMA tensor cores — RS Variant (A in Registers, B in Shared Memory)
  *
- * A persistent variant of 08_bf16_gemm_sm80_pipe_tma_ws_persistent.cu that replaces SM80 HMMA
- * with SM90 WGMMA (warpgroup matrix multiply-accumulate). WGMMA reads operands directly from
- * smem via 64-bit GMMA descriptors, eliminating LDSM copies and the k_block inner loop.
+ * An educational variant of 09_bf16_gemm_sm90_pipe_tma_ws_persistent.cu that swaps the WGMMA
+ * atom from SS (both operands in shared memory via GMMA descriptors) to RS (A in registers,
+ * B in shared memory via descriptor). This demonstrates the register-vs-descriptor trade-off in
+ * SM90 WGMMA.
  *
- * Key changes from 08:
- *   - SM90 WGMMA atom (64x256x16_SS) replaces SM80 HMMA atom (16x8x16)
- *   - Tile size 128x256 (was 256x128) — 2 warpgroups of 64x256 each, high arithmetic intensity
- *   - No S2R (smem-to-register) copies — WGMMA reads smem via descriptors
- *   - No k_block inner loop — single gemm() call per pipeline stage
- *   - warpgroup_arrive/commit_batch/wait replaces manual mma.sync scheduling
+ * Key changes from 09 (SS variant):
+ *   - WGMMA atom: RS (64x256x16_F32BF16BF16_RS) replaces SS (64x256x16_F32BF16BF16_SS)
+ *   - S2R copy for A operand — A is loaded from smem into registers before each gemm call
+ *     (RS requires register-source A with GMMA::Major::K layout)
+ *   - B operand unchanged — still uses GMMA smem descriptor
+ *   - Higher register pressure — A uses ~64B of register storage per thread (vs ~32B for SS descriptors)
+ *
+ * Unchanged from 09:
+ *   - Tile size 128x256x64 (2 warpgroups of 64x256 each)
+ *   - TMA load (A, B) + TMA store (C), PipelineTmaAsync 3-stage
+ *   - Persistent scheduling, warp-specialized (384 threads: 128 producer + 256 consumer)
+ *   - STSM BF16 epilogue
  *   - Smem ~213 KB (128x256x64 tile, 3 pipeline stages)
  *
  * C = alpha * A * B^T + beta * C
