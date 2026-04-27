@@ -263,9 +263,16 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       {
         pipeline.consumer_wait(smem_pipe_read);
 
+        // S2R copy: load A from swizzled smem into registers.
+        // tCsA is partitioned via ALayout_64x16 — each thread reads its 32 bf16
+        // values (4 K-tiles x 8 val) from the correct swizzled smem addresses.
+        copy(tCsA(_,_,_,smem_pipe_read.index()), tCrA);
+
         warpgroup_fence_operand(tCrC);
         warpgroup_arrive();
-        gemm(mma, tCrA(_,_,_,smem_pipe_read.index()),
+        // tCrA: register values (no pipe index — already loaded above)
+        // tCrB: GMMA descriptors (pipe-indexed per K-tile)
+        gemm(mma, tCrA,
                   tCrB(_,_,_,smem_pipe_read.index()), tCrC);
         warpgroup_commit_batch();
         warpgroup_wait<0>();
