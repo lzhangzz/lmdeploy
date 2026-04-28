@@ -121,3 +121,17 @@ loading path changes.
 The `warpgroup_wait<2>()` restoration should close most of the gap with sample 13.
 Remaining gap (if any) comes from 2-way smem bank conflicts on A's S2R, which is
 minor compared to the iter 01 bottlenecks.
+
+## Performance Results (L20Y, CUDA 12.8)
+
+| Size | Iter 01 | Iter 02 | Sample 13 | Iter 02/01 | Iter 02/S13 |
+|------|---------|---------|-----------|------------|-------------|
+| 256^3 | 1750 | 1844 | 1792 | 1.05x | 1.03x |
+| 512^3 | 12037 | 12992 | 12710 | 1.08x | 1.02x |
+| 1024^3 | 74005 | 83749 | 82895 | 1.13x | 1.01x |
+| 2048^3 | 374382 | 460632 | 457433 | 1.23x | 1.01x |
+| 4096^3 | 369220 | 668171 | 669365 | **1.81x** | 1.00x |
+
+GFLOP/s. Iter 02 achieves **parity with sample 13** at 4096^3 and a **1.81x
+improvement over iter 01**. The bulk copy + smem pipeline for A fully eliminates
+the scalar load and warpgroup_wait<0>() bottlenecks.
