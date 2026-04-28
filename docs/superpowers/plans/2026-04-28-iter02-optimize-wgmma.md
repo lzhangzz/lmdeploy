@@ -6,7 +6,7 @@
 
 **Architecture:** Add 3-stage smem pipeline for packed A (flat register layout) alongside existing B TMA pipeline. Both transfers arrive at a single mbarrier per stage. Consumer does per-thread S2R loads from smem, enabling `warpgroup_wait<2>()` instead of `wait<0>()`.
 
-**Tech Stack:** CUDA 12.8, SM90 (Hopper), CuTe/CUTLASS, `cp.async.bulk` PTX, `PipelineTmaAsync`
+**Tech Stack:** CUDA 12.8, SM90 (Hopper), CuTe/CUTLASS, `SM90_BULK_COPY_G2S`, `PipelineTmaAsync`
 
 ---
 
@@ -80,7 +80,9 @@ With:
 
 ```cpp
   extern __shared__ char shared_memory[];
-  constexpr int a_stage_elements = size<0>(CtaTiler{}) * size<2>(CtaTiler{});
+  static_assert(decltype(size<0>(cta_tiler))::value == 128);
+  static_assert(decltype(size<2>(cta_tiler))::value == 64);
+  constexpr int a_stage_elements = 128 * 64;
   using SharedStorage = WgmmaSharedStorage<bf16_t, a_stage_elements, TB, TC,
       SmemLayoutB, SmemLayoutC, cute::size<2>(SmemLayoutB{})>;
   SharedStorage& smem = *reinterpret_cast<SharedStorage*>(shared_memory);
@@ -88,7 +90,8 @@ With:
   Tensor sC = make_tensor(make_smem_ptr(smem.C.begin()), SmemLayoutC{});
 ```
 
-Note: `CtaTiler` is the kernel template parameter for the cta_tiler type. This computes `a_stage_elements = 128 * 64 = 8192` at compile time.
+`a_stage_elements = bM * bK = 8192` bf16 elements per A pipeline stage. Static asserts verify the
+cta_tiler dimensions match. `regs_per_thread * 256 == a_stage_elements` (confirmed: 32 * 256 = 8192).
 
 Replace the transaction_bytes computation (lines 71-72):
 
@@ -107,14 +110,14 @@ With:
 
 This adds A's bulk copy bytes (16 KB) to B's TMA bytes (32 KB) = 48 KB total per stage.
 
-- [ ] **Step 5: Update producer — add cp.async.bulk for A**
+- [ ] **Step 5: Update producer — add bulk copy for A**
 
 Replace the producer block (lines 99-127) with:
 
 ```cpp
   if (warp_group_idx == 2) {
     // ==================================================================
-    // Producer warp group — cp.async.bulk for A + TMA for B (persistent)
+    // Producer warp group — bulk copy for A + TMA for B (persistent)
     // ==================================================================
     cutlass::arch::warpgroup_reg_dealloc<40>();
 
@@ -135,18 +138,14 @@ Replace the producer block (lines 99-127) with:
           BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
           int write_stage = smem_pipe_write.index();
 
-          // Issue cp.async.bulk for packed A: gmem -> smem_A[write_stage]
+          // Issue bulk copy for packed A: gmem -> smem_A[write_stage]
           {
             int a_tile_idx = m_idx * k_tile_count + k_tile;
-            const bf16_t* gmem_a_ptr = packed_A + a_tile_idx * a_stage_elements;
-            bf16_t* smem_a_ptr = smem.A.begin() + write_stage * a_stage_elements;
-            uint32_t smem_addr  = __cvta_generic_to_shared(smem_a_ptr);
-            uint64_t gmem_addr  = reinterpret_cast<uint64_t>(gmem_a_ptr);
-            uint32_t copy_bytes = a_stage_elements * sizeof(bf16_t);
-            uint32_t bar_addr   = __cvta_generic_to_shared(tma_barrier);
-            asm volatile(
-              "cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes [%0], [%1], %2, [%3];\n"
-              :: "r"(smem_addr), "l"(gmem_addr), "r"(copy_bytes), "r"(bar_addr));
+            SM90_BULK_COPY_G2S::copy(
+                packed_A + a_tile_idx * a_stage_elements,
+                tma_barrier,
+                smem.A.begin() + write_stage * a_stage_elements,
+                a_stage_elements * sizeof(bf16_t));
           }
 
           // Issue TMA for B
@@ -164,9 +163,12 @@ Replace the producer block (lines 99-127) with:
 ```
 
 Key points:
-- `cp.async.bulk` arrives at the same mbarrier as TMA for B
-- `a_stage_elements * sizeof(bf16_t)` = 8192 * 2 = 16384 bytes per A stage
-- `__cvta_generic_to_shared` converts generic pointers to 32-bit smem addresses for PTX
+- `SM90_BULK_COPY_G2S::copy(gmem, mbar, smem, bytes)` is a cute wrapper that issues
+  `cp.async.bulk...mbarrier::complete_tx::bytes` with correct pointer conversions
+- It arrives at the same mbarrier as TMA for B — both use `mbarrier.complete_tx::bytes` to
+  track completion. The barrier was initialized with `transaction_bytes = A_bytes + B_bytes`
+  (set in Step 4), so it flips only after both transfers complete
+- `producer_get_barrier()` returns `uint64_t*` (ProducerBarrierType), matching the function signature
 
 - [ ] **Step 6: Update consumer — smem S2R for A, remove warpgroup_wait<0>()**
 
@@ -271,7 +273,7 @@ Update the smem_size computation. Replace line 309:
 With:
 
 ```cpp
-  constexpr int a_stage_elements_host = 128 * 64;
+  constexpr int a_stage_elements_host = 128 * 64; // must match kernel's a_stage_elements
   int smem_size = int(sizeof(WgmmaSharedStorage<bf16_t, a_stage_elements_host, bf16_t, bf16_t,
       decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sB){})>));
 ```
