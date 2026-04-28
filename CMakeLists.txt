@@ -348,6 +348,7 @@ add_subdirectory(src)
 option(BUILD_CUTE_SAMPLES "Build CuTe reference GEMM samples" OFF)
 if(BUILD_CUTE_SAMPLES)
   add_subdirectory(cute-reference/samples)
+  add_subdirectory(cute-reference/mixed-gemm)
 endif()
 
 # if(BUILD_TEST)
