@@ -14,6 +14,7 @@ set(CUTE_GEMM_SAMPLES
     10_bf16_gemm_sm90_pipe_tma_ws_persistent_mcast
     11_bf16_gemm_sm90_pipe_tma_ws_persistent_rs
     12_bf16_gemm_sm90_pipe_tma_ws_persistent_rs_opt
+    13_bf16_gemm_sm90_pipe_tma_ws_persistent_rs_cutlass
     test_mcast_shapes
 )
 
