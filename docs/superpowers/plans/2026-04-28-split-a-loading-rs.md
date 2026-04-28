@@ -205,14 +205,17 @@ split_a_pack_device(ProblemShape shape_MK, CtaTiler cta_tiler,
     // Compute gmem tensor for this tile
     Tensor gA = local_tile(mA, cta_tiler, make_coord(tile_m, tile_k));
 
-    // ---- TMA load using raw mbarrier ----
+    // ---- TMA load using raw mbarrier (pattern from tma_load_testbed.hpp) ----
     if (threadIdx.x == 0) {
       smem.mbarrier = 0;
       cute::initialize_barrier(smem.mbarrier, 1);
       cute::set_barrier_transaction_bytes(smem.mbarrier, tma_transaction_bytes);
 
+      // group_modes<0,2> flattens 2D (bM, bK) to 1D ((bM, bK)) so the full tile
+      // is treated as one TMA transfer (same pattern as sample 13's tma_partition calls)
       auto [tAgA, tAsA] = tma_partition(tma_a, Int<0>{}, Layout<_1>{},
-                                         sA(_,_,0), gA);
+                                         group_modes<0,2>(sA(_,_,0)),
+                                         group_modes<0,2>(gA));
       copy(tma_a.with(smem.mbarrier), tAgA, tAsA);
     }
     __syncthreads();
@@ -422,10 +425,10 @@ cd /data/lmdeploy-cute/build && ninja bf16_gemm_sm90_split_a_pack 2>&1
 
 Expected: successful compilation with no errors. PTXAS output should show register usage for 256-thread kernel.
 
-If compilation fails with `tma_partition` errors for 2D tensors, try wrapping with `group_modes<0,2>`:
+If compilation fails with `tma_partition` errors for 2D tensors, try removing `group_modes<0,2>` and using `(_,0)` indexing instead (pattern from `test_tma_load.cu`):
 ```cuda
-auto [tAgA, tAsA] = tma_partition(tma_a, Int<0>{}, Layout<_1>{},
-                                   group_modes<0,2>(sA(_,_,0)), group_modes<0,2>(gA));
+auto [tAgA, tAsA] = tma_partition(tma_a, Int<0>{}, Layout<_1>{}, sA(_,_,0), gA);
+copy(tma_a.with(smem.mbarrier), tAgA(_,0), tAsA(_,0));
 ```
 
 - [ ] **Step 4: Run the pack test**
@@ -1062,6 +1065,17 @@ git commit -m "Enable BUILD_CUTE_SAMPLES in build configuration"
 ---
 
 ## Self-Review
+
+### Verified Correctness (Codebase Exploration)
+
+| Concern | Finding | Source |
+|---|---|---|
+| `tma_partition` with 2D tensors | Works with 2D tensors (no `group_modes` needed for simple cases), but `group_modes<0,2>` is the proven pattern from sample 13 | `test_tma_load.cu:37`, sample 13 |
+| Raw mbarrier pattern | `cute::initialize_barrier` + `cute::set_barrier_transaction_bytes` + `cute::wait_barrier` pattern is verified in `tma_load_testbed.hpp` | Lines 139-149 of test bed |
+| `make_fragment_A` with dummy smem tensor | Safe for RS WGMMA. `FrgTypeA = bfloat16_t` (no `has_dereference`), so Path B (`make_fragment_like`) is taken — only reads layout, never dereferences data pointer | `mma_atom.hpp:145-169`, `mma_traits_sm90_gmma.hpp:1866-1883` |
+| Register layout consistency across PIPE stages | **Identical.** `thrfrg_A` only touches modes 0 and 2 (spatial M,K), PIPE passes through untouched. `tCsA(_,_,_,Int<0>{})` strips PIPE before `make_fragment_A`, producing the same rank-3 tensor regardless of total PIPE count. | `mma_atom.hpp:288-314` |
+| Dummy smem pointer safety | `partition_A` calls `thrfrg_A(atensor.layout())` (layout-only) and `make_tensor(atensor.data(), new_layout)` (non-owning view). Neither dereferences data. For RS WGMMA Path B, `make_fragment_like` creates a fresh register tensor from layout alone. | `mma_atom.hpp:521-530, 145-169` |
+| `local_tile` with 2D tiler and 2D coord on 2D tensor | Produces shape `(bM, bK)` — a single tile with no rest dimensions. Confirmed by CuTe docs. | `tensor_impl.hpp:978-1035` |
 
 ### Spec Coverage
 
