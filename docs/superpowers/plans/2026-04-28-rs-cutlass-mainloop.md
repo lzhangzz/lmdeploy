@@ -194,11 +194,12 @@ Replace with:
         if (k_tile_count > 0) {
           // Wait for next stage and prefetch its first k_block.
           // This overlaps the pipeline wait with the in-flight last-k_block WGMMA.
+          // NOTE: smem_pipe_read is NOT incremented here. It stays pointing at the
+          // prefetched stage so the mainloop can pick it up as read_stage.
           pipeline.consumer_wait(smem_pipe_read, barrier_token);
           copy(smem_tiled_copy_A,
                tCsA_copy_view(_,_,0,smem_pipe_read.index()),
                tCrA_copy_view(_,_,0));
-          barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
           warpgroup_wait<2>();
         }
       }
@@ -217,7 +218,8 @@ Replace with:
         CUTLASS_PRAGMA_UNROLL
         for (int k_block = 0; k_block < k_block_count; ++k_block) {
           if (k_block == 0) {
-            // Non-blocking probe for the stage after next.
+            // Non-blocking probe for the next stage (smem_pipe_read was
+            // already incremented at the top of this k_tile iteration).
             // The token is consumed at k_block == k_block_count-1.
             barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
           }
