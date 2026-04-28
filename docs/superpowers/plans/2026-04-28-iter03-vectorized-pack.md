@@ -54,17 +54,23 @@ With:
 
 ```cpp
     // ---- Write registers to packed gmem buffer (vectorized 128-bit stores) ----
-    // Packed layout: (K_BLOCK, THREAD, REG) stride (2048, 8, 1)
-    // Each thread stores 4 x 128-bit (one per k_block of 8 contiguous bf16)
+    // Packed layout: offset = k*2048 + t*8 + j
+    // CuTe mode order (REG, THREAD, K_BLOCK) so default col-major strides = (1, 8, 2048)
     Tensor gPacked = make_tensor(make_gmem_ptr(packed_A + linear_idx * 256 * regs_per_thread),
-                                  make_shape(Int<4>{}, Int<256>{}, Int<8>{}));
-    Tensor gP = gPacked(_, threadIdx.x, _);
-    Tensor rA = make_tensor(tCrA.data(), make_layout(make_shape(Int<4>{}, Int<8>{})));
+                                  make_shape(Int<8>{}, Int<256>{}, Int<4>{}));
+    Tensor gP = gPacked(_, threadIdx.x, _);   // (8, 4) stride (1, 2048)
+    // tCrA flat layout: j + k*8, so (REG, K_BLOCK) = (8, 4) stride (1, 8) matches
+    Tensor rA = make_tensor(tCrA.data(), make_shape(Int<8>{}, Int<4>{}));
     copy(AutoVectorizingCopy{}, rA, gP);
 ```
 
-The reshape from `tCrA (8, 1, 4)` to `(4, 8)` works because tCrA's flat layout is `k*8 + j`,
-so `make_layout(Shape<_4, _8>{})` with default stride `(8, 1)` maps `rA(k, j)` = `tCrA(j, 0, k)`.
+**Why this mode order:** CuTe's `make_layout(shape)` uses column-major strides (leftmost mode gets
+stride 1). Mode order `(REG, THREAD, K_BLOCK)` gives default stride `(1, 8, 2048)` which matches
+our packed format `offset = k*2048 + t*8 + j` without needing explicit strides.
+
+The register reshape `make_shape(Int<8>{}, Int<4>{})` gives stride `(1, 8)`, matching tCrA's
+flat layout `rA(j, k) = j + k*8`. `AutoVectorizingCopy` sees stride-1 innermost of size 8 in
+both tensors, recasts to `uint128_t`, and emits 4 × 128-bit store instructions.
 
 - [ ] **Step 4: Commit**
 
@@ -149,7 +155,7 @@ Replace lines 1-14:
  * per k_block contiguously, enabling zero-bank-conflict 128-bit smem loads.
  *
  * Changes from iteration 02:
- *   - New packed format: (K_BLOCK, THREAD, REG) stride (2048, 8, 1)
+ *   - New packed format: offset = k*2048 + t*8 + j, mode order (REG, THREAD, K_BLOCK)
  *   - Consumer S2R: CuTe copy(AutoVectorizingCopy, sP, rA) instead of scalar loop
  *
  * Target: SM90
@@ -187,12 +193,14 @@ With:
 
 ```cpp
         // Load packed A from smem pipeline stage into registers (vectorized 128-bit loads)
-        // Packed layout: (K_BLOCK, THREAD, REG) stride (2048, 8, 1) in smem
+        // Packed layout: offset = k*2048 + t*8 + j
+        // CuTe mode order (REG, THREAD, K_BLOCK), default strides (1, 8, 2048)
         Tensor sA_packed = make_tensor(
             make_smem_ptr(smem.A.begin() + read_stage * a_stage_elements),
-            make_shape(Int<4>{}, Int<256>{}, Int<8>{}));
-        Tensor sP = sA_packed(_, threadIdx.x, _);
-        Tensor rA = make_tensor(tCrA.data(), make_layout(make_shape(Int<4>{}, Int<8>{})));
+            make_shape(Int<8>{}, Int<256>{}, Int<4>{}));
+        Tensor sP = sA_packed(_, threadIdx.x, _);  // (8, 4) stride (1, 2048)
+        // Register view: (REG, K_BLOCK) = (8, 4) stride (1, 8)
+        Tensor rA = make_tensor(tCrA.data(), make_shape(Int<8>{}, Int<4>{}));
         copy(AutoVectorizingCopy{}, sP, rA);
 ```
 

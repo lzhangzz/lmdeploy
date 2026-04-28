@@ -20,7 +20,8 @@ the packed data layout so each thread has 8 contiguous bf16 values per k_block.
 
 **New format (iter 03):** `offset(k, t, j) = k * 2048 + t * 8 + j`
 - k_blocks outermost (4), threads middle (256), registers inner (8)
-- In CuTe layout: `Shape<_4, _256, _8>` with stride `(2048, 8, 1)`
+- CuTe tensor uses mode order `(REG, THREAD, K_BLOCK)` = `Shape<_8, _256, _4>` with default
+  column-major stride `(1, 8, 2048)` — matches our packed format without explicit stride specification
 - Each thread's 8 registers per k_block are contiguous
 - Total size unchanged: 8192 bf16 (16 KB) per tile
 
@@ -54,19 +55,23 @@ Based on iter 01's pack kernel. Changes:
 1. **Store pattern:** Replace 32 individual bf16 stores with CuTe tensor copy:
 
 ```cpp
-// Packed gmem tensor: (K_BLOCK, THREAD, REG) stride (2048, 8, 1)
+// Packed gmem tensor: (REG, THREAD, K_BLOCK) stride (1, 8, 2048)
+// Mode order chosen so default column-major strides match our format
 Tensor gPacked = make_tensor(make_gmem_ptr(packed_A + tile_base),
-                              make_shape(Int<4>{}, Int<256>{}, Int<8>{}));
-Tensor gP = gPacked(_, threadIdx.x, _);  // (4, 8) stride (2048, 1)
+                              make_shape(Int<8>{}, Int<256>{}, Int<4>{}));
+Tensor gP = gPacked(_, threadIdx.x, _);  // (8, 4) stride (1, 2048)
 
-// Reshape tCrA (8, 1, 4) → (4, 8) stride (8, 1)
-Tensor rA = make_tensor(tCrA.data(), make_layout(make_shape(Int<4>{}, Int<8>{})));
+// Reshape tCrA (8, 1, 4) → (REG, K_BLOCK) = (8, 4) stride (1, 8)
+// Default stride matches tCrA flat layout: rA(j, k) = j + k * 8
+Tensor rA = make_tensor(tCrA.data(), make_shape(Int<8>{}, Int<4>{}));
 
 copy(AutoVectorizingCopy{}, rA, gP);
 ```
 
-The tCrA flat layout is `k * 8 + j`, so `make_layout(Shape<_4, _8>{})` with default stride
-`(8, 1)` is correct — both source and destination have stride-1 innermost dimension of size 8.
+CuTe's `make_layout(shape)` uses column-major strides (leftmost mode gets stride 1). Mode order
+`(REG, THREAD, K_BLOCK)` gives default stride `(1, 8, 2048)` matching `offset = k*2048 + t*8 + j`.
+`AutoVectorizingCopy` sees stride-1 innermost mode of size 8 in both src and dst, recasts to
+`uint128_t`, and emits 4 × 128-bit store instructions.
 
 2. **TMA load and S2R copy:** Unchanged from iter 01.
 
@@ -85,14 +90,14 @@ Based on iter 02's WGMMA kernel. Changes:
 1. **S2R load pattern:** Replace 32 individual bf16 loads with CuTe tensor copy:
 
 ```cpp
-// Smem tensor for this stage: (4, 256, 8) stride (2048, 8, 1)
+// Smem tensor for this stage: (REG, THREAD, K_BLOCK) stride (1, 8, 2048)
 Tensor sA = make_tensor(
     make_smem_ptr(smem.A.begin() + read_stage * a_stage_elements),
-    make_shape(Int<4>{}, Int<256>{}, Int<8>{}));
-Tensor sP = sA(_, threadIdx.x, _);  // (4, 8) stride (2048, 1)
+    make_shape(Int<8>{}, Int<256>{}, Int<4>{}));
+Tensor sP = sA(_, threadIdx.x, _);  // (8, 4) stride (1, 2048)
 
-// Register view: (4, 8) stride (8, 1)
-Tensor rA = make_tensor(tCrA.data(), make_layout(make_shape(Int<4>{}, Int<8>{})));
+// Register view: (REG, K_BLOCK) = (8, 4) stride (1, 8)
+Tensor rA = make_tensor(tCrA.data(), make_shape(Int<8>{}, Int<4>{}));
 
 copy(AutoVectorizingCopy{}, sP, rA);
 ```
