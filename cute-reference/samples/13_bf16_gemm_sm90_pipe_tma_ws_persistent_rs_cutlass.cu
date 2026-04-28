@@ -1,19 +1,20 @@
 /***************************************************************************************************
- * BF16 GEMM using SM90 WGMMA tensor cores — RS Optimized Variant
+ * BF16 GEMM using SM90 WGMMA tensor cores — RS CUTLASS-Style Variant
  *
- * An optimized variant of 11_bf16_gemm_sm90_pipe_tma_ws_persistent_rs.cu that adds k_block
- * double-buffering to overlap the S2R (smem-to-register) copy of operand A with WGMMA compute.
+ * An optimized variant of sample 12 that restructures the consumer mainloop to match
+ * CUTLASS's canonical RS pattern (sm90_mma_tma_gmma_rs_warpspecialized.hpp):
  *
- * Key optimization over sample 11 (naive RS):
- *   - K=64 tile split into 4 k_blocks of K=16 (matching WGMMA atom K dimension)
- *   - S2R copy for k_block+1 overlaps with WGMMA for k_block (double-buffering)
- *   - warpgroup_wait<2>() allows 2 in-flight WGMMA instructions for overlap
+ *   - Prologue/mainloop/epilogue structure instead of a single k_tile loop
+ *   - Early pipeline release at k_block==1 (producer can refill 2 WGMMA sooner)
+ *   - k_tile-level prefetch overlap via consumer_try_wait + deferred consumer_wait
  *
- * Unchanged from sample 11:
+ * These optimizations close the performance gap with sample 09 (SS variant) by eliminating
+ * producer starvation and pipeline bubbles at k_tile boundaries.
+ *
+ * Unchanged from sample 12:
  *   - Tile size 128x256x64, PipelineTmaAsync 3-stage
  *   - Persistent scheduling, warp-specialized (384 threads)
- *   - STSM BF16 epilogue
- *   - Register budget (same A fragment size, no PIPE dimension)
+ *   - STSM BF16 epilogue, register budget, shared memory layouts
  *
  * C = alpha * A * B^T + beta * C
  *   A: bf16, M x K, row-major (TN layout)
@@ -510,7 +511,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 GEMM (SM90 WGMMA + TMA load/store, tile 128x256x64, 384 threads WS, PipelineTmaAsync, PERSISTENT, RS OPT kblock)\n\n");
+  printf("BF16 GEMM (SM90 WGMMA + TMA load/store, tile 128x256x64, 384 threads WS, PipelineTmaAsync, PERSISTENT, RS CUTLASS)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
