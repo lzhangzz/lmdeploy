@@ -55,3 +55,21 @@ to drain all pending operations before overwriting `tCrA`.
 - A loaded from gmem via scalar loads (no TMA, no vectorization)
 - `warpgroup_wait<0>()` prevents overlapping WGMMA across k_tiles
 - Not a concern for the production pipeline, which has a different A loading path
+
+
+### Iteration 02: Optimize WGMMA kernel
+
+Optimize the WGMMA kernel by loading packed A with `cp.async.bulk` via smem pipeline
+and remove the extra `warpgroup_wait<0>()`
+
+**Files:** `cute-reference/mixed-gemm/02_*`
+
+Replaces iter 01's scalar gmem→register loads with `SM90_BULK_COPY_G2S` gmem→smem + per-thread
+smem→register loads through a 3-stage pipeline. A single mbarrier per stage coordinates both
+A bulk copy and B TMA arrivals.
+
+**Validated:**
+- Correctness matches iter 01 (same test sizes, same max errors)
+- Performance at 4096^3: **668 GFLOP/s** vs iter 01's 369 GFLOP/s (1.81x speedup)
+- Achieves **parity with sample 13** at large sizes (668 vs 669 GFLOP/s)
+- The `warpgroup_wait<0>()` elimination fully restores WGMMA overlap across k_tiles
