@@ -73,3 +73,18 @@ A bulk copy and B TMA arrivals.
 - Performance at 4096^3: **668 TFLOP/s** vs iter 01's 369 TFLOP/s (1.81x speedup)
 - Achieves **parity with sample 13** at large sizes (668 vs 669 TFLOP/s)
 - The `warpgroup_wait<0>()` elimination fully restores WGMMA overlap across k_tiles
+
+
+### Iteration 03: Vectorized pack/unpack
+
+New packed format `offset(k, t, j) = k*2048 + t*8 + j` enables vectorized 128-bit stores (pack)
+and loads (consumer S2R). Uses CuTe `copy(AutoVectorizingCopy{}, ...)` with mode order
+`(REG, THREAD, K_BLOCK)` for correct default column-major strides.
+
+**Files:** `cute-reference/mixed-gemm/03_*`
+
+**Validated:**
+- Correctness matches iter 02 (same max errors across all test sizes)
+- Pack kernel: vectorized gmem stores (4 × 128-bit vs 32 × 16-bit per thread)
+- Consumer S2R: vectorized smem loads with zero bank conflicts
+- Performance at 4096^3: **665 TFLOP/s** — parity with iter 02 (666 TFLOP/s)

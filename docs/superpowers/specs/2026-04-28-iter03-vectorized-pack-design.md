@@ -137,3 +137,16 @@ layout; only the load/store paths change.
 - Pack kernel: faster gmem stores (4 × 128-bit vs 32 × 16-bit per thread)
 - Consumer: faster S2R (4 × 128-bit vs 32 × 16-bit per thread, ~4x fewer effective cycles)
 - WGMMA throughput should remain at iter 02 / sample 13 parity
+
+## Performance Results (L20Y, CUDA 12.8)
+
+| Size | Iter 02 | Iter 03 | Iter 03/02 |
+|------|---------|---------|------------|
+| 256^3 | 1785 | 1797 | 1.01x |
+| 512^3 | 12586 | 12718 | 1.01x |
+| 1024^3 | 81961 | 82879 | 1.01x |
+| 2048^3 | 451027 | 458770 | 1.02x |
+| 4096^3 | 666103 | 665323 | 1.00x |
+
+GFLOP/s. Iter 03 achieves **parity with iter 02** across all sizes. Correctness is bit-exact
+(same max errors). The vectorized S2R maintains throughput while enabling zero bank conflicts.
