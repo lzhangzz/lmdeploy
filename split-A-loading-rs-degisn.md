@@ -70,6 +70,6 @@ A bulk copy and B TMA arrivals.
 
 **Validated:**
 - Correctness matches iter 01 (same test sizes, same max errors)
-- Performance at 4096^3: **668 GFLOP/s** vs iter 01's 369 GFLOP/s (1.81x speedup)
-- Achieves **parity with sample 13** at large sizes (668 vs 669 GFLOP/s)
+- Performance at 4096^3: **668 TFLOP/s** vs iter 01's 369 TFLOP/s (1.81x speedup)
+- Achieves **parity with sample 13** at large sizes (668 vs 669 TFLOP/s)
 - The `warpgroup_wait<0>()` elimination fully restores WGMMA overlap across k_tiles
