@@ -24,16 +24,17 @@ The packed A data is stored as a flat register dump in gmem. Kernel 1 writes eac
 
 ### Grid and Threading
 
-- 1 CTA = 1 warpgroup (128 threads)
+- 1 CTA = 2 warpgroups (256 threads), matching sample 13's consumer warpgroups (WG0 + WG1)
+- This is required because the S2R copy for A distributes registers across 256 threads (matching the TiledMMA that spans 2 MMA atoms for M=128)
 - Grid size: enough CTAs to cover all (M, K) tiles
 - Grid-stride loop over (M, K) tiles
-- Single thread (thread 0) issues TMA loads; all threads participate in S2R copy and gmem writes
+- Single thread (thread 0) issues TMA loads; all 256 threads participate in S2R copy and gmem writes
 
 ### Per-Tile Pipeline
 
 1. **TMA gmem→smem:** Thread 0 issues `copy(tma_a.with(barrier), gA_tile, sA)` — same TMA load as sample 13. Wait on barrier.
 2. **S2R copy:** `copy(smem_tiled_copy_A, tCsA, tCrA)` — same S2R copy as sample 13. Transforms swizzled smem layout (`GMMA::Layout_K_SW128_Atom`) to GMMA register layout.
-3. **Register dump to gmem:** Each thread writes its portion of `tCrA` to the packed buffer using direct stores. Offset: `(tile_m * num_k_tiles + tile_k) * packed_tile_size + thread_id * regs_per_thread`.
+3. **Register dump to gmem:** Each thread writes its portion of `tCrA` to the packed buffer using direct stores. Offset: `(tile_m * num_k_tiles + tile_k) * packed_tile_size + thread_id * regs_per_thread`. Thread IDs are flat within the 2-warpgroup CTA (0-255), matching the TiledMMA thread layout.
 
 ### Smem
 
@@ -53,7 +54,7 @@ The packed A data is stored as a flat register dump in gmem. Kernel 1 writes eac
 
 ```
 packed_A: [num_m_tiles][num_k_tiles][packed_tile_bytes]
-  packed_tile_bytes = warpgroup_size * regs_per_thread * sizeof(bf16)
+  packed_tile_bytes = 256 * regs_per_thread * sizeof(bf16)
 ```
 
 Each tile is a contiguous block. Within a tile, threads write sequentially (thread 0's values, then thread 1's, etc.).
@@ -80,7 +81,7 @@ Each tile is a contiguous block. Within a tile, threads write sequentially (thre
 
 For each output tile (m_tile, n_tile), iterate over k_tiles:
 
-1. **Load packed A to registers:** Each thread reads its portion of `packed_A[m_tile][k_tile]` directly from gmem. Data goes into `tCrA` registers — identical layout to what Kernel 1 wrote. Vectorized loads for coalescing.
+1. **Load packed A to registers:** Each consumer thread (0-255) reads its portion of `packed_A[m_tile][k_tile]` directly from gmem. Data goes into `tCrA` registers — identical layout to what Kernel 1 wrote. The thread-to-offset mapping must match Kernel 1 exactly (same TiledMMA and tiled_copy_A construction ensures this). Vectorized loads for coalescing.
 2. **Wait for B:** `pipeline.consumer_wait()` for B in smem
 3. **Batched WGMMA:** Same as sample 13:
    ```
