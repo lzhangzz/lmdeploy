@@ -9,7 +9,7 @@ set(MIXED_GEMM_TARGETS
 
 foreach(target ${MIXED_GEMM_TARGETS})
     add_executable(${target} ${target}.cu)
-    target_link_libraries(${target} PRIVATE nvidia::cutlass::cutlass)
+    target_link_libraries(${target} PRIVATE nvidia::cutlass::cutlass cublas)
     target_compile_options(${target} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3>
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>

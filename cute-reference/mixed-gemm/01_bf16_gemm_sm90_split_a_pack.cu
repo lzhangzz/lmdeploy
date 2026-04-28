@@ -48,7 +48,7 @@ int main(int argc, char** argv)
 
   // ---- Benchmark ----
   printf("Pack benchmark:\n");
-  for (int size : {256, 512, 1024, 2048, 4096}) {
+  for (int size : {256, 512, 1024, 2048, 4096, 8192}) {
     int m = size, k = size;
     int ldA = k;
 

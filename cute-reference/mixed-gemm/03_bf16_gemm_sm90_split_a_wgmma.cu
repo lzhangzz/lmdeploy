@@ -16,6 +16,7 @@
 #include "cutlass/arch/barrier.h"
 #include "cutlass/arch/reg_reconfig.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
+#include <cublas_v2.h>
 #include <cmath>
 
 template <class ElementA, int AStageElements, class ElementB, class ElementC,
@@ -421,7 +422,12 @@ int main(int argc, char** argv)
 
   // Benchmark
   printf("Benchmark (100 iterations each):\n");
-  for (int size : {256, 512, 1024, 2048, 4096}) {
+  // cuBLAS reference
+  cublasHandle_t cublas_handle;
+  cublasCreate(&cublas_handle);
+  cublasSetMathMode(cublas_handle, CUBLAS_DEFAULT_MATH);
+
+  for (int size : {256, 512, 1024, 2048, 4096, 8192}) {
     int m = size, n = size, k = size;
     int ldA = k, ldB = k, ldC = m;
 
@@ -439,6 +445,7 @@ int main(int argc, char** argv)
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+    // Custom kernel benchmark
     split_a_wgmma(m, n, k, alpha, d_packed.data().get(),
                   d_B.data().get(), ldB, beta, d_C.data().get(), ldC);
     CUTE_CHECK_LAST();
@@ -455,11 +462,47 @@ int main(int argc, char** argv)
     cudaEventElapsedTime(&total_ms, start, stop);
     double avg_ms = total_ms / timing_iterations;
     double gflops = (2.0 * m * n * k) * 1e-9;
-    printf("  %dx%dx%d: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
+    printf("  %dx%dx%d custom: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    // cuBLAS benchmark
+    thrust::device_vector<bf16_t> d_C_ref(m * n);
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    float alpha_f = 1.0f, beta_f = 0.0f;
+    cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                 m, n, k, &alpha_f,
+                 d_A.data().get(), CUDA_R_16BF, ldA,
+                 d_B.data().get(), CUDA_R_16BF, ldB,
+                 &beta_f,
+                 d_C_ref.data().get(), CUDA_R_16BF, ldC,
+                 CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+
+    cudaEventRecord(start);
+    for (int i = 0; i < timing_iterations; ++i) {
+      cublasGemmEx(cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                   m, n, k, &alpha_f,
+                   d_A.data().get(), CUDA_R_16BF, ldA,
+                   d_B.data().get(), CUDA_R_16BF, ldB,
+                   &beta_f,
+                   d_C_ref.data().get(), CUDA_R_16BF, ldC,
+                   CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    cudaEventElapsedTime(&total_ms, start, stop);
+    avg_ms = total_ms / timing_iterations;
+    printf("  %dx%dx%d cublas: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
   }
+
+  cublasDestroy(cublas_handle);
 
   return 0;
 }
