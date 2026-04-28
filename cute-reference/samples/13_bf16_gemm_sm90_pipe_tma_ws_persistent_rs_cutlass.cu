@@ -261,27 +261,96 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       // Clear accumulators for this tile
       clear(tCrC);
 
-      // ---- Step 5: Pipelined main loop with k_block double-buffering ----
+      // ---- Step 5: Pipelined main loop (CUTLASS-style prologue/mainloop/epilogue) ----
+      //
+      // Three-phase structure matching CUTLASS's sm90_mma_tma_gmma_rs_warpspecialized.hpp:
+      //   Prologue: first k_tile — computes on stage 0, prefetches stage 1
+      //   Mainloop: middle k_tiles — early release at k_block==1, k_tile prefetch overlap
+      //   Epilogue: last k_tile — no next-stage wait, early release at k_block==1
 
-      CUTE_NO_UNROLL
-      for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter)
+      cutlass::ConsumerToken barrier_token = {cutlass::BarrierStatus::WaitAgain};
+
+      // ---- Prologue: first k_tile ----
       {
-        pipeline.consumer_wait(smem_pipe_read);
+        barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
+        pipeline.consumer_wait(smem_pipe_read, barrier_token);
+
         int read_stage = smem_pipe_read.index();
         ++smem_pipe_read;
+        barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
 
-        // Load first k_block of this pipeline stage
+        // Load first k_block of stage 0
         copy(smem_tiled_copy_A,
              tCsA_copy_view(_,_,0,read_stage),
              tCrA_copy_view(_,_,0));
 
         warpgroup_fence_operand(tCrC);
 
+        // k_blocks 0..2 (skip last — it's handled separately below)
         CUTLASS_PRAGMA_UNROLL
-        for (int k_block = 0; k_block < k_block_count; ++k_block)
-        {
-          // Prefetch next k_block (overlaps with current WGMMA via warpgroup_wait<2>)
-          if (k_block < k_block_count - 1) {
+        for (int k_block = 0; k_block < k_block_count - 1; ++k_block) {
+          copy(smem_tiled_copy_A,
+               tCsA_copy_view(_,_,k_block+1,read_stage),
+               tCrA_copy_view(_,_,k_block+1));
+
+          warpgroup_arrive();
+          gemm(mma, tCrA(_,_,k_block),
+                    tCrB(_,_,k_block,read_stage), tCrC);
+          warpgroup_commit_batch();
+        }
+
+        warpgroup_wait<2>();
+
+        // Last k_block of stage 0
+        warpgroup_arrive();
+        gemm(mma, tCrA(_,_,k_block_count-1),
+                  tCrB(_,_,k_block_count-1,read_stage), tCrC);
+        warpgroup_commit_batch();
+
+        --k_tile_count;
+
+        if (k_tile_count > 0) {
+          // Wait for next stage and prefetch its first k_block.
+          // This overlaps the pipeline wait with the in-flight last-k_block WGMMA.
+          // NOTE: smem_pipe_read is NOT incremented here. It stays pointing at the
+          // prefetched stage so the mainloop can pick it up as read_stage.
+          pipeline.consumer_wait(smem_pipe_read, barrier_token);
+          copy(smem_tiled_copy_A,
+               tCsA_copy_view(_,_,0,smem_pipe_read.index()),
+               tCrA_copy_view(_,_,0));
+          warpgroup_wait<2>();
+        }
+      }
+
+      warpgroup_fence_operand(tCrC);
+
+      // ---- Mainloop: middle k_tiles ----
+      CUTE_NO_UNROLL
+      for (; k_tile_count > 1; --k_tile_count)
+      {
+        int read_stage = smem_pipe_read.index();
+        ++smem_pipe_read;
+
+        warpgroup_fence_operand(tCrC);
+
+        CUTLASS_PRAGMA_UNROLL
+        for (int k_block = 0; k_block < k_block_count; ++k_block) {
+          if (k_block == 0) {
+            // Non-blocking probe for the next stage (smem_pipe_read was
+            // already incremented at the top of this k_tile iteration).
+            // The token is consumed at k_block == k_block_count-1.
+            barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
+          }
+
+          if (k_block == k_block_count - 1) {
+            // Last k_block: block for the next stage and prefetch its first k_block.
+            // This overlaps the pipeline wait with the current WGMMA.
+            pipeline.consumer_wait(smem_pipe_read, barrier_token);
+            copy(smem_tiled_copy_A,
+                 tCsA_copy_view(_,_,0,smem_pipe_read.index()),
+                 tCrA_copy_view(_,_,0));
+          } else {
+            // Normal: prefetch next k_block within current stage.
             copy(smem_tiled_copy_A,
                  tCsA_copy_view(_,_,k_block+1,read_stage),
                  tCrA_copy_view(_,_,k_block+1));
@@ -292,13 +361,57 @@ bf16_gemm_persistent_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
                     tCrB(_,_,k_block,read_stage), tCrC);
           warpgroup_commit_batch();
           warpgroup_wait<2>();
+
+          if (k_block == 1) {
+            // Early release: producer can start refilling this buffer
+            // 2 WGMMA instructions sooner than sample 12.
+            pipeline.consumer_release(smem_pipe_release);
+            ++smem_pipe_release;
+          }
         }
 
         warpgroup_fence_operand(tCrC);
-
-        pipeline.consumer_release(smem_pipe_release);
-        ++smem_pipe_release;
       }
+
+      // ---- Epilogue: last k_tile ----
+      if (k_tile_count == 1)
+      {
+        int read_stage = smem_pipe_read.index();
+
+        warpgroup_fence_operand(tCrC);
+
+        CUTLASS_PRAGMA_UNROLL
+        for (int k_block = 0; k_block < k_block_count - 1; ++k_block) {
+          copy(smem_tiled_copy_A,
+               tCsA_copy_view(_,_,k_block+1,read_stage),
+               tCrA_copy_view(_,_,k_block+1));
+
+          warpgroup_arrive();
+          gemm(mma, tCrA(_,_,k_block),
+                    tCrB(_,_,k_block,read_stage), tCrC);
+          warpgroup_commit_batch();
+          warpgroup_wait<2>();
+
+          if (k_block == 1) {
+            pipeline.consumer_release(smem_pipe_release);
+            ++smem_pipe_release;
+          }
+        }
+
+        // Last k_block (no next stage to prefetch)
+        warpgroup_arrive();
+        gemm(mma, tCrA(_,_,k_block_count-1),
+                  tCrB(_,_,k_block_count-1,read_stage), tCrC);
+        warpgroup_commit_batch();
+
+        warpgroup_fence_operand(tCrC);
+      }
+
+      // Wait for all in-flight WGMMA to complete, then release the
+      // prologue's buffer (which was never released during the mainloop).
+      warpgroup_wait<0>();
+      pipeline.consumer_release(smem_pipe_release);
+      ++smem_pipe_release;
 
       // ---- Step 6: Epilogue (per tile) ----
 
