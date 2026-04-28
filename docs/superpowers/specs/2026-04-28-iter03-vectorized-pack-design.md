@@ -110,16 +110,16 @@ Unchanged from iter 02: 144 KB (3 stages × 48 KB). Same headroom (84 KB on L20Y
 
 ## Bank Conflict Analysis
 
-Consumer S2R with 128-bit loads:
+Consumer S2R with 128-bit loads: **zero bank conflicts**.
 
 - Thread t's k_block k starts at byte offset `k * 4096 + t * 16`
-- Starting bank: `(t * 4) % 32`
-- 128-bit access spans 4 consecutive banks
-- Within a warp (32 threads): threads 0, 8, 16, 24 all access banks 0-3 → 4-way conflict
+- 128-bit access spans 4 consecutive banks (16 bytes)
+- SM90 hardware splits the 32-thread warp into 4 groups of 8 threads for wide smem accesses
+- Within each 8-thread group, threads access banks `0-3, 4-7, ..., 28-31` — all 32 banks
+  covered exactly once per group
+- Groups execute serialized, so no inter-group conflicts either
 
-This is the theoretical minimum for 128-bit loads with 256 threads. Despite worse per-instruction
-conflicts (4-way vs 2-way), total effective cycles are lower: 4 instructions × 4 cycles = 16,
-vs current 32 instructions × 2 cycles = 64.
+This is strictly better than the current iter 02 S2R (2-way bank conflicts with 32-bit loads).
 
 ## Validation
 
