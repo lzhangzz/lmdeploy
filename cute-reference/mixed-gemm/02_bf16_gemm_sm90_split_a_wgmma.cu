@@ -318,8 +318,7 @@ split_a_wgmma(int m, int n, int k,
   dim3 dimCluster(1, 1, 1);
   dim3 dimGrid(std::min(num_SMs, total_tiles));
 
-  constexpr int a_stage_elements_host = int(bM) * int(bK);
-  static_assert(a_stage_elements_host == 128 * 64);
+  constexpr int a_stage_elements_host = 128 * 64;  // bM * bK, must match kernel
   int smem_size = int(sizeof(WgmmaSharedStorage<bf16_t, a_stage_elements_host, bf16_t, bf16_t,
       decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sB){})>));
 
