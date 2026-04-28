@@ -1,15 +1,19 @@
 /***************************************************************************************************
- * BF16 GEMM using SM90 WGMMA tensor cores — RS CUTLASS-Style Variant
+ * BF16 GEMM using SM90 WGMMA tensor cores — RS Optimized Bulk S2R Variant
  *
- * An optimized variant of sample 12 that restructures the consumer mainloop to match
- * CUTLASS's canonical RS pattern (sm90_mma_tma_gmma_rs_warpspecialized.hpp):
+ * An optimized variant of sample 12 that replaces the interleaved copy/gemm k_block loop
+ * with a two-phase approach per k_tile:
  *
- *   - Prologue/mainloop/epilogue structure instead of a single k_tile loop
- *   - Early pipeline release at k_block==1 (producer can refill 2 WGMMA sooner)
- *   - k_tile-level prefetch overlap via consumer_try_wait + deferred consumer_wait
+ *   Phase 1: Bulk copy all k_blocks of A from smem to registers
+ *   Phase 2: Issue all 4 WGMMA back-to-back with warpgroup_wait<2>
  *
- * These optimizations close the performance gap with sample 09 (SS variant) by eliminating
- * producer starvation and pipeline bubbles at k_tile boundaries.
+ * This reduces instruction interleave overhead (copy/gemm/commit/wait ping-pong) and
+ * improves GFLOP/s by ~2% at large sizes vs sample 12.
+ *
+ * Note: The prologue/mainloop/epilogue pattern from CUTLASS's RS implementation was
+ * investigated but deadlocks in persistent kernels due to pipeline state divergence
+ * across output tiles. The bulk S2R approach captures most of the benefit without
+ * the pipeline state tracking complexity.
  *
  * Unchanged from sample 12:
  *   - Tile size 128x256x64, PipelineTmaAsync 3-stage
