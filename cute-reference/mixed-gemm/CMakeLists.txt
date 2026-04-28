@@ -2,6 +2,7 @@
 set(MIXED_GEMM_TARGETS
     01_bf16_gemm_sm90_split_a_pack
     01_bf16_gemm_sm90_split_a_wgmma
+    02_bf16_gemm_sm90_split_a_wgmma
 )
 
 foreach(target ${MIXED_GEMM_TARGETS})
