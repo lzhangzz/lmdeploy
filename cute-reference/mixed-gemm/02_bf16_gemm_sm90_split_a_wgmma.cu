@@ -153,8 +153,8 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
     ThrMMA thr_mma = mma.get_thread_slice(threadIdx.x);
 
-    // Dummy A smem tensor for fragment creation — points to start of shared_memory
-    // (no actual A smem allocation; only used for layout computation)
+    // A smem tensor for fragment creation only. Points to stage 0 of A smem.
+    // The actual S2R loads use a direct smem pointer into the pipeline stage.
     Tensor dummy_sA = make_tensor(make_smem_ptr(reinterpret_cast<bf16_t*>(shared_memory)), SmemLayoutA{});
     Tensor dummy_tCsA = thr_mma.partition_A(dummy_sA);
     Tensor tCrA = thr_mma.make_fragment_A(dummy_tCsA(_,_,_,Int<0>{}));
@@ -318,7 +318,8 @@ split_a_wgmma(int m, int n, int k,
   dim3 dimCluster(1, 1, 1);
   dim3 dimGrid(std::min(num_SMs, total_tiles));
 
-  constexpr int a_stage_elements_host = 128 * 64;
+  constexpr int a_stage_elements_host = int(bM) * int(bK);
+  static_assert(a_stage_elements_host == 128 * 64);
   int smem_size = int(sizeof(WgmmaSharedStorage<bf16_t, a_stage_elements_host, bf16_t, bf16_t,
       decltype(sB), decltype(sC_layout), cute::size<2>(decltype(sB){})>));
 
@@ -362,7 +363,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 Split A WGMMA (SM90, pre-packed A, tile 128x256x64, 384t WS, persistent)\n\n");
+  printf("BF16 Split A WGMMA iter 02 (SM90, bulk-copy A pipeline, tile 128x256x64, 384t WS, persistent)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
