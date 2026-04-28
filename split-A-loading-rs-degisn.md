@@ -88,3 +88,27 @@ and loads (consumer S2R). Uses CuTe `copy(AutoVectorizingCopy{}, ...)` with mode
 - Pack kernel: vectorized gmem stores (4 × 128-bit vs 32 × 16-bit per thread)
 - Consumer S2R: vectorized smem loads with zero bank conflicts
 - Performance at 4096^3: **665 TFLOP/s** — parity with iter 02 (666 TFLOP/s)
+
+
+### Iteration 04: Reduce packing unit to 64×16
+
+Reduces the packing unit from (128, 64) to (64, 16) — one WGMMA instruction's A operand —
+for maximum composability in the production pipeline.
+
+**Files:** `cute-reference/mixed-gemm/04_*`
+
+Keeps the (128, 64) processing tile in the pack kernel (same TMA+S2R pipeline), but restructures
+the output into 8 independent (64, 16) units organized by (warpgroup, k_block). Each warpgroup's
+4 units are contiguous (4096 bf16). Consumer bulk copy is unchanged; only the smem-to-register
+mapping is updated to load per-warpgroup regions.
+
+Packed format per unit: `(REG=8, THREAD=128)` strides `(1, 8)`, 1024 bf16.
+Full packed tensor: `Shape<_8, _128, (4, K_tiles), (2, M_tiles)>` with composite K and M modes
+that flatten to `K_units = ceil_div(K, 16)` and `M_units = ceil_div(M, 64)`.
+
+**Validated:**
+- Correctness matches iter 03 (same max errors across all test sizes)
+- Pack output: per-warpgroup contiguous regions, vectorized 128-bit stores
+- Consumer S2R: per-warpgroup loads from contiguous 4096 bf16 smem regions
+- Performance at 4096^3: **667 TFLOP/s** — parity with iter 03 (665 TFLOP/s)
+- Performance at 8192^3: **662 TFLOP/s** — parity with iter 03 (654 TFLOP/s)
