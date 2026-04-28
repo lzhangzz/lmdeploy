@@ -8,7 +8,7 @@
  * Target: SM90 (uses TMA for gmem->smem, SM90 WGMMA register layout)
  **************************************************************************************************/
 
-#include "split_a_pack.h"
+#include "01_split_a_pack.h"
 
 int main(int argc, char** argv)
 {

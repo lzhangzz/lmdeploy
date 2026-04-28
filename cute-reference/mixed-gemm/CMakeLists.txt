@@ -1,7 +1,7 @@
 # Mixed-precision GEMM kernels (split A loading POC)
 set(MIXED_GEMM_TARGETS
-    bf16_gemm_sm90_split_a_pack
-    bf16_gemm_sm90_split_a_wgmma
+    01_bf16_gemm_sm90_split_a_pack
+    01_bf16_gemm_sm90_split_a_wgmma
 )
 
 foreach(target ${MIXED_GEMM_TARGETS})
