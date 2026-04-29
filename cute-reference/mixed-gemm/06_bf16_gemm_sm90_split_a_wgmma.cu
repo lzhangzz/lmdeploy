@@ -115,10 +115,11 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       if (linear_idx == 0) { } // avoid unused variable warning
 
       while (linear_idx < total_tiles) {
-        int offset = linear_idx & (swizzle_size - 1);
-        int extra  = linear_idx >> log_swizzle;
-        int n_idx  = extra % n_tiles;
-        int m_idx  = (extra / n_tiles) * swizzle_size + offset;
+        int m_idx  = linear_idx / n_tiles;
+        int n_base = linear_idx % n_tiles;
+        int n_low  = n_base & (swizzle_size - 1);
+        int n_high = n_base >> log_swizzle;
+        int n_idx  = n_high + n_low * (n_tiles >> log_swizzle);
 
         if (m_idx >= m_tiles || n_idx >= n_tiles) {
           linear_idx += grid_size;
@@ -208,10 +209,11 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     };
 
     while (linear_idx < total_tiles) {
-      int offset = linear_idx & (swizzle_size - 1);
-      int extra  = linear_idx >> log_swizzle;
-      int n_idx  = extra % n_tiles;
-      int m_idx  = (extra / n_tiles) * swizzle_size + offset;
+      int m_idx  = linear_idx / n_tiles;
+      int n_base = linear_idx % n_tiles;
+      int n_low  = n_base & (swizzle_size - 1);
+      int n_high = n_base >> log_swizzle;
+      int n_idx  = n_high + n_low * (n_tiles >> log_swizzle);
 
       if (m_idx >= m_tiles || n_idx >= n_tiles) {
         linear_idx += grid_size;
@@ -354,6 +356,7 @@ split_a_wgmma(int m, int n, int k,
               bf16_t const* B, int ldB,
               Beta beta,
               bf16_t* C, int ldC,
+              int log_swizzle_override = -1,
               cudaStream_t stream = 0)
 {
   using namespace cute;
@@ -398,22 +401,18 @@ split_a_wgmma(int m, int n, int k,
 
   int m_tiles = size(ceil_div(M, bM));
   int n_tiles = size(ceil_div(N, bN));
+  int total_tiles = m_tiles * n_tiles;
   int k_tile_count = size(ceil_div(K, bK));
 
-  // Swizzle heuristic (from CUTLASS get_log_swizzle_size)
-  int min_cta_dim = std::min(m_tiles, n_tiles);
-  int log_swizzle = 0;
-  if (min_cta_dim >= 6)      log_swizzle = 3;
-  else if (min_cta_dim >= 3) log_swizzle = 2;
-  else if (min_cta_dim >= 2) log_swizzle = 1;
+  // Swizzle: no swizzle is optimal for this kernel (empirically verified).
+  // Override via CLI for experimentation. log_swizzle=0 means row-major (no swizzle).
+  int log_swizzle = (log_swizzle_override >= 0) ? log_swizzle_override : 0;
   int swizzle_size = 1 << log_swizzle;
 
-  // Pad m_tiles to multiple of swizzle_size for bijective swizzle mapping.
-  // The swizzle groups swizzle_size consecutive M-tiles. If m_tiles is not a
-  // multiple of swizzle_size, some tiles in the last group would be missed.
-  // Padding m_tiles ensures every valid tile is reachable by the mapping.
-  int m_tiles_padded = ((m_tiles + swizzle_size - 1) / swizzle_size) * swizzle_size;
-  int total_tiles_padded = m_tiles_padded * n_tiles;
+  // N-swizzle: m stays row-major, n is interleaved. No m_tiles padding needed.
+  // n_tiles must be a multiple of swizzle_size for bijective mapping (true for
+  // power-of-2 problem sizes where n_tiles = N/256 is a power of 2).
+  int total_tiles_padded = total_tiles;
 
   dim3 dimBlock(size(mma) * 3 / 2);
   dim3 dimCluster(1, 1, 1);
@@ -518,13 +517,13 @@ int main(int argc, char** argv)
 
   printf("\n");
 
-  // Benchmark
+  // Benchmark: sweep over log_swizzle values at key sizes
   printf("Benchmark (100 iterations each):\n");
   cublasHandle_t cublas_handle;
   cublasCreate(&cublas_handle);
   cublasSetMathMode(cublas_handle, CUBLAS_DEFAULT_MATH);
 
-  for (int size : {256, 512, 1024, 2048, 4096, 8192}) {
+  for (int size : {4096, 8192}) {
     int m = size, n = size, k = size;
     int ldA = k, ldB = k, ldC = m;
 
@@ -542,24 +541,26 @@ int main(int argc, char** argv)
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-    // Custom kernel benchmark
-    split_a_wgmma(m, n, k, alpha, d_packed.data().get(),
-                  d_B.data().get(), ldB, beta, d_C.data().get(), ldC);
-    CUTE_CHECK_LAST();
-
-    cudaEventRecord(start);
-    for (int i = 0; i < timing_iterations; ++i) {
+    for (int log_sw : {0, 1, 2, 3}) {
       split_a_wgmma(m, n, k, alpha, d_packed.data().get(),
-                    d_B.data().get(), ldB, beta, d_C.data().get(), ldC);
-    }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
+                    d_B.data().get(), ldB, beta, d_C.data().get(), ldC, log_sw);
+      CUTE_CHECK_LAST();
 
-    float total_ms = 0.0f;
-    cudaEventElapsedTime(&total_ms, start, stop);
-    double avg_ms = total_ms / timing_iterations;
-    double gflops = (2.0 * m * n * k) * 1e-9;
-    printf("  %dx%dx%d custom: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
+      cudaEventRecord(start);
+      for (int i = 0; i < timing_iterations; ++i) {
+        split_a_wgmma(m, n, k, alpha, d_packed.data().get(),
+                      d_B.data().get(), ldB, beta, d_C.data().get(), ldC, log_sw);
+      }
+      cudaEventRecord(stop);
+      cudaEventSynchronize(stop);
+
+      float total_ms = 0.0f;
+      cudaEventElapsedTime(&total_ms, start, stop);
+      double avg_ms = total_ms / timing_iterations;
+      double gflops = (2.0 * m * n * k) * 1e-9;
+      printf("  %dx%dx%d log_swizzle=%d (sw=%d): %.1f GFLOP/s (%.4f ms)\n",
+             m, n, k, log_sw, 1 << log_sw, gflops / (avg_ms * 1e-3), avg_ms);
+    }
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
@@ -591,9 +592,11 @@ int main(int argc, char** argv)
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
-    cudaEventElapsedTime(&total_ms, start, stop);
-    avg_ms = total_ms / timing_iterations;
-    printf("  %dx%dx%d cublas: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops / (avg_ms * 1e-3), avg_ms);
+    float cublas_ms = 0.0f;
+    cudaEventElapsedTime(&cublas_ms, start, stop);
+    double cublas_avg = cublas_ms / timing_iterations;
+    double gflops_ref = (2.0 * m * n * k) * 1e-9;
+    printf("  %dx%dx%d cublas: %.1f GFLOP/s (%.4f ms)\n", m, n, k, gflops_ref / (cublas_avg * 1e-3), cublas_avg);
 
     cudaEventDestroy(start);
     cudaEventDestroy(stop);

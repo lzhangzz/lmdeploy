@@ -164,30 +164,50 @@ Iter 05 interleaves S2R loads with WGMMA at k_block granularity and delays stage
 - The consumer_try_wait prefetch in the main loop closes the gap at 8192^3
 
 
-### Iteration 06: Threadblock swizzling
+### Iteration 06: Threadblock swizzling (negative result)
 
-The 4096^3 gap (86.2% vs 97.6% at 8192^3) is likely caused by L2 cache thrashing — without
-swizzling, consecutive CTAs in the grid-stride loop map to adjacent M-tiles that share L2 cache
-lines for operand B. CUTLASS's persistent kernels solve this via the tile scheduler's swizzle
-logic (`PersistentTileSchedulerSm90Params::log_swizzle_size_`).
-
-**Target changes:**
-
-1. **Swizzle the linear index**: Remap `linear_idx = blockIdx.x` to a swizzled tile coordinate
-   `(m_tile, n_tile)` instead of the current row-major rasterization (`m_idx = linear / n_tiles`,
-   `n_idx = linear % n_tiles`). The swizzle interleaves consecutive CTAs on the minor axis to
-   improve L2 locality for B.
-
-2. **Swizzle heuristic**: Adapted from CUTLASS's `get_log_swizzle_size()`:
-   - swizzle_size = 8 if `min(m_tiles, n_tiles) >= 6`
-   - swizzle_size = 4 if `min(m_tiles, n_tiles) >= 3`
-   - swizzle_size = 2 if `min(m_tiles, n_tiles) >= 2`
-   - swizzle_size = 1 otherwise
-
-3. **Grid launch**: Pad `total_tiles` up to a multiple of `swizzle_size * cluster_shape` (cluster
-   shape = 1 for our single-CTA kernel). Extra tiles are skipped at runtime.
+Investigated whether CUTLASS-style tile swizzling could close the 4096^3 gap (86.2% vs 97.6% at
+8192^3). Tested both M-axis swizzle (CUTLASS pattern: consecutive CTAs share N tile) and N-axis
+swizzle (consecutive CTAs within M group get spread-out N tiles). Both directions hurt performance.
 
 **Files:** `cute-reference/mixed-gemm/06_*`
+
+**Tested:**
+
+1. **M-axis swizzle** (CUTLASS bit-decomposition): Groups `swizzle_size` consecutive CTAs to
+   share the same N tile, maximizing B reuse in L2. At the cost of breaking A reuse (consecutive
+   CTAs no longer share the same M tile).
+
+2. **N-axis swizzle**: Keeps M grouping (preserving A reuse) but interleaves N within each M
+   group: `n_idx = (n_base >> log_sw) + (n_base & (sw-1)) * (n_tiles >> log_sw)`. Spreads B
+   accesses across L2 sets.
+
+**M-axis swizzle results** (4096^3):
+
+| log_swizzle | sw | GFLOP/s | vs cuBLAS |
+|---|---|---|---|
+| 0 (none) | 1 | **677,740** | 85.5% |
+| 1 | 2 | 673,133 | 84.9% |
+| 2 | 4 | 657,763 | 83.0% |
+| 3 | 8 | 610,332 | 77.0% |
+
+**N-axis swizzle results** (4096^3):
+
+| log_swizzle | sw | GFLOP/s | vs cuBLAS |
+|---|---|---|---|
+| 0 (none) | 1 | **677,040** | 85.4% |
+| 1 | 2 | 677,168 | 85.4% |
+| 2 | 4 | 675,951 | 85.2% |
+| 3 | 8 | 635,164 | 80.1% |
+
+**Conclusion:** No swizzle (log_swizzle=0, row-major) is optimal. The row-major tile ordering
+provides maximum L2 reuse for packed A — consecutive CTAs share the same m_tile and load the same
+A data via bulk copy. Any swizzle breaks this A reuse, and the B reuse gained does not compensate.
+The CUTLASS swizzle is designed for kernels where both operands use TMA; our kernel loads A via
+bulk copy from a packed buffer, which has different L2 behavior.
+
+The 4096^3 gap is not a tile ordering issue. It may be a compute-to-memory ratio issue at that
+problem size, or cuBLAS using a different kernel configuration.
 
 **Reference:** CUTLASS `sm90_tile_scheduler.hpp` `get_work_idx_m_and_n()` and
 `tile_scheduler_params.h` `get_log_swizzle_size()`.
