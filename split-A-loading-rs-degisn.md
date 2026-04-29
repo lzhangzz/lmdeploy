@@ -211,3 +211,33 @@ problem size, or cuBLAS using a different kernel configuration.
 
 **Reference:** CUTLASS `sm90_tile_scheduler.hpp` `get_work_idx_m_and_n()` and
 `tile_scheduler_params.h` `get_log_swizzle_size()`.
+
+
+### Iteration 07: Persistent kernel
+
+Current kernel is persistent within a single GEMM (grid-stride loop over tiles), but launches
+a new kernel for each GEMM call. A fully persistent kernel stays alive across GEMMs, accepting
+new work items via a host-producer queue. Benefits:
+
+1. **Eliminate CTA launch overhead**: No kernel launch cost per GEMM. On L20Y with 132 SMs,
+   launching 384-thread CTAs has non-trivial overhead that matters for smaller problems.
+
+2. **Overlap data transfer & computation**: While the WGMMA pipeline processes tile (m, n, k),
+   the next GEMM's packed A data can be DMA'd into a staging buffer. The producer warp group
+   can prefetch B via TMA for the next tile while the consumer drains WGMMA for the current tile.
+
+3. **Better occupancy utilization**: A persistent kernel can dynamically adjust work distribution
+   across SMs. Currently 1 CTA/SM (register-limited at 64,512/65,536 regs). A persistent kernel
+   could overlap computation from multiple GEMMs to keep SMs busy during pipeline bubbles.
+
+**Target changes:**
+
+1. **Host-kernel communication**: A work queue in global memory (or managed memory) where the
+   host enqueues GEMM descriptors (M, N, K, pointers to A, B, C). The kernel polls for new work.
+
+2. **Cross-GEMM persistence**: The kernel's outer loop iterates over work queue items instead of
+   tiles of a single GEMM. Each work item is a full GEMM with its own grid-stride tile loop.
+
+3. **Data transfer overlap**: The host can prepare and DMA the next GEMM's packed A while the
+   kernel is still computing the current GEMM. This is the key throughput win for the production
+   mixed-precision pipeline (pack → WGMMA → dequantize).
