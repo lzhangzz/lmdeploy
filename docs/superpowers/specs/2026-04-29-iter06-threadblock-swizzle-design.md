@@ -52,7 +52,7 @@ Computed on the host side, passed to the kernel as arguments.
 
 ## Grid Launch
 
-Pad `total_tiles` up to a multiple of `swizzle_size` (cluster_shape = 1). Extra tiles from padding are skipped at runtime by the bounds check. Grid size remains `min(num_SMs, total_tiles_padded)`.
+Pad `m_tiles` up to a multiple of `swizzle_size` (cluster_shape = 1), then `total_tiles_padded = m_tiles_padded * n_tiles`. The padding is along M (the swizzle axis) — padding total_tiles directly would miss tiles when m_tiles isn't a multiple of swizzle_size. Extra tiles from padding are skipped at runtime by the bounds check. Grid size remains `min(num_SMs, total_tiles_padded)`.
 
 ## What Doesn't Change
 
