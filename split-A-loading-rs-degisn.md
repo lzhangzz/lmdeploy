@@ -112,3 +112,38 @@ that flatten to `K_units = ceil_div(K, 16)` and `M_units = ceil_div(M, 64)`.
 - Consumer S2R: per-warpgroup loads from contiguous 4096 bf16 smem regions
 - Performance at 4096^3: **667 TFLOP/s** — parity with iter 03 (665 TFLOP/s)
 - Performance at 8192^3: **662 TFLOP/s** — parity with iter 03 (654 TFLOP/s)
+
+
+### Iteration 05: k_block-level interleaving and delayed stage release
+
+Pipeline optimization to close the gap with cuBLAS (currently ~85% at 4096^3).
+
+The current pipeline loads all 4 k_blocks of A to registers, then issues 4 WGMMA back-to-back.
+This stalls the WGMMA pipeline during the S2R phase. The CUTLASS production RS WGMMA collective
+hides this latency by interleaving at k_block granularity and delaying stage release.
+
+**Target changes:**
+
+1. **k_block-level interleaving**: While WGMMA k_block N is in flight, load k_block N+1 from
+   smem to registers. This hides S2R latency behind WGMMA execution.
+   ```
+   Current:                     Target:
+   load all 4 k_blocks          load k_block 0
+   wgmma 0, wait<2>             wgmma 0, wait<2>
+   wgmma 1, wait<2>             load k_block 1   ← overlapped
+   wgmma 2, wait<2>             wgmma 1, wait<2>
+   wgmma 3, wait<2>             load k_block 2   ← overlapped
+                                wgmma 2, wait<2>
+                                load k_block 3   ← overlapped
+                                wgmma 3, wait<2>
+   ```
+
+2. **Delayed stage release**: Release pipeline stages at `k_block == 1` of the next k_tile
+   instead of immediately after the WGMMA loop. This gives the producer more time to refill
+   stages before the consumer needs them.
+
+3. **`consumer_try_wait` prefetch**: Use non-blocking `consumer_try_wait` at `k_block == 0`
+   to start barrier polling early, then do the blocking `consumer_wait` only at the last
+   k_block. Reduces stall time when the consumer needs data.
+
+**Reference:** CUTLASS collective `sm90_mma_tma_gmma_rs_warpspecialized.hpp` lines 597-727.
