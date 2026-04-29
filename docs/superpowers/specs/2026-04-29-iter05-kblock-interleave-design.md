@@ -1,4 +1,10 @@
-# Iteration 05: k_block-level Interleaving with Delayed Release + Prefetch
+# Iteration 05: k_block-level Interleaving with Delayed Release
+
+## Status: IMPLEMENTED (partial)
+
+k_block interleaving and delayed release implemented and validated. consumer_try_wait prefetch
+attempted but reverted — the CUTLASS token-based pipeline produces incorrect results without
+a drain when inlined. See PROGRESS.md for full debugging history.
 
 ## Goal
 

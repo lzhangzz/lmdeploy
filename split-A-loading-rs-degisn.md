@@ -116,18 +116,18 @@ that flatten to `K_units = ceil_div(K, 16)` and `M_units = ceil_div(M, 64)`.
 
 ### Iteration 05: k_block-level interleaving and delayed stage release
 
-Pipeline optimization to close the gap with cuBLAS (currently ~85% at 4096^3).
+Pipeline optimization to close the gap with cuBLAS. The iter 04 pipeline loads all 4 k_blocks
+of A to registers, then issues 4 WGMMA back-to-back, stalling the WGMMA pipeline during S2R.
+Iter 05 interleaves S2R loads with WGMMA at k_block granularity and delays stage release.
 
-The current pipeline loads all 4 k_blocks of A to registers, then issues 4 WGMMA back-to-back.
-This stalls the WGMMA pipeline during the S2R phase. The CUTLASS production RS WGMMA collective
-hides this latency by interleaving at k_block granularity and delaying stage release.
+**Files:** `cute-reference/mixed-gemm/05_*`
 
-**Target changes:**
+**Implemented:**
 
 1. **k_block-level interleaving**: While WGMMA k_block N is in flight, load k_block N+1 from
-   smem to registers. This hides S2R latency behind WGMMA execution.
+   smem to registers. S2R load latency is hidden behind WGMMA execution.
    ```
-   Current:                     Target:
+   iter 04:                     iter 05:
    load all 4 k_blocks          load k_block 0
    wgmma 0, wait<2>             wgmma 0, wait<2>
    wgmma 1, wait<2>             load k_block 1   ← overlapped
@@ -139,11 +139,23 @@ hides this latency by interleaving at k_block granularity and delaying stage rel
    ```
 
 2. **Delayed stage release**: Release pipeline stages at `k_block == 1` of the next k_tile
-   instead of immediately after the WGMMA loop. This gives the producer more time to refill
-   stages before the consumer needs them.
+   instead of after the full WGMMA loop. Gives the producer more time to refill stages.
 
-3. **`consumer_try_wait` prefetch**: Use non-blocking `consumer_try_wait` at `k_block == 0`
-   to start barrier polling early, then do the blocking `consumer_wait` only at the last
-   k_block. Reduces stall time when the consumer needs data.
+3. **No wait<0>() drain**: Eliminated the wait<0>() drain between prologue and main loop.
+   The 2 pending WGMMA from the prologue carry over naturally into the main loop's wait<2>
+   chain, recovering ~120 TFLOP/s at 4096^3.
 
-**Reference:** CUTLASS collective `sm90_mma_tma_gmma_rs_warpspecialized.hpp` lines 597-727.
+**Not implemented (attempted but failed):**
+
+- `consumer_try_wait` prefetch: The CUTLASS token-based pipeline (try_wait + token-based
+  consumer_wait with non-incrementing smem_pipe_read) produces incorrect results without a
+  drain. Root cause: `mbarrier.try_wait.parity` consumes the barrier signal, and the
+  non-incrementing smem_pipe_read pattern combined with inlined code causes issues.
+  The simpler iter 04-style plain consumer_wait with incrementing smem_pipe_read works.
+
+**Validated:**
+- Correctness matches iter 04 (same max errors across all test sizes)
+- Performance at 4096^3: **682 TFLOP/s** (85.9% of cuBLAS 794 TFLOP/s)
+- Performance at 8192^3: **660 TFLOP/s** (91.9% of cuBLAS 718 TFLOP/s)
+- Up from iter 04's 667 TFLOP/s (85%) at 4096^3 and 654 TFLOP/s at 8192^3
+- The no-drain optimization alone accounts for ~120 TFLOP/s improvement at 4096^3

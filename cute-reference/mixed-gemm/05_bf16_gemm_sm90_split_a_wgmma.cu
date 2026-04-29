@@ -1,22 +1,20 @@
 /***************************************************************************************************
  * BF16 GEMM using SM90 WGMMA with pre-packed operand A (iteration 05).
  *
- * Pipeline optimization: k_block-level interleaving with delayed stage release
- * and consumer_try_wait prefetch.
+ * Pipeline optimization: k_block-level interleaving with delayed stage release.
  *
- * Follows CUTLASS's sm90_mma_tma_gmma_rs_warpspecialized.hpp lines 597-727
- * 3-part structure: prologue / main loop / tail.
+ * Consumer mainloop uses iter 04-style prologue (all loads + wait<2> per gemm)
+ * followed by k_block-interleaved main loop with delayed stage release at k_block==1.
+ * No drain between prologue and main loop — 2 pending WGMMA carry over naturally.
  *
  * Changes from iteration 04:
- *   - Consumer mainloop: prologue/main/tail with k_block interleaving
- *   - Delayed stage release at k_block==1
- *   - Prefetch next stage via consumer_try_wait at k_block==0
+ *   - k_block-level interleaving in main loop (load k_block N+1 before WGMMA N)
+ *   - Delayed stage release at k_block==1 instead of after full WGMMA loop
  *
  * Target: SM90
  **************************************************************************************************/
 
 #include "05_split_a_pack.h"
-#include "cutlass/arch/barrier.h"
 #include "cutlass/arch/reg_reconfig.h"
 #include "cutlass/pipeline/sm90_pipeline.hpp"
 #include <cublas_v2.h>
@@ -112,6 +110,8 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     if (warp_group_thread_idx == 0) {
       using BarrierType = typename MainloopPipeline::ProducerBarrierType;
 
+      if (linear_idx == 0) { } // avoid unused variable warning
+
       while (linear_idx < total_tiles) {
         int m_idx = linear_idx / n_tiles;
         int n_idx = linear_idx % n_tiles;
@@ -152,7 +152,7 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
   } else {
     // ==================================================================
     // Consumer warp groups (wg 0 and 1)
-    //   CUTLASS 3-part mainloop: prologue / main loop / tail
+    //   Prologue + k_block-interleaved main loop + tail
     // ==================================================================
     cutlass::arch::warpgroup_reg_alloc<232>();
 
@@ -162,8 +162,6 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     Tensor dummy_sA = make_tensor(make_smem_ptr(reinterpret_cast<bf16_t*>(shared_memory)), SmemLayoutA{});
     Tensor dummy_tCsA = thr_mma.partition_A(dummy_sA);
     Tensor tCrA = thr_mma.make_fragment_A(dummy_tCsA(_,_,_,Int<0>{}));
-
-    constexpr int regs_per_thread = size(tCrA);
 
     Tensor tCsB = thr_mma.partition_B(sB);
     Tensor tCrB = thr_mma.make_fragment_B(tCsB);
@@ -209,122 +207,81 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
       clear(tCrC);
 
-      // ================================================================
-      // PROLOGUE: first k_tile
-      //   Matches CUTLASS lines 597-644
-      // ================================================================
-      int k_tile_remaining = k_tile_count;
-
-      ConsumerToken barrier_token = {BarrierStatus::WaitAgain};
-      barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
-      pipeline.consumer_wait(smem_pipe_read, barrier_token);
-
-      int read_stage = smem_pipe_read.index();
-      ++smem_pipe_read;
-      barrier_token = pipeline.consumer_try_wait(smem_pipe_read);  // prefetch next k_tile
-
-      load_k_block(0, read_stage);
+      int read_stage;
+      int k_tiles = k_tile_count;
 
       warpgroup_fence_operand(tCrC);
 
-      // k_block 0..N-2: NO warpgroup_wait<2> inside this loop
-      CUTLASS_PRAGMA_UNROLL
-      for (int k_block = 0; k_block < k_block_count - 1; ++k_block) {
-        load_k_block(k_block + 1, read_stage);
-        warpgroup_arrive();
-        gemm(mma, tCrA(_,_,k_block),
-                  tCrB(_,_,k_block,read_stage), tCrC);
-        warpgroup_commit_batch();
-      }
-
-      // Last k_block WGMMA (outside loop, after wait<2>)
-      warpgroup_wait<2>();
-      warpgroup_arrive();
-      gemm(mma, tCrA(_,_,k_block_count - 1),
-                tCrB(_,_,k_block_count - 1,read_stage), tCrC);
-      warpgroup_commit_batch();
-
-      --k_tile_remaining;
-      if (k_tile_remaining == 0) {
-        goto mma_tail;
-      }
-
-      // Finalize prefetch for next stage, load k_block 0
-      pipeline.consumer_wait(smem_pipe_read, barrier_token);
-      load_k_block(0, smem_pipe_read.index());
-      warpgroup_wait<2>();
-
       // ================================================================
-      // MAIN LOOP: k_tiles 1..N-2
-      //   Matches CUTLASS lines 646-691
+      // PROLOGUE: iter 04 style (wait<2> after each gemm, 2 pending)
       // ================================================================
-      CUTLASS_PRAGMA_NO_UNROLL
-      for (; k_tile_remaining > 1; --k_tile_remaining) {
+      {
+        pipeline.consumer_wait(smem_pipe_read);
         read_stage = smem_pipe_read.index();
         ++smem_pipe_read;
+
+        for (int kb = 0; kb < k_block_count; ++kb) {
+          load_k_block(kb, read_stage);
+        }
 
         warpgroup_fence_operand(tCrC);
 
         CUTLASS_PRAGMA_UNROLL
         for (int k_block = 0; k_block < k_block_count; ++k_block) {
-          if (k_block == 0) {
-            barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
-          }
-
-          if (k_block == k_block_count - 1) {
-            pipeline.consumer_wait(smem_pipe_read, barrier_token);
-            load_k_block(0, smem_pipe_read.index());
-          } else {
-            load_k_block(k_block + 1, read_stage);
-          }
-
           warpgroup_arrive();
           gemm(mma, tCrA(_,_,k_block),
                     tCrB(_,_,k_block,read_stage), tCrC);
           warpgroup_commit_batch();
           warpgroup_wait<2>();
-
-          if (k_block == 1) {
-            pipeline.consumer_release(smem_pipe_release);
-            ++smem_pipe_release;
-          }
         }
+
+        warpgroup_fence_operand(tCrC);
+        --k_tiles;
       }
 
-      // ================================================================
-      // TAIL: last k_tile
-      //   Matches CUTLASS lines 693-730
-      // ================================================================
+      // NO drain — 2 pending WGMMA from prologue
+
+      if (k_tiles > 0)
       {
-        read_stage = smem_pipe_read.index();
+        // iter 04 main loop (plain consumer_wait, no token)
+        CUTE_NO_UNROLL
+        for (int k_tile_iter = 0; k_tile_iter < k_tiles; ++k_tile_iter)
+        {
+          pipeline.consumer_wait(smem_pipe_read);
+          read_stage = smem_pipe_read.index();
+          ++smem_pipe_read;
 
-        warpgroup_fence_operand(tCrC);
+          load_k_block(0, read_stage);
 
-        CUTLASS_PRAGMA_UNROLL
-        for (int k_block = 0; k_block < k_block_count - 1; ++k_block) {
-          load_k_block(k_block + 1, read_stage);
-          warpgroup_arrive();
-          gemm(mma, tCrA(_,_,k_block),
-                    tCrB(_,_,k_block,read_stage), tCrC);
-          warpgroup_commit_batch();
-          warpgroup_wait<2>();
+          warpgroup_fence_operand(tCrC);
 
-          if (k_block == 1) {
-            pipeline.consumer_release(smem_pipe_release);
-            ++smem_pipe_release;
+          CUTLASS_PRAGMA_UNROLL
+          for (int k_block = 0; k_block < k_block_count; ++k_block) {
+            if (k_block < k_block_count - 1) {
+              load_k_block(k_block + 1, read_stage);
+            }
+
+            warpgroup_arrive();
+            gemm(mma, tCrA(_,_,k_block),
+                      tCrB(_,_,k_block,read_stage), tCrC);
+            warpgroup_commit_batch();
+            warpgroup_wait<2>();
+
+            if (k_block == 1) {
+              pipeline.consumer_release(smem_pipe_release);
+              ++smem_pipe_release;
+            }
           }
+
+          warpgroup_fence_operand(tCrC);
         }
-
-        warpgroup_arrive();
-        gemm(mma, tCrA(_,_,k_block_count - 1),
-                  tCrB(_,_,k_block_count - 1,read_stage), tCrC);
-        warpgroup_commit_batch();
-
-        warpgroup_fence_operand(tCrC);
       }
 
-mma_tail:
+      // ================================================================
+      // MMA TAIL: drain all WGMMA, release last stage
+      // ================================================================
       warpgroup_wait<0>();
+      warpgroup_fence_operand(tCrC);
       pipeline.consumer_release(smem_pipe_release);
       ++smem_pipe_release;
 
@@ -468,7 +425,7 @@ int main(int argc, char** argv)
 {
   using namespace cute;
 
-  printf("BF16 Split A WGMMA iter 05 (SM90, k_block interleaving, delayed release, prefetch)\n\n");
+  printf("BF16 Split A WGMMA iter 05 (SM90, k_block interleaving, delayed release)\n\n");
 
   float alpha = 1.0f;
   float beta  = 0.0f;
