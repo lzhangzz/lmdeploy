@@ -162,3 +162,32 @@ Iter 05 interleaves S2R loads with WGMMA at k_block granularity and delays stage
 - Performance at 8192^3: **676 TFLOP/s** (97.6% of cuBLAS 693 TFLOP/s)
 - Up from iter 04's 667 TFLOP/s (85%) at 4096^3 and 654 TFLOP/s at 8192^3
 - The consumer_try_wait prefetch in the main loop closes the gap at 8192^3
+
+
+### Iteration 06: Threadblock swizzling
+
+The 4096^3 gap (86.2% vs 97.6% at 8192^3) is likely caused by L2 cache thrashing — without
+swizzling, consecutive CTAs in the grid-stride loop map to adjacent M-tiles that share L2 cache
+lines for operand B. CUTLASS's persistent kernels solve this via the tile scheduler's swizzle
+logic (`PersistentTileSchedulerSm90Params::log_swizzle_size_`).
+
+**Target changes:**
+
+1. **Swizzle the linear index**: Remap `linear_idx = blockIdx.x` to a swizzled tile coordinate
+   `(m_tile, n_tile)` instead of the current row-major rasterization (`m_idx = linear / n_tiles`,
+   `n_idx = linear % n_tiles`). The swizzle interleaves consecutive CTAs on the minor axis to
+   improve L2 locality for B.
+
+2. **Swizzle heuristic**: Adapted from CUTLASS's `get_log_swizzle_size()`:
+   - swizzle_size = 8 if `min(m_tiles, n_tiles) >= 6`
+   - swizzle_size = 4 if `min(m_tiles, n_tiles) >= 3`
+   - swizzle_size = 2 if `min(m_tiles, n_tiles) >= 2`
+   - swizzle_size = 1 otherwise
+
+3. **Grid launch**: Pad `total_tiles` up to a multiple of `swizzle_size * cluster_shape` (cluster
+   shape = 1 for our single-CTA kernel). Extra tiles are skipped at runtime.
+
+**Files:** `cute-reference/mixed-gemm/06_*`
+
+**Reference:** CUTLASS `sm90_tile_scheduler.hpp` `get_work_idx_m_and_n()` and
+`tile_scheduler_params.h` `get_log_swizzle_size()`.
