@@ -81,6 +81,8 @@ for (int k_tile_iter = 0; k_tile_iter < k_tile_count; ++k_tile_iter)
         }
     }
 
+    warpgroup_fence_operand(tCrC);
+
     // Prepare next k_tile: finalize prefetch, load k_block 0 of next stage
     if (k_tile_iter < k_tile_count - 1) {
         pipeline.consumer_wait(smem_pipe_read, barrier_token);

@@ -410,6 +410,8 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
           }
         }
 
+        warpgroup_fence_operand(tCrC);
+
         // Prepare next k_tile: finalize prefetch, load k_block 0 of next stage
         if (k_tile_iter < k_tile_count - 1) {
           pipeline.consumer_wait(smem_pipe_read, barrier_token);
