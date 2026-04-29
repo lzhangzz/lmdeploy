@@ -147,15 +147,18 @@ Iter 05 interleaves S2R loads with WGMMA at k_block granularity and delays stage
 
 **Not implemented (attempted but failed):**
 
-- `consumer_try_wait` prefetch: The CUTLASS token-based pipeline (try_wait + token-based
-  consumer_wait with non-incrementing smem_pipe_read) produces incorrect results without a
-  drain. Root cause: `mbarrier.try_wait.parity` consumes the barrier signal, and the
-  non-incrementing smem_pipe_read pattern combined with inlined code causes issues.
-  The simpler iter 04-style plain consumer_wait with incrementing smem_pipe_read works.
+- `consumer_try_wait` prefetch in prologue: Adding try_wait after `++smem_pipe_read` in the
+  prologue causes Multi-K failures (error 8.09) even when the token is unused. The PTX docs
+  confirm try_wait is non-consuming, and the asm volatile should be a compiler barrier.
+  The exact failure mechanism is unknown.
+- CUTLASS no-wait<2> prologue: Accumulating WGMMA without draining in the prologue's k_block
+  loop produces wrong results (error 7.97 for single tile). Adding wait<2> doesn't help.
+- CUTLASS k_block==last consumer_wait pattern: Using consumer_wait inside the k_block loop
+  (at k_block==last) instead of at the start of each k_tile iteration produces errors.
 
 **Validated:**
 - Correctness matches iter 04 (same max errors across all test sizes)
-- Performance at 4096^3: **682 TFLOP/s** (85.9% of cuBLAS 794 TFLOP/s)
-- Performance at 8192^3: **660 TFLOP/s** (91.9% of cuBLAS 718 TFLOP/s)
+- Performance at 4096^3: **679 TFLOP/s** (86.2% of cuBLAS 788 TFLOP/s)
+- Performance at 8192^3: **676 TFLOP/s** (97.6% of cuBLAS 693 TFLOP/s)
 - Up from iter 04's 667 TFLOP/s (85%) at 4096^3 and 654 TFLOP/s at 8192^3
-- The no-drain optimization alone accounts for ~120 TFLOP/s improvement at 4096^3
+- The consumer_try_wait prefetch in the main loop closes the gap at 8192^3

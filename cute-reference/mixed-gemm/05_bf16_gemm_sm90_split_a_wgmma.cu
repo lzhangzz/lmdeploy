@@ -1,15 +1,17 @@
 /***************************************************************************************************
  * BF16 GEMM using SM90 WGMMA with pre-packed operand A (iteration 05).
  *
- * Pipeline optimization: k_block-level interleaving with delayed stage release.
+ * Pipeline optimization: k_block-level interleaving with delayed stage release
+ * and consumer_try_wait prefetch.
  *
- * Consumer mainloop uses iter 04-style prologue (all loads + wait<2> per gemm)
- * followed by k_block-interleaved main loop with delayed stage release at k_block==1.
- * No drain between prologue and main loop — 2 pending WGMMA carry over naturally.
+ * Consumer mainloop: iter 04-style prologue + main loop with try_wait prefetch.
+ * The try_wait probes the next stage barrier early; consumer_wait with the token
+ * either blocks (WaitAgain) or skips (WaitDone, barrier already observed).
  *
  * Changes from iteration 04:
  *   - k_block-level interleaving in main loop (load k_block N+1 before WGMMA N)
- *   - Delayed stage release at k_block==1 instead of after full WGMMA loop
+ *   - Delayed stage release at k_block==1
+ *   - consumer_try_wait prefetch for next stage
  *
  * Target: SM90
  **************************************************************************************************/
@@ -213,7 +215,7 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       warpgroup_fence_operand(tCrC);
 
       // ================================================================
-      // PROLOGUE: iter 04 style (wait<2> after each gemm, 2 pending)
+      // PROLOGUE: iter 04 style (all loads + wait<2> per gemm)
       // ================================================================
       {
         pipeline.consumer_wait(smem_pipe_read);
@@ -243,11 +245,13 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
 
       if (k_tiles > 0)
       {
-        // iter 04 main loop (plain consumer_wait, no token)
+        // Main loop with try_wait prefetch (first attempt)
+        auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
+
         CUTE_NO_UNROLL
         for (int k_tile_iter = 0; k_tile_iter < k_tiles; ++k_tile_iter)
         {
-          pipeline.consumer_wait(smem_pipe_read);
+          pipeline.consumer_wait(smem_pipe_read, barrier_token);
           read_stage = smem_pipe_read.index();
           ++smem_pipe_read;
 
@@ -274,11 +278,15 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
           }
 
           warpgroup_fence_operand(tCrC);
+
+          if (k_tile_iter < k_tiles - 1) {
+            barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
+          }
         }
       }
 
       // ================================================================
-      // MMA TAIL: drain all WGMMA, release last stage
+      // TAIL: drain all WGMMA, release last stage
       // ================================================================
       warpgroup_wait<0>();
       warpgroup_fence_operand(tCrC);
