@@ -2,9 +2,81 @@
 
 **Goal:** Validate the full quantization roundtrip — bit-extend UINT4 to BF16, pack as uint4, dequantize in registers before WGMMA.
 
-**Architecture:** The pack kernel bit-truncates BF16 to uint4 using `Converter<uint16_t, uint4_t>::pack` (from `format.h`) and stores 1×uint32 per thread per k_block. The consumer bulk-copies the 4x-smaller packed buffer to smem, S2R loads 1×uint32, applies `cvt_bf16x8_u4` (lop3 + subtract 128) to produce 8×BF16, and feeds into WGMMA unchanged.
+**Architecture:** The pack kernel bit-truncates BF16 to uint4 via `pack_bf16_to_u4` and stores 1×uint32 per thread per k_block. The consumer bulk-copies the 4x-smaller packed buffer to smem, S2R loads 1×uint32, applies `unpack_u4_to_bf16` (lop3 + subtract 128) to produce 8×BF16, and feeds into WGMMA unchanged.
 
 **Tech Stack:** CUDA 12+, CuTe, CUTLASS pipeline primitives, SM90 WGMMA, LOP3 for fast I2F
+
+---
+
+## Standalone Pack/Unpack Functions
+
+These are extracted from `src/turbomind/kernels/gemm/format.h` and
+`src/turbomind/kernels/attention/quantization.h`, rewritten without `Array<T>`.
+
+### `pack_bf16_to_u4` — Pack 8 BF16 values into 1×uint32
+
+Takes 8 BF16 values (each holding a quantized uint4 value in [0,15]) and packs
+them into a single uint32. Each value's low 4 bits are extracted and interleaved
+via OR-shift + byte_perm.
+
+```cpp
+// Pack 8 BF16 values into 1 uint32 containing 8 uint4 nibbles.
+// Each input value must be in [0, 15].
+__device__ uint32_t
+pack_bf16_to_u4(const uint16_t v[8])
+{
+    uint32_t w0 = uint32_t(v[0] & 0xF)
+                | (uint32_t(v[1] & 0xF) << 8)
+                | (uint32_t(v[2] & 0xF) << 16)
+                | (uint32_t(v[3] & 0xF) << 24);
+    uint32_t w1 = uint32_t(v[4] & 0xF)
+                | (uint32_t(v[5] & 0xF) << 8)
+                | (uint32_t(v[6] & 0xF) << 16)
+                | (uint32_t(v[7] & 0xF) << 24);
+    w0 |= (w0 >> 12);
+    w1 |= (w1 >> 12);
+    return __byte_perm(w0, w1, 0x5140);
+}
+```
+
+### `unpack_u4_to_bf16` — Unpack 1×uint32 to 8 BF16 values
+
+Inverse of `pack_bf16_to_u4`. Uses 4 `lop3.b32` instructions for fast integer-
+to-float conversion (each lop3 produces 2 BF16 values), then subtracts the
+implicit zero point (128).
+
+```cpp
+// Unpack 1 uint32 (8 uint4 nibbles) to 8 BF16 values via fast I2F.
+// Subtracts implicit zero point 128 from each output value.
+__device__ void
+unpack_u4_to_bf16(uint32_t packed, nv_bfloat16 out[8])
+{
+    static constexpr uint32_t TEMPLATE = 0x43004300;  // bf162(128, 128)
+    static constexpr uint32_t MASK     = 0x000f000f;
+    static constexpr uint32_t immLut   = (0xf0 & 0xcc) | 0xaa;
+
+    uint32_t* h = reinterpret_cast<uint32_t*>(out);
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;" : "=r"(h[0]) : "r"(packed),       "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;" : "=r"(h[1]) : "r"(packed >> 4),  "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;" : "=r"(h[2]) : "r"(packed >> 8),  "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+    asm volatile("lop3.b32 %0, %1, %2, %3, %4;" : "=r"(h[3]) : "r"(packed >> 12), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
+
+    #pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        out[i] -= nv_bfloat16(128.f);
+    }
+}
+```
+
+### Order-Shuffle Cancellation
+
+The pack function rearranges 8 nibbles into a specific bit pattern via
+`__byte_perm(0x5140)`. The unpack function reads the same 4 bytes and extracts
+nibbles via right-shifts (`>> 0, >> 4, >> 8, >> 12`), positioning exactly 2
+nibbles per lop3 call. The byte_perm shuffle in pack and the shift-based
+extraction in unpack are designed to be inverses — no explicit unshuffle is
+needed. This is confirmed by production usage in turbomind where the original
+`Converter::pack` and `cvt_bf16x8_u4` are used together.
 
 ---
 
@@ -15,14 +87,14 @@ Host: generate UINT4 [0,15] → bit-extend to BF16 → feed as "original A"
 
 Pack kernel:
   gmem A (BF16) → TMA → smem (swizzled) → S2R to registers (BF16)
-  → Converter::pack (BF16 → uint4, 8 values into 1×uint32)
+  → pack_bf16_to_u4 (8 BF16 → 1×uint32)
   → store 1×uint32 to gmem packed_A
 
 Consumer kernel:
   gmem packed_A (uint4) → bulk copy → smem (packed)
   → S2R: load 1×uint32 per thread per k_block
-  → cvt_bf16x8_u4<true> (lop3.b32 × 4 + subtract 128)
-  → copy BF16 result into tCrA registers
+  → unpack_u4_to_bf16 (1×uint32 → 8×BF16, zero-point subtracted)
+  → copy BF16 into tCrA registers
   → WGMMA (unchanged)
 ```
 
@@ -37,15 +109,17 @@ Consumer kernel:
 - Per warpgroup per tile: 4 × 128 × 4 = 2048 bytes
 - Packed buffer is **4× smaller**
 
-The packed smem layout per warpgroup region changes from `(REG=8, THREAD=128, K_BLOCK=4)` with strides `(1, 8, 1024)` in BF16 to `(THREAD=128, K_BLOCK=4)` with strides `(1, 128)` in uint32. Each thread loads 1 contiguous uint32 per k_block.
+Packed smem layout per warpgroup: `(THREAD=128, K_BLOCK=4)` with strides
+`(1, 128)` in uint32. Each thread loads 1 contiguous uint32 per k_block.
 
 ## Pack Kernel Changes
 
-Only the register-to-gmem store changes. Everything upstream (TMA load, smem layout, S2R copy) is identical to iter 04.
+Only the register-to-gmem store changes. Everything upstream (TMA load, smem
+layout, S2R copy) is identical to iter 04.
 
 **Register-to-gmem store (per thread, per k_block):**
-1. Reinterpret 8 BF16 registers as `Array<uint16_t, 8>`
-2. Apply `Converter<uint16_t, uint4_t>::pack()` → `Array<uint4_t, 8>` = 4 bytes = 1×uint32
+1. Reinterpret 8 BF16 registers as `uint16_t[8]`
+2. Call `pack_bf16_to_u4()` → 1×uint32
 3. Store 1×uint32 to packed gmem via `AutoVectorizingCopy`
 
 **Packed gmem tensor per warpgroup:**
@@ -67,34 +141,19 @@ Load 1×uint32 from smem instead of 8×BF16 (32 bits vs 128 bits):
 auto load_k_block = [&](int kb, int stage) {
     uint32_t* smem_base = reinterpret_cast<uint32_t*>(
         smem.A.begin() + stage * a_stage_bytes + wg_id * 512);  // 512 = 128 threads × 4 bytes
-    uint32_t packed = smem_base[local_tid + kb * 128];  // 1×uint32
-    // packed contains 8 uint4 values in Converter::pack format
-    ...
+    uint32_t packed = smem_base[local_tid + kb * 128];
+    nv_bfloat16 dequant[8];
+    unpack_u4_to_bf16(packed, dequant);
+    // Copy dequant into tCrA registers for k_block kb
+    copy(AutoVectorizingCopy{},
+         make_tensor(make_bfloat16_ptr(dequant), make_shape(Int<8>{})),
+         make_tensor(tCrA.data() + kb * 8, make_shape(Int<8>{})));
 };
 ```
 
-### Dequantization in Registers
-
-Apply `cvt_bf16x8_u4<true>` (from `quantization.h` L172-209) to convert the packed uint4 to BF16:
-
-```cpp
-Array<uint4_t, 8> packed_u4 = reinterpret_cast<Array<uint4_t, 8>&>(packed);
-Array<nv_bfloat16, 8> dequant = cvt_bf16x8_u4<true>(packed_u4);
-// dequant now holds 8 BF16 values with zero-point subtracted
-// Copy into tCrA registers for k_block kb
-copy(AutoVectorizingCopy{},
-     make_tensor(make_bfloat16_ptr(dequant.data()), make_shape(Int<8>{})),
-     make_tensor(tCrA.data() + kb * 8, make_shape(Int<8>{})));
-```
-
-The `cvt_bf16x8_u4<true>` function:
-1. Takes 4 bytes (`uint32_t`) containing 8 uint4 nibbles
-2. Uses 4 `lop3.b32` instructions (one per 2 BF16 output values) with TEMPLATE=0x43004300, MASK=0x000f000f, immLut for fast integer-to-float conversion
-3. Subtracts `nv_bfloat16(128.f)` from each of the 8 output values (zero-point subtraction)
-
 ### Bulk Copy
 
-The bulk copy now transfers 4× less data per stage:
+The bulk copy transfers 4× less data per stage:
 - `a_stage_bytes` = 2048 (down from 8192)
 - `tma_transaction_bytes` = a_stage_bytes + B TMA transaction size
 - Smem A array size shrinks accordingly
@@ -107,21 +166,6 @@ The bulk copy now transfers 4× less data per stage:
 - k_block interleaving (iter 05 optimization)
 - Deferred TMA store wait (iter 07 optimization)
 - Host function signature (M, K, ldA; packed_A is now uint4 buffer)
-
-## Order-Shuffle Cancellation
-
-`Converter::pack` rearranges 8 nibbles into a specific bit pattern via `__byte_perm(0x5140)`:
-- Input: bytes `[v0, v1, v2, v3, v4, v5, v6, v7]` (each byte holds a 4-bit value)
-- After OR-shift: bytes are interleaved into `ui[0]` and `ui[1]`
-- `__byte_perm(0x5140)` selects 4 bytes: positions 0, 1, 4, 5 from the 8-byte input
-- Output: 1×uint32 with nibbles in a specific order
-
-`cvt_bf16x8_u4` reads the same 4 bytes as `uint32_t` and extracts nibbles via shifts:
-- `i4s` = raw uint32 (same layout as pack output)
-- `i4s_4 = i4s >> 4`, `i4s_8 = i4s >> 8`, `i4s_12 = i4s >> 12`
-- Each shift positions 2 nibbles for the lop3.b32 to convert to BF16
-
-The pack shuffle and the cvt extraction are designed to be inverses — no explicit unshuffle is needed between them. This is confirmed by the production usage in turbomind where these two functions are used together.
 
 ## Test Strategy
 
