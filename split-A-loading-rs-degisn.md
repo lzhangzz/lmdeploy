@@ -264,9 +264,6 @@ uint4 (4× smaller) → dequantize in registers via lop3 I2F → WGMMA.
 
 **Validated:**
 - Correctness: pack→dequant roundtrip produces correct WGMMA results across all test sizes
-- Performance at 4096^3: **632 TFLOP/s** (77.8% of cuBLAS 812 TFLOP/s)
-- Performance at 8192^3: **628 TFLOP/s** (94.9% of cuBLAS 662 TFLOP/s)
+- Performance at 4096^3: **704 TFLOP/s** (86.7% of cuBLAS 813 TFLOP/s)
+- Performance at 8192^3: **699 TFLOP/s** (94.4% of cuBLAS 740 TFLOP/s)
 - vs iter 07: 683 TFLOP/s (86.1%) at 4096^3, 667 TFLOP/s (96.1%) at 8192^3
-- Performance regression at 4096^3 is from the dequantization overhead (4 lop3 + 8 subtracts
-  per k_block per thread) competing with WGMMA for execution resources at smaller problem
-  sizes. At 8192^3 the compute-to-memory ratio is more favorable and overhead is better hidden.
