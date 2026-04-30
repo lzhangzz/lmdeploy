@@ -111,11 +111,12 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
       if (linear_idx == 0) { } // avoid unused variable warning
 
       while (linear_idx < total_tiles) {
-        int m_idx  = linear_idx / n_tiles;
-        int n_base = linear_idx % n_tiles;
-        int n_low  = n_base & (swizzle_size - 1);
-        int n_high = n_base >> log_swizzle;
-        int n_idx  = n_high + n_low * (n_tiles >> log_swizzle);
+        // M-axis swizzle: bit-reverse low log_swizzle bits of m.
+        int m_base = linear_idx / n_tiles;
+        int n_idx  = linear_idx % n_tiles;
+        int m_low  = m_base & (swizzle_size - 1);
+        int m_high = m_base >> log_swizzle;
+        int m_idx  = m_high + m_low * (m_tiles >> log_swizzle);
 
         if (m_idx >= m_tiles || n_idx >= n_tiles) {
           linear_idx += grid_size;
@@ -204,11 +205,12 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     };
 
     while (linear_idx < total_tiles) {
-      int m_idx  = linear_idx / n_tiles;
-      int n_base = linear_idx % n_tiles;
-      int n_low  = n_base & (swizzle_size - 1);
-      int n_high = n_base >> log_swizzle;
-      int n_idx  = n_high + n_low * (n_tiles >> log_swizzle);
+      // M-axis swizzle (matches producer)
+      int m_base = linear_idx / n_tiles;
+      int n_idx  = linear_idx % n_tiles;
+      int m_low  = m_base & (swizzle_size - 1);
+      int m_high = m_base >> log_swizzle;
+      int m_idx  = m_high + m_low * (m_tiles >> log_swizzle);
 
       if (m_idx >= m_tiles || n_idx >= n_tiles) {
         linear_idx += grid_size;
