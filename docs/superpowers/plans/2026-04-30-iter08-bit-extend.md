@@ -560,14 +560,17 @@ with:
     int local_tid = threadIdx.x % 128;
 
     // Helper: load a single k_block from per-warpgroup smem region, dequantize to BF16
+    // NOTE: smem.A is ArrayEngine<uint32_t, ...>, so begin() returns uint32_t*.
+    // Pointer arithmetic is in uint32 units — do NOT multiply by sizeof(uint32_t).
     auto load_k_block = [&](int kb, int stage) {
-      uint32_t* smem_base = reinterpret_cast<uint32_t*>(
-          smem.A.begin() + stage * a_stage_elements * sizeof(uint32_t) + wg_id * 512 * sizeof(uint32_t));
+      uint32_t* smem_base = smem.A.begin() + stage * a_stage_elements + wg_id * 512;
       uint32_t packed = smem_base[local_tid + kb * 128];
-      nv_bfloat16 dequant[8];
-      unpack_u4_to_bf16(packed, dequant);
+      bf16_t dequant[8];
+      // unpack_u4_to_bf16 writes nv_bfloat16, which is bit-compatible with bf16_t.
+      // We reinterpret the output array since the copy target is bf16_t.
+      unpack_u4_to_bf16(packed, reinterpret_cast<nv_bfloat16*>(dequant));
       copy(AutoVectorizingCopy{},
-           make_tensor(make_bfloat16_ptr(dequant), make_shape(Int<8>{})),
+           make_tensor(dequant, make_shape(Int<8>{})),
            make_tensor(tCrA.data() + kb * size<0>(tCrA), make_shape(Int<8>{})));
     };
 ```
