@@ -235,3 +235,38 @@ tile's epilogue, allowing the TMA store for tile N to overlap with tile N+1's co
 - Performance at 8192^3: **667,109 TFLOP/s** (96.1% of cuBLAS 694,459 TFLOP/s)
 - vs iter 06: 679 TFLOP/s (85.5%) at 4096^3, 672 TFLOP/s (97.6%) at 8192^3
 - Modest improvement at 4096^3 (+4.5 TFLOP/s), parity at 8192^3
+
+
+### Iteration 08: On-the-fly bit-extend
+
+Full quantization roundtrip validation: UINT4 [0,15] → bit-extend to BF16 → pack as
+uint4 (4× smaller) → dequantize in registers via lop3 I2F → WGMMA.
+
+**Files:** `cute-reference/mixed-gemm/08_*`
+
+**Implemented:**
+
+1. **`pack_bf16_to_u4`**: Standalone pack function (no Array<T>). Takes 8 BF16 values
+   (each in [0,15]), extracts low 4 bits, interleaves via OR-shift + `__byte_perm(0x5140)`.
+   Produces 1×uint32 per thread per k_block (down from 8×BF16 = 16 bytes).
+
+2. **`unpack_u4_to_bf16`**: Standalone unpack function. Takes 1×uint32, applies 4
+   `lop3.b32` instructions for fast I2F (TEMPLATE=0x43004300), subtracts zero point 128.
+   Produces 8×BF16 in registers for WGMMA.
+
+3. **Pack kernel** (from iter 04): After TMA+S2R, each thread calls `pack_bf16_to_u4`
+   and stores 1×uint32 to packed gmem. Packed buffer is 4× smaller (4096 bytes/tile
+   vs 8192 bytes/tile in iter 07).
+
+4. **Consumer kernel** (from iter 07): S2R loads 1×uint32 per k_block, calls
+   `unpack_u4_to_bf16`, copies result into tCrA registers. Bulk copy transfers 4× less
+   data. All pipeline optimizations preserved (k_block interleaving, deferred TMA store).
+
+**Validated:**
+- Correctness: pack→dequant roundtrip produces correct WGMMA results across all test sizes
+- Performance at 4096^3: **632 TFLOP/s** (77.8% of cuBLAS 812 TFLOP/s)
+- Performance at 8192^3: **628 TFLOP/s** (94.9% of cuBLAS 662 TFLOP/s)
+- vs iter 07: 683 TFLOP/s (86.1%) at 4096^3, 667 TFLOP/s (96.1%) at 8192^3
+- Performance regression at 4096^3 is from the dequantization overhead (4 lop3 + 8 subtracts
+  per k_block per thread) competing with WGMMA for execution resources at smaller problem
+  sizes. At 8192^3 the compute-to-memory ratio is more favorable and overhead is better hidden.
