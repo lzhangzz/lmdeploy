@@ -213,4 +213,25 @@ problem size, or cuBLAS using a different kernel configuration.
 `tile_scheduler_params.h` `get_log_swizzle_size()`.
 
 
-### Iteration 07: Persistent kernel
+### Iteration 07: Epilogue-compute overlap
+
+Defers `tma_store_wait<0>()` from after the TMA store issue to the start of the next
+tile's epilogue, allowing the TMA store for tile N to overlap with tile N+1's compute
+(consumer_wait + S2R + WGMMA).
+
+**Files:** `cute-reference/mixed-gemm/07_*`
+
+**Implemented:**
+
+1. **Deferred TMA store wait**: Moved `tma_store_wait<0>()` from the end of the epilogue
+   (after TMA store issue) to the beginning (before r2s copy). The first tile's wait is
+   a no-op; subsequent tiles' waits ensure the previous tile's store completed before
+   sC is overwritten. The producer's existing `tma_store_wait<0>()` ensures the last
+   tile's store completes before kernel exit.
+
+**Validated:**
+- Correctness matches iter 06 (same max errors across all test sizes)
+- Performance at 4096^3: **683,441 TFLOP/s** (86.1% of cuBLAS 793,717 TFLOP/s)
+- Performance at 8192^3: **667,109 TFLOP/s** (96.1% of cuBLAS 694,459 TFLOP/s)
+- vs iter 06: 679 TFLOP/s (85.5%) at 4096^3, 672 TFLOP/s (97.6%) at 8192^3
+- Modest improvement at 4096^3 (+4.5 TFLOP/s), parity at 8192^3
