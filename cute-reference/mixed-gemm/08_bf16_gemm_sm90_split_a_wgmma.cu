@@ -200,14 +200,7 @@ split_a_wgmma_device(ProblemShape shape_MNK, CtaTiler cta_tiler,
     auto load_k_block = [&](int kb, int stage) {
       uint32_t* smem_base = smem.A.begin() + stage * a_stage_elements + wg_id * 512;
       uint32_t packed = smem_base[local_tid + kb * 128];
-      bf16_t dequant[8];
-      // unpack_u4_to_bf16 writes nv_bfloat16, which is bit-compatible with bf16_t.
-      // We reinterpret the output array since the copy target is bf16_t.
-      unpack_u4_to_bf16(packed, reinterpret_cast<nv_bfloat16*>(dequant));
-      bf16_t* dptr = dequant;
-      copy(AutoVectorizingCopy{},
-           make_tensor(dptr, make_shape(Int<8>{})),
-           make_tensor(tCrA.data() + kb * size<0>(tCrA), make_shape(Int<8>{})));
+      unpack_u4_to_bf16(packed, reinterpret_cast<nv_bfloat16*>(tCrA.data() + kb * size<0>(tCrA)));
     };
 
     while (linear_idx < total_tiles) {
