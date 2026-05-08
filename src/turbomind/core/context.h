@@ -12,6 +12,7 @@ enum class scope_type
 {
     named,
     function,
+    call,
 };
 
 struct ScopeEntry {

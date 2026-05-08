@@ -202,29 +202,29 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
 }
 
 template<class T>
-cudaError_t invokeProcessKV_v2(char**                 blocks,
-                               const T*               k,
-                               const T*               v,
-                               const T*               k_bias,
-                               const T*               v_bias,
-                               const int*             cu_q_len,
-                               const int*             cu_k_len,
-                               const int*             cu_block_num,
-                               const RopeKernelParam& rope_param,
-                               int64_t                stride_b,
-                               int64_t                stride_c,
-                               int64_t                stride_h,
-                               int64_t                stride_s,
-                               int                    block_seq_len,
-                               int                    layer_id,
-                               int                    cp_rank,
-                               FastDivmod             cp_size,
-                               int                    max_q_len,
-                               int                    head_num,
-                               int                    head_dim,
-                               int                    batch_size,
-                               int                    quant_policy,
-                               cudaStream_t           stream)
+void invokeProcessKV_v2(char**                 blocks,
+                        const T*               k,
+                        const T*               v,
+                        const T*               k_bias,
+                        const T*               v_bias,
+                        const int*             cu_q_len,
+                        const int*             cu_k_len,
+                        const int*             cu_block_num,
+                        const RopeKernelParam& rope_param,
+                        int64_t                stride_b,
+                        int64_t                stride_c,
+                        int64_t                stride_h,
+                        int64_t                stride_s,
+                        int                    block_seq_len,
+                        int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
+                        int                    max_q_len,
+                        int                    head_num,
+                        int                    head_dim,
+                        int                    batch_size,
+                        int                    quant_policy,
+                        cudaStream_t           stream)
 {
 
     auto invoke = [&](auto tkv, const auto dim) {
@@ -292,33 +292,33 @@ cudaError_t invokeProcessKV_v2(char**                 blocks,
         dispatch(T{});
     }
 
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_invokeProcessKV_v2(type)                                                                           \
-    template cudaError_t invokeProcessKV_v2(char**                 blocks,                                             \
-                                            const type*            k,                                                  \
-                                            const type*            v,                                                  \
-                                            const type*            k_bias,                                             \
-                                            const type*            v_bias,                                             \
-                                            const int*             cu_q_len,                                           \
-                                            const int*             cu_k_len,                                           \
-                                            const int*             cu_block_num,                                       \
-                                            const RopeKernelParam& rope_param,                                         \
-                                            int64_t                stride_b,                                           \
-                                            int64_t                stride_c,                                           \
-                                            int64_t                stride_h,                                           \
-                                            int64_t                stride_s,                                           \
-                                            int                    block_seq_len,                                      \
-                                            int                    layer_id,                                           \
-                                            int                    cp_rank,                                            \
-                                            FastDivmod             cp_size,                                            \
-                                            int                    max_q_len,                                          \
-                                            int                    head_num,                                           \
-                                            int                    head_dim,                                           \
-                                            int                    batch_size,                                         \
-                                            int                    quant_policy,                                       \
-                                            cudaStream_t           stream);
+    template void invokeProcessKV_v2(char**                 blocks,                                                    \
+                                     const type*            k,                                                         \
+                                     const type*            v,                                                         \
+                                     const type*            k_bias,                                                    \
+                                     const type*            v_bias,                                                    \
+                                     const int*             cu_q_len,                                                  \
+                                     const int*             cu_k_len,                                                  \
+                                     const int*             cu_block_num,                                              \
+                                     const RopeKernelParam& rope_param,                                                \
+                                     int64_t                stride_b,                                                  \
+                                     int64_t                stride_c,                                                  \
+                                     int64_t                stride_h,                                                  \
+                                     int64_t                stride_s,                                                  \
+                                     int                    block_seq_len,                                             \
+                                     int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
+                                     int                    max_q_len,                                                 \
+                                     int                    head_num,                                                  \
+                                     int                    head_dim,                                                  \
+                                     int                    batch_size,                                                \
+                                     int                    quant_policy,                                              \
+                                     cudaStream_t           stream);
 
 INSTANTIATE_invokeProcessKV_v2(half);
 #if ENABLE_BF16
@@ -456,26 +456,26 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
 }
 
 template<class T>
-cudaError_t invokeFlattenKV_v2(T*                     k,
-                               T*                     v,
-                               char**                 blocks,
-                               const int*             cu_k_len,
-                               const int*             cu_block_num,
-                               const RopeKernelParam& rope_param,
-                               int64_t                stride_b,
-                               int64_t                stride_c,
-                               int64_t                stride_h,
-                               int64_t                stride_s,
-                               int                    block_seq_len,
-                               int                    layer_id,
-                               int                    cp_rank,
-                               FastDivmod             cp_size,
-                               int                    max_seq_len,
-                               int                    head_num,
-                               int                    head_dim,
-                               int                    batch_size,
-                               int                    quant_policy,
-                               cudaStream_t           stream)
+void invokeFlattenKV_v2(T*                     k,
+                        T*                     v,
+                        char**                 blocks,
+                        const int*             cu_k_len,
+                        const int*             cu_block_num,
+                        const RopeKernelParam& rope_param,
+                        int64_t                stride_b,
+                        int64_t                stride_c,
+                        int64_t                stride_h,
+                        int64_t                stride_s,
+                        int                    block_seq_len,
+                        int                    layer_id,
+                        int                    cp_rank,
+                        FastDivmod             cp_size,
+                        int                    max_seq_len,
+                        int                    head_num,
+                        int                    head_dim,
+                        int                    batch_size,
+                        int                    quant_policy,
+                        cudaStream_t           stream)
 {
 
     auto invoke = [&](auto tkv, const auto dim) {
@@ -540,30 +540,30 @@ cudaError_t invokeFlattenKV_v2(T*                     k,
         dispatch(T{});
     }
 
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_invokeFlattenKV_v2(type)                                                                           \
-    template cudaError_t invokeFlattenKV_v2(type*                  k,                                                  \
-                                            type*                  v,                                                  \
-                                            char**                 blocks,                                             \
-                                            const int*             cu_k_len,                                           \
-                                            const int*             cu_block_num,                                       \
-                                            const RopeKernelParam& rope_param,                                         \
-                                            int64_t                stride_b,                                           \
-                                            int64_t                stride_c,                                           \
-                                            int64_t                stride_h,                                           \
-                                            int64_t                stride_s,                                           \
-                                            int                    block_seq_len,                                      \
-                                            int                    layer_id,                                           \
-                                            int                    cp_rank,                                            \
-                                            FastDivmod             cp_size,                                            \
-                                            int                    max_seq_len,                                        \
-                                            int                    head_num,                                           \
-                                            int                    head_dim,                                           \
-                                            int                    batch_size,                                         \
-                                            int                    quant_policy,                                       \
-                                            cudaStream_t           stream);
+    template void invokeFlattenKV_v2(type*                  k,                                                         \
+                                     type*                  v,                                                         \
+                                     char**                 blocks,                                                    \
+                                     const int*             cu_k_len,                                                  \
+                                     const int*             cu_block_num,                                              \
+                                     const RopeKernelParam& rope_param,                                                \
+                                     int64_t                stride_b,                                                  \
+                                     int64_t                stride_c,                                                  \
+                                     int64_t                stride_h,                                                  \
+                                     int64_t                stride_s,                                                  \
+                                     int                    block_seq_len,                                             \
+                                     int                    layer_id,                                                  \
+                                     int                    cp_rank,                                                   \
+                                     FastDivmod             cp_size,                                                   \
+                                     int                    max_seq_len,                                               \
+                                     int                    head_num,                                                  \
+                                     int                    head_dim,                                                  \
+                                     int                    batch_size,                                                \
+                                     int                    quant_policy,                                              \
+                                     cudaStream_t           stream);
 
 INSTANTIATE_invokeFlattenKV_v2(half);
 #if ENABLE_BF16

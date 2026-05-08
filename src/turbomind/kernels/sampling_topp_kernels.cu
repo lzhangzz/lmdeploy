@@ -70,20 +70,20 @@ __global__ void topPSortInitialize(const int    vocab_size_padded,
     }
 }
 
-cudaError_t invokeTopPSortInitialize(const int    vocab_size_padded,
-                                     const int    vocab_size,
-                                     const size_t batch_size,
-                                     const int*   top_ks,
-                                     int*         topp_id_val_buf,
-                                     int*         begin_offset_buf,
-                                     int*         end_offset_buf,
-                                     cudaStream_t stream)
+void invokeTopPSortInitialize(const int    vocab_size_padded,
+                              const int    vocab_size,
+                              const size_t batch_size,
+                              const int*   top_ks,
+                              int*         topp_id_val_buf,
+                              int*         begin_offset_buf,
+                              int*         end_offset_buf,
+                              cudaStream_t stream)
 {
     const size_t block_size = 512;
     const size_t grid_size  = (batch_size * vocab_size_padded + block_size - 1) / block_size;
     topPSortInitialize<<<grid_size, block_size, 0, stream>>>(
         vocab_size_padded, vocab_size, batch_size, top_ks, topp_id_val_buf, begin_offset_buf, end_offset_buf);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T>
@@ -131,26 +131,26 @@ static __global__ void softmax(T* logits, const int vocab_size_padded, const int
 }
 
 template<typename T>
-cudaError_t invokeSoftmax(T*           logits,
-                          const int    vocab_size_padded,
-                          const int    vocab_size,
-                          const int    batch_size,
-                          const int*   kept,
-                          cudaStream_t stream)
+void invokeSoftmax(T*           logits,
+                   const int    vocab_size_padded,
+                   const int    vocab_size,
+                   const int    batch_size,
+                   const int*   kept,
+                   cudaStream_t stream)
 {
     dim3 grid(batch_size);
     dim3 block(std::min(vocab_size_padded, 1024));
     softmax<<<grid, block, 0, stream>>>(logits, vocab_size_padded, vocab_size, kept);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATE_INVOKE_SOFTMAX(T)                                                                                  \
-    template cudaError_t invokeSoftmax<T>(T * logits,                                                                  \
-                                          const int    vocab_size_padded,                                              \
-                                          const int    vocab_size,                                                     \
-                                          const int    batch_size,                                                     \
-                                          const int*   kept,                                                           \
-                                          cudaStream_t stream);
+    template void invokeSoftmax<T>(T * logits,                                                                         \
+                                   const int    vocab_size_padded,                                                     \
+                                   const int    vocab_size,                                                            \
+                                   const int    batch_size,                                                            \
+                                   const int*   kept,                                                                  \
+                                   cudaStream_t stream);
 
 INSTANTIATE_INVOKE_SOFTMAX(float);
 
@@ -218,7 +218,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void topp_beam_topk_kernel(const 
 }
 
 template<typename T>
-cudaError_t invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
+void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
 {
     const int num_items = params.vocab_size_padded * (params.batch_size - 1) + params.vocab_size;
 
@@ -249,7 +249,7 @@ cudaError_t invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
     auto beg_offset_buf = beg_offset.data();
     auto end_offset_buf = end_offset.data();
 
-    TM_CUDA_CHECK(invokeTopPSortInitialize(params.vocab_size_padded,
+    TM_SCOPE_CALL(invokeTopPSortInitialize(params.vocab_size_padded,
                                            params.vocab_size,
                                            params.batch_size,
                                            params.top_ks,
@@ -282,10 +282,10 @@ cudaError_t invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
                                                                      0,              // begin_bit
                                                                      sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
                                                                      stream));       // cudaStream_t
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
+template void invokeTopPSort<float>(TopPSortParams& params, cudaStream_t stream);
 
 template<typename T, int BLOCK_SIZE>
 __global__ void topPMinPFilter(T*           sorted_logits,
@@ -383,7 +383,7 @@ __global__ void topPMinPFilter(T*           sorted_logits,
 }
 
 template<typename T>
-cudaError_t invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
+void invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stream)
 {
     topPMinPFilter<T, 256><<<params.batch_size, 256, 0, stream>>>((T*)params.sorted_logits,
                                                                   params.sorted_indices,
@@ -391,9 +391,9 @@ cudaError_t invokeTopPMinPFilter(TopPMinPFilterParams& params, cudaStream_t stre
                                                                   params.vocab_size_padded,
                                                                   params.top_ps,
                                                                   params.min_ps);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
+template void invokeTopPMinPFilter<float>(TopPMinPFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

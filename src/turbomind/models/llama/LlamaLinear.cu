@@ -74,7 +74,7 @@ struct LlamaLinear::Impl {
 
         // Currently, FP8 only; INT8 may be added later
         if (input.dtype() != dense.input_type) {
-            QuantizeSymm(A, U, input, st);
+            TM_SCOPE_CALL(QuantizeSymm(A, U, input, st));
         }
         else {
             A = input;
@@ -84,9 +84,9 @@ struct LlamaLinear::Impl {
             const auto [bsz, k] = A.shapes(0, 1);
             const int e         = indices.size() / bsz;
             Tensor    A_e       = {{m, k}, A.dtype(), kDEVICE};
-            TM_CUDA_CHECK(invokeMoeDispatch(A_e, A, indices.data(), e, st));
+            TM_SCOPE_CALL(invokeMoeDispatch(A_e, A, indices.data(), e, st));
             Tensor U_e;
-            TM_CUDA_CHECK(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
+            TM_SCOPE_CALL(invokeMoeDispatchScales(U_e, U, indices.data(), e, st));
             A       = A_e;
             U       = U_e;
             indices = {};  // indices already applied
@@ -178,29 +178,22 @@ struct LlamaLinear::Impl {
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
-                            std::optional<Tensor>   output)
+void LlamaLinear::Forward(const Tensor&           input,  //
+                          const LlamaDenseWeight& weight,
+                          Ref<Tensor>             output)
 {
-    return Forward(input, weight, {}, {}, output);
+    Forward(input, weight, {}, {}, output);
 }
 
-Tensor LlamaLinear::Forward(const Tensor&           input,  //
-                            const LlamaDenseWeight& weight,
-                            const Buffer_<int>&     indices,
-                            const Buffer_<int>&     offsets,
-                            std::optional<Tensor>   output)
+void LlamaLinear::Forward(const Tensor&           input,  //
+                          const LlamaDenseWeight& weight,
+                          const Buffer_<int>&     indices,
+                          const Buffer_<int>&     offsets,
+                          Ref<Tensor>             output)
 {
+    TM_FUNCTION_SCOPE();
     Tensor in = input.view({-1, input.shape(-1)});
-    Tensor out;
-
-    if (output) {
-        out = output->view({-1, output->shape(-1)});
-    }
-
-    impl_->Forward(out, in, weight, indices, offsets);
-
-    return out;
+    impl_->Forward(output.get(), in, weight, indices, offsets);
 }
 
 void LlamaLinear::set_measure(bool measure)

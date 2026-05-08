@@ -41,7 +41,7 @@ void Module::remove_module(Module& module)
             return;
         }
     }
-    TM_CHECK(0) << "module " << &module << " not found";
+    TM_LOG_FATAL("module {} not found", (void*)&module);
 }
 
 void Module::remove_parameter(Tensor& param)
@@ -52,7 +52,7 @@ void Module::remove_parameter(Tensor& param)
             return;
         }
     }
-    TM_CHECK(0) << "param " << &param << " not found";
+    TM_LOG_FATAL("param {} not found", (void*)&param);
 }
 
 std::unordered_map<std::string, Tensor*> Module::get_parameters() const

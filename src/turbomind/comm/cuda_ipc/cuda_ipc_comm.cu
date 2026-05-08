@@ -178,7 +178,7 @@ void* CudaIpcCommImpl::Allocate(size_t size)
         prop.size       = size;
         TM_CUDRV_CHECK(cuMulticastGetGranularity(&granularity, &prop, CU_MULTICAST_GRANULARITY_MINIMUM));
 #else
-        TM_CHECK(0);
+        TM_LOG_FATAL("NVLS not supported");
 #endif
     }
     else {
@@ -283,7 +283,7 @@ void CudaIpcCommImpl::Register(const Allocation& alloc, int group)
             TM_CUDRV_CHECK(cuMemRetainAllocationHandle(&s.mc_handle, s.mc_ptr));
         }
 #else
-        TM_CHECK(0);
+        TM_LOG_FATAL("NVLS not supported");
 #endif
     }
 
@@ -302,7 +302,7 @@ void CudaIpcCommImpl::Deregister(Symmetric& s)
         s.mc_handle = {};
         s.mc_ptr    = {};
 #else
-        TM_CHECK(0);
+        TM_LOG_FATAL("NVLS not supported");
 #endif
     }
 }

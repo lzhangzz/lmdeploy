@@ -1,3 +1,4 @@
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/kernels/gemm/tuner/cache_utils.h"
@@ -211,7 +212,7 @@ bool test_moe_gate(int                     tokens,  //
     bool softmax = true;
 
     if (1) {
-        TM_CUDA_CHECK(
+        TM_SCOPE_CALL(
             invokeMoeSoftmaxMaskTopKGroups(logits.data().get(), tokens, expert_num, expert_num / 8, 8, nullptr));
         softmax = false;
     }

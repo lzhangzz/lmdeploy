@@ -4,6 +4,7 @@
 #include "block.h"
 #include "decoding.h"
 #include "kv_cache_utils_v2.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/attention_params.h"
 #include "src/turbomind/kernels/attention/reference.h"
 #include "src/turbomind/models/llama/llama_utils.h"
@@ -143,7 +144,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     // [B, 2H, S, D] -> [B, S/s] x [2H, s, D]
     for (int i = 0; i < 1; ++i) {
         // (B, 2, H, S, D) -> blocks
-        TM_CUDA_CHECK(invokeProcessKV_v2(k_ptrs.data().get(),
+        TM_SCOPE_CALL(invokeProcessKV_v2(k_ptrs.data().get(),
                                          kv_cache.data().get(),
                                          kv_cache.data().get() + head_num * seq_len * head_dim,
                                          (T*)nullptr,
@@ -172,7 +173,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
     // round trip test
     for (int i = 0; i < 1; ++i) {
         // kv_cache_2 is [B, 2, H, S, D]
-        TM_CUDA_CHECK(invokeFlattenKV_v2(kv_cache_2.data().get(),
+        TM_SCOPE_CALL(invokeFlattenKV_v2(kv_cache_2.data().get(),
                                          kv_cache_2.data().get() + head_num * seq_len * head_dim,
                                          k_ptrs.data().get(),
                                          cu_seq_lens.data().get(),
@@ -355,7 +356,7 @@ int test_attention()
                           kBatchSize * KvHeadNum);
     }
 
-    TM_CUDA_CHECK(invokeApplyRotaryEmbedding(
+    TM_SCOPE_CALL(invokeApplyRotaryEmbedding(
         k_cache.data().get(), kContextLen, KvHeadNum, kHeadDim, kRoPEBase, kRoPEDim, kBatchSize));
 
     thrust::universal_vector<T> k_cache_ref = k_cache;
@@ -518,9 +519,9 @@ int test_attention()
         cudaEventRecord(ev_end[i]);
 #else
         // input -> blocked
-        TM_CUDA_CHECK(invokeProcessKV_v2_(params));
+        TM_SCOPE_CALL(invokeProcessKV_v2_(params));
         // blocked -> linear
-        TM_CUDA_CHECK(invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]));
+        TM_SCOPE_CALL(invokeFlattenKV_v2_(params, cu_kv_lens[kBatchSize]));
 
         cudaEventRecord(ev_start[i]);
         dispatchAttention(params);
@@ -558,7 +559,7 @@ int test_attention()
         }
     }
 
-    TM_CUDA_CHECK(invokeFlattenKV_v2(k_cache.data().get(),  // [B, H, S, D]
+    TM_SCOPE_CALL(invokeFlattenKV_v2(k_cache.data().get(),  // [B, H, S, D]
                                      v_cache.data().get(),
                                      k_ptrs.data().get(),
                                      cu_kv_lens.data().get(),

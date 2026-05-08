@@ -144,6 +144,11 @@ struct ContextStorage {
             if (scope_[r].type == scope_type::function) {
                 name = StripFunctionSignature(name);
             }
+            else if (scope_[r].type == scope_type::call) {
+                if (auto p = name.find('('); p != std::string::npos) {
+                    name.resize(p);
+                }
+            }
             s += fmt::format("  [{:>2}] {} @ {}:{}\n", i, name, StripPathPrefix(scope_[r].file), scope_[r].line);
         }
         return s;

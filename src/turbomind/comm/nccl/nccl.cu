@@ -285,7 +285,7 @@ public:
         const auto elem_size = byte_size(dtype);
 
         auto rms_norm = [&](int64_t first, int64_t count) {
-            TM_CUDA_CHECK(invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm((char*)hidden + elem_size * first * dim,
                                                     (char*)residual + elem_size * first * dim,
                                                     weights,
                                                     bias,
@@ -368,7 +368,7 @@ public:
 
         if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
             char* buff = (char*)hidden + elem_size * (offset + first) * dim;
-            TM_CUDA_CHECK(invokeResidualBiasRMSNorm(
+            TM_SCOPE_CALL(invokeResidualBiasRMSNorm(
                 buff, (char*)residual + elem_size * first * dim, weights, bias, type, dim, num, eps, stream));
         }
 

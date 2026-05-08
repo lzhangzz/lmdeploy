@@ -33,6 +33,7 @@ StopCriteria::StopCriteria(const BaseGenerationParam& base, int phases): BaseGen
 
 void StopCriteria::Setup(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d = *data_.at(phase);
 
     const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
@@ -55,6 +56,7 @@ void StopCriteria::Setup(int phase, TensorMap& env)
 
 void StopCriteria::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     auto& d = *data_.at(phase);
 
     const Buffer_<int*> token_ids_ptrs  = env.at("token_ids_ptrs").buffer();
@@ -69,7 +71,7 @@ void StopCriteria::Forward(int phase, TensorMap& env)
     if (auto& stop_words = d.stop_words_ten) {
         TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
         size_t stop_words_len = stop_words.shape(2);
-        TM_CUDA_CHECK(invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
+        TM_SCOPE_CALL(invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
                                                   sequence_length.data(),
                                                   stop_words.data(),
                                                   finished.data(),
@@ -78,7 +80,7 @@ void StopCriteria::Forward(int phase, TensorMap& env)
                                                   stream));
     }
 
-    TM_CUDA_CHECK(invokeLengthCriterion_v2(finished.data(),  //
+    TM_SCOPE_CALL(invokeLengthCriterion_v2(finished.data(),  //
                                            sequence_length.data(),
                                            d.max_seq_len.data(),
                                            batch_size,

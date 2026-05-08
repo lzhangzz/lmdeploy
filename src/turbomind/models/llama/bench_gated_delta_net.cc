@@ -204,7 +204,7 @@ int main(int argc, char** argv)
     // --- Benchmark recurrent (v2) kernel ---
     printf("\n=== Benchmarks ===\n");
     auto launch_v2 = [&] {
-        TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v2(v_out_v2,
+        TM_SCOPE_CALL(invokeGatedDeltaRuleBatched_v2(v_out_v2,
                                                      qkv_in,
                                                      beta,
                                                      g,
@@ -222,7 +222,7 @@ int main(int argc, char** argv)
 
     // --- Benchmark chunked kernel ---
     auto launch_chunked = [&] {
-        TM_CUDA_CHECK(invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
+        TM_SCOPE_CALL(invokeChunkedGatedDeltaRuleBatched(v_out_chunked,
                                                          qkv_in,
                                                          beta,
                                                          g,
@@ -242,7 +242,7 @@ int main(int argc, char** argv)
     // --- Benchmark v3 persistent decode kernel (seq_len == 1 only) ---
     float v3_ms     = -1.f;
     auto  launch_v3 = [&] {
-        TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v3(v_out_v3,
+        TM_SCOPE_CALL(invokeGatedDeltaRuleBatched_v3(v_out_v3,
                                                      qkv_in,
                                                      beta,
                                                      g,

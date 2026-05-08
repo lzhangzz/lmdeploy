@@ -216,7 +216,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
     }
 
     if (tp_size_ == 1) {
-        TM_CUDA_CHECK(invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st));
+        TM_SCOPE_CALL(invokeEmbeddingLookup(input_embeds, input_ids, embedding_table, st));
     }
     else if (use_ag2d_) {
         const auto local_hidden_units = embedding_table.shape(1);
@@ -224,7 +224,7 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor temp{symm_buf.view(dtype_), {token_num, tp_size_, local_hidden_units}};
         Tensor local{temp.slice({0, tp_rank_, 0}, {-1, 1, -1}).squeeze(1)};
 
-        TM_CUDA_CHECK(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
+        TM_SCOPE_CALL(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
 
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   temp.raw_data(),
@@ -245,11 +245,11 @@ Tensor LanguageModel::Impl::LookupEmbedding(const Buffer_<int>& input_ids, Buffe
         Tensor temp{symm_buf.view(dtype_), {tp_size_, token_num, local_hidden_units}};
         Tensor local{temp.slice(tp_rank_).squeeze(0)};
 
-        TM_CUDA_CHECK(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
+        TM_SCOPE_CALL(invokeEmbeddingLookup(local, input_ids, embedding_table, st));
 
         comm_.d_comm->AllGather(local.raw_data(), temp.raw_data(), local.size(), dtype_, comm_.d_tp_group, st);
 
-        TM_CUDA_CHECK(invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
+        TM_SCOPE_CALL(invokeInPlaceTranspose102((uint16_t*)input_embeds.raw_data(),
                                                 (uint16_t*)temp.raw_data(),
                                                 tp_size_,
                                                 token_num,
@@ -277,14 +277,14 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
 
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, dtype_, kDEVICE};
-        linear_.Forward(features, weights_.post_decoder_embedding, logits);
+        TM_SCOPE_CALL(linear_.Forward(features, weights_.post_decoder_embedding, logits));
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
         Tensor logits{symm_buf.view(dtype_), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1));
+        TM_SCOPE_CALL(linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(1)));
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
                                   vocab_size,
@@ -300,10 +300,10 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     else {
         Tensor logits{symm_buf.view(dtype_), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0));
+        TM_SCOPE_CALL(linear_.Forward(features, weights_.post_decoder_embedding, local.squeeze(0)));
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
         Tensor out{{bsz, vocab_size}, features.dtype(), features.device()};
-        TM_CUDA_CHECK(invokeTransposeAxis01(
+        TM_SCOPE_CALL(invokeTransposeAxis01(
             (uint16_t*)out.raw_data(), (uint16_t*)logits.raw_data(), tp_size_, bsz, local_vocab_size, st));
         return out;
     }

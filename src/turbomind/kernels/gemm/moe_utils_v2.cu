@@ -20,6 +20,7 @@
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -625,7 +626,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
 
     if (!softmax && norm_topk) {
         // norm top-k is part of softmax impl
-        TM_CHECK(0) << softmax << " " << norm_topk;
+        TM_LOG_FATAL("unsupported moe config: softmax={} norm_topk={}", softmax, norm_topk);
     }
 
     auto dispatch = [&] {
@@ -684,6 +685,7 @@ void invokeMoeGate_V2(int*         f2n,            // [e*n] -> n
                                                               tokens_padded,
                                                               experts);
     }
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // noaux_tc: scores = scoring_func(logits), scores_for_choice = scores + correction_bias,
@@ -816,23 +818,23 @@ __global__ void MoeGateNoAuxTCKernel(float*       scales,  // [top_k, tokens]
     }
 }
 
-cudaError_t invokeMoeGate_NoAuxTC(int*         f2n,
-                                  int*         f2E,
-                                  int*         en2f,
-                                  int*         offsets,
-                                  float*       scales,
-                                  void*        masks,
-                                  int*         accum,
-                                  const float* logits,
-                                  const float* correction_bias,
-                                  int          tokens,
-                                  int          tokens_padded,
-                                  int          experts,
-                                  int          exp_per_tok,
-                                  bool         norm_topk_prob,
-                                  float        routed_scale,
-                                  bool         use_sigmoid,
-                                  cudaStream_t st)
+void invokeMoeGate_NoAuxTC(int*         f2n,
+                           int*         f2E,
+                           int*         en2f,
+                           int*         offsets,
+                           float*       scales,
+                           void*        masks,
+                           int*         accum,
+                           const float* logits,
+                           const float* correction_bias,
+                           int          tokens,
+                           int          tokens_padded,
+                           int          experts,
+                           int          exp_per_tok,
+                           bool         norm_topk_prob,
+                           float        routed_scale,
+                           bool         use_sigmoid,
+                           cudaStream_t st)
 {
     TM_CHECK(exp_per_tok > 0);
     TM_CHECK_LE(exp_per_tok, 32);
@@ -876,7 +878,7 @@ cudaError_t invokeMoeGate_NoAuxTC(int*         f2n,
     MoeScanKernel_v2<scan_threads><<<scan_blocks, scan_threads, 0, st>>>(
         f2n, f2E, en2f, offsets, (int8_t*)masks, accum, log_tile, tiles, tokens, tokens_padded, experts);
 
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int block_dim, class T>
@@ -897,8 +899,7 @@ __global__ void MoeGatherKernel(T*         dst,  // [e*n, d]
     }
 }
 
-cudaError_t
-invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
     auto& out    = out_.get();
     auto  invoke = [&](auto t) {
@@ -912,17 +913,19 @@ invokeMoeDispatch(Ref<Tensor> out_, const Tensor& src, const int* f2n, int exper
             (const T*)src.raw_data(),
             f2n,
             dim / vec_size);
-        return cudaGetLastError();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
     TM_CHECK_EQ(src.dtype(), out.dtype());
     const auto elem_size = byte_size(src.dtype());
     if (elem_size == sizeof(uint16_t)) {
-        return invoke(uint16_t{});
+        invoke(uint16_t{});
     }
     else if (elem_size == sizeof(uint8_t)) {
-        return invoke(uint8_t{});
+        invoke(uint8_t{});
     }
-    TM_CHECK(0) << "unsupported data type: " << src.dtype();
+    else {
+        TM_LOG_FATAL("unsupported data type: {}", src.dtype());
+    }
 }
 
 template<int alignment, int block_dim, class T>
@@ -966,8 +969,7 @@ MoeDispatchScalesNonaligned(T* dst, const T* src, int dst_stride, int src_stride
     }
 }
 
-cudaError_t
-invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
+void invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int expert_per_token, cudaStream_t st)
 {
     using T                 = float;
     constexpr int alignment = 16 / sizeof(T);
@@ -1001,7 +1003,7 @@ invokeMoeDispatchScales(Ref<Tensor> out_, const Tensor& src, const int* f2n, int
                                                             f2n,
                                                             dim);
 
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int vec_size, int exp_k, bool has_bias, int block_dim, class T>
@@ -1075,19 +1077,19 @@ __global__ void MoeReduceKernel(T*           dst,         // [  n, d]
 }
 
 template<bool has_bias, class T>
-cudaError_t invokeMoeReduce(T*           dst,
-                            const T*     src,
-                            const T*     bias,
-                            const float* scales,
-                            const int*   en2f,
-                            const int*   f2E,
-                            const float* dst_scales,
-                            int          tokens,
-                            int          experts_per_token,
-                            int          dim,
-                            T            bscale,
-                            float        dst_scale,
-                            cudaStream_t st)
+void invokeMoeReduce(T*           dst,
+                     const T*     src,
+                     const T*     bias,
+                     const float* scales,
+                     const int*   en2f,
+                     const int*   f2E,
+                     const float* dst_scales,
+                     int          tokens,
+                     int          experts_per_token,
+                     int          dim,
+                     T            bscale,
+                     float        dst_scale,
+                     cudaStream_t st)
 {
     // std::cout << __PRETTY_FUNCTION__ << std::endl;
 
@@ -1107,37 +1109,42 @@ cudaError_t invokeMoeReduce(T*           dst,
             tokens,
             bscale,
             dst_scale);
-        return cudaGetLastError();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     switch (experts_per_token) {
         case 1:
-            return invoke(std::integral_constant<int, 1>{});
+            invoke(std::integral_constant<int, 1>{});
+            break;
         case 2:
-            return invoke(std::integral_constant<int, 2>{});
+            invoke(std::integral_constant<int, 2>{});
+            break;
         case 4:
-            return invoke(std::integral_constant<int, 4>{});
+            invoke(std::integral_constant<int, 4>{});
+            break;
         case 6:
-            return invoke(std::integral_constant<int, 6>{});
+            invoke(std::integral_constant<int, 6>{});
+            break;
         case 8:
-            return invoke(std::integral_constant<int, 8>{});
+            invoke(std::integral_constant<int, 8>{});
+            break;
         default:
             fprintf(stderr, "Unsupported experts_per_token %d\n", experts_per_token);
             std::abort();
     }
 }
 
-cudaError_t invokeMoeCombine(Ref<Tensor>   out_,
-                             const Tensor& src,
-                             const Tensor& bias,
-                             const float*  scales,
-                             const int*    en2f,
-                             const int*    f2E,
-                             const float*  dst_scales,
-                             int           experts_per_token,
-                             float         bscale,
-                             float         dst_scale,
-                             cudaStream_t  st)
+void invokeMoeCombine(Ref<Tensor>   out_,
+                      const Tensor& src,
+                      const Tensor& bias,
+                      const float*  scales,
+                      const int*    en2f,
+                      const int*    f2E,
+                      const float*  dst_scales,
+                      int           experts_per_token,
+                      float         bscale,
+                      float         dst_scale,
+                      cudaStream_t  st)
 {
     auto& out = out_.get();
 
@@ -1146,32 +1153,32 @@ cudaError_t invokeMoeCombine(Ref<Tensor>   out_,
 
     auto invoke = [&](auto has_bias, auto t) {
         using T = decltype(t);
-        return invokeMoeReduce<has_bias.value>(out.data<T>(),
-                                               src.data<T>(),
-                                               bias.data_or((T*)nullptr),
-                                               scales,
-                                               en2f,
-                                               f2E,
-                                               dst_scales,
-                                               tokens,
-                                               experts_per_token,
-                                               src.shape(1),
-                                               (T)bscale,
-                                               dst_scale,
-                                               st);
+        invokeMoeReduce<has_bias.value>(out.data<T>(),
+                                        src.data<T>(),
+                                        bias.data_or((T*)nullptr),
+                                        scales,
+                                        en2f,
+                                        f2E,
+                                        dst_scales,
+                                        tokens,
+                                        experts_per_token,
+                                        src.shape(1),
+                                        (T)bscale,
+                                        dst_scale,
+                                        st);
     };
 
     auto dispatch_dtype = [&](auto t) {
         if (bias) {
             TM_CHECK_NOTNULL(f2E);
-            return invoke(std::true_type{}, t);
+            invoke(std::true_type{}, t);
         }
         else {
-            return invoke(std::false_type{}, t);
+            invoke(std::false_type{}, t);
         }
     };
 
-    TM_DISPATCH_PRIMARY_DTYPES_RET(src.dtype(), dispatch_dtype);
+    TM_DISPATCH_PRIMARY_DTYPES(src.dtype(), dispatch_dtype);
 }
 
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
@@ -1318,8 +1325,8 @@ __global__ void MoeSoftmaxMaskTopKGroups(float* logits, int token_num, int exper
     }
 }
 
-cudaError_t
-invokeMoeSoftmaxMaskTopKGroups(float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st)
+void invokeMoeSoftmaxMaskTopKGroups(
+    float* logits, int token_num, int expert_num, int group_size, int top_k, cudaStream_t st)
 {
     auto invoke = [&](auto max_expert_num, auto items_per_thread, auto vec_size) {
         constexpr int thrs_per_tok = max_expert_num.value / items_per_thread.value;
@@ -1327,11 +1334,12 @@ invokeMoeSoftmaxMaskTopKGroups(float* logits, int token_num, int expert_num, int
         const int     blocks       = ceil_div(token_num, threads / thrs_per_tok);
         MoeSoftmaxMaskTopKGroups<max_expert_num.value, items_per_thread.value, vec_size.value>
             <<<blocks, threads, 0, st>>>(logits, token_num, expert_num, top_k);
-        return cudaGetLastError();
+        TM_CUDA_CHECK(cudaGetLastError());
     };
 
     if (expert_num == 160 && group_size == 20) {
-        return invoke(_Int<160>, _Int<20>, _Int<4>);
+        invoke(_Int<160>, _Int<20>, _Int<4>);
+        return;
     }
 
     std::cerr << __FILE__ << "(" << __LINE__ << "): unsupported moe config: expert_num=" << expert_num

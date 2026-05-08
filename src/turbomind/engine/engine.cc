@@ -507,6 +507,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
 void Engine::Impl::Schedule()
 {
+    TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
     vector<const Sequence*>  sequences;
@@ -636,6 +637,7 @@ void Engine::Impl::Schedule()
 
 void Engine::Impl::Setup(BatchData& d)
 {
+    TM_FUNCTION_SCOPE();
     auto& st = states_.at(0);
 
     d.rc.resize(st.active);
@@ -682,6 +684,7 @@ void Engine::Impl::Setup(BatchData& d)
 
 void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 {
+    TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
     BatchCopy copy;
@@ -771,6 +774,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
 
 void Engine::Impl::InternalThreadEntry()
 {
+    TM_FUNCTION_SCOPE();
     TM_CUDA_CHECK(cudaSetDevice(device_id_));
 
     auto stream = Stream::create();

@@ -115,7 +115,7 @@ static void Convert(LlamaDenseWeight& dense, bool is_grouped, cudaStream_t st)
 
         if (order_w == kRowMajor) {  // (k,m) -> (m,k)
             Tensor_<uint16_t> trans{{dense.output_dim, dense.input_dim}, kDEVICE};
-            TM_CUDA_CHECK(invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st));
+            TM_SCOPE_CALL(invokeTransposeAxis01(trans.data(), tmp.data(), dense.input_dim, dense.output_dim, 1, st));
             tmp = trans;
         }
 
@@ -222,7 +222,7 @@ static void ConvertBlockscaleFP8Native(LlamaDenseWeight& dense, cudaStream_t str
     auto process = [&](Tensor& x, MatrixLayout& d, auto dtype) {
         using T = decltype(dtype);
         Tensor trans{{x.shape(1), x.shape(0)}, x.dtype(), kDEVICE};
-        TM_CUDA_CHECK(invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream));
+        TM_SCOPE_CALL(invokeTransposeAxis01((T*)trans.raw_data(), (T*)x.raw_data(), x.shape(0), x.shape(1), 1, stream));
         x = std::move(trans);
         d = MatrixLayout{x.dtype(),  //
                          kColMajor,
@@ -407,7 +407,7 @@ static void Interleave(const Tensor& a, const Tensor& b, Tensor& c, cudaStream_t
         interleave_output_dims((uint32_t*)c_, (uint32_t*)a_, (uint32_t*)b_, M, K, st);
     }
     else {
-        TM_CHECK(0);
+        TM_LOG_FATAL("unreachable");
     }
 }
 

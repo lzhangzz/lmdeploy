@@ -31,3 +31,10 @@ std::string StripFunctionSignature(std::string_view name);
 #define TM_FUNCTION_SCOPE()                                                                                            \
     ::turbomind::core::Scope _tm_func_scope_##__LINE__(                                                                \
         __PRETTY_FUNCTION__, __FILE__, __LINE__, ::turbomind::core::scope_type::function)
+
+#define TM_SCOPE_CALL(func_call)                                                                                       \
+    do {                                                                                                               \
+        ::turbomind::core::Scope _tm_scope_##__LINE__(                                                                 \
+            #func_call, __FILE__, __LINE__, ::turbomind::core::scope_type::call);                                      \
+        func_call;                                                                                                     \
+    } while (0)

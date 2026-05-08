@@ -132,7 +132,7 @@ void CudaIpcCommImpl::AllGather(
             invoke(uint{});
         }
         else {
-            TM_CHECK(0) << "not implemented";
+            TM_LOG_FATAL("not implemented");
         }
     }
     else {
@@ -339,7 +339,7 @@ void CudaIpcCommImpl::AllGather2D(const void*  sendbuff,
             invoke(uint{});
         }
         else {
-            TM_CHECK(0) << "not implemented";
+            TM_LOG_FATAL("not implemented");
         }
     }
     else {

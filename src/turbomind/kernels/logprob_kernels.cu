@@ -30,6 +30,7 @@
 #include "src/turbomind/kernels/logprob_kernels.h"
 #include "src/turbomind/kernels/reduce_kernel_utils.cuh"
 #include "src/turbomind/macro.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -138,18 +139,18 @@ __global__ void accumulate_log_probs(float*       cum_log_probs,
 }
 
 template<typename T>
-cudaError_t invokeLogProbFromLogits(float*       cum_log_probs,
-                                    const T*     logits,
-                                    const int*   input_ids,
-                                    const int*   input_lengths,
-                                    const size_t max_input_length,
-                                    const size_t batch_size,
-                                    const size_t vocab_size,
-                                    const size_t vocab_size_padded,
-                                    void*        workspace,
-                                    const size_t workspace_size,
-                                    cudaStream_t stream,
-                                    const bool   batch_first)
+void invokeLogProbFromLogits(float*       cum_log_probs,
+                             const T*     logits,
+                             const int*   input_ids,
+                             const int*   input_lengths,
+                             const size_t max_input_length,
+                             const size_t batch_size,
+                             const size_t vocab_size,
+                             const size_t vocab_size_padded,
+                             void*        workspace,
+                             const size_t workspace_size,
+                             cudaStream_t stream,
+                             const bool   batch_first)
 {
     // A batched version of log prob computation.
     //
@@ -181,32 +182,32 @@ cudaError_t invokeLogProbFromLogits(float*       cum_log_probs,
                                                          batch_first);
     accumulate_log_probs<<<batch_size, block_size, 0, stream>>>(
         cum_log_probs, log_probs, input_lengths, max_input_length, batch_size, batch_first);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeLogProbFromLogits(float*       cum_log_probs,
-                                             const float* logits,
-                                             const int*   input_ids,
-                                             const int*   input_lengths,
-                                             const size_t max_input_length,
-                                             const size_t batch_size,
-                                             const size_t vocab_size,
-                                             const size_t vocab_size_padded,
-                                             void*        workspace,
-                                             const size_t workspace_size,
-                                             cudaStream_t stream,
-                                             const bool   batch_first);
+template void invokeLogProbFromLogits(float*       cum_log_probs,
+                                      const float* logits,
+                                      const int*   input_ids,
+                                      const int*   input_lengths,
+                                      const size_t max_input_length,
+                                      const size_t batch_size,
+                                      const size_t vocab_size,
+                                      const size_t vocab_size_padded,
+                                      void*        workspace,
+                                      const size_t workspace_size,
+                                      cudaStream_t stream,
+                                      const bool   batch_first);
 
-template cudaError_t invokeLogProbFromLogits(float*       cum_log_probs,
-                                             const half*  logits,
-                                             const int*   input_ids,
-                                             const int*   input_lengths,
-                                             const size_t max_input_length,
-                                             const size_t batch_size,
-                                             const size_t vocab_size,
-                                             const size_t vocab_size_padded,
-                                             void*        workspace,
-                                             const size_t workspace_size,
-                                             cudaStream_t stream,
-                                             const bool   batch_first);
+template void invokeLogProbFromLogits(float*       cum_log_probs,
+                                      const half*  logits,
+                                      const int*   input_ids,
+                                      const int*   input_lengths,
+                                      const size_t max_input_length,
+                                      const size_t batch_size,
+                                      const size_t vocab_size,
+                                      const size_t vocab_size_padded,
+                                      void*        workspace,
+                                      const size_t workspace_size,
+                                      cudaStream_t stream,
+                                      const bool   batch_first);
 }  // end of namespace turbomind

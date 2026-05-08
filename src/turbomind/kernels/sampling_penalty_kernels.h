@@ -30,22 +30,22 @@ void ApplyRepetitionPenalty(Tensor&               logits,
                             cudaStream_t          stream);
 
 template<typename T>
-[[nodiscard]] cudaError_t invokeBatchApplyTemperaturePenalty_v2(T*           logits,
-                                                                const T*     bias,
-                                                                const float* temperatures,
-                                                                const int    batch_size,
-                                                                const int    vocab_size,
-                                                                const int    vocab_size_padd,
-                                                                cudaStream_t stream);
+void invokeBatchApplyTemperaturePenalty_v2(T*           logits,
+                                           const T*     bias,
+                                           const float* temperatures,
+                                           const int    batch_size,
+                                           const int    vocab_size,
+                                           const int    vocab_size_padd,
+                                           cudaStream_t stream);
 
 template<typename T>
-[[nodiscard]] cudaError_t invokeMinLengthPenalty(T*           logits,
-                                                 const int*   min_lengths,
-                                                 const int*   sequnece_lengths,
-                                                 const int    vocab_size_padded,
-                                                 const int    batch_size,
-                                                 const int*   end_ids,
-                                                 const int    end_ids_size,
-                                                 cudaStream_t stream);
+void invokeMinLengthPenalty(T*           logits,
+                            const int*   min_lengths,
+                            const int*   sequnece_lengths,
+                            const int    vocab_size_padded,
+                            const int    batch_size,
+                            const int*   end_ids,
+                            const int    end_ids_size,
+                            cudaStream_t stream);
 
 }  // namespace turbomind

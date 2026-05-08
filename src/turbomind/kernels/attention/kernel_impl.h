@@ -64,14 +64,15 @@ public:
         info_.name = to_string(desc_);
     }
 
-    [[nodiscard]] cudaError_t Launch(const void* params, int sm_count) const override
+    bool Launch(const void* params, int sm_count) const override
     {
         const auto& p = *static_cast<const typename K::ParamType*>(params);
         if constexpr (kIsDecoding) {
-            return invokeDecoding<K>(p, sm_count, info_.max_active_ctas) ? cudaSuccess : cudaErrorUnknown;
+            return invokeDecoding<K>(p, sm_count, info_.max_active_ctas);
         }
         else {
-            return invokeAttention<K>(p, sm_count, info_.max_active_ctas);
+            invokeAttention<K>(p, sm_count, info_.max_active_ctas);
+            return true;
         }
     }
 };

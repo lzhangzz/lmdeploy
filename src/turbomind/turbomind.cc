@@ -69,8 +69,7 @@ static void parse_default_rope_param(const YAML::Node& node, RopeParam& param)
     param.base = node["base"].as<float>();
     param.dim  = node["dim"].as<int>();
     if (param.base == 0.f || param.dim == 0) {
-        TM_LOG_ERROR("invalid rope param: base = {}, dim = {}", param.base, param.dim);
-        TM_CHECK(0);
+        TM_LOG_FATAL("invalid rope param: base = {}, dim = {}", param.base, param.dim);
     }
 }
 
@@ -162,7 +161,7 @@ static DataType data_type_from_string(std::string str)
     else if (str == "e2m1") {
         return kFloat4_e2m1;
     }
-    TM_CHECK(0) << "unsupported weight type: " << str;
+    TM_LOG_FATAL("unsupported weight type: {}", str);
     return {};
 }
 
@@ -346,7 +345,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
         node = YAML::Load(config);
     }
     catch (const YAML::Exception& e) {
-        TM_CHECK(0) << "Error loading YAML config: " << e.what() << "\nconfig:\n" << config;
+        TM_LOG_FATAL("Error loading YAML config: {}\nconfig:\n{}", e.what(), config);
     }
 
     /// TODO: move config parsing to suitable place
@@ -444,7 +443,7 @@ TurboMind::Impl::Impl(string model_dir, string config, FFICtxFactory ffi_ctx_fac
     engine_param_.enable_metrics        = engine["enable_metrics"].as<bool>(false);
 
     if (engine_param_.enable_prefix_caching && HasLinearAttention(model_param_)) {
-        TM_CHECK(0) << "Prefix caching is unsupported when linear attention is present";
+        TM_LOG_FATAL("Prefix caching is unsupported when linear attention is present");
     }
 
     engine_param_.num_tokens_per_iter = engine["num_tokens_per_iter"].as<int>(0);

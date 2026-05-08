@@ -30,6 +30,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
@@ -90,6 +91,7 @@ void InitializeRandomStates(
 
     InitializeRandomStates_Kernel<<<blocks, threads, 0, stream>>>(
         (curandState_t*)states, (const unsigned long long*)random_seeds, mask, batch_size);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
@@ -233,7 +235,7 @@ __global__ void topKSortStage2(const int* top_ks,
                                                                                             params.kept);
 
 template<typename T>
-cudaError_t invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
+void invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stream)
 {
     const int max_top_k             = params.max_top_k;
     const int batch_size            = params.batch_size;
@@ -264,9 +266,9 @@ cudaError_t invokeTopKSortFilter(TopKSortFilterParams& params, cudaStream_t stre
     else {
         throw std::domain_error(fmtstr("top-k kernel supports 1<=k<=1024 but got k=%d", max_top_k));
     }
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
+template void invokeTopKSortFilter<float>(TopKSortFilterParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

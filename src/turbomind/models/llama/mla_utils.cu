@@ -3,6 +3,7 @@
 #include <cuda_bf16.h>
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
 #include "src/turbomind/kernels/core/math.h"
@@ -47,14 +48,14 @@ __global__ void mla_copy_qkv_kernel(T*       qkv,        // [s, head_num + 2, kv
 }
 
 template<class T>
-cudaError_t invokeMLACopyQKV(T*           qkv,
-                             const T*     q,
-                             const T*     kv_a_k_pe,
-                             int          token_num,
-                             int          head_num,
-                             int          kv_lora_rank,
-                             int          rope_dim,
-                             cudaStream_t stream)
+void invokeMLACopyQKV(T*           qkv,
+                      const T*     q,
+                      const T*     kv_a_k_pe,
+                      int          token_num,
+                      int          head_num,
+                      int          kv_lora_rank,
+                      int          rope_dim,
+                      cudaStream_t stream)
 {
     constexpr int vec_size = 16 / sizeof(T);
 
@@ -71,7 +72,7 @@ cudaError_t invokeMLACopyQKV(T*           qkv,
 
     mla_copy_qkv_kernel<T, vec_size>
         <<<grid, block, 0, stream>>>(qkv, q, kv_a_k_pe, head_num, head_dim, kv_lora_rank, rope_dim);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 void MLACopyQKV(DataType     dtype,
@@ -86,13 +87,13 @@ void MLACopyQKV(DataType     dtype,
 {
     auto invoke = [&](auto t) {
         using T = decltype(t);
-        TM_CUDA_CHECK(invokeMLACopyQKV(
+        TM_SCOPE_CALL(invokeMLACopyQKV(
             (T*)qkv, (const T*)q, (const T*)kv_a_k_pe, token_num, head_num, kv_lora_rank, rope_dim, stream));
     };
 
     TM_CHECK_EQ(byte_size(dtype, 1), 2) << "unsupported data type: " << dtype;
 
-    return invoke(uint16_t{});
+    invoke(uint16_t{});
 }
 
 }  // namespace turbomind

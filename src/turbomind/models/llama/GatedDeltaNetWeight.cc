@@ -1,4 +1,5 @@
 #include "src/turbomind/models/llama/GatedDeltaNetWeight.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -166,7 +167,7 @@ void GatedDeltaNetWeight::prepare()
         const int cols = conv1d.shape(1);  // d_conv
 
         Tensor conv1d_t{{cols, rows}, conv1d.dtype(), kDEVICE};
-        TM_CUDA_CHECK(
+        TM_SCOPE_CALL(
             invokeTransposeAxis01((uint16_t*)conv1d_t.raw_data(), (uint16_t*)conv1d.raw_data(), rows, cols, 1, stream));
         conv1d = std::move(conv1d_t);
     }

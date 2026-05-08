@@ -38,6 +38,6 @@ struct SamplingParams {
 };
 
 template<typename T>
-[[nodiscard]] cudaError_t invokeSampling(SamplingParams& params, cudaStream_t stream);
+void invokeSampling(SamplingParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

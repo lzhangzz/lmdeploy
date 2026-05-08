@@ -116,7 +116,7 @@ __global__ void __launch_bounds__(1024) softmax_kernel(T*           attn_score,
 }
 
 template<typename T>
-cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream)
+void invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t stream)
 {
     // attention_score,    (batch_size, head_num, q_length, k_length), softmax output.
     // qk,                 (batch_size, head_num, q_length, k_length), QK^T.
@@ -166,15 +166,15 @@ cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<T>& param, cudaStream_t strea
     else {
         throw std::runtime_error("not impelmented");
     }
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<half>& param, cudaStream_t stream);
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<half>& param, cudaStream_t stream);
 #ifdef ENABLE_BF16
-template cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<nv_bfloat16>& param, cudaStream_t stream);
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<nv_bfloat16>& param, cudaStream_t stream);
 #endif
 #if ENABLE_FP32
-template cudaError_t invokeMaskedSoftmax(MaskedSoftmaxParam<float>& param, cudaStream_t stream);
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<float>& param, cudaStream_t stream);
 #endif
 
 // clang-format off
@@ -262,7 +262,7 @@ __global__ void transpose_remove_padding(const T*     src,
 
 // clang-format off
 template<typename T>
-cudaError_t invokeTransposeAttentionOutRemovePadding(T*           src,
+void invokeTransposeAttentionOutRemovePadding(T*           src,
                                                      T*           dst,
                                                      const int    valid_word_num,
                                                      const int    batch_size,
@@ -305,22 +305,22 @@ cudaError_t invokeTransposeAttentionOutRemovePadding(T*           src,
         transpose_remove_padding<<<valid_word_num, block_size, 0, stream>>>(
             src, dst, batch_size, seq_len, head_num, size_per_head, mask_offset, scale, int8_mode);
     }
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 // clang-format on
 
 #define INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(T)                                                               \
-    template cudaError_t invokeTransposeAttentionOutRemovePadding(T*           src,                                    \
-                                                                  T*           dst,                                    \
-                                                                  const int    valid_word_num,                         \
-                                                                  const int    batch_size,                             \
-                                                                  const int    seq_len,                                \
-                                                                  const int    head_num,                               \
-                                                                  const int    size_per_head,                          \
-                                                                  const int*   mask_offset,                            \
-                                                                  const float* scale,                                  \
-                                                                  const int    int8_mode,                              \
-                                                                  cudaStream_t stream)
+    template void invokeTransposeAttentionOutRemovePadding(T*           src,                                           \
+                                                           T*           dst,                                           \
+                                                           const int    valid_word_num,                                \
+                                                           const int    batch_size,                                    \
+                                                           const int    seq_len,                                       \
+                                                           const int    head_num,                                      \
+                                                           const int    size_per_head,                                 \
+                                                           const int*   mask_offset,                                   \
+                                                           const float* scale,                                         \
+                                                           const int    int8_mode,                                     \
+                                                           cudaStream_t stream)
 #ifdef ENABLE_FP32
 INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(float);
 #endif
@@ -345,12 +345,12 @@ __global__ void addRelativeAttentionBias(
 }
 
 template<typename T>
-cudaError_t invokeAddRelativeAttentionBias(T*           qk_buf,
-                                           const T*     relative_attention_bias,
-                                           const int    batch_size,
-                                           const int    head_num,
-                                           const int    seq_len,
-                                           cudaStream_t stream)
+void invokeAddRelativeAttentionBias(T*           qk_buf,
+                                    const T*     relative_attention_bias,
+                                    const int    batch_size,
+                                    const int    head_num,
+                                    const int    seq_len,
+                                    cudaStream_t stream)
 {
     // qk_buf: [batch_size, head_num, seq_len, seq_len]
     // relative_attention_bias: [1, head_num, seq_len, seq_len]
@@ -370,16 +370,16 @@ cudaError_t invokeAddRelativeAttentionBias(T*           qk_buf,
         addRelativeAttentionBias<<<grid, block, 0, stream>>>(
             qk_buf, relative_attention_bias, batch_size, head_num, seq_len);
     }
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 #define INSTANTIATEADDRELATIVEATTENTIONBIAS(T)                                                                         \
-    template cudaError_t invokeAddRelativeAttentionBias(T*           qk_buf,                                           \
-                                                        const T*     relative_attention_bias,                          \
-                                                        const int    batch_size,                                       \
-                                                        const int    head_num,                                         \
-                                                        const int    seq_len,                                          \
-                                                        cudaStream_t stream)
+    template void invokeAddRelativeAttentionBias(T*           qk_buf,                                                  \
+                                                 const T*     relative_attention_bias,                                 \
+                                                 const int    batch_size,                                              \
+                                                 const int    head_num,                                                \
+                                                 const int    seq_len,                                                 \
+                                                 cudaStream_t stream)
 #if 0
 #ifdef ENABLE_FP32
 INSTANTIATEADDRELATIVEATTENTIONBIAS(float);

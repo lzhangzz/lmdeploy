@@ -2,6 +2,7 @@
 
 #include "decoding.h"
 #include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/registry.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -33,7 +34,7 @@ void dispatchDecoding(const AttentionParams<T>& params)
 
     TM_CHECK(kernel) << "No decoding kernel found: " + to_string(desc);
 
-    TM_CUDA_CHECK(kernel->Launch(&params, reg.sm_count()));
+    TM_SCOPE_CALL(kernel->Launch(&params, reg.sm_count()));
 }
 
 template void dispatchDecoding(const AttentionParams<half>& params);

@@ -206,7 +206,7 @@ __global__ void activation_kernel(T* inter_buf, const T* __restrict__ gate_buf, 
 }
 
 template<template<typename T> class Activation, typename T>
-cudaError_t invokeGenericActivation_v2(
+void invokeGenericActivation_v2(
     T* inter_buf, const T* __restrict__ gate_buf, int64_t stride, int token_num, int dims, cudaStream_t stream)
 {
     constexpr int kVecSize = 4;
@@ -216,11 +216,11 @@ cudaError_t invokeGenericActivation_v2(
 
     activation_kernel<kVecSize, Activation, T>
         <<<grid, block, 0, stream>>>(inter_buf, gate_buf, stride, token_num, dims);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<template<typename T> class Activation>
-cudaError_t invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream)
+void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream)
 {
     auto& inter = inter_.get();
     TM_CHECK_EQ(inter.ndim(), 2);
@@ -244,10 +244,9 @@ cudaError_t invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, c
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(inter.dtype(), invoke);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t
-invokeGenericActivation_v3<SiluActivation>(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
+template void invokeGenericActivation_v3<SiluActivation>(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
 }  // namespace turbomind

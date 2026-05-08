@@ -237,7 +237,7 @@ int main(int argc, char** argv)
     stream.Sync();
 
     auto launch_v2 = [&] {
-        TM_CUDA_CHECK(invokeFusedConv1dSiLU(out_v2,
+        TM_SCOPE_CALL(invokeFusedConv1dSiLU(out_v2,
                                             all_proj,
                                             weight,
                                             Tensor{},

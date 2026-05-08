@@ -264,7 +264,7 @@ struct AnomalyHandler::Impl {
     }
 
     template<class T>
-    cudaError_t invokeCountAndFixAnomaly(T* data, int64_t size, const std::string& key, int level)
+    void invokeCountAndFixAnomaly(T* data, int64_t size, const std::string& key, int level)
     {
         if (g_level && level <= g_level) {
             TM_CHECK(size >= 0);
@@ -287,11 +287,11 @@ struct AnomalyHandler::Impl {
                                                                        g_ninf_val_,
                                                                        g_nan_val_);
         }
-        return cudaGetLastError();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     template<class T>
-    cudaError_t invokeFixLogitsAnomaly(T* logits, int batch_size, int level)
+    void invokeFixLogitsAnomaly(T* logits, int batch_size, int level)
     {
         if (g_level && level <= g_level) {
             TM_CHECK(batch_size <= max_batch_size_);
@@ -306,7 +306,7 @@ struct AnomalyHandler::Impl {
                                                                           batch_size,
                                                                           fallback_);
         }
-        return cudaGetLastError();
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     static int   g_level;

@@ -68,7 +68,102 @@ struct OperatorTest {
     }
 };
 
+std::string scope_call_trace;
+int         scope_call_depth;
+int         scope_call_side_effect;
+
+void scope_call_target(int x)
+{
+    scope_call_side_effect = x;
+    scope_call_trace       = core::Context::scope_trace();
+    scope_call_depth       = core::Context::scope_depth();
+}
+
 }  // namespace
+
+TEST_CASE("test scope call", "[scope]")
+{
+    using core::Context;
+
+    REQUIRE(Context::scope_depth() == 0);
+    REQUIRE(Context::scope_trace().empty());
+
+    SECTION("basic call with stringified expression")
+    {
+        scope_call_side_effect = 0;
+        scope_call_trace.clear();
+        scope_call_depth = 0;
+
+        TM_SCOPE_CALL(scope_call_target(42));
+
+        // The function call actually executed within the scope
+        REQUIRE(scope_call_side_effect == 42);
+
+        // The trace shows just the function name, not the full expression
+        REQUIRE(scope_call_trace.find("scope_call_target(42)") == std::string::npos);
+        REQUIRE(scope_call_trace.find("scope_call_target") != std::string::npos);
+        REQUIRE(scope_call_trace.find("test_scope.cc") != std::string::npos);
+
+        // The scope depth was 1 during the call
+        REQUIRE(scope_call_depth == 1);
+
+        // Scope is cleaned up after the call returns
+        REQUIRE(Context::scope_depth() == 0);
+        REQUIRE(Context::scope_trace().empty());
+    }
+
+    SECTION("nested inside TM_SCOPE")
+    {
+        scope_call_side_effect = 0;
+        scope_call_trace.clear();
+        scope_call_depth = 0;
+
+        {
+            TM_SCOPE("outer");
+            REQUIRE(Context::scope_depth() == 1);
+
+            TM_SCOPE_CALL(scope_call_target(99));
+
+            // Function executed
+            REQUIRE(scope_call_side_effect == 99);
+
+            // During the call, depth was 2 (outer + scope_call)
+            REQUIRE(scope_call_depth == 2);
+
+            // Trace captured during the call contained both names
+            REQUIRE(scope_call_trace.find("outer") != std::string::npos);
+            REQUIRE(scope_call_trace.find("scope_call_target(99)") == std::string::npos);
+            REQUIRE(scope_call_trace.find("scope_call_target") != std::string::npos);
+
+            // After TM_SCOPE_CALL, depth returns to 1 (outer still active)
+            REQUIRE(Context::scope_depth() == 1);
+        }
+
+        REQUIRE(Context::scope_depth() == 0);
+        REQUIRE(Context::scope_trace().empty());
+    }
+
+    SECTION("multiple sequential calls")
+    {
+        scope_call_side_effect = 0;
+        scope_call_trace.clear();
+        scope_call_depth = 0;
+
+        TM_SCOPE_CALL(scope_call_target(1));
+        REQUIRE(scope_call_side_effect == 1);
+        REQUIRE(scope_call_depth == 1);
+        REQUIRE(Context::scope_depth() == 0);
+
+        TM_SCOPE_CALL(scope_call_target(2));
+        REQUIRE(scope_call_side_effect == 2);
+        REQUIRE(scope_call_depth == 1);
+        REQUIRE(Context::scope_depth() == 0);
+
+        // Trace from the second call contains the second expression
+        REQUIRE(scope_call_trace.find("scope_call_target(2)") == std::string::npos);
+        REQUIRE(scope_call_trace.find("scope_call_target") != std::string::npos);
+    }
+}
 
 TEST_CASE("test function scope formatting", "[scope]")
 {

@@ -26,6 +26,7 @@ namespace turbomind {
 
 void LlamaFfnLayer::forward(ForwardParam param)
 {
+    TM_FUNCTION_SCOPE();
     NvtxScope scope("ffn");
 
     const auto& mlp = *param.weights;
@@ -40,7 +41,8 @@ void LlamaFfnLayer::forward(ForwardParam param)
     Tensor inter;
 
     if (mlp.fused_gating_intermediate.weight) {
-        auto mix = linear_.Forward(param.input, mlp.fused_gating_intermediate);
+        Tensor mix;
+        TM_SCOPE_CALL(linear_.Forward(param.input, mlp.fused_gating_intermediate, mix));
 
         gating = mix.slice({0, 0}, {(int)token_num, inter_size});
         if (!mlp.is_fused_silu) {
@@ -48,22 +50,22 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        gating = linear_.Forward(param.input, mlp.gating);
+        TM_SCOPE_CALL(linear_.Forward(param.input, mlp.gating, gating));
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        inter = linear_.Forward(param.input, mlp.intermediate);
+        TM_SCOPE_CALL(linear_.Forward(param.input, mlp.intermediate, inter));
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
     if (!mlp.is_fused_silu) {
         // gate' = silu(gate) * up
-        Activation(gating, inter, mlp.act_type, stream);
+        TM_SCOPE_CALL(Activation(gating, inter, mlp.act_type, stream));
         TM_DEBUG_TENSOR(gating, Concat("act", layer_id), 3);
     }
 
     {  // w2(x)
         NvtxScope scope("w2");
-        linear_.Forward(gating, mlp.output, param.output);
+        TM_SCOPE_CALL(linear_.Forward(gating, mlp.output, param.output));
     }
 }
 

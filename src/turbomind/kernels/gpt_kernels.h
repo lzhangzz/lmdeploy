@@ -77,12 +77,11 @@ template<typename T>
 void invokeInputIdsEmbeddingLookupPosEncodingSoftPrompt(inputIdsEmbeddingLookupPosEncodingSoftPromptParam<T> param);
 
 template<typename T>
-[[nodiscard]] cudaError_t
-invokeTransposeAxis01(T* out, T* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
+void invokeTransposeAxis01(T* out, T* in, const int dim0, const int dim1, const int dim2, cudaStream_t stream);
 
 template<typename T>
-[[nodiscard]] cudaError_t
-invokeTransposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream);
+void invokeTransposeAxis01(
+    T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1, cudaStream_t stream);
 
 template<typename T>
 void invokeBuildDecoderAttentionMask(T*           attention_mask,
@@ -226,21 +225,22 @@ void invokeSumLengthDimension(float*       out_buf,
                               cudaStream_t stream = 0);
 
 template<class T>
-[[nodiscard]] cudaError_t invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t st);
+void invokeTranspose2D_(T* dst, const T* src, int rows, int cols, cudaStream_t st);
 
 template<class T>
-[[nodiscard]] cudaError_t invokeTranspose2D(T* dst, const T* src, int rows, int cols, cudaStream_t st)
+void invokeTranspose2D(T* dst, const T* src, int rows, int cols, cudaStream_t st)
 {
     if constexpr (sizeof(T) == 4) {
-        return invokeTranspose2D_((uint32_t*)dst, (const uint32_t*)src, rows, cols, st);
+        invokeTranspose2D_((uint32_t*)dst, (const uint32_t*)src, rows, cols, st);
     }
     else {
-        TM_CHECK(0);
-        return cudaErrorUnknown;
+        TM_LOG_FATAL("unreachable");
     }
 }
 
-[[nodiscard]] cudaError_t
-invokeEmbeddingLookup(Ref<Tensor> out_, const Buffer_<int>& token_ids, const Tensor& embedding_table, cudaStream_t st);
+void invokeEmbeddingLookup(Ref<Tensor>         out_,
+                           const Buffer_<int>& token_ids,
+                           const Tensor&       embedding_table,
+                           cudaStream_t        st);
 
 }  // namespace turbomind

@@ -167,7 +167,8 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         //    where the split dims are: conv_dim_, value_dim_, v_heads_tp_, v_heads_tp_
         // =================================================================
         const int v_heads_tp = num_v_heads_;  // already TP-sharded
-        Tensor    all_proj   = linear_.Forward(p.input, weights.in_proj_all);
+        Tensor    all_proj;
+        TM_SCOPE_CALL(linear_.Forward(p.input, weights.in_proj_all, all_proj));
 
         // Column offsets per token (all_proj is token-major, row-major):
         //   [0, conv_dim_)           -> mixed_qkv
@@ -208,7 +209,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // ----- 3a. Fused Causal Conv1d + SiLU (all requests) -----
         // all_proj carries the non-contiguous qkv slice (stride = all_col);
         // in_stride is derived from all_proj.stride(0) inside the launcher.
-        TM_CUDA_CHECK(invokeFusedConv1dSiLU(conv_out,
+        TM_SCOPE_CALL(invokeFusedConv1dSiLU(conv_out,
                                             all_proj,
                                             weights.conv1d,
                                             Tensor{},
@@ -243,7 +244,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 // Decode on main stream
                 auto dc_state = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto dc_q     = pd.q_offsets.slice(0, decode_count + 1);
-                TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v3(attn_out,
+                TM_SCOPE_CALL(invokeGatedDeltaRuleBatched_v3(attn_out,
                                                              conv_out,
                                                              beta,
                                                              g,
@@ -260,7 +261,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
                 // Prefill on aux stream (higher priority)
                 auto pf_state = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
                 auto pf_q     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                TM_CUDA_CHECK(invokeChunkedGatedDeltaRuleBatched(attn_out,
+                TM_SCOPE_CALL(invokeChunkedGatedDeltaRuleBatched(attn_out,
                                                                  conv_out,
                                                                  beta,
                                                                  g,
@@ -281,7 +282,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             else if (decode_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(0, decode_count);
                 auto q_slice     = pd.q_offsets.slice(0, decode_count + 1);
-                TM_CUDA_CHECK(invokeGatedDeltaRuleBatched_v3(attn_out,
+                TM_SCOPE_CALL(invokeGatedDeltaRuleBatched_v3(attn_out,
                                                              conv_out,
                                                              beta,
                                                              g,
@@ -298,7 +299,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
             else if (prefill_count > 0) {
                 auto state_slice = pd.recurrent_state_ptrs.slice(decode_count, prefill_count);
                 auto q_slice     = pd.q_offsets.slice(decode_count, prefill_count + 1);
-                TM_CUDA_CHECK(invokeChunkedGatedDeltaRuleBatched(attn_out,
+                TM_SCOPE_CALL(invokeChunkedGatedDeltaRuleBatched(attn_out,
                                                                  conv_out,
                                                                  beta,
                                                                  g,
@@ -319,12 +320,12 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         // Gate (z) lives at column conv_dim_ of all_proj with row-stride all_col.
         Tensor gate        = all_proj.slice({0, conv_dim_}, {-1, value_dim_});
         Tensor hidden_view = attn_out.view({token_num * num_v_heads_, value_head_dim_});
-        TM_CUDA_CHECK(invokeRMSNormGated(hidden_view, gate, weights.norm, norm_eps_, stream));
+        TM_SCOPE_CALL(invokeRMSNormGated(hidden_view, gate, weights.norm, norm_eps_, stream));
 
         // =================================================================
         // 4. Output projection (all tokens at once)
         // =================================================================
-        (void)linear_.Forward(attn_out, weights.out_proj, p.output);
+        TM_SCOPE_CALL(linear_.Forward(attn_out, weights.out_proj, p.output));
     };
 
     if (dtype == kHalf) {
@@ -334,7 +335,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam p)
         dispatch(nv_bfloat16{});
     }
     else {
-        TM_CHECK(0) << "Unsupported dtype for GatedDeltaNetLayer";
+        TM_LOG_FATAL("Unsupported dtype for GatedDeltaNetLayer");
     }
 }
 

@@ -8,6 +8,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/utils/constant.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -81,7 +82,7 @@ __global__ void sampling(const T*       logits,
 }
 
 template<typename T>
-cudaError_t invokeSampling(SamplingParams& params, cudaStream_t stream)
+void invokeSampling(SamplingParams& params, cudaStream_t stream)
 {
     const int grid  = params.batch_size;
     const int block = 256;
@@ -95,9 +96,9 @@ cudaError_t invokeSampling(SamplingParams& params, cudaStream_t stream)
                                                    (T*)params.sampled_logprobs,
                                                    params.sampled_indexes,
                                                    params.sampled_nums);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
+template void invokeSampling<float>(SamplingParams& params, cudaStream_t stream);
 
 }  // namespace turbomind

@@ -11,6 +11,7 @@
 #include "src/turbomind/kernels/core/meta.h"
 
 #include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
 
@@ -84,10 +85,10 @@ __global__ void RMSNorm(T*       dst,
 
 }  // namespace kernel
 
-cudaError_t invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
     if (x.size() == 0) {
-        return cudaSuccess;
+        return;
     }
 
     TM_CHECK(x.ndim() == 2);
@@ -117,7 +118,7 @@ cudaError_t invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float e
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 namespace kernel {
@@ -182,15 +183,15 @@ __global__ void RMSNormQK(T*       data,  //
 
 }  // namespace kernel
 
-cudaError_t invokeQkRMSNorm(void*        data,
-                            int          ld,
-                            const void*  weight,
-                            DataType     dtype,
-                            int          head_dim,
-                            int          n,
-                            int          token_num,
-                            float        eps,
-                            cudaStream_t stream)
+void invokeQkRMSNorm(void*        data,
+                     int          ld,
+                     const void*  weight,
+                     DataType     dtype,
+                     int          head_dim,
+                     int          n,
+                     int          token_num,
+                     float        eps,
+                     cudaStream_t stream)
 {
 
     auto invoke = [&](auto t) {
@@ -222,10 +223,10 @@ cudaError_t invokeQkRMSNorm(void*        data,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-cudaError_t invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
+void invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t st)
 {
     TM_CHECK(x.ndim() == 3);
 
@@ -266,7 +267,7 @@ cudaError_t invokeRMSNormQK(Tensor& x, const Tensor& w, float eps, cudaStream_t 
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(x.dtype(), invoke);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 // r' <- r + (h + b)
@@ -351,7 +352,7 @@ __global__ void BiasResidualRMSNormKernel(T* __restrict__ residual,
 }
 
 template<class T>
-cudaError_t invokeBiasResidualRMSNorm(
+void invokeBiasResidualRMSNorm(
     T* residual, T* hidden_states, const T* weights, const T* bias, int dims, int num, float eps, cudaStream_t st)
 {
     constexpr int vec_size = 16 / sizeof(T);
@@ -366,41 +367,41 @@ cudaError_t invokeBiasResidualRMSNorm(
                                                                                        num,
                                                                                        eps,
                                                                                        1.f / dims);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeBiasResidualRMSNorm(half*        residual,
-                                               half*        hidden_states,
-                                               const half*  weights,
-                                               const half*  bias,
-                                               int          dims,
-                                               int          num,
-                                               float        eps,
-                                               cudaStream_t st);
+template void invokeBiasResidualRMSNorm(half*        residual,
+                                        half*        hidden_states,
+                                        const half*  weights,
+                                        const half*  bias,
+                                        int          dims,
+                                        int          num,
+                                        float        eps,
+                                        cudaStream_t st);
 
 #if ENABLE_BF16
-template cudaError_t invokeBiasResidualRMSNorm(nv_bfloat16*       residual,
-                                               nv_bfloat16*       hidden_states,
-                                               const nv_bfloat16* weights,
-                                               const nv_bfloat16* bias,
-                                               int                dims,
-                                               int                num,
-                                               float              eps,
-                                               cudaStream_t       st);
+template void invokeBiasResidualRMSNorm(nv_bfloat16*       residual,
+                                        nv_bfloat16*       hidden_states,
+                                        const nv_bfloat16* weights,
+                                        const nv_bfloat16* bias,
+                                        int                dims,
+                                        int                num,
+                                        float              eps,
+                                        cudaStream_t       st);
 #endif
 
-cudaError_t invokeResidualBiasRMSNorm(void*        hidden_states,
-                                      void*        residual,
-                                      const void*  weights,
-                                      const void*  bias,
-                                      DataType     dtype,
-                                      int          dims,
-                                      int          num,
-                                      float        eps,
-                                      cudaStream_t st)
+void invokeResidualBiasRMSNorm(void*        hidden_states,
+                               void*        residual,
+                               const void*  weights,
+                               const void*  bias,
+                               DataType     dtype,
+                               int          dims,
+                               int          num,
+                               float        eps,
+                               cudaStream_t st)
 {
     if (num == 0) {
-        return cudaSuccess;
+        return;
     }
     auto invoke = [&](auto t) {
         using T                = decltype(t);
@@ -418,7 +419,7 @@ cudaError_t invokeResidualBiasRMSNorm(void*        hidden_states,
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(dtype, invoke);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T, class B, int vec_size>
@@ -470,6 +471,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, cudaStream_t st)
         }
     };
     TM_DISPATCH_DTYPES(data.dtype(), invoke0, float, half, nv_bfloat16);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T, int vec_size>
@@ -550,6 +552,7 @@ void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, fl
     };
 
     TM_DISPATCH_PRIMARY_DTYPES(data.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 }  // namespace turbomind

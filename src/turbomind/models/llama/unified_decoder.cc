@@ -104,7 +104,7 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                               stream);
     }
     else {
-        TM_CUDA_CHECK(invokeResidualBiasRMSNorm(hidden_states.raw_data(),
+        TM_SCOPE_CALL(invokeResidualBiasRMSNorm(hidden_states.raw_data(),
                                                 residual.data_or((void*)nullptr),
                                                 weight.raw_data(),
                                                 bias.data_or((void*)nullptr),
@@ -178,7 +178,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    TM_CUDA_CHECK(
+    TM_SCOPE_CALL(
         invokeRMSNorm(local_hidden_states, local_residual, weights.at(0)->self_attn_norm, rmsnorm_eps_, stream));
 
     TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);

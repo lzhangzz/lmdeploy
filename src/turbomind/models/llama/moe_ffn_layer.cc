@@ -67,13 +67,14 @@ Tensor_<float> MoeFfnLayer::Gate(const Tensor& input, const LlamaDenseWeight& ga
     auto& weight = gate.weight;
     TM_CHECK_EQ(input.shape(1), weight.shape(0));
     Tensor_<float> logits{{input.shape(0), weight.shape(1)}, kDEVICE};
-    linear_.Forward(input, gate, logits);
+    TM_SCOPE_CALL(linear_.Forward(input, gate, logits));
     ApplyBias(logits, gate.bias, core::Context::stream().handle());
     return logits;
 }
 
 void MoeFfnLayer::Forward(ForwardParam& p)
 {
+    TM_FUNCTION_SCOPE();
     const int   tokens = p.input.shape(0);
     const auto& moe    = *p.weights;
 
@@ -96,7 +97,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         TM_CHECK_EQ(param_.topk_group, 1);
         const float* correction_bias =
             (moe.score_correction_bias.size() > 0) ? moe.score_correction_bias.data<float>() : nullptr;
-        TM_CUDA_CHECK(invokeMoeGate_NoAuxTC(f2n_.data(),
+        TM_SCOPE_CALL(invokeMoeGate_NoAuxTC(f2n_.data(),
                                             f2E_.data(),
                                             en2f_.data(),
                                             offsets_.data(),
@@ -120,28 +121,28 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
         bool softmax = true;
         if (param_.topk_method == "group_limited_greedy") {
-            TM_CUDA_CHECK(invokeMoeSoftmaxMaskTopKGroups(
+            TM_SCOPE_CALL(invokeMoeSoftmaxMaskTopKGroups(
                 logits.data(), tokens, expert_num, expert_num / param_.n_group, param_.topk_group, st));
             softmax = false;
         }
 
         /// TODO: fix illegal memory access even if NaN are present in logits
-        invokeMoeGate_V2(f2n_.data(),
-                         f2E_.data(),
-                         en2f_.data(),
-                         offsets_.data(),
-                         scales_.data(),
-                         masks_.data(),
-                         accum_.data(),
-                         logits.data(),
-                         tokens,
-                         padded,
-                         expert_num,
-                         param_.experts_per_token,
-                         softmax,
-                         param_.norm_topk_prob,
-                         param_.routed_scale,
-                         st);
+        TM_SCOPE_CALL(invokeMoeGate_V2(f2n_.data(),
+                                       f2E_.data(),
+                                       en2f_.data(),
+                                       offsets_.data(),
+                                       scales_.data(),
+                                       masks_.data(),
+                                       accum_.data(),
+                                       logits.data(),
+                                       tokens,
+                                       padded,
+                                       expert_num,
+                                       param_.experts_per_token,
+                                       softmax,
+                                       param_.norm_topk_prob,
+                                       param_.routed_scale,
+                                       st));
     }
 
     if (is_warm_up_) {
@@ -163,7 +164,7 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
     if (param_.method == MoeParam::kNaive) {
 
-        TM_CUDA_CHECK(invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, st));
+        TM_SCOPE_CALL(invokeMoeDispatch(temp_, p.input, f2n_.data(), param_.experts_per_token, st));
 
         TM_CUDA_CHECK(
             cudaMemcpyAsync(h_offsets_.data(), offsets_.data(), sizeof(int) * (expert_num + 1), cudaMemcpyDefault, st));
@@ -186,13 +187,14 @@ void MoeFfnLayer::Forward(ForwardParam& p)
         auto indices = f2n_.slice(0, tokens * param_.experts_per_token);
         auto offsets = offsets_.slice(0, expert_num + 1);
 
-        Tensor inter = linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_);
+        Tensor inter;
+        TM_SCOPE_CALL(linear_.Forward(p.input, block.fused_gating_intermediate, indices, offsets_, inter));
 
         if (!block.is_fused_silu) {
             Activation(inter, block.fused_gating_intermediate.bias, f2E_, moe.block.act_type, st);
         }
 
-        linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_);
+        TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size_}), block.output, {}, offsets, temp_));
     }
 
     if (moe.shared_gate.weight) {
@@ -202,9 +204,10 @@ void MoeFfnLayer::Forward(ForwardParam& p)
 
 void MoeFfnLayer::Combine(ForwardParam& p)
 {
+    TM_FUNCTION_SCOPE();
     auto& moe = *p.weights;
 
-    TM_CUDA_CHECK(invokeMoeCombine(p.output,
+    TM_SCOPE_CALL(invokeMoeCombine(p.output,
                                    temp_,
                                    p.weights->block.output.bias,
                                    scales_.data(),

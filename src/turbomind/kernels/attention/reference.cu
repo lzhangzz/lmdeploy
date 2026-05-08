@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "reference.h"
+#include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/unfused_attention_kernels.h"
@@ -57,39 +58,39 @@ applyRotaryEmbedding(T* k_cache, int max_k_len, int head_num, int head_dim, floa
 }
 
 template<class T>
-cudaError_t invokeApplyRotaryEmbedding(T*           k_cache,
-                                       int          max_k_len,
-                                       int          head_num,
-                                       int          head_dim,
-                                       float        rope_base,
-                                       int          rope_dim,
-                                       int          batch_size,
-                                       cudaStream_t stream)
+void invokeApplyRotaryEmbedding(T*           k_cache,
+                                int          max_k_len,
+                                int          head_num,
+                                int          head_dim,
+                                float        rope_base,
+                                int          rope_dim,
+                                int          batch_size,
+                                cudaStream_t stream)
 {
     int  threads = 128;
     dim3 blocks(max_k_len, head_num, batch_size);
 
     applyRotaryEmbedding<<<blocks, threads, 0, stream>>>(k_cache, max_k_len, head_num, head_dim, rope_base, rope_dim);
-    return cudaGetLastError();
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template cudaError_t invokeApplyRotaryEmbedding(half*        k_cache,
-                                                int          max_k_len,
-                                                int          head_num,
-                                                int          head_dim,
-                                                float        rope_base,
-                                                int          rope_dim,
-                                                int          batch_size,
-                                                cudaStream_t stream);
+template void invokeApplyRotaryEmbedding(half*        k_cache,
+                                         int          max_k_len,
+                                         int          head_num,
+                                         int          head_dim,
+                                         float        rope_base,
+                                         int          rope_dim,
+                                         int          batch_size,
+                                         cudaStream_t stream);
 #if ENABLE_BF16
-template cudaError_t invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
-                                                int          max_k_len,
-                                                int          head_num,
-                                                int          head_dim,
-                                                float        rope_base,
-                                                int          rope_dim,
-                                                int          batch_size,
-                                                cudaStream_t stream);
+template void invokeApplyRotaryEmbedding(nv_bfloat16* k_cache,
+                                         int          max_k_len,
+                                         int          head_num,
+                                         int          head_dim,
+                                         float        rope_base,
+                                         int          rope_dim,
+                                         int          batch_size,
+                                         cudaStream_t stream);
 #endif
 
 template<class T>
@@ -240,6 +241,7 @@ void Reference<T>::Reshape(size_t max_q_len,
     kv_head_num_ = kv_head_num;
     batch_size_  = batch_size;
     window_size_ = window_size;
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<class T>
@@ -317,7 +319,7 @@ void Reference<T>::Execute(
     params.k_length        = max_k_len_;
     params.num_heads       = head_num_;
     params.sinks           = sinks;
-    TM_CUDA_CHECK(invokeMaskedSoftmax(params, stream_));
+    TM_SCOPE_CALL(invokeMaskedSoftmax(params, stream_));
 
     alpha = 1.f;
     cublasGemmStridedBatchedEx(cublas_,
@@ -345,7 +347,7 @@ void Reference<T>::Execute(
                                CUBLAS_GEMM_DEFAULT);
 
     // [B, H, Q, D] -> [B, Q, H, D]
-    TM_CUDA_CHECK(invokeTransposeAttentionOutRemovePadding(out_.data().get(),
+    TM_SCOPE_CALL(invokeTransposeAttentionOutRemovePadding(out_.data().get(),
                                                            output,
                                                            batch_size_ * max_q_len_,
                                                            batch_size_,
@@ -356,6 +358,7 @@ void Reference<T>::Execute(
                                                            nullptr,
                                                            0,
                                                            stream_));
+    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template class Reference<half>;

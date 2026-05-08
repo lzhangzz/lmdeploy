@@ -65,6 +65,7 @@ LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): B
 
 void LogitsProcessor::Forward(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     // apply repetition penalty -> ban bad words -> min length penalty -> temperature penalty
     // the order is same with transformerss
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
@@ -91,7 +92,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
     // min length
     if (d.has_min_length_penalty) {
-        TM_CUDA_CHECK(invokeMinLengthPenalty(logits.data(),
+        TM_SCOPE_CALL(invokeMinLengthPenalty(logits.data(),
                                              d.min_lengths_buf.data(),
                                              sequence_length.data(),
                                              vocab_size_padded_,
@@ -103,7 +104,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
     // temperature
     if (d.has_temperature_penalty) {
-        TM_CUDA_CHECK(invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
+        TM_SCOPE_CALL(invokeBatchApplyTemperaturePenalty_v2(logits.data(),  //
                                                             (float*)nullptr,
                                                             d.temperature_buf.data(),
                                                             bsz,
@@ -117,6 +118,7 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
 void LogitsProcessor::Setup(int phase, TensorMap& env)
 {
+    TM_FUNCTION_SCOPE();
     TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
 
     auto& d = *data_.at(phase);
