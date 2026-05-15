@@ -29,7 +29,7 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
 
     constexpr int kPad      = kVec;
     constexpr int kStride   = kTileDim + kPad;
-    constexpr int kThrRows  = 256 / kTileDim;  // threads along dim 0 in phase 1
+    constexpr int kThrRows  = 256 / kTileDim;
     using VecT = uint_bit_t<kVec * sizeof_bits_v<T>>;
 
     T* smem_base = reinterpret_cast<T*>(smem_buf);
@@ -44,10 +44,43 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
         make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}),
                           make_stride(Int<kStride>{}, Int<1>{})));
 
-    // Tile gmem tensors
+    // Decode blockIdx.z → multi-dim batch coord → per-block pointer offsets.
+    // The `if constexpr (kRank > 2)` guard is REQUIRED: cute::crd2idx /
+    // cute::idx2crd are implemented with unary fold expressions of the form
+    // `(... + crd2idx_inner(...))` over the shape's tuple_seq. For rank == 2
+    // the tuple_seq is empty, and a unary `+` fold over an empty pack is
+    // ill-formed C++. Skipping the calls entirely is the simplest fix; the
+    // 2D body below still runs, with src_off/dst_off both 0.
+    constexpr int kRank = rank_v<SrcLayout>;
+    int64_t src_off = 0;
+    int64_t dst_off = 0;
+    if constexpr (kRank > 2) {
+        auto batch_shape   = take<2, kRank>(shape(src));
+        auto src_batch_str = take<2, kRank>(stride(src));
+        auto dst_batch_str = take<2, kRank>(stride(dst));
+        auto batch_coord   = idx2crd(int64_t(blockIdx.z), batch_shape);
+        src_off = crd2idx(batch_coord, batch_shape, src_batch_str);
+        dst_off = crd2idx(batch_coord, batch_shape, dst_batch_str);
+    }
+
+    // 2D view of the (I, J) plane at this batch's offset. The static Int<1>
+    // strides at src dim 0 / dst dim 1 are preserved (they propagate through
+    // shape<0>/stride<0>/shape<1>/stride<1> as compile-time values), keeping
+    // the smem partitioning identical to the original 2D path. For kRank==2
+    // src_off/dst_off are both 0, so this view equals the input tensors.
+    auto src_2d = make_tensor(
+        make_gmem_ptr(raw_pointer_cast(src.data()) + src_off),
+        make_layout(make_shape(shape<0>(src), shape<1>(src)),
+                    make_stride(stride<0>(src), stride<1>(src))));
+    auto dst_2d = make_tensor(
+        make_gmem_ptr(raw_pointer_cast(dst.data()) + dst_off),
+        make_layout(make_shape(shape<0>(dst), shape<1>(dst)),
+                    make_stride(stride<0>(dst), stride<1>(dst))));
+
+    // Tile the 2D plane (existing logic, unchanged from here on)
     auto tiler = make_shape(Int<kTileDim>{}, Int<kTileDim>{});
-    auto src_tiled = tiled_divide(src, tiler);
-    auto dst_tiled = tiled_divide(dst, tiler);
+    auto src_tiled = tiled_divide(src_2d, tiler);
+    auto dst_tiled = tiled_divide(dst_2d, tiler);
 
     // Bounds check on tile grid
     if (blockIdx.y >= size<1>(src_tiled) ||
