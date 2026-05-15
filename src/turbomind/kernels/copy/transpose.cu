@@ -121,6 +121,48 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
 
 }  // namespace kernel
 
+namespace detail {
+
+// Build a CuTe Shape tuple from a runtime ssize_t array.
+template<size_t... Is>
+auto make_cute_shape_impl(const ssize_t* data, std::index_sequence<Is...>)
+{
+    return make_shape(static_cast<int32_t>(data[Is])...);
+}
+
+template<int kRank>
+auto make_cute_shape(const ssize_t* data)
+{
+    return make_cute_shape_impl(data, std::make_index_sequence<kRank>{});
+}
+
+// Per-element selector: Int<1>{} at UnitPos, otherwise dynamic int64_t.
+template<int UnitPos, size_t I>
+auto stride_elem(const ssize_t* data)
+{
+    if constexpr (I == UnitPos) {
+        return cute::Int<1>{};
+    } else {
+        return static_cast<int64_t>(data[I]);
+    }
+}
+
+// Build a CuTe Stride tuple of length kRank with Int<1>{} at UnitPos and
+// dynamic int64_t at all other positions.
+template<int UnitPos, size_t... Is>
+auto make_unit_stride_impl(const ssize_t* data, std::index_sequence<Is...>)
+{
+    return cute::make_stride(stride_elem<UnitPos, Is>(data)...);
+}
+
+template<int UnitPos, int kRank>
+auto make_unit_stride(const ssize_t* data)
+{
+    return make_unit_stride_impl<UnitPos>(data, std::make_index_sequence<kRank>{});
+}
+
+}  // namespace detail
+
 // ============================================================================
 // TransposeCopy: 2D transpose via vectorized smem-staged TiledCopy
 // ============================================================================
@@ -128,41 +170,61 @@ void TransposeCopy(const void* data_a, void* data_b,
                    const Layout& a, const Layout& b,
                    DataType dtype, cudaStream_t stream)
 {
+    const int rank = a.rank();
     int32_t M = static_cast<int32_t>(a.shape(0));
     int32_t N = static_cast<int32_t>(a.shape(1));
 
-    auto dispatch = [&](auto t, auto kvec, auto ktiledim) {
+    auto launch = [&](auto t, auto kvec, auto ktiledim, auto rank_c) {
         using T = decltype(t);
-        constexpr int kVec = decltype(kvec)::value;
+        constexpr int kVec     = decltype(kvec)::value;
         constexpr int kTileDim = decltype(ktiledim)::value;
+        constexpr int kRank    = decltype(rank_c)::value;
 
         if (M % kTileDim || N % kTileDim) {
-            TM_CHECK(0) << "TransposeCopy: shape not divisible by tile " << kTileDim;
+            TM_CHECK(0) << "TransposeCopy: shape (" << M << ", " << N
+                        << ") not divisible by tile " << kTileDim;
             return;
         }
 
+        auto data_shape  = detail::make_cute_shape<kRank>(a.shape().data());
+        auto src_strides = detail::make_unit_stride<0, kRank>(a.stride().data());
+        auto dst_strides = detail::make_unit_stride<1, kRank>(b.stride().data());
+
+        auto src_gmem = make_tensor(
+            make_gmem_ptr(reinterpret_cast<const T*>(data_a)),
+            make_layout(data_shape, src_strides));
+        auto dst_gmem = make_tensor(
+            make_gmem_ptr(reinterpret_cast<T*>(data_b)),
+            make_layout(data_shape, dst_strides));
+
+        int64_t total_batch = 1;
+        for (int i = 2; i < kRank; ++i) total_batch *= a.shape(i);
+
         constexpr int smem_bytes = 2 * kTileDim * (kTileDim + kVec) * sizeof(T);
-
         dim3 grid(static_cast<uint32_t>(N / kTileDim),
-                  static_cast<uint32_t>(M / kTileDim));
-
-        auto src_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<const T*>(data_a)),
-            make_layout(make_shape(M, N),
-                              make_stride(Int<1>{}, a.stride(1))));
-
-        auto dst_gmem = make_tensor(make_gmem_ptr(reinterpret_cast<T*>(data_b)),
-            make_layout(make_shape(M, N),
-                              make_stride(b.stride(0), Int<1>{})));
+                  static_cast<uint32_t>(M / kTileDim),
+                  static_cast<uint32_t>(total_batch));
 
         kernel::TransposeCopyKernel<kTileDim, kVec>
             <<<grid, 256, smem_bytes, stream>>>(src_gmem, dst_gmem);
     };
 
+    auto dispatch_rank = [&](auto t, auto kvec, auto ktiledim) {
+        switch (rank) {
+            case 2: return launch(t, kvec, ktiledim, std::integral_constant<int, 2>{});
+            case 3: return launch(t, kvec, ktiledim, std::integral_constant<int, 3>{});
+            case 4: return launch(t, kvec, ktiledim, std::integral_constant<int, 4>{});
+            default:
+                TM_CHECK(0) << "TransposeCopy: rank " << rank << " not supported";
+                return;
+        }
+    };
+
     switch (byte_size(dtype)) {
-        case 1: return dispatch(uint8_t{},  Int<4>{}, Int<64>{});
-        case 2: return dispatch(uint16_t{}, Int<4>{}, Int<64>{});
-        case 4: return dispatch(uint32_t{}, Int<2>{}, Int<32>{});
-        case 8: return dispatch(uint64_t{}, Int<1>{}, Int<32>{});
+        case 1: return dispatch_rank(uint8_t{},  Int<16>{}, Int<64>{});
+        case 2: return dispatch_rank(uint16_t{}, Int<8>{},  Int<64>{});
+        case 4: return dispatch_rank(uint32_t{}, Int<4>{},  Int<32>{});
+        case 8: return dispatch_rank(uint64_t{}, Int<2>{},  Int<32>{});
         default:
             TM_CHECK(0) << "TransposeCopy: unsupported element size " << byte_size(dtype);
             break;
