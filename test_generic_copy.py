@@ -250,6 +250,22 @@ def main():
         else:
             all_passed = False
 
+    # --- Batched transpose throughput sweep ---
+    sweep_batched = []
+    for (b_, m, n) in [(8, 1024, 1024), (32, 512, 512), (8, 4096, 128)]:
+        numel = b_ * m * n
+        size_label = f"{numel // (1024 * 1024)}M" if numel >= 1024 * 1024 else f"{numel // 1024}K"
+        shape_label = f"{b_}x{m}x{n}"
+
+        total += 1
+        ok, bench = run_test(f"batched-trans {size_label} ({shape_label})",
+                             _rand(b_, m, n).transpose(1, 2))
+        if ok:
+            passed += 1
+            sweep_batched.append((shape_label, *bench))
+        else:
+            all_passed = False
+
     # --- Throughput summary table ---
     print(f"\n{'=' * 60}")
     print(f"Throughput Summary (dtype={args.dtype}, GB/s):")
@@ -260,6 +276,9 @@ def main():
         print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
     print("  Transpose:")
     for shape, gc, pt, pct in sweep_trans:
+        print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
+    print("  Batched transpose:")
+    for shape, gc, pt, pct in sweep_batched:
         print(f"  {shape:<14} {gc:>12.1f} {pt:>12.1f} {pct:>7.1f}%")
 
     # --- Negative strides ---
