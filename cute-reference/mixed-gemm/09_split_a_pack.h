@@ -69,24 +69,23 @@ unpack_u4_to_bf16(uint32_t packed, nv_bfloat16 out[8])
 // where eff_zero = bf16(z_int + 128) with z_int the uint4 zero point — the −128
 // from the iter-08 lop3 bias is folded into eff_zero on the host side.
 //
-// The 8 register values per thread per k_block span 4 distinct M rows:
-//   regs {0,2}: M = m_0          (use lo_pair_*)
-//   regs {1,3}: M = m_0 + 4      (use lo_pair_*)
-//   regs {4,6}: M = m_0 + 32     (use hi_pair_*)
-//   regs {5,7}: M = m_0 + 36     (use hi_pair_*)
+// CuTe ALayout_64x16 (K-major codomain): per warpgroup, each thread holds 8 BF16
+// values covering exactly 2 distinct M rows × 4 K cols. Empirically verified:
+//   regs {0, 1, 4, 5}: M = m_lo  (where m_lo = (local_tid / 4) % 8 + 16*(local_tid/32))
+//   regs {2, 3, 6, 7}: M = m_hi  (where m_hi = m_lo + 8)
 // After lop3, the four bf16x2 halves h[0..3] are:
-//   h[0] = bf16x2(reg0, reg1) → both use lo_pair_*
-//   h[1] = bf16x2(reg2, reg3) → both use lo_pair_*
-//   h[2] = bf16x2(reg4, reg5) → both use hi_pair_*
-//   h[3] = bf16x2(reg6, reg7) → both use hi_pair_*
+//   h[0] = bf16x2(reg0, reg1) → both M = m_lo  (use *_lo pair)
+//   h[1] = bf16x2(reg2, reg3) → both M = m_hi  (use *_hi pair)
+//   h[2] = bf16x2(reg4, reg5) → both M = m_lo  (use *_lo pair)
+//   h[3] = bf16x2(reg6, reg7) → both M = m_hi  (use *_hi pair)
 //
-// Pair format: bf16x2 packed as uint32 with .x in low halfword, .y in high halfword:
-//   lo_*_pair.x = value for M = m_0          ; lo_*_pair.y = value for M = m_0 + 4
-//   hi_*_pair.x = value for M = m_0 + 32     ; hi_*_pair.y = value for M = m_0 + 36
+// Pair format: bf16x2 with the SAME bf16 broadcast in both halves, e.g.
+// scale_lo_pair = bf16x2(scale[m_lo], scale[m_lo]). The caller broadcasts at
+// SZ-refresh time.
 __device__ void
 unpack_dequant_to_bf16(uint32_t packed,
-                      uint32_t lo_scale_pair, uint32_t lo_zero_pair,
-                      uint32_t hi_scale_pair, uint32_t hi_zero_pair,
+                      uint32_t scale_lo_pair, uint32_t zero_lo_pair,
+                      uint32_t scale_hi_pair, uint32_t zero_hi_pair,
                       nv_bfloat16 out[8])
 {
     static constexpr uint32_t TEMPLATE = 0x43004300;  // bf162(128, 128)
@@ -100,14 +99,14 @@ unpack_dequant_to_bf16(uint32_t packed,
     asm volatile("lop3.b32 %0, %1, %2, %3, %4;" : "=r"(h[3]) : "r"(packed >> 12), "n"(MASK), "n"(TEMPLATE), "n"(immLut));
 
     nv_bfloat162* h2 = reinterpret_cast<nv_bfloat162*>(out);
-    h2[0] = __hsub2(h2[0], reinterpret_cast<nv_bfloat162 const&>(lo_zero_pair));
-    h2[1] = __hsub2(h2[1], reinterpret_cast<nv_bfloat162 const&>(lo_zero_pair));
-    h2[2] = __hsub2(h2[2], reinterpret_cast<nv_bfloat162 const&>(hi_zero_pair));
-    h2[3] = __hsub2(h2[3], reinterpret_cast<nv_bfloat162 const&>(hi_zero_pair));
-    h2[0] = __hmul2(h2[0], reinterpret_cast<nv_bfloat162 const&>(lo_scale_pair));
-    h2[1] = __hmul2(h2[1], reinterpret_cast<nv_bfloat162 const&>(lo_scale_pair));
-    h2[2] = __hmul2(h2[2], reinterpret_cast<nv_bfloat162 const&>(hi_scale_pair));
-    h2[3] = __hmul2(h2[3], reinterpret_cast<nv_bfloat162 const&>(hi_scale_pair));
+    h2[0] = __hsub2(h2[0], reinterpret_cast<nv_bfloat162 const&>(zero_lo_pair));   // M=m_lo
+    h2[1] = __hsub2(h2[1], reinterpret_cast<nv_bfloat162 const&>(zero_hi_pair));   // M=m_hi
+    h2[2] = __hsub2(h2[2], reinterpret_cast<nv_bfloat162 const&>(zero_lo_pair));   // M=m_lo
+    h2[3] = __hsub2(h2[3], reinterpret_cast<nv_bfloat162 const&>(zero_hi_pair));   // M=m_hi
+    h2[0] = __hmul2(h2[0], reinterpret_cast<nv_bfloat162 const&>(scale_lo_pair));
+    h2[1] = __hmul2(h2[1], reinterpret_cast<nv_bfloat162 const&>(scale_hi_pair));
+    h2[2] = __hmul2(h2[2], reinterpret_cast<nv_bfloat162 const&>(scale_lo_pair));
+    h2[3] = __hmul2(h2[3], reinterpret_cast<nv_bfloat162 const&>(scale_hi_pair));
 }
 
 // SharedStorage for pack kernel: A smem (1 stage) + TMA mbarrier
