@@ -267,3 +267,45 @@ uint4 (4× smaller) → dequantize in registers via lop3 I2F → WGMMA.
 - Performance at 4096^3: **704 TFLOP/s** (86.7% of cuBLAS 813 TFLOP/s)
 - Performance at 8192^3: **699 TFLOP/s** (94.4% of cuBLAS 740 TFLOP/s)
 - vs iter 07: 683 TFLOP/s (86.1%) at 4096^3, 667 TFLOP/s (96.1%) at 8192^3
+
+
+### Iteration 09: Real asymmetric W4A16 example
+
+W4A16, group size 128 along K. Per-(M, K_group) bf16 scales and zero points applied
+on the fly via a separate per-group smem pipeline. Mock end-to-end (random uint4
+weights + random bf16 scales/zeros).
+
+**Files:** `cute-reference/mixed-gemm/09_*`
+
+**Design spec:** [`docs/superpowers/specs/2026-05-15-iter09-w4a16-design.md`](docs/superpowers/specs/2026-05-15-iter09-w4a16-design.md)
+
+**Implemented:**
+
+1. **`unpack_dequant_to_bf16`** (in `09_split_a_pack.h`): replaces iter-08
+   `unpack_u4_to_bf16`. Same lop3 step, but the `−128` is folded into the host-side
+   `eff_zero` so the dequant is `(bf16(q+128) − eff_zero) · scale`. Per thread per
+   k_block: 4 lop3 + 4 HSUB2 + 4 HMUL2.
+
+2. **SZ smem pipeline** (in WGMMA kernel): second `PipelineTmaAsync<2>` with period
+   1 group = 2 k_tiles, 512 B/stage. Producer issues one `SM90_BULK_COPY_G2S` per
+   group; consumer waits at every group boundary, does 2 LDS.32 + 8 register ops
+   (mask/shift broadcast) into 4 cached `bf16x2` pairs, releases the stage.
+
+3. **K-major register layout** (corrected during implementation): CuTe `ALayout_64x16`
+   has a K-major codomain, so each thread holds 8 BF16 values covering only 2
+   distinct M rows (`m_lo`, `m_hi = m_lo + 8`) × 4 K cols. The naive M-major
+   reading from the layout strides was wrong; verified empirically by filling
+   `A[m,*] = m % 16` and reading back `tCrA`. Per-thread `m_lo` derivation:
+   `m_lo = wg_id * 64 + (local_tid / 4) % 8 + 16 * (local_tid / 32)`.
+
+4. **Host harness**: `generate_and_pack_sz` produces random bf16 scales in
+   `[0.25, 4.0]`, random uint4 zeros in `[0, 15]`, and writes the interleaved
+   `(scale, eff_zero)` device buffer in one pass. CPU reference matmul-accumulates
+   in fp32 from raw integer `q`, `z` values. Tolerance: `max_err < K · 0.05`.
+
+**Validated:**
+- Correctness: all 9 correctness tests PASS (K bumped to ≥128 for group-size precondition); max errors 2–5 vs tolerances 6–51
+- Performance at 4096³: **669,906 GFLOP/s** (83.8% of cuBLAS 799,577 GFLOP/s)
+- Performance at 8192³: **663,151 GFLOP/s** (98.3% of cuBLAS 674,710 GFLOP/s)
+- vs iter 08: 704 TFLOP/s (86.7%) at 4096³, 699 TFLOP/s (94.4%) at 8192³
+- Modest drop at 4096³ (~5% absolute); parity-or-better at 8192³ relative to cuBLAS
