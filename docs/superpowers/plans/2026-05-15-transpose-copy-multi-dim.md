@@ -56,15 +56,29 @@ Add these checks immediately after the existing 4D check on line 198. Insert in 
     # --- 4D transformations ---
     print("\n4D transformations:")
     check("4D slice", _rand(4, 8, 32, 64)[:, :, ::3, :])
+    # Coalesces to rank-3 dispatch (B and H stride-proportional in both src and dst).
     check("4D batched transpose (B,H,M,N)->(B,H,N,M)",
           _rand(4, 8, 64, 128).transpose(2, 3))
+    # J originates at position != 1 after the src-stride-ascending sort.
     check("4D non-adjacent transpose (B,M,H,N)->(B,N,H,M)",
           _rand(4, 64, 8, 128).transpose(1, 3))
-    check("4D batched transpose with sliced batch (non-coalesceable)",
+    # Sliced inner batch dim — strides are still proportional, so this
+    # also coalesces to rank-3 dispatch.
+    check("4D batched transpose with sliced inner batch",
           _rand(4, 16, 64, 128)[:, ::2, :, :].transpose(2, 3))
+    # Sliced OUTER batch dim — the slice doubles the outer stride only;
+    # 8 * a.stride(2) != a.stride(3) after permute, so coalesce_batch_dims
+    # leaves it rank 4. This is the test that actually exercises the rank-4
+    # kernel instantiation.
+    check("4D batched transpose with sliced outer batch (rank-4 dispatch)",
+          _rand(8, 8, 64, 128)[::2, :, :, :].transpose(2, 3))
 ```
 
-- [ ] **Step 2: Run the test, confirm new cases PASS via fallback**
+- [ ] **Step 2: Confirm a free GPU is available**
+
+Use the `get_gpu_usage` MCP tool. If no GPU is free, wait or coordinate; `test_generic_copy.py` allocates ~16MB on `cuda:0`.
+
+- [ ] **Step 3: Run the test, confirm new cases PASS via fallback**
 
 Run:
 
@@ -75,7 +89,7 @@ PYTHONPATH=$PWD/lmdeploy:$PWD/build/lib python test_generic_copy.py
 
 Expected: every new case prints `[PASS]` (the `VectorizedCopy` fallback handles them today). If any of the new cases prints `[FAIL]` *before* any kernel changes, that indicates a pre-existing bug in `VectorizedCopy` for that layout — investigate before continuing.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add test_generic_copy.py
@@ -164,7 +178,7 @@ git commit -m "refactor(copy): add coalesce_batch_dims helper (unused)"
 
 ## Task 3: Make `TransposeCopyKernel` rank-generic
 
-Add batch offset decoding at the top of the kernel and refactor the existing 2D body to operate on a 2D view sliced at the per-block batch offset. For rank == 2, `take<2,2>` yields an empty tuple, `crd2idx` returns 0, and the kernel reduces exactly to today's path.
+Add batch offset decoding at the top of the kernel and refactor the existing 2D body to operate on a 2D view sliced at the per-block batch offset. For rank == 2, the batch decode is skipped via `if constexpr (kRank > 2)` (CuTe's `crd2idx` / `idx2crd` use unary fold expressions that are ill-formed for empty packs), and `src_off`/`dst_off` stay 0 so the 2D body sees the input tensors unchanged.
 
 **Files:**
 
@@ -204,19 +218,29 @@ TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
                           make_stride(Int<kStride>{}, Int<1>{})));
 
     // Decode blockIdx.z → multi-dim batch coord → per-block pointer offsets.
-    // For rank == 2, batch_shape is empty, batch_coord is empty, and offsets are 0.
+    // The `if constexpr (kRank > 2)` guard is REQUIRED: cute::crd2idx /
+    // cute::idx2crd are implemented with unary fold expressions of the form
+    // `(... + crd2idx_inner(...))` over the shape's tuple_seq. For rank == 2
+    // the tuple_seq is empty, and a unary `+` fold over an empty pack is
+    // ill-formed C++. Skipping the calls entirely is the simplest fix; the
+    // 2D body below still runs, with src_off/dst_off both 0.
     constexpr int kRank = rank_v<SrcLayout>;
-    auto batch_shape   = take<2, kRank>(shape(src));
-    auto src_batch_str = take<2, kRank>(stride(src));
-    auto dst_batch_str = take<2, kRank>(stride(dst));
-    auto batch_coord   = idx2crd(int64_t(blockIdx.z), batch_shape);
-    int64_t src_off = crd2idx(batch_coord, batch_shape, src_batch_str);
-    int64_t dst_off = crd2idx(batch_coord, batch_shape, dst_batch_str);
+    int64_t src_off = 0;
+    int64_t dst_off = 0;
+    if constexpr (kRank > 2) {
+        auto batch_shape   = take<2, kRank>(shape(src));
+        auto src_batch_str = take<2, kRank>(stride(src));
+        auto dst_batch_str = take<2, kRank>(stride(dst));
+        auto batch_coord   = idx2crd(int64_t(blockIdx.z), batch_shape);
+        src_off = crd2idx(batch_coord, batch_shape, src_batch_str);
+        dst_off = crd2idx(batch_coord, batch_shape, dst_batch_str);
+    }
 
     // 2D view of the (I, J) plane at this batch's offset. The static Int<1>
-    // strides at src dim 0 / dst dim 1 are preserved (they're part of the
-    // CuTe stride tuple's static type), keeping the smem partitioning
-    // identical to the original 2D path.
+    // strides at src dim 0 / dst dim 1 are preserved (they propagate through
+    // shape<0>/stride<0>/shape<1>/stride<1> as compile-time values), keeping
+    // the smem partitioning identical to the original 2D path. For kRank==2
+    // src_off/dst_off are both 0, so this view equals the input tensors.
     auto src_2d = make_tensor(
         make_gmem_ptr(raw_pointer_cast(src.data()) + src_off),
         make_layout(make_shape(shape<0>(src), shape<1>(src)),
@@ -293,8 +317,10 @@ git add src/turbomind/kernels/copy/transpose.cu
 git commit -m "refactor(copy): rank-generic TransposeCopyKernel body
 
 Decode blockIdx.z into per-block pointer offsets via idx2crd/crd2idx
-on the batch dims (positions 2..rank-1). For rank == 2 the batch tuple
-is empty and offsets are zero, reducing to the original 2D path."
+on the batch dims (positions 2..rank-1). The rank == 2 path skips
+this decode via 'if constexpr (kRank > 2)' (CuTe's idx2crd/crd2idx
+use unary fold expressions that are ill-formed for empty packs);
+src_off/dst_off stay 0 and the 2D body sees the input tensors."
 ```
 
 ---
@@ -491,7 +517,16 @@ Replace lines 53–65 (from the `// --- 2D transpose detection ---` comment thro
     if (is_transpose) {
         if (J != 1) { a = a.transpose(1, J); b = b.transpose(1, J); }
         std::tie(a, b) = coalesce_batch_dims(a, b);
-        if (a.rank() <= 4) {
+
+        // Compute total batch (product of post-coalesce batch dims, positions ≥ 2).
+        int64_t total_batch = 1;
+        for (int i = 2; i < a.rank(); ++i) total_batch *= a.shape(i);
+
+        // Dispatch only when the kernel can handle it:
+        //   1. post-coalesce rank ≤ 4 (only 2/3/4 are instantiated in TransposeCopy host),
+        //   2. total_batch ≤ gridDim.z hardware limit (65535 on all current archs).
+        // Otherwise, fall through to VectorizedCopy.
+        if (a.rank() <= 4 && total_batch <= 65535) {
             TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
             return;
         }
@@ -620,12 +655,12 @@ git commit -m "test(copy): add batched-transpose throughput sweep"
 - Spec: "find J at any position, treat others as batch" → Task 5 (`for i in [1, rank-1]: if b.stride(i)==1: J=i`).
 - Spec: "swap J to position 1, canonical form" → Task 5 (`if (J != 1) a = a.transpose(1, J)`).
 - Spec: "joint batch coalescing" → Task 2 (`coalesce_batch_dims`), wired in Task 5.
-- Spec: "rank-generic kernel body via take/idx2crd/crd2idx" → Task 3.
+- Spec: "rank-generic kernel body via take/idx2crd/crd2idx" → Task 3 (with the empty-tuple `if constexpr` guard noted below).
 - Spec: "host dispatch over rank ∈ {2,3,4}" → Task 4.
 - Spec: "12 kernel instantiations" → Task 4 (4 dtypes × 3 ranks switch).
 - Spec: "static Int<1> stride at I (src dim 0) and J (dst dim 1)" → Task 4 (`make_unit_stride<0,…>` and `<1,…>`).
 - Spec: "per-dtype tile size (64 for ≤2-byte, 32 otherwise)" → Task 5 (replaces hardcoded 32).
-- Spec: "fall through to VectorizedCopy when J not found / rank>4 / not aligned" → Task 5 (the `if (is_transpose)` guard around the dispatch + the rank cap).
+- Spec: "fall through to VectorizedCopy when J not found / rank>4 / not aligned" → Task 5 (the `if (is_transpose)` guard around the dispatch, the post-coalesce rank cap, **and the new `total_batch ≤ 65535` guard for `gridDim.z` overflow**).
 - Spec: "regression tests cover 3D batched / 4D batched / non-adjacent J / non-coalesceable batch / unaligned" → Task 1.
 - Spec: "throughput sweep entry" → Task 6.
 
@@ -642,3 +677,25 @@ All spec requirements covered.
 - `detail::make_cute_shape<kRank>(const ssize_t*)` declared in Task 4, called once in Task 4. Note: this is a local copy of the same-named helper in `copy.cu`'s `detail` namespace — they're separate translation units, so no link conflict.
 
 All consistent.
+
+**4. CuTe API verification (caught during code review):**
+
+Verified by reading CUTLASS sources at `build/_deps/repo-cutlass-src/include/cute/`:
+
+- `cute::take<B, E>(t)` returns elements `[B, E)`; for `B == E` returns an empty tuple via `apply` over an empty index sequence. ✓
+- `cute::crd2idx(coord, shape, stride)` for tuple-tuple-tuple uses `crd2idx_ttt` which expands a unary fold `(... + crd2idx(get<Is>(...)...))` over `tuple_seq<Coord>`. **Empty `seq<>` makes this fold ill-formed (unary `+` fold has no identity).** Mirror situation in `crd2idx_itt` for "int tuple tuple": the template signature is `seq<I0, Is...>` requiring at least one element.
+- Same restriction applies transitively to `cute::idx2crd(idx, shape)` over an empty shape — it internally calls `crd2idx(idx, shape, basis)`.
+- **Mitigation:** Task 3's kernel guards the batch decode with `if constexpr (kRank > 2)` and initializes `src_off = dst_off = 0` for the rank-2 path. The 2D body works on the `src_2d`/`dst_2d` views (which equal the input tensors when offsets are 0).
+- `cute::raw_pointer_cast(iter_adaptor<I, D>)` recursively unwraps to the raw `T*`. `tensor.data()` returns `engine().begin()` (a `gmem_ptr<T>`, which is an `iter_adaptor`). So `raw_pointer_cast(src.data()) + src_off` gives a valid `T const*`. ✓
+- `gridDim.z` hardware limit is 65535 across all currently-supported NVIDIA architectures. Task 5's dispatcher checks `total_batch <= 65535` before dispatching; pathological large batches fall through to `VectorizedCopy` rather than triggering `cudaErrorInvalidConfiguration` at launch. ✓
+
+**5. Trace check on representative inputs:**
+
+- 2D `_rand(64, 128).t()` (existing test): post-normalization a=(128,64):(1,128), b=(128,64):(64,1). New dispatcher finds J=1, no swap, coalesce no-op, rank=2 ≤ 4, total_batch=1. Dispatches with kRank=2. Kernel: `if constexpr (kRank > 2)` skipped, src_off=dst_off=0, src_2d/dst_2d equal src/dst. Same code as today. ✓
+- 3D `_rand(8, 64, 128).transpose(1, 2)`: post-normalization a=(128,64,8):(1,128,8192), b=(128,64,8):(64,1,8192). Find J=1, no swap, coalesce_batch_dims returns rank 3 (only 1 batch dim, no merge). rank=3 ≤ 4, total_batch=8 ≤ 65535. Dispatches with kRank=3. ✓
+- 4D `_rand(4, 8, 64, 128).transpose(2, 3)`: post-normalization a=(128,64,8,4):(1,128,8192,65536), b=(128,64,8,4):(64,1,8192,65536). Find J=1, no swap, coalesce_batch_dims merges positions 2,3 (8 * 8192 = 65536 = a.stride(3) ✓ and same for b) → rank 3 (single batch of 32). total_batch=32, dispatches with kRank=3. ✓
+- 4D `_rand(4, 64, 8, 128).transpose(1, 3)` (non-adjacent J): src layout after permute (sort by src stride asc) puts the dst-stride-1 dim at position J ≠ 1. Dispatcher finds J via the linear scan, swaps to position 1, dispatches. ✓
+- 4D `_rand(8, 8, 64, 128)[::2, :, :, :].transpose(2, 3)` (sliced outer batch — rank-4 dispatch): src = (4,8,128,64):(131072,8192,1,128). After permute by [2,3,1,0]: a=(128,64,8,4):(1,128,8192,131072), b=(128,64,8,4):(64,1,8192,65536). coalesce_batch_dims at i=3: a.stride(3)=131072, but ash.back()*ast.back()=8\*8192=65536 ≠ 131072 — **does NOT merge**. Result rank 4, total_batch=32. Dispatches with kRank=4. ✓
+- 3D unaligned `_rand(8, 60, 100).transpose(1, 2)`: 60 % 32 ≠ 0 (and 60 % 64 ≠ 0). `is_transpose` becomes false, falls through to `VectorizedCopy`. ✓
+
+All traces match expectations.
