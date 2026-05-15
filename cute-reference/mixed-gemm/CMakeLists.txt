@@ -15,6 +15,8 @@ set(MIXED_GEMM_TARGETS
     07_bf16_gemm_sm90_split_a_wgmma
     08_bf16_gemm_sm90_split_a_pack
     08_bf16_gemm_sm90_split_a_wgmma
+    09_bf16_gemm_sm90_split_a_pack
+    # TODO(iter09 Task 2): add 09_bf16_gemm_sm90_split_a_wgmma here when its .cu is created
 )
 
 foreach(target ${MIXED_GEMM_TARGETS})
