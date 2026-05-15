@@ -216,6 +216,10 @@ def main():
     # kernel instantiation.
     check("4D batched transpose with sliced outer batch (rank-4 dispatch)",
           _rand(8, 8, 64, 128)[::2, :, :, :].transpose(2, 3))
+    # Coalesces to total_batch > 65535 → falls through to VectorizedCopy.
+    # Used to crash before the dispatcher's a.rank() fix.
+    check("4D batched transpose, large coalesced batch (>65535, fall-through)",
+          _rand(256, 256, 64, 128).transpose(2, 3))
 
     # --- Combined operations ---
     print("\nCombined operations:")

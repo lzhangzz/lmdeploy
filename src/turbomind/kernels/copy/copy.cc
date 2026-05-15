@@ -101,21 +101,47 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
 
     const DataType dtype = src.dtype();
 
-    // --- 2D transpose detection ---
-    constexpr int kTileDim = 32;
-    bool is_2d_transpose = (rank == 2) &&
-        (a.stride(0) == 1) && (b.stride(1) == 1) &&
-        (a.stride(1) > 1) && (b.stride(0) > 1);
+    // --- Transpose detection (2D + batched) ---
+    // After the src-stride-ascending sort above, position 0 holds the smallest
+    // src stride (innermost). We dispatch to TransposeCopy when:
+    //   - position 0 has src stride 1 (call it I),
+    //   - some position J ∈ [1, rank-1] has dst stride 1,
+    //   - both shape(0) and shape(J) are divisible by the per-dtype tile.
+    // Then swap J → position 1 to get canonical (I=0, J=1, batch...) and
+    // coalesce adjacent batch dims that are proportional in both a and b.
+    const int kTileDim = byte_size(dtype) <= 2 ? 64 : 32;
 
-    if (is_2d_transpose &&
-        a.shape(0) % kTileDim == 0 && a.shape(1) % kTileDim == 0)
-    {
-        TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
-        return;
+    int J = -1;
+    for (int i = 1; i < rank; ++i) {
+        if (b.stride(i) == 1) { J = i; break; }
+    }
+
+    bool is_transpose =
+        (J >= 1) &&
+        (a.stride(0) == 1) && (a.stride(J) > 1) && (b.stride(0) > 1) &&
+        (a.shape(0) % kTileDim == 0) &&
+        (a.shape(J) % kTileDim == 0);
+
+    if (is_transpose) {
+        if (J != 1) { a = a.transpose(1, J); b = b.transpose(1, J); }
+        std::tie(a, b) = coalesce_batch_dims(a, b);
+
+        // Compute total batch (product of post-coalesce batch dims, positions ≥ 2).
+        int64_t total_batch = 1;
+        for (int i = 2; i < a.rank(); ++i) total_batch *= a.shape(i);
+
+        // Dispatch only when the kernel can handle it:
+        //   1. post-coalesce rank ≤ 4 (only 2/3/4 are instantiated in TransposeCopy host),
+        //   2. total_batch ≤ gridDim.z hardware limit (65535 on all current archs).
+        // Otherwise, fall through to VectorizedCopy.
+        if (a.rank() <= 4 && total_batch <= 65535) {
+            TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
+            return;
+        }
     }
 
     // --- Vectorized / scalar copy ---
-    VectorizedCopy(src.raw_data(), dst.raw_data(), a, b, rank, dtype, stream);
+    VectorizedCopy(src.raw_data(), dst.raw_data(), a, b, a.rank(), dtype, stream);
 }
 
 }  // namespace turbomind::core
