@@ -192,10 +192,30 @@ def main():
     # --- 3D transformations ---
     print("\n3D transformations:")
     check("permute (2,0,1)", _rand(16, 32, 64).permute(2, 0, 1))
+    check("3D batched transpose (B,M,N)->(B,N,M)",
+          _rand(8, 64, 128).transpose(1, 2))
+    check("3D batched transpose unaligned (must fall through)",
+          _rand(8, 60, 100).transpose(1, 2))
 
     # --- 4D transformations ---
     print("\n4D transformations:")
     check("4D slice", _rand(4, 8, 32, 64)[:, :, ::3, :])
+    # Coalesces to rank-3 dispatch (B and H stride-proportional in both src and dst).
+    check("4D batched transpose (B,H,M,N)->(B,H,N,M)",
+          _rand(4, 8, 64, 128).transpose(2, 3))
+    # J originates at position != 1 after the src-stride-ascending sort.
+    check("4D non-adjacent transpose (B,M,H,N)->(B,N,H,M)",
+          _rand(4, 64, 8, 128).transpose(1, 3))
+    # Sliced inner batch dim — strides are still proportional, so this
+    # also coalesces to rank-3 dispatch.
+    check("4D batched transpose with sliced inner batch",
+          _rand(4, 16, 64, 128)[:, ::2, :, :].transpose(2, 3))
+    # Sliced OUTER batch dim — the slice doubles the outer stride only;
+    # 8 * a.stride(2) != a.stride(3) after permute, so coalesce_batch_dims
+    # leaves it rank 4. This is the test that actually exercises the rank-4
+    # kernel instantiation.
+    check("4D batched transpose with sliced outer batch (rank-4 dispatch)",
+          _rand(8, 8, 64, 128)[::2, :, :, :].transpose(2, 3))
 
     # --- Combined operations ---
     print("\nCombined operations:")
