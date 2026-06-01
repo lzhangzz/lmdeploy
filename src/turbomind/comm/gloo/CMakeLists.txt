@@ -16,6 +16,18 @@ set(BUILD_TEST OFF)
 set(USE_IBVERBS OFF)
 FetchContent_MakeAvailable(gloo)
 
+# GCC 15+ no longer provides stdint types transitively; gloo/types.h uses them directly.
+set(_GLOO_TYPES_H "${gloo_SOURCE_DIR}/gloo/types.h")
+file(READ "${_GLOO_TYPES_H}" _GLOO_TYPES_H_CONTENT)
+if(NOT _GLOO_TYPES_H_CONTENT MATCHES "#include <cstdint>")
+  string(REPLACE "#include \"gloo/common/common.h\""
+               "#include \"gloo/common/common.h\"\n\n#include <cstdint>"
+               _GLOO_TYPES_H_CONTENT "${_GLOO_TYPES_H_CONTENT}")
+  file(WRITE "${_GLOO_TYPES_H}" "${_GLOO_TYPES_H_CONTENT}")
+endif()
+unset(_GLOO_TYPES_H)
+unset(_GLOO_TYPES_H_CONTENT)
+
 # gloo build doesn't add include directories as a target property...
 target_include_directories(gloo PUBLIC
     $<BUILD_INTERFACE:${gloo_SOURCE_DIR}>
