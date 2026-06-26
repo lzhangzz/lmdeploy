@@ -279,10 +279,10 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
 > → `Buffer_<Sequence*>`, `alpha` → `inflight_input_len`, interactive guard
 > dropped); the attention layer borrows the encoder's mrope tensors via an
 > `env.try_("mrope_length")` source branch. Verified on H200/tp1: text/SSM
-> regression (`Qwen3.5-27B`) PASS, and a best-effort VL run (same model on the
-> in-repo `resources/batch_memory.png`, since GitHub was unreachable) correctly
-> read the chart's axis labels — full encoder + embed-merge + mrope path. See the
-> plan's "W1 execution notes" for details.
+> regression (`Qwen3.5-27B`) PASS, and VL runs of the same model passed
+> end-to-end — an accurate description of `tiger.jpeg` and correct reading of the
+> `resources/batch_memory.png` chart axis labels (full encoder + embed-merge +
+> mrope path). See the plan's "W1 execution notes" for details.
 
 ## 9. Out of scope / deferred
 

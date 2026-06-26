@@ -588,13 +588,16 @@ W1 landed and is verified. Deviations from the predicted plan:
    `PatchEmbedding`/`PatchMultimodalEmbedding` body, the `Sequence`-based
    request iteration, and the absence of any `r.session` clone all landed via
    the Phase-1 auto-merge — W1 only verified it, no new edits.
-4. **VL verification used an in-repo image, not the GitHub tiger.** The sandbox
-   could not reach `raw.githubusercontent.com`, so the best-effort VL check ran
-   `Qwen/Qwen3.5-27B` (itself a VLM) on `resources/batch_memory.png`. The model
-   accurately described it as a line chart and read the `batch_size` X-axis
-   values (8/16/32/48) — confirming the encoder, the image-embedding merge, and
-   the mrope env-source positions are all correct end-to-end. (The throwaway VL
-   harness needed `enable_metrics=False`; `prometheus_client` is not installed.)
+4. **VL verification passed end-to-end on two images.** `Qwen/Qwen3.5-27B`
+   (itself a VLM) was driven through the lmdeploy VL pipeline. On the canonical
+   `tiger.jpeg` it produced an accurate, detailed description (a tiger lying on
+   grass, orange fur with vertical black stripes, white chest/muzzle). An
+   earlier run on the in-repo `resources/batch_memory.png` correctly read the
+   chart's `batch_size` X-axis values (8/16/32/48). Both confirm the encoder,
+   the image-embedding merge, and the mrope env-source positions are correct
+   end-to-end. (The sandbox could not reach `raw.githubusercontent.com`, so the
+   tiger image was supplied manually; the throwaway VL harness needed
+   `enable_metrics=False` because `prometheus_client` is not installed.)
 
 ---
 
