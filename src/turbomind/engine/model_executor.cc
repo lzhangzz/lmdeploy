@@ -54,25 +54,38 @@ struct ModelExecutor::Impl {
         }
     }
 
+    static void RunCopies(std::vector<ResolvedCopy>& copies)
+    {
+        for (const auto& c : copies) {
+            Copy(Buffer_<uint8_t>{static_cast<uint8_t*>(c.src), static_cast<ssize_t>(c.bytes), kDEVICE},
+                 Buffer_<uint8_t>{static_cast<uint8_t*>(c.dst), static_cast<ssize_t>(c.bytes), kDEVICE});
+        }
+        copies.clear();
+    }
+
     void Run(BatchData& d)
     {
         TM_FUNCTION_SCOPE();
-        auto batch = &d;
 
         BatchCopy copy;
         TensorMap env{{"batch", d.buf()}, {"copy", copy.buf()}};
 
+        // Restore copies first so kPrepare may post-process restored content
+        // (a module reset overrides whatever a whole-object restore wrote).
+        RunCopies(d.restore_copies);
+
         model_.Run(BatchOp::kPrepare, d.phase, env);
-        // dbg(copy);
         copy.Run();
 
         model_.Run(BatchOp::kForward, d.phase, env);
 
         model_.Run(BatchOp::kUnprep, d.phase, env);
-        // dbg(copy);
         copy.Run();
 
-        // TM_CHECK(0);
+        // Publication copies last: kUnprep is the module's final chance to
+        // finalize frontier contents before the snapshot.
+        RunCopies(d.publish_copies);
+
         AnomalyHandler::instance().Summarize([](...) {});
         AnomalyHandler::instance().Reset();
     }

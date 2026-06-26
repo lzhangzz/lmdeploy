@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/gateway.h"
 
 #include "src/turbomind/models/language_model.h"
@@ -27,8 +28,9 @@ public:
     }
 
     Engine(EngineParam        param,
+           ObjectAllocator    alloc,
+           CacheRegistry      cache_registry,
            LanguageModel      model,
-           const ModelWeight& weights,
            Context&           ctx,
            Gateway&           gateway,
            int                device_id,

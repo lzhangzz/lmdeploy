@@ -14,9 +14,6 @@ add_library(models STATIC
         model_weight.cc
         model_root.cc
         llama/LlamaLinear.cu
-        llama/BlockManager.cc
-        llama/BlockTrie.cc
-        llama/SequenceManager.cc
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
         llama/unified_decoder.cc
@@ -31,6 +28,7 @@ set_property(TARGET models PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(models PUBLIC
         generation
         core
+        memory
         gemm2
         rms_norm
         CUDA::cublas

@@ -11,6 +11,7 @@ namespace turbomind {
 
 using std::vector;
 using std::shared_ptr;
+using std::unique_ptr;
 
 struct OutputProcessor::Impl {
 
@@ -30,12 +31,19 @@ struct OutputProcessor::Impl {
         }
     }
 
+    struct OutputRange {
+        std::shared_ptr<Request> request;
+        int                      type;
+        Interval                 src;
+        Interval                 dst;
+    };
+
     struct Data {
         Interval full_states;  // requested range for full hidden states
         Interval full_logits;  // requested range for full logits
 
-        vector<std::tuple<int, int, Interval, Interval>> output_states;
-        vector<std::tuple<int, int, Interval, Interval>> output_logits;
+        vector<OutputRange> output_states;
+        vector<OutputRange> output_logits;
     };
 
     vector<Data> data_;
@@ -61,7 +69,7 @@ struct OutputProcessor::Impl {
 
     void Add(int phase, TensorMap& env)
     {
-        const Buffer_<RequestCache*> rc = env.at("requests").buffer();
+        const Buffer_<Sequence*> rc = env.at("requests").buffer();
 
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *rc[i];
@@ -84,15 +92,16 @@ struct OutputProcessor::Impl {
     {
         auto& d = data_.at(phase);
 
-        const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
+        // const auto& rc = env.at("batch").data<BatchData*>()[0]->rc;
+        Buffer_<Sequence*> rc = env.at("requests").buffer();
 
         vector<Interval> all_tokens;
         vector<Interval> sel_tokens;
         for (int i = 0; i < rc.size(); ++i) {
             using Size = Interval::Size;
             auto& c    = *rc[i];
-            all_tokens.emplace_back(c.history_len + c.alpha, Size{c.input_len});
-            sel_tokens.emplace_back(c.history_len + c.alpha + c.input_len - 1, Size{1});
+            all_tokens.emplace_back(c.history_len + c.inflight_input_len, Size{c.input_len});
+            sel_tokens.emplace_back(c.history_len + c.inflight_input_len + c.input_len - 1, Size{1});
             if (!c.generating) {
                 sel_tokens.back() = {};
             }
@@ -125,7 +134,7 @@ struct OutputProcessor::Impl {
                     type = 2;
                 }
                 if (type) {
-                    d.output_states.emplace_back(i, type, m.src, m.dst);
+                    d.output_states.push_back({c.req, type, m.src, m.dst});
                     // dbg(type, &m.src, &m.dst);
                 }
             }
@@ -139,7 +148,7 @@ struct OutputProcessor::Impl {
                     type = 2;
                 }
                 if (type) {
-                    d.output_logits.emplace_back(i, type, m.src, m.dst);
+                    d.output_logits.push_back({c.req, type, m.src, m.dst});
                 }
             }
             offset += c.input_len;
@@ -158,20 +167,19 @@ struct OutputProcessor::Impl {
     }
 
     template<class Ranges>
-    void OutputHiddenStates(const Ranges& ranges, const Tensor& h, int type, const vector<shared_ptr<RequestCache>>& rs)
+    void OutputHiddenStates(const Ranges& ranges, const Tensor& h, int type)
     {
-        for (const auto& [i, t, src, dst] : ranges) {
-            if (t == type) {
-                auto& out = rs[i]->req->outputs.at("last_hidden_state");
+        for (const auto& r : ranges) {
+            if (r.type == type) {
+                auto& out = r.request->outputs.at("last_hidden_state");
                 if (tp_rank_ == 0) {
-                    // dbg(&src, &dst);
-                    Copy(h.slice(src.begin(), (int)src.size()), out.slice(dst.begin(), (int)dst.size()));
+                    Copy(h.slice(r.src.begin(), (int)r.src.size()), out.slice(r.dst.begin(), (int)r.dst.size()));
                 }
             }
         }
     }
 
-    void ComputeAndOutputLogits(const Data& data, const Tensor& h, const vector<shared_ptr<RequestCache>>& rs)
+    void ComputeAndOutputLogits(const Data& data, const Tensor& h)
     {
         const int step_size = max_logits_len_;
 
@@ -189,7 +197,7 @@ struct OutputProcessor::Impl {
                 // dbg(&chunk);
                 // Compute & output full logits by chunks
                 auto logits = lm_head_(h.slice(chunk.begin(), (int)chunk.size()));
-                success     = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2, rs);
+                success     = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2);
                 if (success) {  // all requests satisfied, exit early
                     break;
                 }
@@ -200,29 +208,29 @@ struct OutputProcessor::Impl {
     }
 
     template<class Ranges>
-    void OutputLogits(Ranges& ranges_, const Tensor& l, int type, const vector<shared_ptr<RequestCache>>& rs)
+    void OutputLogits(Ranges& ranges_, const Tensor& l, int type)
     {
         // Coroutine frame
         int  p      = 0;
         auto ranges = ranges_;
 
-        TM_CHECK(OutputLogitsImpl(ranges, p, l, /* base */ 0, type, rs));
+        TM_CHECK(OutputLogitsImpl(ranges, p, l, /* base */ 0, type));
     }
 
     template<class Ranges>
-    bool OutputLogitsImpl(
-        Ranges& ranges, int& p, const Tensor& l, int base, int type, const vector<shared_ptr<RequestCache>>& rs)
+    bool OutputLogitsImpl(Ranges& ranges, int& p, const Tensor& l, int base, int type)
     {
         // dbg("OutputLogitsImpl");
         const auto stream = core::Context::stream().handle();
         for (; p < ranges.size(); ++p) {
-            if (auto& [i, t, src, dst] = ranges[p]; t == type) {
-                Tensor&        out   = rs[i]->req->outputs.at("logits");
+            auto& r = ranges[p];
+            if (r.type == type) {
+                Tensor&        out   = r.request->outputs.at("logits");
                 const DataType dtype = out.dtype();
-                TM_CHECK_LE(base, src.begin());  // logical error
-                if (Interval msrc = src & Interval{base, Interval::Size{(int)l.shape(0)}}) {
+                TM_CHECK_LE(base, r.src.begin());  // logical error
+                if (Interval msrc = r.src & Interval{base, Interval::Size{(int)l.shape(0)}}) {
                     const int tokens = (int)msrc.size();
-                    Interval  mdst{dst.begin(), msrc.size()};
+                    Interval  mdst{r.dst.begin(), msrc.size()};
                     // TODO: support strides in `DLTensor`, so that batched 1D copy can be used
                     if (tp_rank_ == 0) {
                         // dbg(&mdst, &msrc, tokens, out, base, l);
@@ -237,11 +245,11 @@ struct OutputProcessor::Impl {
                                     0);
                     }
                     // move to next request if they are empty after the erosion
-                    src = -(int)msrc.size() | src;
-                    dst = -(int)mdst.size() | dst;
+                    r.src = -(int)msrc.size() | r.src;
+                    r.dst = -(int)mdst.size() | r.dst;
                 }
-                // dbg(&src, (int)src.size(), &dst, (int)dst.size());
-                if (src) {
+                // dbg(&r.src, (int)r.src.size(), &r.dst, (int)r.dst.size());
+                if (r.src) {
                     // request not compeleted, suspend and wait for next chunk
                     return false;
                 }
@@ -253,24 +261,23 @@ struct OutputProcessor::Impl {
     void OutputHiddenStatesAndLogits(int phase, TensorMap& env, int type)
     {
         auto& d = data_.at(phase);
-        auto& b = *env.at("batch").data<BatchData*>()[0];
 
         if (type == 2 && d.full_states) {
             auto hidden_states = env.consume("full_hidden_states");
             if (!d.output_states.empty()) {
-                OutputHiddenStates(d.output_states, hidden_states, 2, b.rc);
+                OutputHiddenStates(d.output_states, hidden_states, 2);
             }
             if (!d.output_logits.empty() && d.full_logits) {
-                ComputeAndOutputLogits(d, hidden_states, b.rc);
+                ComputeAndOutputLogits(d, hidden_states);
             }
         }
 
         if (type == 1) {
             if (!d.output_states.empty()) {
-                OutputHiddenStates(d.output_states, env.at("hidden_states"), 1, b.rc);
+                OutputHiddenStates(d.output_states, env.at("hidden_states"), 1);
             }
             if (!d.output_logits.empty()) {
-                OutputLogits(d.output_logits, env.at("logits"), 1, b.rc);
+                OutputLogits(d.output_logits, env.at("logits"), 1);
             }
         }
     }
