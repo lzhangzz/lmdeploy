@@ -299,6 +299,18 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
 > text regression PASS, ppl smoke (coherent mean-NLL `2.34` < garbled `4.25`), VL
 > regression still PASS. See the plan's "W2 execution notes" for details.
 
+> **W3 execution update.** The cp inference fix (#4619 / `6276b3bd`) required no
+> code changes — three of its four hunks landed byte-for-byte in the structural
+> merge (`cp_utils.cu` `invokeFillNegInfML`, `cp_utils.h` decl, and the 3-line
+> `unified_attention_layer.cc` `attn_cp_size > 1` init in the Clear block), and
+> `cp_utils.cu` is already in the attention CMake target. The fourth hunk (a
+> WARN→INFO `#victim` log in the deleted `SequenceManager.cc`) has no target in the
+> refactored scheduler. cp was verified end-to-end (not deferred): a `tp=2`/`cp=2`
+> run of `Qwen3.5-27B` on 2×H200 (cp is a sub-division of tp) produced coherent
+> output for an async, varying-length batch including an early-finishing sequence —
+> the exact finished-sequence/stale-`partial_ML` path the fix targets. See the
+> plan's "W3 execution notes" for details.
+
 ## 9. Out of scope / deferred
 
 - Reviving `ScheduleMetrics` onto the new scheduler (pre-existing gap from `b189745a`;

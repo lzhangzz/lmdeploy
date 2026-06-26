@@ -686,18 +686,40 @@ Most of #4619 lands clean (`cp_utils.*`) or was taken in Phase 1 (`causal`).
 
 ### Task 4.1: Confirm and finish the cp fix
 
-- [ ] **Step 1: Verify the pieces post-merge:**
+- [x] **Step 1: Verify the pieces post-merge:**
 ```bash
 git grep -n "causal" src/turbomind/kernels/attention/attention_params.h
 ls src/turbomind/kernels/attention/cp_utils.cu src/turbomind/kernels/attention/cp_utils.h
 git grep -n "cp_utils\|causal" src/turbomind/models/llama/unified_attention_layer.cc
 ```
 If `cp_utils.*` weren't auto-added, port them from `git show 6276b3bd`; ensure the 3-line `unified_attention_layer.cc` cp addition survived the Task 1.5 resolution.
-- [ ] **Step 2: Build** (`ninja`). cp end-to-end needs a multi-GPU cp run — best-effort; flag deferred if unavailable.
-- [ ] **Step 3: Commit only if Task 4.1 produced changes:**
+- [x] **Step 2: Build** (`ninja`). cp end-to-end needs a multi-GPU cp run — best-effort; flag deferred if unavailable.
+- [x] **Step 3: Commit only if Task 4.1 produced changes:**
 ```bash
 git add -A && git commit -m "fix(turbomind): carry cp inference fix into merged tree" || echo "nothing to commit"
 ```
+
+### W3 execution notes (deviations from the predicted plan)
+
+1. **Nothing to port — the entire #4619 cp fix landed cleanly in the structural merge.** The
+   reference commit `6276b3bd` had four hunks. Three are present byte-for-byte in our tree:
+   `cp_utils.cu` (`FillNegInfMLKernel` + `invokeFillNegInfML`, `#include <math_constants.h>`),
+   `cp_utils.h` (the `invokeFillNegInfML` decl), and the 3-line call in
+   `unified_attention_layer.cc::Run` — `if (engine_param_.attn_cp_size > 1) invokeFillNegInfML(partial_ML_.data(), partial_ML_.size() / 2, ...)` — correctly placed inside the
+   `if (tmp_attn_)` Clear block after `Clear(split_cnt_)`. `cp_utils.cu` is wired into the
+   attention CMake target, and the W2 build already linked it. So Task 4.1 produced **no code
+   changes** (Step 3 commit was a no-op).
+2. **The fourth hunk (`SequenceManager.cc` WARN→INFO `#victim` log) has no target.** That file
+   was deleted in `memory-1a`; the old victim/scheduling logging does not exist in the refactored
+   scheduler (`git grep "#victim"` is empty). It is a pure log-verbosity tweak with nothing to
+   apply — correctly dropped.
+3. **cp end-to-end was actually verified, not deferred.** With 8 idle H200s available, ran a
+   `cp=2`/`tp=2`/`dp=1` smoke on `Qwen3.5-27B` (attention context-parallel across 2 GPUs, MLP
+   tp=2; `attn_cp_size=2` triggers the fix). Note cp is a sub-division of `tp`, so the valid
+   topology is `tp=2, cp=2` (not `tp=1, cp=2`). Async batch with varying-length generations —
+   including an early-finishing one-word reply (gen=97) — produced coherent output for all
+   prompts with no NaN crash, exercising exactly the finished-sequence/stale-`partial_ML` path
+   the fix addresses.
 
 ---
 
