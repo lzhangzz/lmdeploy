@@ -14,20 +14,16 @@ add_library(models STATIC
         decoder_layer_weight.cc
         model_weight.cc
         model_root.cc
-        # qwen3.5-vit WEIGHT modules are compiled so VLM checkpoints (e.g. Qwen3.5)
-        # load their vision sub-tree; the vision ENCODER + CUDA kernels are deferred
-        # to W1 (the structural merge does not yet thread VisionModel through the engine).
+        vision_model.cc
         qwen3_5vit/qwen3_5vit_block_weight.cc
         qwen3_5vit/qwen3_5vit_weight.cc
-        # TODO(W1): re-enable the vision encoder + kernels.
-        # vision_model.cc
-        # qwen3_5vit/fast_pos_embed.cu
-        # qwen3_5vit/fast_rotary_pos_emb.cu
-        # qwen3_5vit/fused_embed_merge.cu
-        # qwen3_5vit/qkv_preprocess.cu
-        # qwen3_5vit/mrope_position_ids.cu
-        # qwen3_5vit/bias_gelu.cu
-        # qwen3_5vit/qwen3_5vit.cc
+        qwen3_5vit/fast_pos_embed.cu
+        qwen3_5vit/fast_rotary_pos_emb.cu
+        qwen3_5vit/fused_embed_merge.cu
+        qwen3_5vit/qkv_preprocess.cu
+        qwen3_5vit/mrope_position_ids.cu
+        qwen3_5vit/bias_gelu.cu
+        qwen3_5vit/qwen3_5vit.cc
         llama/LlamaLinear.cu
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
@@ -76,15 +72,14 @@ if(BUILD_TEST)
             models
             CUDA::cudart)
 
-    # TODO(W1): re-enable alongside qwen3.5-vit compile units.
-    # add_executable(test_mrope_position_ids
-    #         qwen3_5vit/test_mrope_position_ids.cu)
-    # set_property(TARGET test_mrope_position_ids PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-    # target_link_libraries(test_mrope_position_ids PRIVATE
-    #         models
-    #         attention
-    #         core
-    #         cuda_utils
-    #         fmt::fmt
-    #         CUDA::cudart)
+    add_executable(test_mrope_position_ids
+            qwen3_5vit/test_mrope_position_ids.cu)
+    set_property(TARGET test_mrope_position_ids PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+    target_link_libraries(test_mrope_position_ids PRIVATE
+            models
+            attention
+            core
+            cuda_utils
+            fmt::fmt
+            CUDA::cudart)
 endif()

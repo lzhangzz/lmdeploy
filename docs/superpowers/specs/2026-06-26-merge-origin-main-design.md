@@ -271,6 +271,19 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
   `kernels/norm/CMakeLists.txt` / `python/CMakeLists.txt`; Phase 1 excludes the
   vit-specific units (not the core rope/attention), W1 re-includes them.
 
+> **W1 execution update.** qwen3.5-vit is integrated and verified. The Engine
+> ctor threads only `std::unique_ptr<VisionModel>` (main's `weights` param was
+> dead in our tree — its only consumers, `SequenceManager` and the
+> `has_linear_attention` guard, were removed). The vit `.cc` was translated from
+> main's `RequestCache`/`r.session` model to our `Sequence` (`env.at("requests")`
+> → `Buffer_<Sequence*>`, `alpha` → `inflight_input_len`, interactive guard
+> dropped); the attention layer borrows the encoder's mrope tensors via an
+> `env.try_("mrope_length")` source branch. Verified on H200/tp1: text/SSM
+> regression (`Qwen3.5-27B`) PASS, and a best-effort VL run (same model on the
+> in-repo `resources/batch_memory.png`, since GitHub was unreachable) correctly
+> read the chart's axis labels — full encoder + embed-merge + mrope path. See the
+> plan's "W1 execution notes" for details.
+
 ## 9. Out of scope / deferred
 
 - Reviving `ScheduleMetrics` onto the new scheduler (pre-existing gap from `b189745a`;

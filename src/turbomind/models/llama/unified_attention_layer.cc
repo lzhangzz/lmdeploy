@@ -347,28 +347,40 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         copy(rope_base_buf_, bsz, d.rope_base);
     }
     else if (rope_param_.mrope_mode != MropeMode::kNone) {
-        // Legacy r.inputs mrope path (Python preprocessor). The C++ vision-encoder
-        // env-source branch is added in W1; `d.mrope_*` are allocated at setup.
-        const auto stride = d.mrope_position_ids.stride(0);
-        for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *rc[i];
-            auto& r = *c.req;
-            if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
-                int length                   = pos_ids->shape(0);
-                mrope_length_buf_[i]         = length;
-                mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
-                if (auto o = Interval{0, length} & Interval{c.history_len + c.inflight_input_len, Interval::Size{c.input_len}}) {
-                    copy(pos_ids->data<int>() + o.begin() * 3,
-                         (int)o.size() * 3,
-                         d.mrope_position_ids.data() + i * stride + o.begin() * 3);
+        if (env.try_("mrope_length")) {
+            // The C++ qwen3.5-vit encoder already built the mrope tensors in FastRoPE's
+            // exact (slot-indexed) layout during its kSetup, which runs before this layer's
+            // Setup in the same pass. Borrow them with no copy; they live on the encoder's
+            // per-phase Data (worst-case allocated) so the non-owning views stay valid
+            // through forward.
+            d.mrope_length         = env.at("mrope_length").buffer().borrow();
+            d.mrope_position_delta = env.at("mrope_position_delta").buffer().borrow();
+            d.mrope_position_ids   = env.at("mrope_position_ids").borrow();
+        }
+        else {
+            // Legacy r.inputs mrope path (Python preprocessor); `d.mrope_*` allocated at setup.
+            const auto stride = d.mrope_position_ids.stride(0);
+            for (int i = 0; i < rc.size(); ++i) {
+                auto& c = *rc[i];
+                auto& r = *c.req;
+                if (auto pos_ids = r.inputs.try_("mrope_position_ids")) {
+                    int length                   = pos_ids->shape(0);
+                    mrope_length_buf_[i]         = length;
+                    mrope_position_delta_buf_[i] = *r.inputs.at("mrope_position_delta").data<int>();
+                    if (auto o = Interval{0, length}
+                                 & Interval{c.history_len + c.inflight_input_len, Interval::Size{c.input_len}}) {
+                        copy(pos_ids->data<int>() + o.begin() * 3,
+                             (int)o.size() * 3,
+                             d.mrope_position_ids.data() + i * stride + o.begin() * 3);
+                    }
+                }
+                else {
+                    mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
                 }
             }
-            else {
-                mrope_length_buf_[i] = mrope_position_delta_buf_[i] = 0;
-            }
+            copy(mrope_length_buf_, rc.size(), d.mrope_length);
+            copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
         }
-        copy(mrope_length_buf_, rc.size(), d.mrope_length);
-        copy(mrope_position_delta_buf_, rc.size(), d.mrope_position_delta);
     }
 }
 

@@ -23,6 +23,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 
@@ -301,6 +302,12 @@ void TurboMind::Impl::CreateEngine(int index)
     // create model
     LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
+    // create vision model for VLM checkpoints; null for text-only (no vision sub-tree attached)
+    std::unique_ptr<VisionModel> vision_model;
+    if (auto* vw = weights_[index]->vision_model_ptr()) {
+        vision_model = CreateVisionModel(*vw, param, ctx, phases_);
+    }
+
     cache_registry.RegisterObjectIds(alloc);
 
     // create engine
@@ -308,6 +315,7 @@ void TurboMind::Impl::CreateEngine(int index)
                              std::move(alloc),
                              std::move(cache_registry),
                              std::move(model),
+                             std::move(vision_model),
                              ctx,
                              *gateway_,
                              engine_param_.devices[index],

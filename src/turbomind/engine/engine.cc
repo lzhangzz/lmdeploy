@@ -24,6 +24,7 @@
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/models/language_model.h"
+#include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/models/llama/context_token_resource.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -61,15 +62,16 @@ struct Engine::Impl {
 
     struct State;
 
-    Impl(EngineParam        param,
-         ObjectAllocator    alloc,
-         CacheRegistry      cache_registry,
-         LanguageModel      model,
-         Context&           ctx,
-         Gateway&           gateway,
-         int                device_id,
-         int                queue_id,
-         int                phases);
+    Impl(EngineParam                  param,
+         ObjectAllocator              alloc,
+         CacheRegistry                cache_registry,
+         LanguageModel                model,
+         std::unique_ptr<VisionModel> vision_model,
+         Context&                     ctx,
+         Gateway&                     gateway,
+         int                          device_id,
+         int                          queue_id,
+         int                          phases);
 
     void InternalThreadEntry();
 
@@ -96,6 +98,11 @@ struct Engine::Impl {
 
     void Run(BatchOp op, int phase, Ref<TensorMap> env)
     {
+        // Vision sub-graph runs first so its env outputs (image embeddings,
+        // mrope tensors) are visible to the language model in the same pass.
+        if (vision_model_) {
+            vision_model_->Run(op, phase, env);
+        }
         model_.Run(op, phase, env);
     }
 
@@ -135,8 +142,9 @@ struct Engine::Impl {
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
 
-    LanguageModel      model_;
-    ModelExecutor      executor_;
+    LanguageModel                model_;
+    std::unique_ptr<VisionModel> vision_model_;  // null for text-only checkpoints
+    ModelExecutor                executor_;
 
     std::thread internal_thread_;
 
@@ -192,15 +200,16 @@ Engine::Impl::~Impl()
     }
 }
 
-Engine::Impl::Impl(EngineParam        param,
-                   ObjectAllocator    alloc,
-                   CacheRegistry      cache_registry,
-                   LanguageModel      model,
-                   Context&           ctx,
-                   Gateway&           gateway,
-                   int                device_id,
-                   int                queue_id,
-                   int                phases):
+Engine::Impl::Impl(EngineParam                  param,
+                   ObjectAllocator              alloc,
+                   CacheRegistry                cache_registry,
+                   LanguageModel                model,
+                   std::unique_ptr<VisionModel> vision_model,
+                   Context&                     ctx,
+                   Gateway&                     gateway,
+                   int                          device_id,
+                   int                          queue_id,
+                   int                          phases):
     param_{param},
     gateway_{gateway},
     tp_group_{ctx.comm.h_tp_group},
@@ -221,7 +230,8 @@ Engine::Impl::Impl(EngineParam        param,
                param_.cache_generation_boundary,
                CreateCacheBoundaryPolicy(param_),
                is_warm_up_},
-    model_{std::move(model)}
+    model_{std::move(model)},
+    vision_model_{std::move(vision_model)}
 {
     states_.emplace_back();
 
@@ -229,7 +239,7 @@ Engine::Impl::Impl(EngineParam        param,
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, ctx, device_id_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
 
     if (cache_log_interval_ && tp_rank_ == 0) {
         TM_LOG_WARN("dp{} cache stats:\n{}", dp_rank_, FormatMemoryStats(object_allocator_.Stats()));
@@ -805,20 +815,21 @@ Engine::Engine()                             = default;
 Engine::Engine(Engine&&) noexcept            = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
-Engine::Engine(EngineParam        param,
-               ObjectAllocator    alloc,
-               CacheRegistry      cache_registry,
-               LanguageModel      model,
-               Context&           ctx,
-               Gateway&           gateway,
-               int                device_id,
-               int                dp_rank,
-               int                phases):
-    impl_{std::make_unique<Impl>(
-        param,
+Engine::Engine(EngineParam                  param,
+               ObjectAllocator              alloc,
+               CacheRegistry                cache_registry,
+               LanguageModel                model,
+               std::unique_ptr<VisionModel> vision_model,
+               Context&                     ctx,
+               Gateway&                     gateway,
+               int                          device_id,
+               int                          dp_rank,
+               int                          phases):
+    impl_{std::make_unique<Impl>(param,
                                  std::move(alloc),
                                  std::move(cache_registry),
                                  std::move(model),
+                                 std::move(vision_model),
                                  ctx,
                                  gateway,
                                  device_id,

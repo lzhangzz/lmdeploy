@@ -136,6 +136,8 @@ void UpdateState(Request& r, int status, int seq_len);
 
 struct Sequence;
 
+struct MultiModalData;  // defined in models/vision_model.h
+
 // A scheduler-planned device copy between two cache blocks of the same
 // category. Resolved to pointers on the engine thread at setup and executed
 // as a whole-object copy by the model executor.
@@ -235,6 +237,9 @@ struct Sequence {
 
     std::vector<Tensor> input_embeds;
     std::vector<int>    input_embeds_offsets;
+
+    // persistent per-sequence vision features (qwen3.5-vit, W1)
+    std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
 
     bool is_active   = false;
     bool is_canceled = false;

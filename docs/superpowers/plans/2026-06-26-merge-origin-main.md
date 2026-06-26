@@ -565,6 +565,37 @@ EOF
 )"
 ```
 
+### W1 execution notes (actual outcome vs. predicted)
+
+W1 landed and is verified. Deviations from the predicted plan:
+
+1. **Engine ctor threads only `vision_model`, not main's `weights`.** Task 2.3
+   proposed mirroring main by also adding `const ModelWeight& weights`. In our
+   tree every consumer of that parameter was already removed: main used
+   `weights_` solely to build the `SequenceManager` and the
+   `has_linear_attention` admission guard, both of which were deleted in the
+   structural merge. Adding it would have been a dead member, so the Engine
+   ctor gains `std::unique_ptr<VisionModel> vision_model` only.
+2. **`model_executor.cc` keeps our restore/publish-copy structure.** Main's
+   `ModelExecutor::Run` has no checkpoint copies, so we did not take it
+   wholesale; instead the two `vision_model_->Run(kPrepare/kForward, …)` calls
+   were inserted into our existing `RunCopies(restore)` → kPrepare → kForward →
+   kUnprep → `RunCopies(publish)` body (vision before the language model in each
+   phase). `Engine::Impl::Run` mirrors the same ordering for the engine-thread
+   phases (kAdd/kSetup) so the vit's mrope env tensors are visible to the
+   attention layer's Setup in the same pass.
+3. **Task 2.6 (input_processor multimodal patch) was already complete.** The
+   `PatchEmbedding`/`PatchMultimodalEmbedding` body, the `Sequence`-based
+   request iteration, and the absence of any `r.session` clone all landed via
+   the Phase-1 auto-merge — W1 only verified it, no new edits.
+4. **VL verification used an in-repo image, not the GitHub tiger.** The sandbox
+   could not reach `raw.githubusercontent.com`, so the best-effort VL check ran
+   `Qwen/Qwen3.5-27B` (itself a VLM) on `resources/batch_memory.png`. The model
+   accurately described it as a line chart and read the `batch_size` X-axis
+   values (8/16/32/48) — confirming the encoder, the image-embedding merge, and
+   the mrope env-source positions are all correct end-to-end. (The throwaway VL
+   harness needed `enable_metrics=False`; `prometheus_client` is not installed.)
+
 ---
 
 ## Phase 3 — W2: get_ppl / CE-loss
