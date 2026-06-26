@@ -356,6 +356,36 @@ EOF
 git log --oneline -1 && git status
 ```
 
+### Phase 1 execution notes (actual outcome vs. predicted)
+
+Done in commit `911c745b`. The trial-merge-based predictions diverged in three
+benign ways; recorded here so W1 stays accurate:
+
+1. **`input_processor.cc` (Task 1.6 Step 1):** the body auto-merged cleanly to
+   main's 4-arg `PatchEmbedding` *with* the multimodal embed branch
+   (`PatchMultimodalEmbedding` + `MultiModalEmbeddingData`). Only the include
+   block conflicted. Resolved by keeping `#include vision_model.h` (needed for
+   `MultiModalEmbeddingData`) and dropping the deleted `SequenceManager.h`. The
+   multimodal branch is inert in Phase 1 (nothing produces env `"multimodal"`),
+   so W1 Task 2.6 mostly verifies/extends it rather than writing it from scratch.
+2. **Session/kill leaks (Task 1.8):** none existed. `SessionParam` auto-merged to
+   ours (`{id, step}`), only `Cancel` is bound (no `End`/kill), and
+   `model_request.{cc,h}` carry only the legitimate `session.id/step`,
+   `r->mm_inputs`, and get_ppl `ce_loss` alloc. Verified by grep; nothing removed.
+3. **Qwen3.5 is a VLM → vision *weights* load in Phase 1 (supersedes Task 1.6
+   Step 3 + part of Task 1.7).** Loading any Qwen3.5 checkpoint builds the vision
+   weight sub-tree via C++ module handles, which requires `ModelRoot`'s vision
+   child; with `model_root.h` force-ours'd the loader hit
+   `add_child_raw` on `None`. Fix: restore `model_root.h` (vision child) and
+   compile the two **standalone** vision weight units
+   (`qwen3_5vit_weight.cc`, `qwen3_5vit_block_weight.cc`; they only pull
+   `linear/layer_norm/attention_weight` + `registry`). The vision **encoder +
+   CUDA kernels + `vision_model.cc`** stay excluded; `model_executor.h`/engine
+   stay vision-unaware, so the encoder is never created/run for text. This let
+   the unmodified `test_turbomind_model.py` load Qwen3.5-27B and verify the
+   text/gated-deltanet path (256 coherent tokens, tp=1 H200). W1 picks up from
+   here (Task 2.2 updated accordingly).
+
 ---
 
 ## Phase 2 — W1: qwen3.5-vit integration
@@ -380,12 +410,16 @@ struct MultiModalData;  // defined in models/vision_model.h
 
 ### Task 2.2: Restore main's vision-aware headers + CMake vit sources
 
-- [ ] **Step 1: Restore main's versions** of the two headers force-ours'd in Phase 1 (`input_processor.h` is already main's from the merge — leave it):
+> Phase 1 already restored `model_root.h` (vision child) and compiled the two
+> standalone vision **weight** units so Qwen3.5 VLM checkpoints load their vision
+> sub-tree (see "Phase 1 execution notes"). W1 only restores the remaining
+> vision-aware header and re-enables the vision **encoder + kernels**.
+
+- [ ] **Step 1: Restore main's `model_executor.h`** (still force-ours'd in Phase 1; `input_processor.h`/`model_root.h` are already main's):
 ```bash
-git checkout origin/main -- src/turbomind/engine/model_executor.h \
-  src/turbomind/models/model_root.h
+git checkout origin/main -- src/turbomind/engine/model_executor.h
 ```
-- [ ] **Step 2: Uncomment every `TODO(merge-W1)`** added in Task 1.7 (CMake vit `.cc`/`.cu` sources). The vit `bind.cpp` bindings were never commented (header-only, kept in Phase 1) — nothing to do there.
+- [ ] **Step 2: Uncomment the remaining `TODO(W1)`** vit sources in `src/turbomind/models/CMakeLists.txt` — the vision encoder + CUDA kernels (`vision_model.cc`, `qwen3_5vit/*.cu`, `qwen3_5vit/qwen3_5vit.cc`) and the `test_mrope_position_ids` test. The two weight `.cc` units are already compiled; the vit `bind.cpp` bindings were never commented (header-only) — nothing to do there.
 - [ ] **Step 3: Do not build yet** — engine threading (2.3–2.8) must land first.
 
 ### Task 2.3: Thread `VisionModel` through the Engine

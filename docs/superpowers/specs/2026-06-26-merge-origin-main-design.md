@@ -126,6 +126,17 @@ callers/headers stay self-consistent.
 
 ### Conflict-resolution map (Phase 1)
 
+> **Phase 1 execution update (commit `911c745b`).** Three rows below changed in
+> practice — full detail in the plan's "Phase 1 execution notes". In short:
+> (1) `model_root.h` was **restored to main** (vision child) and the two
+> standalone vit **weight** units (`qwen3_5vit_weight.cc`,
+> `qwen3_5vit_block_weight.cc`) are **compiled** in Phase 1, because Qwen3.5 is a
+> VLM whose loader builds the vision weight sub-tree; the vision **encoder +
+> kernels + `vision_model.cc`** stay excluded. (2) `bind.cpp`/`model_request`
+> had **no** session/kill leaks to strip (auto-merge already produced our shape).
+> (3) `input_processor.cc` kept the auto-merged multimodal embed body (inert),
+> resolving only the include block (keep `vision_model.h`, drop `SequenceManager.h`).
+
 | File | Phase-1 resolution |
 |---|---|
 | `engine.h` / `engine.cc` | Take **ours** (text-only ctor; drops vision threading, `seq_mgr_` metrics == the #4615 health change, and main's `Validate` lambda/`kill_reqs`). Vision re-added W1; `return_ppl` clause W2. |
