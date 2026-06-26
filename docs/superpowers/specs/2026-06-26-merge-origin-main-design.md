@@ -311,8 +311,29 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
 > the exact finished-sequence/stale-`partial_ML` path the fix targets. See the
 > plan's "W3 execution notes" for details.
 
+> **W4 execution update.** Final phase done. All clean-add commits from
+> `origin/main` are in the tree (`origin/main` is the merge-base — i.e. fully an
+> ancestor of `HEAD`). The health-endpoint surface (`async_engine.health_probe`,
+> `EngineHealthMonitor`, turbomind `get_health_status`/`ScheduleMetrics` binding)
+> is present. TurboMind `UpdateScheduleMetrics` is still stubbed, so
+> `GetScheduleMetrics` returns null → Python `None`; turbomind.py
+> `get_schedule_metrics()` previously dereferenced that `None` and broke `/health`.
+> Added two minimal None-guards (graceful degradation, **not** metrics revival):
+> `get_schedule_metrics()` returns `None` when the backend has no metrics, and
+> `metrics_processor.update_schedule_stats()` skips on `None`. With these, the probe
+> reports healthy-when-idle (matching the documented "empty metrics" behavior).
+> Clean rebuild (`ninja -t clean && ninja`, 482 targets) green; final text/SSM
+> verification on `Qwen3.5-27B` PASS. See the plan's "W4 execution notes" for details.
+
 ## 9. Out of scope / deferred
 
-- Reviving `ScheduleMetrics` onto the new scheduler (pre-existing gap from `b189745a`;
-  W4, optional).
+- **Reviving `ScheduleMetrics` onto the new scheduler** (pre-existing gap from
+  `b189745a`; `Engine::Impl::UpdateScheduleMetrics` is a stub). Consumers degrade
+  gracefully (health probe = healthy-when-idle; metrics logger skips schedule stats),
+  but the `/health` scheduler-stall detection and the Prometheus schedule gauges are
+  inert until metrics are wired onto the new scheduler. Not required by any merged
+  feature.
 - Any revival of stateful sessions / interactive mode (§4 — permanently removed).
+- **Verified, not deferred:** VL (W1, `tiger.jpeg` + `batch_memory.png`), get_ppl/CE
+  (W2, ppl smoke), and cp multi-GPU (W3, `tp=2`/`cp=2` on 2×H200) were all confirmed
+  end-to-end on `Qwen3.5-27B`.

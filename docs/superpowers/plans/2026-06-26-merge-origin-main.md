@@ -727,14 +727,38 @@ git add -A && git commit -m "fix(turbomind): carry cp inference fix into merged 
 
 ### Task 5.1: Health endpoint & misc clean adds
 
-- [ ] **Step 1: Confirm the Python health-endpoint + other clean-add commits merged**; no action unless a build/import breaks. Note: TurboMind `ScheduleMetrics` is stubbed (Phase 1) — the health probe sees empty metrics; reviving metrics onto the new scheduler is deferred (spec §9).
+- [x] **Step 1: Confirm the Python health-endpoint + other clean-add commits merged**; no action unless a build/import breaks. Note: TurboMind `ScheduleMetrics` is stubbed (Phase 1) — the health probe sees empty metrics; reviving metrics onto the new scheduler is deferred (spec §9).
 
 ### Task 5.2: Final pass
 
-- [ ] **Step 1: Clean rebuild** to catch stale objects: `cd build && ninja -t clean && ninja`.
-- [ ] **Step 2: Final text/SSM verification** (Task 1.10 command) — PASS required.
-- [ ] **Step 3: Record deferred items** in spec §9 (metrics revival; VL verification if no model was available; cp multi-GPU verification).
-- [ ] **Step 4: Confirm history**: `git log --oneline --graph -8` shows the merge commit + W1/W2/(W3) feature commits.
+- [x] **Step 1: Clean rebuild** to catch stale objects: `cd build && ninja -t clean && ninja`.
+- [x] **Step 2: Final text/SSM verification** (Task 1.10 command) — PASS required.
+- [x] **Step 3: Record deferred items** in spec §9 (metrics revival; VL verification if no model was available; cp multi-GPU verification).
+- [x] **Step 4: Confirm history**: `git log --oneline --graph -8` shows the merge commit + W1/W2/(W3) feature commits.
+
+### W4 execution notes (deviations from the predicted plan)
+
+1. **All clean adds confirmed merged.** `git merge-base HEAD origin/main` == `origin/main`,
+   i.e. `origin/main` is fully an ancestor of `HEAD` (`911c745b`), so every `origin/main`
+   commit — health endpoint (#4615), Mixtral (#4623), the PyTorch-only ssm scheduler fix
+   (#4691), etc. — is in the tree. Nothing to port.
+2. **Small graceful-degradation fix for the stubbed health metrics (deviation from "no action").**
+   The plan predicted "the health probe sees empty metrics," but `UpdateScheduleMetrics` is a
+   stub → `GetScheduleMetrics` returns a null `shared_ptr` → Python `None`, and turbomind.py
+   `get_schedule_metrics()` dereferenced that `None`, so `/health` actually *errored* (caught →
+   "unhealthy") instead of degrading. The `async_engine.health_probe` already handles
+   `schedule_metrics is None` (healthy-when-idle), so the only gap was upstream. Added two
+   minimal None-guards — `turbomind.py get_schedule_metrics()` returns `None` when the backend
+   has none, and `metrics_processor.update_schedule_stats()` returns early on `None`. This is
+   graceful degradation, **not** metrics revival (still deferred, spec §9).
+3. **Import check caveat.** `lmdeploy.serve.openai.api_server` import needs `fastapi`, which is
+   not installed in this env; `py_compile` confirms it is syntactically valid, and all core
+   modules (`turbomind`, `metrics_processor`, `async_engine`, `pipeline`, `messages`) import
+   cleanly.
+4. **Verification.** Clean rebuild (`ninja -t clean && ninja`) — 482/482 targets green (only the
+   pre-existing `DLDeviceType` ODR warning). Final text/SSM run on `Qwen3.5-27B` (`tp 1`, 256
+   tokens) — coherent PASS. VL (W1), ppl (W2), and cp (W3) already verified end-to-end, so the
+   only deferred item is `ScheduleMetrics` revival.
 
 ---
 

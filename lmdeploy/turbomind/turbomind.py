@@ -395,6 +395,11 @@ class TurboMind:
     def get_schedule_metrics(self):
         # TODO: support dp
         tm_metrics = self.model_comm.get_schedule_metrics(0)
+        if tm_metrics is None:
+            # ScheduleMetrics is not yet wired onto the new scheduler (metrics revival is
+            # deferred). Report no metrics so consumers (health probe / metrics logger)
+            # degrade gracefully instead of dereferencing a missing metrics object.
+            return None
         return ScheduleMetrics(active_seqs=tm_metrics.active_seqs,
                                waiting_seqs=tm_metrics.waiting_seqs,
                                total_blocks=tm_metrics.total_blocks,
