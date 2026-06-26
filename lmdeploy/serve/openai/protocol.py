@@ -50,11 +50,28 @@ class ModelList(BaseModel):
     data: list[ModelCard] = []
 
 
+class PromptTokensDetails(BaseModel):
+    """Prompt token usage details."""
+
+    cached_tokens: int = 0
+
+
 class UsageInfo(BaseModel):
     """Usage information."""
     prompt_tokens: int = 0
     total_tokens: int = 0
     completion_tokens: int | None = 0
+    prompt_tokens_details: PromptTokensDetails | None = None
+
+    @classmethod
+    def build(cls, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> 'UsageInfo':
+        """Build OpenAI-compatible usage with prefix-cache details."""
+        return cls(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        )
 
 
 class Function(BaseModel):
@@ -81,6 +98,18 @@ class ToolChoice(BaseModel):
     type: Literal['function'] = Field(default='function', examples=['function'])
 
 
+class AllowedTools(BaseModel):
+    """Constrains the tools available to the model to a pre-defined set."""
+    mode: Literal['auto', 'required']
+    tools: list[dict[str, Any]]
+
+
+class AllowedToolChoice(BaseModel):
+    """Allowed tool choice definition."""
+    type: Literal['allowed_tools'] = 'allowed_tools'
+    allowed_tools: AllowedTools
+
+
 class StreamOptions(BaseModel):
     """The stream options."""
     include_usage: bool | None = False
@@ -105,6 +134,11 @@ class ResponseFormat(BaseModel):
     regex_schema: str | None = None
 
 
+# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
+ImageDataInputItem = str | dict
+ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
+
+
 class ChatCompletionRequest(BaseModel):
     """Chat completion request."""
     model: str
@@ -113,7 +147,9 @@ class ChatCompletionRequest(BaseModel):
     temperature: float | None = 0.7
     top_p: float | None = 1.0
     tools: list[Tool] | None = Field(default=None, examples=[None])
-    tool_choice: ToolChoice | Literal['auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    tool_choice: ToolChoice | AllowedToolChoice | Literal[
+        'auto', 'required', 'none'] = Field(default='auto', examples=['none'])
+    parallel_tool_calls: bool | None = True
     logprobs: bool | None = False
     top_logprobs: int | None = None
     n: int | None = 1
@@ -153,6 +189,7 @@ class ChatCompletionRequest(BaseModel):
     min_p: float = 0.0
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
+    return_logprob: bool | None = False
     include_stop_str_in_output: bool | None = False
     # kwargs for chat template renderer
     chat_template_kwargs: dict[str, Any] | None = Field(
@@ -169,6 +206,25 @@ class ChatCompletionRequest(BaseModel):
     mm_processor_kwargs: dict[str, Any] | None = Field(
         default=None,
         description=('Additional kwargs to pass to the HF processor'),
+    )
+    # Extended input fields from /generate endpoint.
+    # input_ids and image_data are fallback inputs — they are only used when
+    # messages is empty/None/''. When messages is non-empty, it takes priority.
+    input_ids: list[int] | None = Field(
+        default=None,
+        description=('Token IDs as input. Only used when messages is empty. '
+                     'Mutually exclusive with non-empty messages.'),
+    )
+    image_data: ImageDataFormat | None = Field(
+        default=None,
+        examples=[None],
+        description=('Image data for multimodal input. Only used alongside input_ids '
+                     'when messages is empty. Mutually exclusive with non-empty messages. '
+                     'Can be a URL/base64 string, a dict, or a list of these.'),
+    )
+    return_routed_experts: bool | None = Field(
+        default=False,
+        description=('Whether to return MoE routed expert indices in the response.'),
     )
 
 
@@ -200,7 +256,6 @@ class ChatMessage(BaseModel):
     """Chat messages."""
     role: str
     content: str | None = None
-    gen_tokens: list[int] | None = None
     reasoning_content: str | None = Field(default=None, examples=[None])
     tool_calls: list[ToolCall] | None = Field(default=None, examples=[None])
 
@@ -234,7 +289,10 @@ class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
     logprobs: ChoiceLogprobs | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
+    output_ids: list[int] | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -254,7 +312,7 @@ class DeltaFunctionCall(BaseModel):
 
 # a tool call delta where everything is optional
 class DeltaToolCall(BaseModel):
-    id: str = Field(default_factory=lambda: f'chatcmpl-tool-{shortuuid.random()}')
+    id: str | None = None
     type: Literal['function'] | None = 'function'
     index: int
     function: DeltaFunctionCall | None = None
@@ -265,7 +323,6 @@ class DeltaMessage(BaseModel):
     role: str | None = None
     content: str | None = None
     reasoning_content: str | None = None
-    gen_tokens: list[int] | None = None
     tool_calls: list[DeltaToolCall] | None = None
 
 
@@ -274,7 +331,10 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: ChoiceLogprobs | None = None
-    finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
+    output_token_logprobs: list[tuple[float, int]] | None = None
+    output_ids: list[int] | None = None
+    finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
+    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -325,7 +385,6 @@ class CompletionRequest(BaseModel):
     top_k: int | None = 40  # for opencompass
     seed: int | None = None
     min_p: float = 0.0
-    return_token_ids: bool | None = False
 
 
 class CompletionResponseChoice(BaseModel):
@@ -333,7 +392,6 @@ class CompletionResponseChoice(BaseModel):
     index: int
     text: str
     logprobs: LogProbs | None = None
-    gen_tokens: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
@@ -352,7 +410,6 @@ class CompletionResponseStreamChoice(BaseModel):
     index: int
     text: str
     logprobs: LogProbs | None = None
-    gen_tokens: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
@@ -408,6 +465,23 @@ class PoolingResponse(BaseModel):
     usage: UsageInfo
 
 
+class PPLRequest(BaseModel):
+    """Get perplexity request.
+
+    The input may be raw text or token ids. Text is tokenized with
+    ``tokenizer.encode`` (no chat template applied).
+    """
+    input: str | list[int]
+
+
+class PPLResponse(BaseModel):
+    """Get perplexity response.
+
+    ``ppl`` is the perplexity (mean cross-entropy loss) of the input.
+    """
+    ppl: float
+
+
 class EncodeRequest(BaseModel):
     """Encode request."""
     input: str | list[str]
@@ -437,9 +511,31 @@ class UpdateParamsRequest(BaseModel):
     finished: bool = False
 
 
-# str for url/base64, base64 should be data:image/jpeg;base64, dict should be {'url': url/base64, 'options': ...}
-ImageDataInputItem = str | dict
-ImageDataFormat = ImageDataInputItem | list[ImageDataInputItem]
+class InitWeightsUpdateGroupRequest(BaseModel):
+    """Initialize a torch.distributed process group used to broadcast weights
+    from an external trainer into the rollout engine."""
+    master_address: str
+    master_port: int
+    rank_offset: int
+    world_size: int
+    group_name: str
+    backend: str = 'nccl'
+
+
+class UpdateWeightsFromDistributedRequest(BaseModel):
+    """Receive weights through a previously initialized distributed group and
+    load them into the running model."""
+    names: list[str]
+    dtypes: list[str]
+    shapes: list[list[int]]
+    group_name: str
+    load_format: str | None = None  # 'flattened_bucket' or None
+    finished: bool = False  # trigger mod.update_weights() finalization when True
+
+
+class DestroyWeightsUpdateGroupRequest(BaseModel):
+    """Tear down a previously initialized weights-update process group."""
+    group_name: str
 
 
 # /generate input

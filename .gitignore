@@ -61,6 +61,8 @@ install/
 # LMDeploy
 workspace/
 work_dir*/
+workdir/
+wscripts/
 
 # Huggingface
 *.bin
@@ -78,6 +80,7 @@ work_dir*/
 
 # Outputs and logs
 *.txt
+!requirements/*.txt
 *.log
 *.out
 *.csv
@@ -89,3 +92,4 @@ proxy_config.yml
 
 # Claude Code local config
 CLAUDE.local.md
+.worktrees/

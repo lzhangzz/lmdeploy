@@ -6,6 +6,8 @@
 
 #include "src/turbomind/engine/request.h"
 
+#include "src/turbomind/models/vision_model.h"
+
 namespace turbomind {
 
 using std::vector;
@@ -193,7 +195,7 @@ public:
         env.produce("selected_token_pos", d.selected_token_pos.slice(0, b.bsz));
     }
 
-    void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy)
+    void PatchInputEmbedding(int phase, Tensor& embeds, BatchCopy& copy)
     {
         auto&      d           = data_.at(phase);
         const auto byte_stride = byte_size(embeds.dtype(), embeds.stride(0));
@@ -202,6 +204,30 @@ public:
             auto src = d.input_embeds_buf.slice(offset, size);
             copy((uint8_t*)src.raw_data(), src.byte_size(), (uint8_t*)embeds.raw_data() + byte_stride * pos);
             offset += size;
+        }
+    }
+
+    void PatchMultimodalEmbedding(Tensor& embeds, BatchCopy& copy, const MultiModalEmbeddingData& multimodal)
+    {
+        TM_CHECK_EQ(multimodal.input_embeds_coords.size(), multimodal.image_embeds_coords.size());
+        const int num_embeddings = multimodal.image_embeds_coords.size();
+        for (int i = 0; i < num_embeddings; ++i) {
+            const auto& [sz0, image_offset] = multimodal.image_embeds_coords[i];
+            const auto& [sz1, input_offset] = multimodal.input_embeds_coords[i];
+            TM_CHECK_EQ(sz0, sz1);
+            copy(multimodal.data.slice(image_offset, sz0).buffer(),
+                 sz0 * embeds.shape(1),
+                 embeds.slice(input_offset, sz1).buffer());
+        }
+    }
+
+    void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env)
+    {
+        PatchInputEmbedding(phase, embeds, copy);
+
+        if (env.try_("multimodal")) {
+            const auto& multimodal = *env.at("multimodal").data<MultiModalEmbeddingData*>()[0];
+            PatchMultimodalEmbedding(embeds, copy, multimodal);
         }
     }
 
@@ -252,9 +278,9 @@ void InputProcessor::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-void InputProcessor::PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy)
+void InputProcessor::PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env)
 {
-    impl_->PatchEmbedding(phase, embeds, copy);
+    impl_->PatchEmbedding(phase, embeds, copy, env);
 }
 
 }  // namespace turbomind

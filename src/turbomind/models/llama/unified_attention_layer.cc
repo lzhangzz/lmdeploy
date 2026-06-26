@@ -181,8 +181,9 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
     if (rope_param_.type == RopeType::kDynamic) {
         rope_base_buf_ = {bsz + 1, kCPUpinned};
     }
-    else if (rope_param_.type == RopeType::kMrope) {
-        // `mrope_position_ids` is not buffered
+    if (rope_param_.mrope_mode != MropeMode::kNone) {
+        // CPU-pinned staging buffers for the legacy r.inputs mrope path; per-phase device
+        // tensors are allocated below. (W1 also borrows env tensors from the vision encoder.)
         mrope_position_delta_buf_ = {bsz, kCPUpinned};
         mrope_length_buf_         = {bsz, kCPUpinned};
     }
@@ -194,12 +195,10 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
         if (rope_param_.type == RopeType::kDynamic) {
             d->rope_base = empty_like(rope_base_buf_, kDEVICE);
         }
-        else if (rope_param_.type == RopeType::kMrope) {
-            /// TODO: total space for `mrope_position_ids` can be reduced to (max_fwd_tokens, 3)
-            d->mrope_position_ids    = {{bsz, engine.session_len, 3}, kDEVICE};
-            d->mrope_position_delta  = empty_like(mrope_position_delta_buf_, kDEVICE);
-            d->mrope_length          = empty_like(mrope_length_buf_, kDEVICE);
-            rope_param_.mrope.stride = d->mrope_position_ids.stride(0);
+        if (rope_param_.mrope_mode != MropeMode::kNone) {
+            d->mrope_position_ids   = {{bsz, engine.session_len, 3}, kDEVICE};
+            d->mrope_position_delta = empty_like(mrope_position_delta_buf_, kDEVICE);
+            d->mrope_length         = empty_like(mrope_length_buf_, kDEVICE);
         }
     }
 
@@ -275,6 +274,9 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
             auto& d = data_.at(phase);
             Clear(tmp_attn_.slice(0, d->decode.n + d->prefill.q_sum));
             Clear(split_cnt_);
+            if (engine_param_.attn_cp_size > 1) {
+                invokeFillNegInfML(partial_ML_.data(), partial_ML_.size() / 2, core::Context::stream().handle());
+            }
         }
     }
 }
@@ -344,7 +346,9 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         }
         copy(rope_base_buf_, bsz, d.rope_base);
     }
-    else if (rope_param_.type == RopeType::kMrope) {
+    else if (rope_param_.mrope_mode != MropeMode::kNone) {
+        // Legacy r.inputs mrope path (Python preprocessor). The C++ vision-encoder
+        // env-source branch is added in W1; `d.mrope_*` are allocated at setup.
         const auto stride = d.mrope_position_ids.stride(0);
         for (int i = 0; i < rc.size(); ++i) {
             auto& c = *rc[i];
@@ -569,10 +573,12 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         if (rope_param_.type == RopeType::kDynamic) {
             params.rope_param.base = d.rope_base.data() + offset;
         }
-        else if (rope_param_.type == RopeType::kMrope) {
-            params.rope_param.mrope.position_ids   = d.mrope_position_ids.data() + offset * rope_param_.mrope.stride;
+        if (rope_param_.mrope_mode != MropeMode::kNone) {
             params.rope_param.mrope.position_delta = d.mrope_position_delta.data() + offset;
             params.rope_param.mrope.length         = d.mrope_length.data() + offset;
+            params.rope_param.mrope.stride         = d.mrope_position_ids.stride(0);
+            params.rope_param.mrope.position_ids =
+                d.mrope_position_ids.data() + offset * params.rope_param.mrope.stride;
         }
 
         // logn attn

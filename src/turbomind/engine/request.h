@@ -16,6 +16,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/interval.h"
 #include "src/turbomind/engine/block.h"
+#include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/utils/metrics.h"
 
 namespace xgrammar {
@@ -44,6 +45,8 @@ struct GenerationConfig {
     uint64_t random_seed = 0;
 
     int output_logprobs = 0;
+
+    bool return_ppl = false;
 
     enum OutType {
         kNone       = 0,
@@ -96,6 +99,8 @@ struct Request {
     // reference to IO tensors
     TensorMap inputs;
     TensorMap outputs;
+    // TODO: update serdes to support multiple nodes inference
+    std::shared_ptr<multimodal::Input> mm_inputs;
     // fast path for accessing common output buffers
     Tensor_<int> output_ids;
     Tensor_<int> sequence_length;
@@ -233,6 +238,10 @@ struct Sequence {
 
     bool is_active   = false;
     bool is_canceled = false;
+
+    // get_ppl / CE-loss (W2)
+    Interval       input_ce_loss;
+    Buffer_<float> ce_loss;  // device, size 1; rank-0 CE-loss accumulator.
 };
 
 template<class Archive>
@@ -253,6 +262,7 @@ void serdes(Archive& ar, GenerationConfig& g)
     ar & g.repetition_penalty;
     ar & g.random_seed;
     ar & g.output_logprobs;
+    ar & g.return_ppl;
     ar & g.output_last_hidden_state;
     ar & g.output_logits;
     // clang-format on

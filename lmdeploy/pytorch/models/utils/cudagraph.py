@@ -98,7 +98,8 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
-        return attn_metadata.is_decoding
+        context = get_step_ctx_manager().current_context()
+        return context.global_is_decoding()
 
     def make_output_buffers(self, output):
         """Make output buffers."""
@@ -116,8 +117,7 @@ class CudaGraphMixin:
         step_ctx = ctx_mgr.current_context()
         model_config = step_ctx.model_config
         sliding_window = model_config.sliding_window
-        num_attention_heads = model_config.num_attention_heads
-        num_key_value_heads = model_config.num_key_value_heads
+        num_attention_heads, num_key_value_heads = model_config.get_num_qkv_head_by_tp()
         headdim = model_config.head_dim
         torch_dtype = model_config.dtype
         if sliding_window is None:
@@ -142,8 +142,9 @@ class CudaGraphMixin:
         )
         return scheduler_metadata
 
-    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, *args, past_key_values: list[list[torch.Tensor]],
-                               **kwargs) -> BuffType:
+    def make_buffers_cudagraph(self, graph_meta: CudaGraphMeta, input_ids: Tensor, position_ids: Tensor,
+                               past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
+                               inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
@@ -176,7 +177,9 @@ class CudaGraphMixin:
             import flash_mla
 
             # create buffers for flash mla
-            num_attention_heads = self.config.num_attention_heads
+            step_ctx = get_step_ctx_manager().current_context()
+            model_config = step_ctx.model_config
+            num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
             index_topk = graph_meta.mla_index_topk
             num_heads_q = None if index_topk is None else num_attention_heads
             input_buffers['tile_scheduler_metadata'], input_buffers['num_splits'] = flash_mla.get_mla_metadata(
@@ -189,10 +192,11 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             input_buffers['scheduler_metadata'] = self.update_meta_flashattn(graph_meta.max_batchs,
                                                                              graph_meta.decode_query_len,
                                                                              block_size=graph_meta.block_size,
-                                                                             max_seqlen_k=decode_query_len,
+                                                                             max_seqlen_k=max_seqlen_k,
                                                                              cache_seqlens=input_buffers['kv_seqlens'])
 
         # mrope
@@ -256,7 +260,9 @@ class CudaGraphMixin:
 
         if graph_meta.use_flash_mla is True:
             import flash_mla
-            num_attention_heads = self.config.num_attention_heads
+            step_ctx = get_step_ctx_manager().current_context()
+            model_config = step_ctx.model_config
+            num_attention_heads, _ = model_config.get_num_qkv_head_by_tp()
             index_topk = graph_meta.mla_index_topk
             num_heads_q = None if index_topk is None else num_attention_heads
             tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
@@ -274,11 +280,16 @@ class CudaGraphMixin:
 
         # use fa3 decode kernel for spec decode
         elif graph_meta.use_fa3_decoding is True:
+            # FA3's mha_fwd internally computes seqlen_k = page_table.size(1) * page_size
+            # where page_table is the (padded) block_offsets buffer. We must use
+            # graph_meta.num_blocks * graph_meta.block_size to match the buffer shape
+            # allocated in make_buffers_cudagraph, not the runtime attn_metadata value.
+            max_seqlen_k = graph_meta.num_blocks * graph_meta.block_size
             scheduler_metadata = self.update_meta_flashattn(
                 new_batch_size,
                 decode_query_len,
                 block_size=graph_meta.block_size,
-                max_seqlen_k=attn_metadata.max_kv_seqlen,
+                max_seqlen_k=max_seqlen_k,
                 cache_seqlens=input_buffers['kv_seqlens'],
             )
             num_meta = scheduler_metadata.size(0)
