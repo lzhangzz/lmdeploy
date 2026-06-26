@@ -284,6 +284,21 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
 > `resources/batch_memory.png` chart axis labels (full encoder + embed-merge +
 > mrope path). See the plan's "W1 execution notes" for details.
 
+> **W2 execution update.** get_ppl / CE-loss is integrated and verified. The whole
+> Python `/get_ppl` surface (`messages.py`, `turbomind.py` `_get_ce_loss` +
+> `c.return_ppl`, `pipeline.get_ppl`, `async_engine.async_get_ppl`, `api_server`
+> `/get_ppl`, `bind.cpp` `return_ppl`) and `model_request.cc`'s `outputs["ce_loss"]`
+> alloc already landed in the structural merge, so only the C++ compute and the
+> admission guard were missing. The CE compute was ported onto our `OutputRange`
+> arch as a self-contained `CeLossSegment { request, ce_loss, range, last }` captured
+> at Setup — the executor side never touches `Sequence` (main's `b.rc` is gone). The
+> per-request `ce_loss` accumulator persists on the `Sequence` across chunked-prefill
+> forwards; `last = !c.input_ce_loss` (post-erosion) gates the single emit; the type-2
+> trigger became `d.full_logits || d.full_ce_loss` (a no-op for non-ppl). `engine.cc`
+> `Validate` now also rejects `return_ppl` under prefix caching. Verified on H200/tp1:
+> text regression PASS, ppl smoke (coherent mean-NLL `2.34` < garbled `4.25`), VL
+> regression still PASS. See the plan's "W2 execution notes" for details.
+
 ## 9. Out of scope / deferred
 
 - Reviving `ScheduleMetrics` onto the new scheduler (pre-existing gap from `b189745a`;

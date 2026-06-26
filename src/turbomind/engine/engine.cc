@@ -276,9 +276,10 @@ void Engine::Impl::Validate(Requests& infer_reqs)
                 r->ec = Request::kInconsistency;
             }
             else if (r->gen_cfg.output_logits == GenerationConfig::kAll
-                     || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll) {
+                     || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll
+                     || r->gen_cfg.return_ppl) {
                 TM_LOG_ERROR("Skip inconsistent infer request for ID {}: prefix caching cannot "
-                             "output logits or last_hidden_states for all tokens",
+                             "output logits/last_hidden_states for all tokens or ppl",
                              r->id);
                 r->ec = Request::kInconsistency;
             }

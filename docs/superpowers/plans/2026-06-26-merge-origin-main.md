@@ -609,14 +609,14 @@ W1 landed and is verified. Deviations from the predicted plan:
 
 **Files:** `src/turbomind/models/output_processor.cc`
 
-- [ ] **Step 1: Port main's CE-loss onto our structures.** Compare `git show origin/main:src/turbomind/models/output_processor.cc` vs ours. Re-introduce, adapted to our `vector<OutputRange>` (do **not** revert to main's `tuple<int,int,Interval,Interval>`): the `full_ce_loss`/`ce_loss_segments`/`ce_targets` members, the `ComputeAndOutputLogits(Data&, const Tensor&, BatchCopy&, <our request collection>)` extension (use our `Sequence*`/`b.rc`, not `RequestCache`), the `if (d.full_logits || d.full_ce_loss)` branch, and the `OutputLogitsImpl(..., rs)` overload. The CE kernels (`cross_entropy_kernels.*`) already merged.
-- [ ] **Step 2: Build** (`ninja`); fix until green.
+- [x] **Step 1: Port main's CE-loss onto our structures.** Compare `git show origin/main:src/turbomind/models/output_processor.cc` vs ours. Re-introduce, adapted to our `vector<OutputRange>` (do **not** revert to main's `tuple<int,int,Interval,Interval>`): the `full_ce_loss`/`ce_loss_segments`/`ce_targets` members, the `ComputeAndOutputLogits(Data&, const Tensor&, BatchCopy&, <our request collection>)` extension (use our `Sequence*`/`b.rc`, not `RequestCache`), the `if (d.full_logits || d.full_ce_loss)` branch, and the `OutputLogitsImpl(..., rs)` overload. The CE kernels (`cross_entropy_kernels.*`) already merged.
+- [x] **Step 2: Build** (`ninja`); fix until green.
 
 ### Task 3.2: Re-add the `return_ppl` admission clause
 
 **Files:** `src/turbomind/engine/engine.cc`
 
-- [ ] **Step 1: Extend our `Validate` prefix-caching incompatibility check** (no session, no kill_reqs):
+- [x] **Step 1: Extend our `Validate` prefix-caching incompatibility check** (no session, no kill_reqs):
 ```cpp
             else if (r->gen_cfg.output_logits == GenerationConfig::kAll
                      || r->gen_cfg.output_last_hidden_state == GenerationConfig::kAll
@@ -633,16 +633,50 @@ Confirm `GenerationConfig::return_ppl` exists; add it (mirror main's `Generation
 
 **Files:** `lmdeploy/messages.py`, `lmdeploy/turbomind/turbomind.py`, `lmdeploy/serve/openai/api_server.py`, `lmdeploy/serve/openai/protocol.py`
 
-- [ ] **Step 1: Port the ppl plumbing** from #4679 into our post-refactor Python layer using `git show c296bebb` as reference, matching our `messages.py`/`turbomind.py` shapes.
+- [x] **Step 1: Port the ppl plumbing** from #4679 into our post-refactor Python layer using `git show c296bebb` as reference, matching our `messages.py`/`turbomind.py` shapes.
 
 ### Task 3.4: Build, verify, commit
 
-- [ ] **Step 1: Build** (`ninja`), re-verify text path (Task 1.10) — PASS required.
-- [ ] **Step 2: Commit**
+- [x] **Step 1: Build** (`ninja`), re-verify text path (Task 1.10) — PASS required.
+- [x] **Step 2: Commit**
 ```bash
 git add -A
 git commit -m "feat(turbomind): re-integrate get_ppl / CE-loss onto OutputRange"
 ```
+
+### W2 execution notes (deviations from the predicted plan)
+
+1. **The entire Python `/get_ppl` surface already landed in the structural merge.** Task 3.3
+   predicted hand-porting #4679 into `messages.py` / `turbomind.py` / `api_server.py` /
+   `protocol.py`. In fact all of it auto-merged or was taken from main during Phase 1:
+   `messages.py` (`return_ppl`, `EngineOutput.ce_loss`), `turbomind.py` (`_get_ce_loss`,
+   `c.return_ppl = cfg.return_ppl`), `pipeline.get_ppl`, `async_engine.async_get_ppl`,
+   `api_server` `/get_ppl` + `PPLRequest`/`PPLResponse`, and `bind.cpp` (`return_ppl`
+   readwrite). `model_request.cc` already allocates `outputs["ce_loss"]` (size-1 `float`, CPU)
+   when `return_ppl`. So Task 3.3 required **no new code** — only the C++ compute (Task 3.1)
+   and the admission guard (Task 3.2) were missing.
+2. **CE segments are self-contained instead of reaching `Sequence` on the executor thread.**
+   main carries `RequestCache` on the batch (`b.rc`) and dereferences `c.ce_loss` /
+   `c.input_ce_loss` inside the executor-side output functions. Our arch dropped `b.rc`, and our
+   `OutputRange` already stores `shared_ptr<Request>` precisely because the executor side never
+   touches `Sequence`. So the new `CeLossSegment { request, ce_loss, range, last }` captures at
+   Setup time: the request (for `outputs["ce_loss"]`), a handle to the Sequence's persistent
+   rank-0 `ce_loss` accumulator, the hidden-buffer `range`, and a `last` flag (`!c.input_ce_loss`
+   after this forward's erosion) so chunked prefill emits exactly once. `ComputeCeLoss` /
+   `OutputCELoss` then need no `rs`/`Sequence`. The `d.ce_targets` device buffer is filled via the
+   Setup-time engine `BatchCopy` (same handoff path as `d.sequence_length`).
+3. **`ComputeAndOutputLogits`/CE path takes a non-`const Data&`.** main strips constness via the
+   `shared_ptr` indirection (`rs[i]->ce_loss`); our segment stores the `Buffer_<float>` directly,
+   so a `const` segment yields `const float*` from `.data()`. The CE compute path therefore takes
+   `Data&` (the accumulator device memory is logically mutable). The type-2 trigger changed from
+   `!d.output_logits.empty() && d.full_logits` to main's `d.full_logits || d.full_ce_loss`; this is
+   a no-op for non-ppl requests (a non-empty `full_logits` always implies a type-2 `output_logits`
+   entry), and `ComputeAndOutputLogits` now seeds `success = ranges.empty()` and drops the early
+   `break` so CE accumulation completes across all chunks.
+4. **Verification.** Build green. Text path (`Qwen3.5-27B`, `tp 1`, 256 tokens) — coherent PASS.
+   PPL smoke (`pipeline.get_ppl`): finite/positive mean-NLL, coherent text `2.34` < garbled text
+   `4.25` (`ppl ≈ 10.4` vs `70`). VL regression (tiger image, 128 tokens) still PASS, confirming
+   the shared output path is unaffected.
 
 ---
 
