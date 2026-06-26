@@ -33,12 +33,12 @@
 ### Global rule — stateful sessions stay removed
 `b189745a` removed the stateful-session/kill subsystem (the `Sequence` persisted in `SequenceManager` after a request ended). Our branch has **zero** `Request::session`, `start_flag`/`end_flag`/`kill_flag`, `kill_reqs`, `seq_mgr_`. Never reintroduce them. Where main hangs a *new feature* off `r->session.*`, re-express it for our **stateless** model (every request is start+end in one shot). Concretely this turns main's interactive-only guards into simplifications (drop them).
 
-### How the merge resolves files (verified, important)
-The trial merge produces **12 conflicts**, but the larger risk is the ~90 vit-PR files the merge resolves *silently*:
+### How the merge resolves files (verified against a throwaway trial merge)
+`origin/main` is at **`4778480b` (77 commits ahead of base `a4025b91`)**. The 7 commits that landed most recently touch **zero `src/turbomind/` files** (Python serve / pytorch / ascend / version bump), so the C++ analysis below is current. A `git merge --no-ff origin/main` produces **exactly 12 conflicts**; the larger risk is the ~90 vit-PR files the merge resolves *silently*:
 - **Taken wholesale from main** (`ours:0` since base): the entire `kernels/attention/*` suite (causal threading), `rotary_embedding.h`, `llama_rope.h` (**`RopeType::kMrope` removed → `MropeMode`**), `attention_weight.cc`, `model_root.h`, `input_processor.h`, `model_executor.h`, `core/module.h`, all `qwen3_5vit/*` + `vision_model.*` + `kernels/norm/*` + `layer_norm_weight.*` (new files), get_ppl's `cross_entropy_kernels.*` (new).
-- **Auto-merged (both changed, no conflict):** `attention_universal.h` (disjoint regions — safe), `attention_weight.h`, `language_model.cc` (→ uses **4-arg** `PatchEmbedding`), `bind.cpp` (pulls in main's vit bindings), `model_request.cc/.h` (session/kill audit targets).
+- **Auto-merged (both changed, no conflict):** `attention_universal.h` (disjoint regions — safe), `attention_weight.h`, `language_model.cc` (→ uses **4-arg** `PatchEmbedding`), `bind.cpp`, `model_request.cc/.h`. Verified consequences: `Request::mm_inputs` auto-merges cleanly into `Request` (so keep the `multimodal_input.h` include and it's an inert field in Phase 1 — `bind.cpp`'s header-only vit bindings then compile as-is); but main's **`SessionParam::start_flag/end_flag` bindings and the `End(session_id)` kill method** also auto-merge in and must be **stripped** (our branch has `Cancel`, not `End`).
 
-Implication: our code must **compile against main's refactored rope/attention**, so Phase 1 adopts `MropeMode`/`causal` rather than "keeping ours", and the only things excluded are the genuinely vit-*specific* compile units + bindings.
+Implication: our code must **compile against main's refactored rope/attention**, so Phase 1 adopts `MropeMode`/`causal` rather than "keeping ours"; the only things excluded are the genuinely vit-*specific* `.cc`/`.cu` compile units (headers + header-only bindings stay); and the auto-merged session/kill leaks are removed.
 
 ---
 
@@ -128,15 +128,15 @@ Expected: no output.
     int   layer_id;  // for debugging
 ```
 
-- [ ] **Step 2: `request.h` — union all three hunks**
-  - Hunk 1 (includes): keep **our** `#include "src/turbomind/engine/block.h"`; **drop** main's `#include "src/turbomind/engine/multimodal_input.h"` (re-added in Task 2.1).
-  - Hunk 2 (`OutType`): keep our `enum OutType {` and add main's flag above it:
+- [ ] **Step 2: `request.h` — resolve the three conflict hunks** (verified line layout: hunks at 18–22 includes, 52–59 `GenerationConfig::OutType`, 212–254 `Sequence` tail)
+  - Hunk 1 (includes): **keep BOTH** — our `#include "src/turbomind/engine/block.h"` **and** main's `#include "src/turbomind/engine/multimodal_input.h"`. The include is required because `Request::mm_inputs` **auto-merged** into the `Request` struct (verified at `request.h:111`, outside the markers); dropping the include would break it.
+  - Hunk 2 (inside `struct GenerationConfig`): keep our `enum OutType {` brace style and add main's flag above it:
 ```cpp
     bool return_ppl = false;
 
     enum OutType {
 ```
-  - Hunk 3 (Sequence tail): keep our **entire** execution-state block (`block_ids` … `input_embeds`/`input_embeds_offsets` … `is_active`/`is_canceled`) and append main's get_ppl members:
+  - Hunk 3 (`Sequence` tail): keep our **entire** execution-state block (`block_ids` … `input_embeds`/`input_embeds_offsets` … `is_active`/`is_canceled`) and append main's get_ppl members:
 ```cpp
     bool is_active   = false;
     bool is_canceled = false;
@@ -146,7 +146,8 @@ Expected: no output.
     Buffer_<float> ce_loss;  // device, size 1; rank-0 CE-loss accumulator.
 };
 ```
-  Do **not** add `bool end_flag` or any `session` member.
+  Do **not** add `bool end_flag` or any `session`/`start_flag`/`end_flag` member.
+  > **No action needed for** `Request::mm_inputs` (auto-merged at line 111) — it stays as an inert field in Phase 1, which is exactly what makes `model_request.cc` (`r->mm_inputs = param.mm_inputs;`) and `bind.cpp` compile without edits. Only the per-sequence `Sequence::multimodal_inputs` vector is deferred to W1 (Task 2.1). `SessionParam` resolves to **ours** (`{id, step}`, only we changed it) — no flag leak in the struct.
 
 - [ ] **Step 3: `messages.py` — union docstring.** Keep our new config docstrings (`linear_prefix_cache_min_interval`, `cache_prompt_boundary`, `cache_generation_boundary`, `cache_boundary_policy`) and adopt main's `quant_policy` wording:
 ```python
@@ -260,53 +261,47 @@ git add src/turbomind/models/model_root.h
 ```
 W1 restores main's version.
 
-### Task 1.7: Exclude qwen3.5-vit-specific compile units and bindings
+### Task 1.7: Exclude qwen3.5-vit-specific compile units (headers stay)
 
-Core rope/attention is *kept* (compiled). Only the vit-specific units + their bindings are excluded.
+Only the vit-specific `.cc`/`.cu` **compile units** are excluded from CMake. **All vit headers stay** (they are header-only-safe). The `bind.cpp` vit bindings are **header-only** (`Qwen3_5VitItem`/`Qwen3_5VitInput` from `qwen3_5vit/qwen3_5vit_input.h`, bound via ctors/fields/`bind_config` — no excluded-`.cc` symbols) and compile as-is once `Request::mm_inputs` exists (Task 1.3) — **do not comment them.**
 
-**Files:** `src/turbomind/models/CMakeLists.txt`, `src/turbomind/kernels/norm/CMakeLists.txt`, `src/turbomind/python/CMakeLists.txt`, `src/turbomind/python/bind.cpp`, and any `add_subdirectory(qwen3_5vit)` location.
+**Files:** `src/turbomind/models/CMakeLists.txt`, `src/turbomind/kernels/norm/CMakeLists.txt`, `src/turbomind/python/CMakeLists.txt`, and any `add_subdirectory(qwen3_5vit)` location.
 
 - [ ] **Step 1: Find the vit-source CMake wiring**
 ```bash
 git grep -n "qwen3_5vit\|vision_model\|layer_norm_weight\|norm/layer_norm\|add_subdirectory(qwen3_5vit)\|kernels/norm" -- 'src/turbomind/**/CMakeLists.txt'
 ```
 
-- [ ] **Step 2: Comment out (don't delete) the vit-specific compile units** with a restore marker: `qwen3_5vit/*`, `vision_model.cc`, `vision_model_weight` (if a `.cc` exists), `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`, and any vit test targets / python vit-binding sources:
+- [ ] **Step 2: Comment out (don't delete) the vit-specific compile units** with a restore marker: `qwen3_5vit/*.cc/.cu`, `vision_model.cc`, `vision_model_weight.cc` (if it exists), `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`, and any vit `.cu` test targets:
 ```cmake
 # TODO(merge-W1): re-enable qwen3.5-vit sources after vit integration
 # add_subdirectory(qwen3_5vit)
 # vision_model.cc
 # layer_norm_weight.cc
 ```
+Do **not** exclude headers and do **not** touch `bind.cpp` here.
 
-- [ ] **Step 3: Comment out main's vit bindings in `bind.cpp`.** Find them and guard with a restore marker:
+- [ ] **Step 3: Stage**
 ```bash
-git grep -n "VisionModel\|Qwen3_5Vit\|vision_model\|mm_inputs\|MultiModalData" src/turbomind/python/bind.cpp
-```
-```cpp
-// TODO(merge-W1): re-enable qwen3.5-vit python bindings after vit integration
-// ...vit binding lines...
-```
-Keep the health-endpoint `scheduler_tick` binding (it only needs the `ScheduleMetrics` field from main's `utils/metrics.h`).
-
-- [ ] **Step 4: Stage**
-```bash
-git add src/turbomind/models/CMakeLists.txt src/turbomind/python/CMakeLists.txt \
-  src/turbomind/python/bind.cpp
+git add src/turbomind/models/CMakeLists.txt src/turbomind/python/CMakeLists.txt
 # plus kernels/norm/CMakeLists.txt and any other edited CMakeLists.txt
 ```
 The exact exclusion set is finalized by the Task 1.9 build — iterate 1.7 ↔ 1.9.
 
-### Task 1.8: Audit auto-merged session/kill/vit leaks
+### Task 1.8: Strip the auto-merged session/kill leaks (`bind.cpp`, `model_request`)
 
-- [ ] **Step 1: Grep the working tree for forbidden / not-yet-wired symbols** (excluding the still-present vit files):
+`bind.cpp`, `model_request.cc`, and `model_request.h` auto-merged with main's stateful-session code. Verified leaks to remove (these reference members/methods our branch deleted — `SessionParam` is now `{id, step}`, and we have `Cancel`, not `End`):
+- `bind.cpp`: main's `py::class_<SessionParam>` binds `start`/`end` (`&SessionParam::start_flag`/`end_flag`) and its init sets `param.start_flag`/`end_flag`; plus a `model_request->End(cb, session_id)` ("end"/`session_id`) binding. **Reduce the `SessionParam` binding to `id`/`step` only and delete the `End` binding; keep our `Cancel` binding and the (header-only) vit bindings.**
+- `model_request.h`/`.cc`: drop any leaked `void End(...)` decl/def and any `param.session.start_flag/end_flag` use. Keep our `Cancel`, and keep the legitimate `param.session.id`/`param.session.step` (our request-id/step carrier) and the auto-merged `r->mm_inputs = param.mm_inputs;` and get_ppl `ce_loss` alloc.
+
+- [ ] **Step 1: Grep for the removed symbols** (these are precise — `SessionParam`/`session_id_`/`session_len_` are *legitimate* and intentionally not matched):
 ```bash
-git grep -n "->session\.\|\.session\.\|kill_reqs\|->end_flag\|start_flag\|kill_flag\|seq_mgr_\|->mm_inputs" -- 'src/turbomind/*' \
+git grep -n "start_flag\|end_flag\|kill_flag\|kill_reqs\|seq_mgr_\|->End(\|\.End(\|\"end\"\|session\.start_flag\|session\.end_flag" -- 'src/turbomind/*' \
   ':!src/turbomind/models/qwen3_5vit/*' ':!src/turbomind/models/vision_model*'
 ```
-Expected: no hits. Any hit (most likely `model_request.cc`/`model_request.h`, which auto-merged with main's changes) is a leak.
+Expected after fixes: no hits.
 
-- [ ] **Step 2: Fix each leak** by reconciling to our flattened request (`r->id`, `r->step`; no `session`/`kill_flag`). Compare `git show origin/main:src/turbomind/engine/model_request.cc` vs `HEAD:`; keep our shape, drop main's session/kill additions.
+- [ ] **Step 2: Remove each leak** by comparing `git show origin/main:<file>` vs `HEAD:<file>` and keeping our shape (no `End`, no `start_flag`/`end_flag`). Edit `bind.cpp` (`SessionParam` binding + `End` binding) and `model_request.{h,cc}` accordingly.
 
 - [ ] **Step 3: Re-run the grep until clean.**
 
@@ -320,11 +315,11 @@ ninja
 ```
 
 - [ ] **Step 2: Fix iteratively** — expected trap categories:
-  - Undefined vit symbol referenced from a non-excluded unit → comment it (Task 1.7) or, if it's a header inclusion (`vision_model.h`), drop that include in the offending our-resolved file.
+  - `SessionParam::start_flag`/`end_flag` or `ModelRequest::End` referenced (in `bind.cpp`/`model_request`) → a Task 1.8 session/kill leak; strip it.
   - `RopeType::kMrope` not found → a leftover in an our-resolved file; convert to `MropeMode` (Task 1.5 pattern).
   - `PatchEmbedding` arity mismatch → align to the 4-arg form (Task 1.6 Step 1).
-  - `ModelExecutor`/`ModelRoot` vision member errors → ensure the headers are ours (Task 1.6 Steps 2–3).
-  - `session`/`kill` symbol → a Task 1.8 leak.
+  - `ModelExecutor`/`ModelRoot` vision member errors → ensure those headers are ours (Task 1.6 Steps 2–3).
+  - Undefined reference to a vit `.cc` symbol (e.g. `CreateVisionModel`, a `VisionModel`/`Qwen3_5Vit*` method/vtable) from a non-excluded unit → either that unit shouldn't be calling it in Phase 1 (it leaked from main — revert to ours), or a needed compile unit was over-excluded (Task 1.7). Header-only vit *bindings* should link fine; a link error here means a real `.cc` symbol is used.
   Re-run `ninja` until green. Do not proceed with a broken build.
 
 ### Task 1.10: Verify the text / SSM path
@@ -367,35 +362,30 @@ git log --oneline -1 && git status
 
 Re-home the multimodal carrier, re-enable the vit sources + bindings, restore main's vision-aware headers, thread `VisionModel` through the engine, and translate main's interactive-only gating to our stateless model.
 
-### Task 2.1: Add the multimodal carrier and request field
+### Task 2.1: Add the per-sequence multimodal carrier
 
 **Files:** Modify `src/turbomind/engine/request.h`
 
-- [ ] **Step 1: Add include + forward decl**
+> `Request::mm_inputs` and the `multimodal_input.h` include already landed in Phase 1 (auto-merged + Task 1.3). W1 only adds the per-sequence feature vector.
+
+- [ ] **Step 1: Add the forward decl** (near the existing `struct Sequence;`):
 ```cpp
-#include "src/turbomind/engine/block.h"
-#include "src/turbomind/engine/multimodal_input.h"
-...
 struct MultiModalData;  // defined in models/vision_model.h
 ```
-- [ ] **Step 2: Add `mm_inputs` to `Request`** (mirror main `request.h:103`):
-```cpp
-    std::shared_ptr<multimodal::Input> mm_inputs;
-```
-- [ ] **Step 3: Add the carrier to `Sequence`**, beside `input_embeds`:
+- [ ] **Step 2: Add the carrier to `Sequence`**, beside `input_embeds`:
 ```cpp
     // persistent per-sequence vision features (qwen3.5-vit, W1)
     std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
 ```
 
-### Task 2.2: Restore main's vision-aware headers + CMake + bindings
+### Task 2.2: Restore main's vision-aware headers + CMake vit sources
 
 - [ ] **Step 1: Restore main's versions** of the two headers force-ours'd in Phase 1 (`input_processor.h` is already main's from the merge — leave it):
 ```bash
 git checkout origin/main -- src/turbomind/engine/model_executor.h \
   src/turbomind/models/model_root.h
 ```
-- [ ] **Step 2: Uncomment every `TODO(merge-W1)`** added in Task 1.7 (CMake vit sources + `bind.cpp` vit bindings).
+- [ ] **Step 2: Uncomment every `TODO(merge-W1)`** added in Task 1.7 (CMake vit `.cc`/`.cu` sources). The vit `bind.cpp` bindings were never commented (header-only, kept in Phase 1) — nothing to do there.
 - [ ] **Step 3: Do not build yet** — engine threading (2.3–2.8) must land first.
 
 ### Task 2.3: Thread `VisionModel` through the Engine

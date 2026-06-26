@@ -81,7 +81,10 @@ and inside vit code). During the merge:
   - **W1:** `qwen3_5vit.cc:211` and `input_processor.cc:71` gate the vision encoder on
     `r.session.start_flag/end_flag`. Translate to our "first/prefill pass" notion
     (e.g. `step == 0` / the new arch's prefill detection) — **not** session flags.
-  - `bind.cpp` / `turbomind.cc` session-flag plumbing for vit → adapt to our request API.
+  - **Phase 1 (Task 1.8):** the auto-merged `bind.cpp` `SessionParam` `start`/`end`
+    bindings and the `End(session_id)` kill binding, plus any `End`/`start_flag`/`end_flag`
+    in `model_request.{cc,h}`, are **stripped** (not adapted). `param.session.id/step`
+    (our request-id/step carrier) stays.
 
 Files where only our branch changed (main: 0 commits) — git takes our version cleanly,
 so session/kill stay gone: `gateway.cc`, `gateway.h`, `request_queue.h`.
@@ -90,7 +93,10 @@ so session/kill stay gone: `gateway.cc`, `gateway.h`, `request_queue.h`.
 
 The 12 textual conflicts are the *small* part. The qwen3.5-vit PR (#4602) is ~90 files
 and the merge resolves most of them silently — verified with
-`git rev-list --count a4025b91..{origin/main,HEAD} -- <file>`:
+`git rev-list --count a4025b91..{origin/main,HEAD} -- <file>` and a throwaway
+`git merge --no-ff` (inspected, then aborted). `origin/main` is at **`4778480b`
+(77 commits ahead)**; the 7 newest commits touch **no `src/turbomind/` file** (Python
+serve / pytorch / ascend / version bump), so this analysis is current.
 
 - **Taken wholesale from main** (`ours:0` since base, so the merge just adopts main's
   version): the entire `kernels/attention/*` suite (a `causal` flag threaded through
@@ -103,12 +109,19 @@ and the merge resolves most of them silently — verified with
 - **Auto-merged, both sides changed, no conflict:** `attention_universal.h` (our
   readonly-KV-store change and main's `first_K/last_K` causal change are in **disjoint
   regions** — safe), `attention_weight.h`, `language_model.cc` (its `PatchEmbedding`
-  call line was changed only by main → becomes the **4-arg** form), `bind.cpp` (pulls in
-  main's vit bindings), `model_request.cc/.h` (session/kill audit targets).
+  call line was changed only by main → becomes the **4-arg** form), `bind.cpp`,
+  `model_request.cc/.h`. Verified outcomes: `Request::mm_inputs` auto-merges cleanly
+  into `Request` (keep the `multimodal_input.h` include; inert in Phase 1 — this is what
+  lets the **header-only** vit bindings in `bind.cpp` and `r->mm_inputs = param.mm_inputs`
+  in `model_request.cc` compile untouched), but main's **`SessionParam::start_flag/
+  end_flag` bindings and the `End(session_id)` kill method auto-merge in and must be
+  stripped** (our branch has `Cancel`, not `End`; `SessionParam` itself resolves to ours
+  = `{id, step}`).
 
 **Consequence:** our code must *compile against main's refactored rope/attention*. So
-Phase 1 **adopts** `MropeMode` / `causal` rather than "keeping ours", and excludes only
-the vit-*specific* compile units + bindings. "keep ours" is valid only where our side's
+Phase 1 **adopts** `MropeMode` / `causal` rather than "keeping ours", excludes only the
+vit-*specific* `.cc`/`.cu` compile units (headers + header-only bindings stay), and
+strips the auto-merged session/kill leaks. "keep ours" is valid only where our side's
 callers/headers stay self-consistent.
 
 ### Conflict-resolution map (Phase 1)
@@ -116,7 +129,7 @@ callers/headers stay self-consistent.
 | File | Phase-1 resolution |
 |---|---|
 | `engine.h` / `engine.cc` | Take **ours** (text-only ctor; drops vision threading, `seq_mgr_` metrics == the #4615 health change, and main's `Validate` lambda/`kill_reqs`). Vision re-added W1; `return_ppl` clause W2. |
-| `request.h` (3 hunks) | **Union**: keep all new-`Sequence` fields + add get_ppl fields (`return_ppl`, `input_ce_loss`, `ce_loss`). Drop `end_flag`/session. Multimodal field W1. |
+| `request.h` (3 hunks) | Hunk1 includes: **keep BOTH** (`block.h` + `multimodal_input.h`). Hunk2: add `return_ppl` in `GenerationConfig`. Hunk3: keep our `Sequence` exec-state + append get_ppl `input_ce_loss`/`ce_loss`. `Request::mm_inputs` **auto-merges** (keep, inert). Only `Sequence::multimodal_inputs` → W1. No `end_flag`/`start_flag`. |
 | `attention_params.h` | Take **theirs** (`causal{true}`, `layer_id`). |
 | `unified_attention_layer.cc` (mrope) | Keep **ours**, changing only the guard `rope_param_.type == RopeType::kMrope` → `rope_param_.mrope_mode != MropeMode::kNone` (compile blocker — `kMrope` removed from the enum; the `mrope` sub-struct is kept by main, so the rest compiles unchanged). Vision env-source branch is W1. **Phase 1, not W1.** |
 | `input_processor.cc` + `input_processor.h` | Take **main's** `.h` (4-arg `PatchEmbedding(..., env)`, since `language_model.cc` auto-merges to the 4-arg call) and adapt our `.cc` to the 4-arg signature (`env` unused until W1). |
@@ -124,10 +137,11 @@ callers/headers stay self-consistent.
 | `model_root.h` | Force **ours** (no `vision_model_ptr()`/vision child needed in Phase 1). Restore main's in W1. |
 | `output_processor.cc` | Take **ours** (`OutputRange`); CE-loss W2. |
 | `turbomind.cc` | Take **ours** (text-only Engine construction); vision construction W1. |
-| `bind.cpp` (auto-merged) | **Comment out** main's vit bindings (reference `VisionModel`/`Qwen3_5VitInput`) so the always-compiled bindings build; keep the health `scheduler_tick` binding. Restore vit bindings W1. |
+| `bind.cpp` (auto-merged) | **Keep** the vit bindings (header-only — compile as-is once `Request::mm_inputs` exists) and our `Cancel` binding. **Strip** main's `SessionParam` `start`/`end` bindings and the `End(session_id)` kill binding (reference removed members). Keep the health `scheduler_tick` binding. |
+| `model_request.{cc,h}` (auto-merged) | Keep ours + the auto-merged `r->mm_inputs = param.mm_inputs` and get_ppl `ce_loss` alloc. **Drop** any leaked `End(...)` decl/def and `session.start_flag/end_flag`. `param.session.id/step` stay (our id/step carrier). |
 | `messages.py` | **Union** doc; keep main's `quant_policy` wording. |
 | `SequenceManager.cc/.h` | **Keep deleted**; port `multimodal_inputs` *intent* onto `engine/request.h::Sequence` in W1. |
-| CMake (`models/`, `kernels/norm/`, `python/`) | Comment out vit-specific units (`qwen3_5vit/*`, `vision_model.cc`, `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`); keep core rope/attention. Restore W1. |
+| CMake (`models/`, `kernels/norm/`, `python/`) | Comment out vit-specific **`.cc`/`.cu`** units (`qwen3_5vit/*`, `vision_model.cc`, `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`); keep core rope/attention **and all headers**. Restore W1. |
 
 ## 6. Feature integration workstreams
 
@@ -228,11 +242,14 @@ GPU runs must execute **outside the sandbox** (no driver in sandbox). The
 - **Header/impl mismatch:** main changed `input_processor.h` (4-arg `PatchEmbedding`),
   `model_executor.h` (`VisionModel*` ctor), `model_root.h` (vision child); paired `.cc`
   resolved to ours. §5 map fixes each (take-main-`.h`+adapt `.cc`, or force-ours `.h`).
-- **`bind.cpp` always compiles:** auto-merged main vit bindings reference excluded
-  symbols → must be commented in Phase 1.
-- **Session/kill leak via auto-merge:** `model_request.cc` (main: 2) and
-  `model_request.h` (main: 1) auto-merged — audit for reintroduced `session`/`kill`
-  (build catches compile breaks; check logic too).
+- **`bind.cpp` always compiles:** verified the auto-merged vit bindings are **header-only**
+  (compile as-is with `Request::mm_inputs` present) — *not* the problem. The real leak is
+  main's `SessionParam` `start`/`end` bindings + the `End(session_id)` kill binding, which
+  reference removed members → strip in Phase 1 (Task 1.8).
+- **Session/kill leak via auto-merge:** `bind.cpp`, `model_request.cc/.h` auto-merged with
+  main's stateful code. Remove `start_flag`/`end_flag`/`End`; keep `Cancel` and the
+  `param.session.id/step` carrier. Grep precisely (`start_flag|end_flag|kill_flag|kill_reqs|seq_mgr_|End(`),
+  not bare `session` (which legitimately matches `SessionParam`/`session_id_`/`session_len_`).
 - **vit hooks in auto-merged regions:** main's vit changes to `language_model.cc`
   (4-arg `PatchEmbedding`) and `input_processor.cc` — audit. (`unified_decoder.cc` is
   ours-only — main did not touch it — so no audit needed there.)
