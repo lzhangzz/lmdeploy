@@ -50,7 +50,7 @@ All conflict resolution happens in one in-progress merge; the merge is finished 
 
 **Files:** none (git state only)
 
-- [ ] **Step 1: Tag a rollback point and confirm clean tree**
+- [x] **Step 1: Tag a rollback point and confirm clean tree**
 ```bash
 cd /data/lmdeploy-memory
 git status --short          # expect only "?? lmdeploy/lib"
@@ -58,13 +58,13 @@ git tag premerge-memory-1a
 git rev-parse --short HEAD  # expect b189745a
 ```
 
-- [ ] **Step 2: Start the merge (it will stop with conflicts)**
+- [x] **Step 2: Start the merge (it will stop with conflicts)**
 ```bash
 git merge --no-ff origin/main
 ```
 Expected: `Automatic merge failed; fix conflicts and then commit the result.`
 
-- [ ] **Step 3: Confirm the exact conflict set (12 files)**
+- [x] **Step 3: Confirm the exact conflict set (12 files)**
 ```bash
 git diff --name-only --diff-filter=U | sort
 ```
@@ -96,7 +96,7 @@ These five files have only keep-ours hunks for Phase 1, and their callers/header
 - Modify: `src/turbomind/turbomind.cc` (text-only Engine construction)
 - Modify: `src/turbomind/models/output_processor.cc` (keep our `OutputRange`)
 
-- [ ] **Step 1: Take ours for all five**
+- [x] **Step 1: Take ours for all five**
 ```bash
 git checkout --ours src/turbomind/engine/engine.h src/turbomind/engine/engine.cc \
   src/turbomind/engine/model_executor.cc src/turbomind/turbomind.cc \
@@ -107,7 +107,7 @@ git add src/turbomind/engine/engine.h src/turbomind/engine/engine.cc \
 ```
 > `checkout --ours` discards main's changes in these files. Intended: those changes are vision wiring (W1), get_ppl CE-loss (W2), or `seq_mgr_`-based metrics (deferred). The health-endpoint engine.cc change *is* the `seq_mgr_` metrics — correctly dropped.
 
-- [ ] **Step 2: Verify no markers remain**
+- [x] **Step 2: Verify no markers remain**
 ```bash
 git grep -n '^<<<<<<<\|^>>>>>>>\|^=======$' -- src/turbomind/engine/engine.cc \
   src/turbomind/engine/engine.h src/turbomind/engine/model_executor.cc \
@@ -122,13 +122,13 @@ Expected: no output.
 - Modify: `src/turbomind/kernels/attention/attention_params.h` (1 hunk — take theirs)
 - Modify: `lmdeploy/messages.py` (1 hunk — union docstring)
 
-- [ ] **Step 1: `attention_params.h` — take theirs.** Resolve the single hunk to:
+- [x] **Step 1: `attention_params.h` — take theirs.** Resolve the single hunk to:
 ```cpp
     bool  causal{true};
     int   layer_id;  // for debugging
 ```
 
-- [ ] **Step 2: `request.h` — resolve the three conflict hunks** (verified line layout: hunks at 18–22 includes, 52–59 `GenerationConfig::OutType`, 212–254 `Sequence` tail)
+- [x] **Step 2: `request.h` — resolve the three conflict hunks** (verified line layout: hunks at 18–22 includes, 52–59 `GenerationConfig::OutType`, 212–254 `Sequence` tail)
   - Hunk 1 (includes): **keep BOTH** — our `#include "src/turbomind/engine/block.h"` **and** main's `#include "src/turbomind/engine/multimodal_input.h"`. The include is required because `Request::mm_inputs` **auto-merged** into the `Request` struct (verified at `request.h:111`, outside the markers); dropping the include would break it.
   - Hunk 2 (inside `struct GenerationConfig`): keep our `enum OutType {` brace style and add main's flag above it:
 ```cpp
@@ -149,13 +149,13 @@ Expected: no output.
   Do **not** add `bool end_flag` or any `session`/`start_flag`/`end_flag` member.
   > **No action needed for** `Request::mm_inputs` (auto-merged at line 111) — it stays as an inert field in Phase 1, which is exactly what makes `model_request.cc` (`r->mm_inputs = param.mm_inputs;`) and `bind.cpp` compile without edits. Only the per-sequence `Sequence::multimodal_inputs` vector is deferred to W1 (Task 2.1). `SessionParam` resolves to **ours** (`{id, step}`, only we changed it) — no flag leak in the struct.
 
-- [ ] **Step 3: `messages.py` — union docstring.** Keep our new config docstrings (`linear_prefix_cache_min_interval`, `cache_prompt_boundary`, `cache_generation_boundary`, `cache_boundary_policy`) and adopt main's `quant_policy` wording:
+- [x] **Step 3: `messages.py` — union docstring.** Keep our new config docstrings (`linear_prefix_cache_min_interval`, `cache_prompt_boundary`, `cache_generation_boundary`, `cache_boundary_policy`) and adopt main's `quant_policy` wording:
 ```python
         quant_policy: default to 0. For TurboMind, when k/v is quantized
             into int4 or int8, set it to 4 or 8, respectively
 ```
 
-- [ ] **Step 4: Stage and check markers**
+- [x] **Step 4: Stage and check markers**
 ```bash
 git add src/turbomind/engine/request.h \
   src/turbomind/kernels/attention/attention_params.h lmdeploy/messages.py
@@ -168,7 +168,7 @@ Expected: no output.
 
 **Files:** Delete `src/turbomind/models/llama/SequenceManager.cc` and `.h`.
 
-- [ ] **Step 1:**
+- [x] **Step 1:**
 ```bash
 git rm src/turbomind/models/llama/SequenceManager.cc \
        src/turbomind/models/llama/SequenceManager.h
@@ -181,7 +181,7 @@ git rm src/turbomind/models/llama/SequenceManager.cc \
 **Files:**
 - Modify: `src/turbomind/models/llama/unified_attention_layer.cc` (the 1 mrope conflict hunk; rest auto-merged)
 
-- [ ] **Step 1: Resolve the conflict to OUR side, changing only the guard.** Keep our entire legacy mrope block (which already uses our `c.history_len + c.inflight_input_len` interval); change just the condition:
+- [x] **Step 1: Resolve the conflict to OUR side, changing only the guard.** Keep our entire legacy mrope block (which already uses our `c.history_len + c.inflight_input_len` interval); change just the condition:
 ```cpp
     // was: else if (rope_param_.type == RopeType::kMrope) {
     else if (rope_param_.mrope_mode != MropeMode::kNone) {
@@ -209,13 +209,13 @@ git rm src/turbomind/models/llama/SequenceManager.cc \
 ```
 Do **not** add main's `env.try_("mrope_length")` borrow branch here — that is W1 (Task 2.7). For Phase-1 text/SSM models `mrope_mode == kNone`, so this block is inert.
 
-- [ ] **Step 2: Confirm no other `RopeType::kMrope` remains** in our-resolved files:
+- [x] **Step 2: Confirm no other `RopeType::kMrope` remains** in our-resolved files:
 ```bash
 git grep -n "RopeType::kMrope" -- 'src/turbomind/*'
 ```
 Expected: no output (the other users — `rotary_embedding.h`, `attention_weight.cc`, `llama_rope.h` — were taken from main and no longer reference it).
 
-- [ ] **Step 3: Stage + marker check**
+- [x] **Step 3: Stage + marker check**
 ```bash
 git add src/turbomind/models/llama/unified_attention_layer.cc
 git grep -n '^<<<<<<<\|^>>>>>>>\|^=======$' -- src/turbomind/models/llama/unified_attention_layer.cc
@@ -231,7 +231,7 @@ Three headers were changed by main (taken to main's version) while their behavio
 - Force-ours: `src/turbomind/engine/model_executor.h`
 - Force-ours: `src/turbomind/models/model_root.h`
 
-- [ ] **Step 1: `input_processor` — accept main's 4-arg `PatchEmbedding`.** The merged `language_model.cc` calls `PatchEmbedding(phase, input_embeds, copy, env)` (4-arg, from main) and the taken `input_processor.h` declares the 4-arg form. Resolve the `input_processor.cc` conflict to **ours** (no `SequenceManager.h`/`vision_model.h` include), then change our `PatchEmbedding` definition signature to match the header, leaving `env` unused in Phase 1:
+- [x] **Step 1: `input_processor` — accept main's 4-arg `PatchEmbedding`.** The merged `language_model.cc` calls `PatchEmbedding(phase, input_embeds, copy, env)` (4-arg, from main) and the taken `input_processor.h` declares the 4-arg form. Resolve the `input_processor.cc` conflict to **ours** (no `SequenceManager.h`/`vision_model.h` include), then change our `PatchEmbedding` definition signature to match the header, leaving `env` unused in Phase 1:
 ```bash
 git checkout --ours src/turbomind/models/input_processor.cc
 ```
@@ -247,14 +247,14 @@ void InputProcessor::PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, 
 ```
 Stage: `git add src/turbomind/models/input_processor.cc`. (W1, Task 2.6, replaces the `(void)env;` placeholders with the real multimodal merge.)
 
-- [ ] **Step 2: `model_executor.h` — force ours.** Main adds a `VisionModel*` ctor param + `#include vision_model.h`; only `engine.cc` (resolved-to-ours) constructs `ModelExecutor`, so keep our header. Our version == base (we didn't change it):
+- [x] **Step 2: `model_executor.h` — force ours.** Main adds a `VisionModel*` ctor param + `#include vision_model.h`; only `engine.cc` (resolved-to-ours) constructs `ModelExecutor`, so keep our header. Our version == base (we didn't change it):
 ```bash
 git checkout HEAD -- src/turbomind/engine/model_executor.h
 git add src/turbomind/engine/model_executor.h
 ```
 W1 restores main's version and threads the vision param.
 
-- [ ] **Step 3: `model_root.h` — force ours.** Main adds `vision_model_ptr()` + a `VisionModelWeight` child; not needed until W1 (Phase 1 loads no VLM). Keep our header:
+- [x] **Step 3: `model_root.h` — force ours.** Main adds `vision_model_ptr()` + a `VisionModelWeight` child; not needed until W1 (Phase 1 loads no VLM). Keep our header:
 ```bash
 git checkout HEAD -- src/turbomind/models/model_root.h
 git add src/turbomind/models/model_root.h
@@ -267,12 +267,12 @@ Only the vit-specific `.cc`/`.cu` **compile units** are excluded from CMake. **A
 
 **Files:** `src/turbomind/models/CMakeLists.txt`, `src/turbomind/kernels/norm/CMakeLists.txt`, `src/turbomind/python/CMakeLists.txt`, and any `add_subdirectory(qwen3_5vit)` location.
 
-- [ ] **Step 1: Find the vit-source CMake wiring**
+- [x] **Step 1: Find the vit-source CMake wiring**
 ```bash
 git grep -n "qwen3_5vit\|vision_model\|layer_norm_weight\|norm/layer_norm\|add_subdirectory(qwen3_5vit)\|kernels/norm" -- 'src/turbomind/**/CMakeLists.txt'
 ```
 
-- [ ] **Step 2: Comment out (don't delete) the vit-specific compile units** with a restore marker: `qwen3_5vit/*.cc/.cu`, `vision_model.cc`, `vision_model_weight.cc` (if it exists), `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`, and any vit `.cu` test targets:
+- [x] **Step 2: Comment out (don't delete) the vit-specific compile units** with a restore marker: `qwen3_5vit/*.cc/.cu`, `vision_model.cc`, `vision_model_weight.cc` (if it exists), `layer_norm_weight.cc`, `kernels/norm/layer_norm.cu`, and any vit `.cu` test targets:
 ```cmake
 # TODO(merge-W1): re-enable qwen3.5-vit sources after vit integration
 # add_subdirectory(qwen3_5vit)
@@ -281,7 +281,7 @@ git grep -n "qwen3_5vit\|vision_model\|layer_norm_weight\|norm/layer_norm\|add_s
 ```
 Do **not** exclude headers and do **not** touch `bind.cpp` here.
 
-- [ ] **Step 3: Stage**
+- [x] **Step 3: Stage**
 ```bash
 git add src/turbomind/models/CMakeLists.txt src/turbomind/python/CMakeLists.txt
 # plus kernels/norm/CMakeLists.txt and any other edited CMakeLists.txt
@@ -294,27 +294,27 @@ The exact exclusion set is finalized by the Task 1.9 build — iterate 1.7 ↔ 1
 - `bind.cpp`: main's `py::class_<SessionParam>` binds `start`/`end` (`&SessionParam::start_flag`/`end_flag`) and its init sets `param.start_flag`/`end_flag`; plus a `model_request->End(cb, session_id)` ("end"/`session_id`) binding. **Reduce the `SessionParam` binding to `id`/`step` only and delete the `End` binding; keep our `Cancel` binding and the (header-only) vit bindings.**
 - `model_request.h`/`.cc`: drop any leaked `void End(...)` decl/def and any `param.session.start_flag/end_flag` use. Keep our `Cancel`, and keep the legitimate `param.session.id`/`param.session.step` (our request-id/step carrier) and the auto-merged `r->mm_inputs = param.mm_inputs;` and get_ppl `ce_loss` alloc.
 
-- [ ] **Step 1: Grep for the removed symbols** (these are precise — `SessionParam`/`session_id_`/`session_len_` are *legitimate* and intentionally not matched):
+- [x] **Step 1: Grep for the removed symbols** (these are precise — `SessionParam`/`session_id_`/`session_len_` are *legitimate* and intentionally not matched):
 ```bash
 git grep -n "start_flag\|end_flag\|kill_flag\|kill_reqs\|seq_mgr_\|->End(\|\.End(\|\"end\"\|session\.start_flag\|session\.end_flag" -- 'src/turbomind/*' \
   ':!src/turbomind/models/qwen3_5vit/*' ':!src/turbomind/models/vision_model*'
 ```
 Expected after fixes: no hits.
 
-- [ ] **Step 2: Remove each leak** by comparing `git show origin/main:<file>` vs `HEAD:<file>` and keeping our shape (no `End`, no `start_flag`/`end_flag`). Edit `bind.cpp` (`SessionParam` binding + `End` binding) and `model_request.{h,cc}` accordingly.
+- [x] **Step 2: Remove each leak** by comparing `git show origin/main:<file>` vs `HEAD:<file>` and keeping our shape (no `End`, no `start_flag`/`end_flag`). Edit `bind.cpp` (`SessionParam` binding + `End` binding) and `model_request.{h,cc}` accordingly.
 
-- [ ] **Step 3: Re-run the grep until clean.**
+- [x] **Step 3: Re-run the grep until clean.**
 
 ### Task 1.9: Configure and build (iterate)
 
-- [ ] **Step 1: Build (outside sandbox)**
+- [x] **Step 1: Build (outside sandbox)**
 ```bash
 cd /data/lmdeploy-memory/build
 sh ../my_generate.sh    # only if build/ not yet configured
 ninja
 ```
 
-- [ ] **Step 2: Fix iteratively** — expected trap categories:
+- [x] **Step 2: Fix iteratively** — expected trap categories:
   - `SessionParam::start_flag`/`end_flag` or `ModelRequest::End` referenced (in `bind.cpp`/`model_request`) → a Task 1.8 session/kill leak; strip it.
   - `RopeType::kMrope` not found → a leftover in an our-resolved file; convert to `MropeMode` (Task 1.5 pattern).
   - `PatchEmbedding` arity mismatch → align to the 4-arg form (Task 1.6 Step 1).
@@ -324,7 +324,7 @@ ninja
 
 ### Task 1.10: Verify the text / SSM path
 
-- [ ] **Step 1: Pick a free GPU, then run (outside sandbox):**
+- [x] **Step 1: Pick a free GPU, then run (outside sandbox):**
 ```bash
 cd /data/lmdeploy-memory
 python scripts/test_turbomind_model.py \
@@ -332,16 +332,16 @@ python scripts/test_turbomind_model.py \
   --cache-dir /mnt_cfs/huggingface_hub/hub/ \
   --tp 1 --gpus 0 --max-new-tokens 256
 ```
-- [ ] **Step 2: Read `--- response 0 ---`.** PASS = ≥128 coherent, on-topic tokens; confirm the gated-deltanet/linear-attention path ran (Qwen3.5 is hybrid). Gibberish/crash → debug + rebuild before committing.
+- [x] **Step 2: Read `--- response 0 ---`.** PASS = ≥128 coherent, on-topic tokens; confirm the gated-deltanet/linear-attention path ran (Qwen3.5 is hybrid). Gibberish/crash → debug + rebuild before committing.
 
 ### Task 1.11: Commit the merge
 
-- [ ] **Step 1: Confirm no unmerged paths or stray markers**
+- [x] **Step 1: Confirm no unmerged paths or stray markers**
 ```bash
 git diff --name-only --diff-filter=U          # expect empty
 git grep -n '^<<<<<<<\|^>>>>>>>\|^=======$' -- . || echo "no markers (good)"
 ```
-- [ ] **Step 2: Commit (finishes the merge)**
+- [x] **Step 2: Commit (finishes the merge)**
 ```bash
 git commit -m "$(cat <<'EOF'
 merge: integrate origin/main into memory-1a (structural)
@@ -398,11 +398,11 @@ Re-home the multimodal carrier, re-enable the vit sources + bindings, restore ma
 
 > `Request::mm_inputs` and the `multimodal_input.h` include already landed in Phase 1 (auto-merged + Task 1.3). W1 only adds the per-sequence feature vector.
 
-- [ ] **Step 1: Add the forward decl** (near the existing `struct Sequence;`):
+- [x] **Step 1: Add the forward decl** (near the existing `struct Sequence;`):
 ```cpp
 struct MultiModalData;  // defined in models/vision_model.h
 ```
-- [ ] **Step 2: Add the carrier to `Sequence`**, beside `input_embeds`:
+- [x] **Step 2: Add the carrier to `Sequence`**, beside `input_embeds`:
 ```cpp
     // persistent per-sequence vision features (qwen3.5-vit, W1)
     std::vector<std::shared_ptr<MultiModalData>> multimodal_inputs;
@@ -415,18 +415,18 @@ struct MultiModalData;  // defined in models/vision_model.h
 > sub-tree (see "Phase 1 execution notes"). W1 only restores the remaining
 > vision-aware header and re-enables the vision **encoder + kernels**.
 
-- [ ] **Step 1: Restore main's `model_executor.h`** (still force-ours'd in Phase 1; `input_processor.h`/`model_root.h` are already main's):
+- [x] **Step 1: Restore main's `model_executor.h`** (still force-ours'd in Phase 1; `input_processor.h`/`model_root.h` are already main's):
 ```bash
 git checkout origin/main -- src/turbomind/engine/model_executor.h
 ```
-- [ ] **Step 2: Uncomment the remaining `TODO(W1)`** vit sources in `src/turbomind/models/CMakeLists.txt` — the vision encoder + CUDA kernels (`vision_model.cc`, `qwen3_5vit/*.cu`, `qwen3_5vit/qwen3_5vit.cc`) and the `test_mrope_position_ids` test. The two weight `.cc` units are already compiled; the vit `bind.cpp` bindings were never commented (header-only) — nothing to do there.
-- [ ] **Step 3: Do not build yet** — engine threading (2.3–2.8) must land first.
+- [x] **Step 2: Uncomment the remaining `TODO(W1)`** vit sources in `src/turbomind/models/CMakeLists.txt` — the vision encoder + CUDA kernels (`vision_model.cc`, `qwen3_5vit/*.cu`, `qwen3_5vit/qwen3_5vit.cc`) and the `test_mrope_position_ids` test. The two weight `.cc` units are already compiled; the vit `bind.cpp` bindings were never commented (header-only) — nothing to do there.
+- [x] **Step 3: Do not build yet** — engine threading (2.3–2.8) must land first.
 
 ### Task 2.3: Thread `VisionModel` through the Engine
 
 **Files:** `src/turbomind/engine/engine.h`, `src/turbomind/engine/engine.cc`
 
-- [ ] **Step 1: `engine.h` — union our Phase-1 ctor with main's vision params:**
+- [x] **Step 1: `engine.h` — union our Phase-1 ctor with main's vision params:**
 ```cpp
     Engine(EngineParam                  param,
            ObjectAllocator              alloc,
@@ -441,14 +441,14 @@ git checkout origin/main -- src/turbomind/engine/model_executor.h
            int                          phases);
 ```
 Add `#include "src/turbomind/models/vision_model.h"` (or forward-declare `class VisionModel;`).
-- [ ] **Step 2: `engine.cc` — mirror in `Engine::Engine` and `Engine::Impl::Impl`** (decl + def), keeping our `object_allocator_`/`scheduler_` init, adding members `std::unique_ptr<VisionModel> vision_model_;` and `const ModelWeight& weights_;`, and forwarding through `make_unique<Impl>(...)`.
-- [ ] **Step 3: Build the engine to confirm signatures.**
+- [x] **Step 2: `engine.cc` — mirror in `Engine::Engine` and `Engine::Impl::Impl`** (decl + def), keeping our `object_allocator_`/`scheduler_` init, adding members `std::unique_ptr<VisionModel> vision_model_;` and `const ModelWeight& weights_;`, and forwarding through `make_unique<Impl>(...)`.
+- [x] **Step 3: Build the engine to confirm signatures.**
 
 ### Task 2.4: Construct the VisionModel + executor wiring
 
 **Files:** `src/turbomind/turbomind.cc`, `src/turbomind/engine/model_executor.cc`
 
-- [ ] **Step 1: In `turbomind.cc`, build the vision model and pass it to Engine** (mirror main `turbomind.cc:282-290`, adapted to our Engine ctor):
+- [x] **Step 1: In `turbomind.cc`, build the vision model and pass it to Engine** (mirror main `turbomind.cc:282-290`, adapted to our Engine ctor):
 ```cpp
     std::unique_ptr<VisionModel> vision_model;
     if (auto* vw = weights_[index]->vision_model_ptr()) {
@@ -457,7 +457,7 @@ Add `#include "src/turbomind/models/vision_model.h"` (or forward-declare `class 
     // ... pass std::move(vision_model) and *weights_[index]->text_model_ptr() into Engine(...)
 ```
 Add includes for `vision_model.h` / `vision_model_weight.h`. Remove any main warm-up `param.session.*` lines if present (we have no session).
-- [ ] **Step 2: `model_executor.cc` — run the encoder before restore copies** (now that `model_executor.h` carries `VisionModel*`):
+- [x] **Step 2: `model_executor.cc` — run the encoder before restore copies** (now that `model_executor.h` carries `VisionModel*`):
 ```cpp
         if (vision_model_) {
             vision_model_->Run(BatchOp::kPrepare, d.phase, env);
@@ -470,7 +470,7 @@ Thread `VisionModel*` into the executor following main's `model_executor.h` ctor
 
 **Files:** `src/turbomind/models/qwen3_5vit/qwen3_5vit.cc`
 
-- [ ] **Step 1: Map main's `RequestCache` to our `Sequence`, drop the interactive guard.** In our arch `env.at("requests")` yields `Sequence*` (has `->req`):
+- [x] **Step 1: Map main's `RequestCache` to our `Sequence`, drop the interactive guard.** In our arch `env.at("requests")` yields `Sequence*` (has `->req`):
 ```cpp
     int Add(Sequence& s)
     {
@@ -513,13 +513,13 @@ Delete the `if ((not r.session.start_flag) or (not r.session.end_flag))` block. 
 
 **Files:** `src/turbomind/models/input_processor.cc`
 
-- [ ] **Step 1: Port main's multimodal embedding handling into `PatchEmbedding`, using the `env` param** (now declared). Compare `git show origin/main:src/turbomind/models/input_processor.cc`. Re-add the `input_embedding_ranges`/`input_embeddings` → `s.input_embeds` logic and the fused vision-embed merge that reads from `env`, but **drop the `if (!r.session.end_flag) clone` branch** (stateless = no persist, reference directly). Keep our `step0`/`seq_len` range math.
+- [x] **Step 1: Port main's multimodal embedding handling into `PatchEmbedding`, using the `env` param** (now declared). Compare `git show origin/main:src/turbomind/models/input_processor.cc`. Re-add the `input_embedding_ranges`/`input_embeddings` → `s.input_embeds` logic and the fused vision-embed merge that reads from `env`, but **drop the `if (!r.session.end_flag) clone` branch** (stateless = no persist, reference directly). Keep our `step0`/`seq_len` range math.
 
 ### Task 2.7: mrope vision env-source
 
 **Files:** `src/turbomind/models/llama/unified_attention_layer.cc` (and the vit encoder that produces env mrope tensors)
 
-- [ ] **Step 1: Add main's env-source branch** in front of the Phase-1 legacy block, so the C++ vision encoder's device tensors are borrowed with no copy when present:
+- [x] **Step 1: Add main's env-source branch** in front of the Phase-1 legacy block, so the C++ vision encoder's device tensors are borrowed with no copy when present:
 ```cpp
     else if (rope_param_.mrope_mode != MropeMode::kNone) {
         if (env.try_("mrope_length")) {
@@ -535,14 +535,14 @@ Delete the `if ((not r.session.start_flag) or (not r.session.end_flag))` block. 
 ```
 Confirm `Tensor_<int>::borrow()` / `Buffer_<int>::borrow()` exist in our core (they are main's APIs on main's core types; if our core renamed them, use the equivalent non-owning view). Build to confirm.
 
-- [ ] **Step 2: Confirm the vit encoder produces the env tensors** (`qwen3_5vit` emits `mrope_length`/`mrope_position_delta`/`mrope_position_ids` into `env`) and the layouts match FastRoPE (3-row position ids; see `git show origin/main:src/turbomind/models/qwen3_5vit/mrope_position_ids.cu`).
+- [x] **Step 2: Confirm the vit encoder produces the env tensors** (`qwen3_5vit` emits `mrope_length`/`mrope_position_delta`/`mrope_position_ids` into `env`) and the layouts match FastRoPE (3-row position ids; see `git show origin/main:src/turbomind/models/qwen3_5vit/mrope_position_ids.cu`).
 
 ### Task 2.8: Build, fix, verify
 
-- [ ] **Step 1: Build** (`cd build && ninja`); iterate. New objects: `qwen3_5vit/*`, `vision_model.cc`, `layer_norm_weight.cc`.
-- [ ] **Step 2: Re-run the leak grep** (Task 1.8 Step 1) — still **zero** `session`/`kill`/`seq_mgr_` hits; `mm_inputs`/`VisionModel` now legitimately present in vit/engine wiring.
-- [ ] **Step 3: Regression — re-verify text/SSM** (Task 1.10 command). Must PASS.
-- [ ] **Step 4: VL check (best-effort).** Fetch the image (may need non-sandbox network):
+- [x] **Step 1: Build** (`cd build && ninja`); iterate. New objects: `qwen3_5vit/*`, `vision_model.cc`, `layer_norm_weight.cc`.
+- [x] **Step 2: Re-run the leak grep** (Task 1.8 Step 1) — still **zero** `session`/`kill`/`seq_mgr_` hits; `mm_inputs`/`VisionModel` now legitimately present in vit/engine wiring.
+- [x] **Step 3: Regression — re-verify text/SSM** (Task 1.10 command). Must PASS.
+- [x] **Step 4: VL check (best-effort).** Fetch the image (may need non-sandbox network):
 ```bash
 curl -L -o /tmp/tiger.jpeg \
   https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg
@@ -551,7 +551,7 @@ Run a qwen3.5-vl image+prompt inference ("Describe this image.") and confirm the
 
 ### Task 2.9: Commit W1
 
-- [ ] **Step 1:**
+- [x] **Step 1:**
 ```bash
 git add -A
 git commit -m "$(cat <<'EOF'
