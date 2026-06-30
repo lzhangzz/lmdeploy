@@ -80,4 +80,13 @@ inline PrefixKey ExtendPrefixKey(PrefixKey key, TokenSpan tokens)
     return key;
 }
 
+inline PrefixKey ExtendPrefixKey(PrefixKey key, TokenSpan tokens, const std::vector<Fingerprint>& fps)
+{
+    key = ExtendPrefixKey(key, tokens);  // existing token fold
+    for (const Fingerprint& fp : fps) {
+        key.hash = HashCombine(key.hash, fp);
+    }
+    return key;
+}
+
 }  // namespace turbomind
