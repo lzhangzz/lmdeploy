@@ -10,6 +10,7 @@
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/engine/prompt_boundary.h"
 #include "src/turbomind/memory/common.h"
 
 namespace turbomind {
@@ -444,45 +445,45 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         }
     }
 
-    // Prompt-boundary publish point (fork_to): only when cache_prompt_boundary
-    // is enabled and the last block is partial and was not the location of the
-    // first miss (where Search above already covers the boundary). The node
-    // excludes the last prompt token so it ends at prompt_len-1 (the reusable
-    // position under the seq_len-1 resume cap).
+    // Prompt-boundary publish point (fork_to): only when cache_prompt_boundary is
+    // enabled. The node ends at the reusable boundary B = prompt_len - K (K =
+    // cache_prompt_boundary_skip, default 1). A partial node is published when B
+    // is inside a block (B % bs != 0); a block-aligned B only arms the clamp.
     if (prompt_boundary) {
-        if (const int last = all_blocks - 1; prompt % bs != 0 && st.miss < last) {
-            const int full_size = prompt - last * bs;  // partial tail length (1..bs-1)
-            const int node_size = full_size - 1;       // exclude the last prompt token
+        const auto plan = PlanPromptBoundary(prompt, bs, cache_prompt_boundary_skip_, st.miss);
+        if (plan.valid) {
+            bool have_target = true;
 
-            bool have_target = full_size == 1;  // prompt_len-1 is the prior block boundary (full-block node)
-
-            if (node_size >= 1) {
-                LogicalBlock& x      = *s.block_ids.back();
-                const auto    tokens = TokenSegment(s, last * bs, node_size);
+            if (plan.partial) {
+                const int     j      = plan.block;  // j >= 1 (guaranteed by the planner)
+                LogicalBlock& x      = *s.block_ids[j];
+                const auto    tokens = TokenSegment(s, j * bs, plan.node_size);
 
                 std::vector<Fingerprint> fps;
-                CollectStartFps(s, last * bs, last * bs + node_size, fps);
+                CollectStartFps(s, j * bs, j * bs + plan.node_size, fps);
 
-                const auto    next = ExtendPrefixKey(st.key, tokens, fps);
-                BlockHandle   vh   = logical_.Create(last);
+                const auto    next = ExtendPrefixKey(s.block_ids[j - 1]->key, tokens, fps);
+                BlockHandle   vh   = logical_.Create(j);
                 LogicalBlock& y    = *vh;
-                y.parent           = st.parent;
+                y.parent           = s.block_ids[j - 1].get();
                 y.key              = next;
-                y.size             = node_size;
+                y.size             = plan.node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
                 y.image_fps        = fps;
                 y.prefix_id        = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
-                    x.fork_to   = std::move(vh);  // edge holds the only ref
-                    have_target = true;
+                    x.fork_to = std::move(vh);  // edge holds the only ref
                 }
                 else {
-                    LogCollision(s, CollisionSite::kPromptBoundary, last * bs, last * bs + node_size);
-                    // undiscoverable: vh drops at scope end -> recycle
+                    LogCollision(s, CollisionSite::kPromptBoundary, j * bs, j * bs + plan.node_size);
+                    have_target = false;  // undiscoverable: vh drops at scope end -> recycle
                 }
             }
 
-            s.prompt_boundary_node = have_target;  // clamp the producer's prefill to prompt_len-1
+            if (have_target) {
+                s.prompt_boundary_node = true;
+                s.prompt_boundary_pos  = plan.pos;  // clamp the producer's prefill to B
+            }
         }
     }
 }
@@ -944,7 +945,7 @@ bool Scheduler::ResolvePublishPromptBoundary(Sequence& s)
     return s.prompt_boundary_publish == 1;
 }
 
-// Prompt-boundary group (caller guarantees end == prompt_len-1): fork_to KV copy +
+// Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): fork_to KV copy +
 // checkpoint, both partial-block, bypassing the min-interval.
 void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
@@ -954,8 +955,8 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
         pass.has_optionals   = true;
     }
 
-    // (b) checkpoint onto the fork_to node, or the block itself for a
-    // single-tail-token prompt (prompt_len-1 is a block boundary).
+    // (b) checkpoint onto the fork_to node, or the block itself when
+    // block-aligned B is a block boundary.
     if (s.publish_cache_id) {
         LogicalBlock& x          = *s.block_ids[(end - 1) / logical_.block_size()];
         const bool    at_block   = x.offset + x.capacity == end;
@@ -1112,22 +1113,22 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         s.history_len = s.resume_len;
 
         // Land the forward end on a checkpoint candidate. The prompt-boundary
-        // clamp (forward ends exactly at prompt_len-1) takes precedence;
+        // clamp (forward ends exactly at B) takes precedence;
         // otherwise truncate partial prefill chunks to a block boundary.
         const int begin   = s.resume_len + s.inflight_input_len;
         const int ctx_end = s.seq_len + s.inflight_new_tokens;  // == prompt_len for a fresh prefill
         int       desired = begin + admitted;
 
-        const int prompt_boundary_pos = s.prompt_len - 1;
+        const int prompt_boundary_pos = s.prompt_boundary_pos;
 
-        // Consult the policy only on the pass that can reach prompt_len-1; >= so an
+        // Consult the policy only on the pass that can reach B; >= so an
         // exact landing isn't truncated away. On a veto, skip the clamp.
         const bool is_prompt_boundary =
             s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
         const bool publish_prompt = is_prompt_boundary && ResolvePublishPromptBoundary(s);
 
         if (publish_prompt) {
-            desired = prompt_boundary_pos;  // land exactly on prompt_len-1
+            desired = prompt_boundary_pos;  // land exactly on B
         }
         else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
             desired = desired / bs * bs;
@@ -1437,9 +1438,12 @@ void LogAccept(const Sequence& s, int bs)
     if (all - matched > 0 && prompt % bs) {
         clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
     }
-    if (!s.block_ids.empty() && s.block_ids.back()->fork_to) {
-        const LogicalBlock& ft = *s.block_ids.back()->fork_to;
-        ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+    if (s.prompt_boundary_pos > 0) {
+        const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
+        if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
+            const LogicalBlock& ft = *s.block_ids[j]->fork_to;
+            ctail                  = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+        }
     }
     TM_LOG_INFO("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
                 s.req->id,

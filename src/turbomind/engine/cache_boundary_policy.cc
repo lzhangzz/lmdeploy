@@ -14,7 +14,7 @@ AutoCacheBoundaryPolicy::AutoCacheBoundaryPolicy(int min_interval, bool prompt_b
 
 bool AutoCacheBoundaryPolicy::PublishPromptBoundary(const Sequence& s) const
 {
-    return prompt_boundary_ && threshold_ > 0 && (s.prompt_len - 1) - s.last_ckpt_pos >= threshold_;
+    return prompt_boundary_ && threshold_ > 0 && s.prompt_boundary_pos - s.last_ckpt_pos >= threshold_;
 }
 
 bool AutoCacheBoundaryPolicy::PublishGenerationBoundary(const Sequence& s) const
