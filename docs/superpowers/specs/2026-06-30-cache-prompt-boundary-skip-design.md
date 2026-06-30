@@ -36,7 +36,8 @@ published node covers `[H] + [G]` minus one token, so it still contains
 whole-block boundary, losing the partial-tail reuse.
 
 **Solution.** Make the excluded-suffix length a single engine-level integer `K`
-(`cache_prompt_boundary_skip`, default 1 = today's behavior), and publish the
+(`cache_prompt_boundary_skip`, default 1 = the legacy `prompt_len-1` position),
+and publish the
 boundary node at `B = prompt_len - K`, placed in whatever block contains `B`.
 
 **Why a global config (not per-request).** The volatile suffix is a property of
@@ -175,19 +176,35 @@ if (cache_prompt_boundary_) {
 length (`prompt_len - last*bs`), not a full block — a misleading name. If a
 comment still needs that quantity it uses `tail_len`.
 
-**Equivalence at `K = 1`:**
+**Design principle (gate is matchability, not backward-compat).** When
+`cache_prompt_boundary` is enabled the goal is to publish a node a *later* request
+can match all the way to `B` with nothing excluded. The gate is therefore purely
+`B`'s alignment — a partial node when `B` is mid-block (`B % bs != 0`), the
+already-tiling whole blocks plus a checkpoint when `B` is block-aligned. There is
+**no `skip == 1` special case**; we do not suppress a boundary to reproduce the
+old `prompt % bs != 0` guard, because that guard preserved a *defect*:
 
-- `prompt_len % bs > 1`: `B = prompt_len-1`, `B % bs != 0`, `j = last`,
+- A duplicate **block-aligned** prompt under the old code could resume only at the
+  last whole-block boundary `prompt_len - bs` (recurrent state falls back a full
+  block); a boundary node at `B = prompt_len - 1` lets it resume at `prompt_len-1`.
+- The **think + full-block case**: when round 1's last block is full and contains
+  the volatile suffix, round 2 cannot match that full block, so the boundary node
+  at `B = prompt_len - K` is the only way round 2 reuses that tail.
+
+Behavior relative to today:
+
+- `prompt_len % bs > 1`, `K = 1`: `B = prompt_len-1`, `B % bs != 0`, `j = last`,
   `node_size = tail_len-1` → partial branch, identical node to today.
-- `prompt_len % bs == 1`: `B = last*bs`, `B % bs == 0`, `j = last-1` →
-  block-aligned branch with `st.miss <= j` (= today's `st.miss < last`),
-  `have_target = true`, no partial node — exactly today's `full_size == 1` case.
+- `prompt_len % bs == 1`, `K = 1`: `B = last*bs`, `B % bs == 0`, `j = last-1` →
+  block-aligned branch (`st.miss <= j` = today's `st.miss < last`), no partial
+  node — exactly today's `full_size == 1` case.
 - block-aligned prompt (`prompt_len % bs == 0`), `K = 1`: `B = prompt_len-1`,
-  `B % bs != 0`, `j = last`, `node_size = bs-1` → partial branch. Today this was
-  skipped by the old `prompt % bs != 0` guard. **Decision: keep the new behavior**
-  (block-aligned prompts also gain a partial boundary node at `K=1`); the prior
-  guard was the prompt's alignment, but the correct quantity is `B`'s alignment.
-  This is a small extra reuse win, not a correctness change.
+  `B % bs != 0`, `j = last`, `node_size = bs-1` → partial branch. The old code
+  skipped this; we now publish it. **Deliberate improvement** (a matchable
+  boundary for duplicate/think prompts), at the standard feature cost of one extra
+  prefill forward; never a correctness change (exact token compare). So `K = 1` is
+  a no-op for partial-tail prompts and a strict improvement for block-aligned
+  prompts.
 
 **Why keep the block-aligned `else` branch / the `< j` vs `<= j` asymmetry.** The
 block-aligned branch's only job is to force a recurrent **checkpoint** at `B` via
@@ -249,7 +266,9 @@ Comment-only updates: `scheduler.cc:452, 949, 960, 1117, 1125, 1132` change the
 wording from `prompt_len-1` to `B (prompt_len - K)`.
 
 At `K = 1`, `prompt_boundary_pos == prompt_len - 1` for every sequence that sets
-it, so (a) and (b) are bit-identical to today.
+it. (a) and (b) read `prompt_boundary_pos`, which equals `prompt_len-1` at
+`K=1`; the only `K=1` difference vs today is §4's added block-aligned-prompt
+boundary, not these sites.
 
 ## 6. Contract sync (`src/turbomind/engine/README.md`)
 
@@ -274,8 +293,9 @@ Content-only edits (no prose re-wrapping):
 - **`concepts`** — one line: `cache_prompt_boundary_skip` is the engine knob and
   `Sequence::prompt_boundary_pos` is its per-sequence resolved boundary `B`.
 
-Semantics are unchanged at the default (`skip == 1` => `B == prompt_len-1`); the
-contract simply gains the configurable-`B` vocabulary.
+At the default `skip == 1`, `B == prompt_len-1` (the legacy position); §4
+additionally publishes a boundary for block-aligned prompts (a strict
+improvement). The contract gains the configurable-`B` vocabulary.
 
 ## 7. Testing
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let the reusable prompt-boundary (`fork_to`) node end at a configurable `B = prompt_len - K` (engine knob `cache_prompt_boundary_skip`, default 1 = today's behavior) so thinking models whose chat template appends a multi-token volatile suffix (e.g. `<think>\n`) still get partial-tail prefix reuse on the next turn.
+**Goal:** Let the reusable prompt-boundary (`fork_to`) node end at a configurable `B = prompt_len - K` (engine knob `cache_prompt_boundary_skip`, default 1 = the legacy `prompt_len-1` position) so thinking models whose chat template appends a multi-token volatile suffix (e.g. `<think>\n`) still get partial-tail prefix reuse on the next turn. The gate is matchability: publish a boundary a later request can match up to `B` with no exclusion — including block-aligned prompts the old code skipped.
 
 **Architecture:** A single engine-level integer flows Python → `EngineConfig` → `Scheduler`. A pure geometry function `PlanPromptBoundary(prompt_len, block_size, skip, miss)` decides where the boundary lands and whether a partial node is needed (`B % block_size != 0`). `SetupForks` consumes it and stores `Sequence::prompt_boundary_pos`; the admission clamp and the auto boundary policy read that field instead of the literal `prompt_len - 1`.
 
@@ -146,7 +146,7 @@ Expected: links cleanly. (If `build/` is not configured yet: `sh ../my_generate.
 
 ```bash
 git add lmdeploy/messages.py lmdeploy/turbomind/turbomind.py src/turbomind/engine/engine_config.h src/turbomind/engine/scheduler.h src/turbomind/engine/scheduler.cc src/turbomind/engine/engine.cc src/turbomind/engine/request.h
-git commit -m "feat(turbomind): add cache_prompt_boundary_skip config knob (default 1, no-op)"
+git commit -m "feat(turbomind): add cache_prompt_boundary_skip config knob (default 1, legacy boundary)"
 ```
 
 ---
@@ -214,6 +214,26 @@ TEST_CASE("PlanPromptBoundary: geometry and guards", "[prompt_boundary]")
         REQUIRE(p.valid);
         REQUIRE_FALSE(p.partial);
         REQUIRE(p.pos == 16);
+    }
+    // Block-aligned PROMPT at K=1 (prompt%bs==0): NOT suppressed -- a matchable
+    // boundary is published (option B; old code skipped this).
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/16, bs, /*skip=*/1, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 15);       // 16 - 1
+        REQUIRE(p.block == 1);      // (15-1)/8
+        REQUIRE(p.node_size == 7);  // 15 - 8
+    }
+    // Think + full-block case: block-aligned prompt, K=2 -> partial node before
+    // the volatile suffix that lives in the last full block.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/16, bs, /*skip=*/2, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 14);       // 16 - 2
+        REQUIRE(p.block == 1);      // (14-1)/8
+        REQUIRE(p.node_size == 6);  // 14 - 8
     }
     // B < 1 -> no boundary.
     {
@@ -309,7 +329,7 @@ git commit -m "test(turbomind): add pure PlanPromptBoundary geometry + unit test
 
 ## Task 3: Wire `PlanPromptBoundary` into `SetupForks` and read `prompt_boundary_pos` downstream
 
-This is the behavior change. At `K = 1` it is bit-identical to today; `K > 1` moves the boundary back.
+This is the behavior change. At `K = 1` the boundary keeps the legacy position `prompt_len-1`: a no-op for partial-tail prompts, and a deliberate improvement for block-aligned prompts (which the old code skipped — see spec §4). `K > 1` moves the boundary back to drop the volatile suffix.
 
 **Files:**
 - Modify: `src/turbomind/engine/scheduler.cc` (`SetupForks` `:454-489`; clamp `:1123`; comments `:452,1117,1125,1132,949,960`)
@@ -399,6 +419,22 @@ In `src/turbomind/engine/cache_boundary_policy.cc:17`, change the return to:
 
 In `src/turbomind/engine/scheduler.cc`, update comment `:949` from `(caller guarantees end == prompt_len-1)` to `(caller guarantees end == B == prompt_boundary_pos)`, and comment `:960` `single-tail-token prompt (prompt_len-1 is a block boundary)` to `block-aligned B is a block boundary`. (Comment-only; the `(end-1)/bs` / `offset+size` logic is already geometry-driven and unchanged.)
 
+- [ ] **Step 4b: Fix `LogAccept` to find `fork_to` on the boundary block**
+
+`LogAccept` (`scheduler.cc:1442`) logs the published node by reading `s.block_ids.back()->fork_to`. With generalized placement the node can live on block `j = (B-1)/bs` which is **not** the last block (e.g. `K > 1`, or a partial node followed by volatile-suffix blocks). The current code would silently drop the `fork_to@...` log line in those cases. Locate the block from `prompt_boundary_pos`:
+
+```cpp
+    if (s.prompt_boundary_pos > 0) {
+        const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
+        if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
+            const LogicalBlock& ft = *s.block_ids[j]->fork_to;
+            ctail = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+        }
+    }
+```
+
+This is logging-only (no scheduling effect), but keeps the diagnostic correct for `K > 1` and block-aligned-prompt boundaries. Note block-aligned `B` publishes no partial node (only a checkpoint), so `ctail` stays empty there — expected.
+
 - [ ] **Step 5: Build**
 
 Run (from `build/`): `ninja`
@@ -418,7 +454,7 @@ python scripts/test_turbomind_model.py \
   --max-new-tokens 128
 ```
 
-Expected: a coherent, on-topic response of ≥128 tokens (gibberish = bug). Verify the response is meaningful human text. (`cache_prompt_boundary_skip` defaults to 1, so output must match a run without the new knob.)
+Expected: a coherent, on-topic response of ≥128 tokens (gibberish = bug). Verify the response is meaningful human text. At the default `cache_prompt_boundary_skip = 1` the boundary stays at `prompt_len-1`; output must remain correct/coherent. Note this is a *correctness* check, not bit-for-bit log equality: block-aligned prompts now publish an extra `fork_to` boundary (intended, see spec §4), so a `fork_to@...` line may appear where the prior commit had none — the generated text must still be coherent and on-topic.
 
 - [ ] **Step 7: Commit**
 
