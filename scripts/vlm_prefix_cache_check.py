@@ -4,15 +4,16 @@
 Scenarios (greedy decoding, sequential requests in one pipeline so the 2nd sees
 the 1st's published blocks):
 
-  reuse    same image + same prompt twice, stand-in fingerprint injected.
-           Expect: warm request reuses the image span -> ViT logs images_batched=0
-           (skip); warm text == cold text.
-  distinct two DIFFERENT images of equal token length, fingerprints injected.
-           Expect: NO false hit -> the 2nd image is re-encoded (no ViT line with
-           images_batched=0); both outputs non-empty.
-  dormant  same image twice, NO fingerprint injected (empty fp).
-           Expect: image reuse stays dormant -> 2nd image re-encoded (no
-           images_batched=0 line); outputs non-empty and equal (recompute).
+  reuse    same image + same prompt twice, real generator computes the digest.
+           Expect: warm request reuses the image span -> only the cold image is
+           encoded (images_encoded == 1); warm text == cold text.
+  distinct two DIFFERENT images of equal token length, real generator computes
+           the digest. Expect: NO false hit -> both images are encoded
+           (images_encoded == 2); both outputs non-empty.
+  dormant  same image twice, fingerprints forced empty via a test-only patch
+           (b'' pre-placed on each item; the is-not-None hook keeps it empty).
+           Expect: image reuse stays dormant -> both images re-encoded
+           (images_encoded == 2); outputs equal (recompute is deterministic).
 
 Run OUTSIDE the sandbox (needs a GPU):
 
@@ -24,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import hashlib
 import os
 import re
 import sys
@@ -53,26 +53,28 @@ def make_image(seed: int, size=(448, 448)):
     return img
 
 
-def install_fingerprint_patch() -> None:
-    """Inject sha256(pixels) at the converter input dict; exercises the real
-    `input_mm.get('fingerprint')` path. Mirrors the future generator."""
+def install_dormant_patch() -> None:
+    """Force empty fingerprints so image-span reuse stays dormant.
+
+    Pre-places `fingerprint = b''` on each item dict before the converter reads
+    it; the converter's `is-not-None` hook treats an explicit b'' as 'use as-is',
+    so the digest stays empty (empty never compares equal -> no image-span match).
+    Test scaffolding only -- the real generator (phase A) always populates a
+    real digest, so this just re-creates the pre-PR dormant state for the
+    negative-control scenario.
+    """
     from lmdeploy.turbomind.models.qwen3_5 import Qwen3_5VisionModel
-    if getattr(Qwen3_5VisionModel, '_fp_patched', False):
+    if getattr(Qwen3_5VisionModel, '_fp_dormant_patched', False):
         return
     _orig = Qwen3_5VisionModel.to_turbomind_multimodal
 
     def _patched(self, multimodal):
-        import torch
         for mm in multimodal:
-            pv = mm.get('pixel_values', mm.get('pixel_values_videos'))
-            # Reinterpret the raw tensor bytes as uint8 so the digest is dtype-agnostic
-            # (numpy cannot consume bfloat16 directly). Deterministic per pixel content.
-            raw = pv.contiguous().cpu().view(torch.uint8).numpy().tobytes()
-            mm['fingerprint'] = hashlib.sha256(raw).digest()
+            mm['fingerprint'] = b''
         return _orig(self, multimodal)
 
     Qwen3_5VisionModel.to_turbomind_multimodal = _patched
-    Qwen3_5VisionModel._fp_patched = True
+    Qwen3_5VisionModel._fp_dormant_patched = True
 
 
 @contextlib.contextmanager
@@ -121,9 +123,9 @@ def run(args) -> int:
     # setdefault()s it, so set it explicitly to guarantee the INFO lines we assert on.
     os.environ['TM_LOG_LEVEL'] = 'INFO'
 
-    inject = args.scenario in ('reuse', 'distinct')
-    if inject:
-        install_fingerprint_patch()
+    force_empty = args.scenario == 'dormant'
+    if force_empty:
+        install_dormant_patch()
 
     if args.scenario == 'distinct':
         images = [make_image(1), make_image(2)]  # different content, equal size
@@ -159,7 +161,7 @@ def run(args) -> int:
     vit, matched, resume = parse_log(log_path)
 
     # --- report (now that fds are restored) ---
-    print(f'=== scenario: {args.scenario} (inject_fingerprint={inject}) ===')
+    print(f'=== scenario: {args.scenario} (force_empty_fingerprint={force_empty}) ===')
     print(f'log: {log_path}')
     for i, t in enumerate(texts):
         print(f'--- response {i} ({len(t)} chars) ---')
