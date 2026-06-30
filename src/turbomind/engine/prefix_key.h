@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/engine/fingerprint.h"
 
 namespace turbomind {
 
@@ -35,6 +36,14 @@ inline TokenSpan MakeTokenSpan(const int* data, int size) noexcept
 inline size_t HashCombine(size_t seed, size_t value) noexcept
 {
     return seed ^ (value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
+}
+
+inline size_t HashCombine(size_t seed, const Fingerprint& fp) noexcept
+{
+    for (uint64_t w : fp.words) {
+        seed = HashCombine(seed, static_cast<size_t>(w));
+    }
+    return seed;
 }
 
 struct PrefixKey {
