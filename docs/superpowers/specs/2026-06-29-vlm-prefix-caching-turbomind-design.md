@@ -197,6 +197,21 @@ features are enabled — off by default) must fold and exact-compare start-
 fingerprints the same way. With the boundary knobs off (default), this path is
 inactive; no default-config behavior change.
 
+**(g) `PublishGeneration` indexing** (`scheduler.cc:711`) is a third indexing
+site and must fold the same way. `CreateMissingBlocks` leaves the prompt-tail
+block private when `size < bs`; once generation extends the sequence,
+`PublishGeneration` indexes that block as a **full** block (`[prompt tail] +
+[first generated tokens]`), and a later multi-turn request whose longer prompt
+re-includes that span matches it via `MatchPrompt`. An image start can only fall
+in this prompt-tail block — generated positions never carry one — so the folding
+is guarded by `x.offset < s.prompt_len` and scans just that block. Without it the
+published node would be token-only, diverging from the identity `Accept` rebuilds:
+that both loses legitimate reuse and, in narrow token-alignment cases (an image
+starting at the prompt-tail block boundary), risks a false hit against a different
+image's KV. Folding makes the identity (token + parent + image-start fingerprint)
+uniform across **all** lookup and indexing sites, so the safety does not rely on
+the native-path "image_token_id ⇔ span start" invariant.
+
 ## 4. Deriving start-fingerprints from the sequence
 
 `MultiModalData` must stay **opaque** to the engine. The engine already holds
@@ -358,10 +373,14 @@ multimodal and need no change.
   > carry no fingerprint of their own — their identity is carried by the
   > cumulative key and the parent chain, since the image's first block
   > exact-compares the fingerprint. Hash equality alone is never identity.
-- `contracts.prefix-prepare` — add: `Accept` folds each image's fingerprint into
-  the cumulative key at the block where the image starts (from
-  `Sequence::multimodal_spans`) and stores it on that `LogicalBlock`; partial-block
-  `Search` applies the same folding when the boundary knobs are enabled.
+- `contracts.prefix-prepare` — add: every indexing site folds each image's
+  fingerprint into the cumulative key at the block where the image starts (from
+  `Sequence::multimodal_spans`) and stores it on that `LogicalBlock` — `Accept`'s
+  block creation, the partial-block `Search` when the boundary knobs are enabled,
+  and `PublishGeneration` when it later indexes the prompt-tail block that block
+  creation left private. The folding is uniform across lookup and indexing, so a
+  published prompt-tail node has the same identity a future request's `Accept`
+  rebuilds.
 - Optionally a one-line `concepts` note that `Sequence::multimodal_spans` is the
   engine-visible `(token span, fingerprint)` projection, while
   `multimodal_inputs` stays opaque.
@@ -488,9 +507,9 @@ per available GPU memory from `nvidia-smi` (a 27B model in fp16 needs ~54 GB).
 ```
 Qwen3_5VitItem.fingerprint (py::bytes, SHA-256 digest)
   -> [kAdd] Sequence.multimodal_spans[] = {interval, Fingerprint}
-  -> [Accept] MatchPrompt/CreateMissingBlocks: start-fingerprints folded into
-     PrefixKey at the image's first block; LogicalBlock.image_fps stored; exact
-     compare in PrefixTrie::Find
+  -> [Accept] MatchPrompt/CreateMissingBlocks (+ PublishGeneration for the
+     prompt-tail block): start-fingerprints folded into PrefixKey at the image's
+     first block; LogicalBlock.image_fps stored; exact compare in PrefixTrie::Find
   -> [Resume/Schedule] valid matched image blocks raise resume_len/history_len
   -> [Qwen3_5Vit::Setup/Forward] window-intersection filter skips ViT for images
      fully below history_len

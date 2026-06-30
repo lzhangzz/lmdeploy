@@ -602,7 +602,41 @@ Replace the `fork_to` publish block's node setup (lines 407–426) with the fing
             }
 ```
 
-- [ ] **Step 6: Add the `PrefixEligible` clarifying comment (no functional change)**
+- [ ] **Step 6: Make `PublishGeneration` fold + store start-fingerprints (prompt-tail block)**
+
+`PublishGeneration` indexes the first *unindexed* block — the prompt-tail block that `CreateMissingBlocks` left private when `size < bs`. Once generation extends the sequence, that block is published as a **full** block whose tokens are `[prompt tail] + [first generated tokens]`, and a later multi-turn request whose longer prompt re-includes that span will match it via `MatchPrompt`. If an image *starts* in that block, its start-fingerprint must be folded into the key and stored in `image_fps`, exactly as `CreateMissingBlocks` does for full blocks. Otherwise the published node is indexed token-only, diverging from the identity (token + parent + image-start fingerprint) a future request rebuilds — which both loses legitimate reuse and, in narrow token-alignment cases (e.g. an image starting at the block boundary of the partial tail block), risks a false hit against a different image's KV.
+
+Generated blocks never carry an image start, so the `x.offset < s.prompt_len` guard restricts the (rare) scan to the single prompt-tail block; for every other block `fps` is empty and the key/identity are unchanged. This reuses `CollectStartFps` from Step 2.
+
+Replace the index-and-insert block (lines 754–767) with:
+
+```cpp
+        const auto               tokens = TokenSegment(s, x.offset, size);
+        std::vector<Fingerprint> fps;
+        if (x.offset < s.prompt_len) {
+            // Only the prompt-tail block (private until now) can hold an image start;
+            // generated positions never do. Fold + store so this node's identity
+            // matches what a future request's MatchPrompt rebuilds.
+            CollectStartFps(s, x.offset, x.offset + size, fps);
+        }
+        const auto next = ExtendPrefixKey(key, tokens, fps);
+        x.parent        = parent;
+        x.key           = next;
+        x.size          = size;
+        x.tokens.assign(tokens.begin(), tokens.end());
+        x.image_fps     = fps;  // usually empty
+        if (!trie_.Insert(x)) {
+            LogCollision(s, CollisionSite::kPublish, x.offset, x.offset + size);
+            x.parent = nullptr;
+            x.key    = {};
+            x.size   = 0;
+            x.tokens.clear();
+            x.image_fps.clear();
+            break;
+        }
+```
+
+- [ ] **Step 7: Add the `PrefixEligible` clarifying comment (no functional change)**
 
 Replace `Scheduler::PrefixEligible` (lines 211–215) with:
 
@@ -617,12 +651,12 @@ bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
 }
 ```
 
-- [ ] **Step 7: Build to verify it compiles**
+- [ ] **Step 8: Build to verify it compiles**
 
 Run: `cd build && ninja _turbomind`
 Expected: build SUCCEEDS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add src/turbomind/engine/scheduler.cc
@@ -928,10 +962,14 @@ fingerprint. Hash equality alone is never identity.
 Find the `contracts.prefix-prepare` item and append:
 
 ```markdown
-`Accept` folds each image's fingerprint into the cumulative key at the block
-where the image starts (from `Sequence::multimodal_spans`) and stores it on that
-`LogicalBlock`; partial-block `Search` applies the same folding when the boundary
-knobs are enabled.
+Every indexing site folds each image's fingerprint into the cumulative key at the
+block where the image starts (from `Sequence::multimodal_spans`) and stores it on
+that `LogicalBlock`: `Accept`'s block creation, the partial-block `Search` when the
+boundary knobs are enabled, and `PublishGeneration` when it later indexes the
+prompt-tail block that block creation left private (an image start can only fall in
+that block; generated positions never carry one). The folding is therefore uniform
+across lookup and indexing, so a published prompt-tail node has the same identity a
+future request's `Accept` rebuilds.
 ```
 
 - [ ] **Step 3: Add a one-line concepts note (optional but recommended)**
