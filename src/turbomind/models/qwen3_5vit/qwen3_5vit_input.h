@@ -19,7 +19,7 @@ struct Qwen3_5VitItem {
     int                token_begin;
     int                token_end;
     std::array<int, 3> grid_thw;
-    Fingerprint        fingerprint{};  // empty until the generation PR
+    Fingerprint        fingerprint{};  // image content hash from the converter (empty if none supplied)
 
     Qwen3_5VitItem() = default;
 
