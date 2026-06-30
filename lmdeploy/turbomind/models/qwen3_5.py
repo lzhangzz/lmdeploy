@@ -408,6 +408,7 @@ class Qwen3_5VisionModel(TextModel):
                     token_begin=token_begin,
                     token_end=token_end,
                     grid_thw=grid_thw,
+                    fingerprint=input_mm.get('fingerprint', b''),
                 ))
 
         return _tm.multimodal.Qwen3_5VitInput(items)
