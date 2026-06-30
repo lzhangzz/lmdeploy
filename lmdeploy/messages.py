@@ -256,6 +256,11 @@ class TurbomindEngineConfig:
             partial block). The node carries the partial block's k/v; a
             recurrent/hybrid model additionally publishes a recurrent-state
             checkpoint onto it. Default False.
+        cache_prompt_boundary_skip: number of trailing prompt tokens treated as
+            the volatile generation-prompt suffix (e.g. a chat template's
+            `<think>\n`) and excluded from the reusable prompt-boundary node, so
+            the node ends at `prompt_len - cache_prompt_boundary_skip`. Requires
+            `cache_prompt_boundary`. Default 1 (exclude only the last token).
         cache_generation_boundary: requires `enable_prefix_caching`. When True,
             index the terminal partial generated block so the exact generation
             end is resumable (e.g. multi-turn chat); a recurrent/hybrid model
@@ -322,6 +327,7 @@ class TurbomindEngineConfig:
     enable_prefix_caching: bool = False
     linear_prefix_cache_min_interval: int = 0
     cache_prompt_boundary: bool = False
+    cache_prompt_boundary_skip: int = 1
     cache_generation_boundary: bool = False
     cache_boundary_policy: str = ''
     quant_policy: int = 0

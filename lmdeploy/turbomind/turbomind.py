@@ -240,6 +240,7 @@ class TurboMind:
         ec.enable_prefix_caching = engine_config.enable_prefix_caching
         ec.linear_prefix_cache_min_interval = engine_config.linear_prefix_cache_min_interval
         ec.cache_prompt_boundary = engine_config.cache_prompt_boundary
+        ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
         ec.cache_generation_boundary = engine_config.cache_generation_boundary
         ec.cache_boundary_policy = engine_config.cache_boundary_policy
         ec.enable_metrics = engine_config.enable_metrics

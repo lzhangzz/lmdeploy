@@ -25,6 +25,7 @@ struct EngineConfig {
     X(bool, enable_prefix_caching, false)                                                                              \
     X(int, linear_prefix_cache_min_interval, 0)                                                                        \
     X(bool, cache_prompt_boundary, false)                                                                              \
+    X(int, cache_prompt_boundary_skip, 1)                                                                              \
     X(bool, cache_generation_boundary, false)                                                                          \
     X(std::string, cache_boundary_policy, "")                                                                          \
     X(bool, enable_metrics, false)                                                                                     \

@@ -92,6 +92,7 @@ public:
               int                                  cache_block_seq_len,
               bool                                 enable_prefix_caching,
               bool                                 cache_prompt_boundary,
+              int                                  cache_prompt_boundary_skip,
               bool                                 cache_generation_boundary,
               std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
               const int&                           is_warm_up);
@@ -221,6 +222,7 @@ private:
 
     bool                                 enable_prefix_caching_{false};
     bool                                 cache_prompt_boundary_{false};
+    int                                  cache_prompt_boundary_skip_{1};
     bool                                 cache_generation_boundary_{false};
     std::unique_ptr<CacheBoundaryPolicy> boundary_policy_;
     const int&                           is_warm_up_;
