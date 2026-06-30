@@ -62,9 +62,13 @@ def install_fingerprint_patch() -> None:
     _orig = Qwen3_5VisionModel.to_turbomind_multimodal
 
     def _patched(self, multimodal):
+        import torch
         for mm in multimodal:
             pv = mm.get('pixel_values', mm.get('pixel_values_videos'))
-            mm['fingerprint'] = hashlib.sha256(pv.contiguous().cpu().numpy().tobytes()).digest()
+            # Reinterpret the raw tensor bytes as uint8 so the digest is dtype-agnostic
+            # (numpy cannot consume bfloat16 directly). Deterministic per pixel content.
+            raw = pv.contiguous().cpu().view(torch.uint8).numpy().tobytes()
+            mm['fingerprint'] = hashlib.sha256(raw).digest()
         return _orig(self, multimodal)
 
     Qwen3_5VisionModel.to_turbomind_multimodal = _patched
@@ -134,6 +138,12 @@ def run(args) -> int:
         session_len=8192,
         cache_max_entry_count=0.5,
         enable_prefix_caching=True,
+        enable_metrics=False,
+        # Qwen3.5 is a hybrid linear/full-attention model: linear-attention layers
+        # carry recurrent state, so cross-request prefix resume (and the resulting
+        # ViT-skip) requires a boundary checkpoint to be published/restored.
+        cache_prompt_boundary=True,
+        cache_generation_boundary=True,
     )
     gen_config = GenerationConfig(max_new_tokens=args.max_new_tokens, do_sample=False)
     prompt = args.prompt
@@ -168,15 +178,25 @@ def run(args) -> int:
 
     check(all(t.strip() for t in texts), 'both responses are non-empty')
     check(len(vit) >= 1, 'ViT setup was logged at least once')
-    skipped_image = any(b == 0 and s >= 1 for (_, b, s, _) in vit)
+    # Total images actually run through the ViT across the whole run. This is the
+    # robust cache-hit signal: a reused image contributes 0, a (re)encoded image
+    # contributes 1. The per-line `images_batched==0` heuristic is NOT reliable
+    # because a single request's prefill can emit a follow-up multimodal pass with
+    # images_batched=0 even for a freshly-encoded image (chunked/boundary prefill).
+    images_encoded = sum(b for (_, b, _, _) in vit)
+    # Two requests, one image each.
+    print(f'images_encoded (sum of images_batched) = {images_encoded}')
 
     if args.scenario == 'reuse':
-        check(skipped_image, 'warm request skipped its image (images_batched=0) -> ViT skip')
+        check(images_encoded == 1,
+              f'warm image reused: only the cold image was encoded (images_encoded={images_encoded}, want 1)')
         check(texts[0].strip() == texts[1].strip(), 'warm text == cold text (greedy oracle)')
     elif args.scenario == 'distinct':
-        check(not skipped_image, 'no false hit: every image was re-encoded (no images_batched=0)')
+        check(images_encoded == 2,
+              f'no false hit: both distinct images were encoded (images_encoded={images_encoded}, want 2)')
     elif args.scenario == 'dormant':
-        check(not skipped_image, 'image reuse dormant: image re-encoded (no images_batched=0)')
+        check(images_encoded == 2,
+              f'image reuse dormant: both images re-encoded (images_encoded={images_encoded}, want 2)')
         check(texts[0].strip() == texts[1].strip(), 'recompute is deterministic (texts equal)')
 
     print('RESULT:', 'OK' if ok else 'FAILED')
