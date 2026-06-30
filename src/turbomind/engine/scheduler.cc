@@ -157,6 +157,30 @@ const char* ResumeSourceName(ResumeSource src)
     }
 }
 
+// Collect start-fingerprints of images whose start token lies in [lo, hi), with
+// their block-relative start positions. multimodal_spans is prompt-ordered
+// ascending by interval.begin().
+void CollectStartFps(const Sequence&           s,
+                     int                       lo,
+                     int                       hi,
+                     std::vector<Fingerprint>& fps,
+                     std::vector<int>*         pos = nullptr)
+{
+    for (const auto& sp : s.multimodal_spans) {
+        const int b = sp.interval.begin();
+        if (b < lo) {
+            continue;
+        }
+        if (b >= hi) {
+            break;
+        }
+        fps.push_back(sp.fingerprint);
+        if (pos) {
+            pos->push_back(b - lo);
+        }
+    }
+}
+
 enum class CollisionSite
 {
     kAccept,
@@ -210,6 +234,9 @@ struct Scheduler::ScheduleState {
 
 bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
 {
+    // Native VLM (multimodal_spans) is eligible: image identity is carried by the
+    // per-image fingerprint folded into the prefix key. The legacy Python-embedding
+    // path (input_embeds) stays excluded -- out of scope for this change.
     return enable_prefix_caching_ && !is_warm_up_ && s.input_embeds.empty() && s.input_embeds_offsets.empty()
            && s.token_ids != nullptr;
 }
@@ -285,6 +312,8 @@ struct Scheduler::AcceptState {
     int                 miss{};         // first block index not matched in the trie
     const LogicalBlock* miss_parent{};  // trie position at the miss, for fork_from
     PrefixKey           miss_key{};
+
+    size_t next_fp = 0;  // monotonic cursor into Sequence::multimodal_spans
 };
 
 void Scheduler::Accept(Sequence& s)
@@ -308,15 +337,23 @@ void Scheduler::MatchPrompt(Sequence& s, AcceptState& st)
 
     int i = 0;
     for (; i < full_blocks; ++i) {
-        const auto tokens = TokenSegment(s, i * bs, bs);
-        const auto next   = ExtendPrefixKey(st.key, tokens);
-        if (LogicalBlock* b = trie_.Find(st.parent, next, tokens)) {
+        const int                offset = i * bs;
+        size_t                   cur    = st.next_fp;  // working copy; do not commit on a miss
+        std::vector<Fingerprint> fps;
+        while (cur < s.multimodal_spans.size() && s.multimodal_spans[cur].interval.begin() < offset + bs) {
+            fps.push_back(s.multimodal_spans[cur].fingerprint);
+            ++cur;
+        }
+        const auto tokens = TokenSegment(s, offset, bs);
+        const auto next   = ExtendPrefixKey(st.key, tokens, fps);
+        if (LogicalBlock* b = trie_.Find(st.parent, next, tokens, fps)) {
             s.block_ids.emplace_back(b);  // retain via BlockHandle copy
-            st.parent = b;
-            st.key    = next;
+            st.parent  = b;
+            st.key     = next;
+            st.next_fp = cur;  // commit advance only on a match
         }
         else {
-            break;
+            break;  // cursor still at the miss block's first span
         }
     }
 
@@ -333,18 +370,25 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
     const int all_blocks = (prompt + bs - 1) / bs;
 
     for (int i = st.miss; i < all_blocks; ++i) {
-        const int     offset = i * bs;
-        const int     size   = std::min(prompt - offset, bs);
+        const int                offset = i * bs;
+        const int                size   = std::min(prompt - offset, bs);
+        std::vector<Fingerprint> fps;
+        while (st.next_fp < s.multimodal_spans.size()
+               && s.multimodal_spans[st.next_fp].interval.begin() < offset + size) {
+            fps.push_back(s.multimodal_spans[st.next_fp].fingerprint);
+            ++st.next_fp;
+        }
         const auto    tokens = TokenSegment(s, offset, size);
         BlockHandle   h      = logical_.Create(i);
         LogicalBlock& x      = *h;
         x.prefix_id          = cache_.Create(registry_.prefix().object_id(), h.get());
         if (size == bs) {
-            const auto next = ExtendPrefixKey(st.key, tokens);
+            const auto next = ExtendPrefixKey(st.key, tokens, fps);
             x.parent        = st.parent;
             x.key           = next;
             x.size          = size;
             x.tokens.assign(tokens.begin(), tokens.end());
+            x.image_fps     = fps;  // usually empty
             if (!trie_.Insert(x)) {
                 LogCollision(s, CollisionSite::kAccept, offset, offset + size);
                 // Stays un-indexed; treated as a private block from here on.
@@ -352,6 +396,7 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
                 x.key    = {};
                 x.size   = 0;
                 x.tokens.clear();
+                x.image_fps.clear();
             }
             else {
                 st.parent = h.get();
@@ -387,7 +432,12 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         const int     offset = st.miss * bs;
         const int     size   = std::min(prompt - offset, bs);
         PrefixKey     k      = st.miss_key;
-        if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size))) {
+
+        std::vector<Fingerprint> fps;
+        std::vector<int>         fp_pos;
+        CollectStartFps(s, offset, offset + size, fps, &fp_pos);
+
+        if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
             x.fork_from = BlockHandle{v};  // edge ref
         }
     }
@@ -407,14 +457,19 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
             if (node_size >= 1) {
                 LogicalBlock& x      = *s.block_ids.back();
                 const auto    tokens = TokenSegment(s, last * bs, node_size);
-                const auto    next   = ExtendPrefixKey(st.key, tokens);
-                BlockHandle   vh     = logical_.Create(last);
-                LogicalBlock& y      = *vh;
-                y.parent             = st.parent;
-                y.key                = next;
-                y.size               = node_size;
+
+                std::vector<Fingerprint> fps;
+                CollectStartFps(s, last * bs, last * bs + node_size, fps);
+
+                const auto    next = ExtendPrefixKey(st.key, tokens, fps);
+                BlockHandle   vh   = logical_.Create(last);
+                LogicalBlock& y    = *vh;
+                y.parent           = st.parent;
+                y.key              = next;
+                y.size             = node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
-                y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
+                y.image_fps        = fps;
+                y.prefix_id        = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
                     x.fork_to   = std::move(vh);  // edge holds the only ref
                     have_target = true;
@@ -751,18 +806,27 @@ void Scheduler::PublishGeneration(Sequence& s)
         if (size < x.capacity && !publish_generation_boundary) {
             break;
         }
-        const auto tokens = TokenSegment(s, x.offset, size);
-        const auto next   = ExtendPrefixKey(key, tokens);
-        x.parent          = parent;
-        x.key             = next;
-        x.size            = size;
+        const auto               tokens = TokenSegment(s, x.offset, size);
+        std::vector<Fingerprint> fps;
+        if (x.offset < s.prompt_len) {
+            // Only the prompt-tail block (private until now) can hold an image start;
+            // generated positions never do. Fold + store so this node's identity
+            // matches what a future request's MatchPrompt rebuilds.
+            CollectStartFps(s, x.offset, x.offset + size, fps);
+        }
+        const auto next = ExtendPrefixKey(key, tokens, fps);
+        x.parent        = parent;
+        x.key           = next;
+        x.size          = size;
         x.tokens.assign(tokens.begin(), tokens.end());
+        x.image_fps     = fps;  // usually empty
         if (!trie_.Insert(x)) {
             LogCollision(s, CollisionSite::kPublish, x.offset, x.offset + size);
             x.parent = nullptr;
             x.key    = {};
             x.size   = 0;
             x.tokens.clear();
+            x.image_fps.clear();
             break;
         }
         if (gen.indexed == 0) {
