@@ -86,7 +86,7 @@ fingerprint = SHA256( modality_byte              # 1 byte: 0=IMAGE, 1=VIDEO
                     | grid_thw                   # 3 x int32 LE: (t, h, w)
                     | second_per_grid_present    # 1 byte: 0 (image / None) or 1
                     | [second_per_grid]          # 1 x float64 LE, only if present
-                    | pixel_values_bytes )       # pv.contiguous().cpu().numpy().tobytes()
+                    | pixel_values_bytes )       # pv.contiguous().cpu().view(uint8).numpy().tobytes()
 ```
 
 Concrete generator -- a Qwen3.5-specific module helper in
@@ -119,7 +119,10 @@ def _image_fingerprint(input_mm: dict) -> bytes:
     h_obj.update(struct.pack('<B', 0 if spg is None else 1))
     if spg is not None:
         h_obj.update(struct.pack('<d', float(spg)))
-    h_obj.update(pv.contiguous().cpu().numpy().tobytes())
+    # Reinterpret the raw storage as uint8 so the digest is dtype-agnostic and
+    # works for bfloat16 (numpy cannot consume bfloat16 directly). Same dtype +
+    # same values -> same bytes; the dtype is constant per engine instance.
+    h_obj.update(pv.contiguous().cpu().view(torch.uint8).numpy().tobytes())
     return h_obj.digest()                          # 32 bytes; never all-zero
 ```
 
@@ -136,10 +139,12 @@ Why each field:
 - `second_per_grid` (video) -- drives mRoPE temporal positions for the image-token
   span, so it changes the LM KV stored in the prefix without changing the ViT
   input. Folding it in prevents false hits across different `second_per_grid`.
-- The pixel tensor's `dtype` is intentionally **not** hashed: `mm_feature_dtype` is
-  fixed at engine init (`set_mm_feature_dtype`), so it is constant across all
-  requests and cannot affect fingerprint equality -- consistent with the "hash only
-  things that vary per request" rule of Section 2.
+- The pixel bytes are read via `view(torch.uint8)` on the raw storage rather than
+  `.numpy().tobytes()` so the hash works for `bfloat16` pixel values (numpy cannot
+  consume bfloat16 directly). The raw byte encoding is dtype-specific, but
+  `mm_feature_dtype` is fixed at engine init (`set_mm_feature_dtype`), so the dtype
+  is constant across all requests and cannot cause cross-request collisions --
+  consistent with the "hash only things that vary per request" rule of Section 2.
 
 Fixed-width framing (no length ambiguity) means e.g. `grid_thw=(1,28,28)` and
 `(1,2,828)` can never collide. SHA-256 never yields the all-zero digest, so the
