@@ -28,6 +28,10 @@ When code and this document disagree, treat the disagreement as a design bug. Ei
 
 `Sequence` is the engine-local mutable execution state for one accepted request on one local rank. It is created from a `Request` during admission and is the object passed through scheduler and model-module contracts. It stores token progress, scheduling decisions, logical block handles, cache-category request state, generation rows, lifecycle flags, and transient per-pass fields.
 
+### multimodal-spans
+
+`Sequence::multimodal_spans` is the engine-visible `(token span, fingerprint)` projection of multimodal inputs; `multimodal_inputs` (pixels) stays opaque.
+
 ### batch-data
 
 `BatchData` is a reusable phase-local carrier between the engine thread and the model executor thread. It contains the phase id, current and previous batch sizes, the active-batch permutation, token-count metadata, and CUDA events used to order host setup and device execution.
@@ -246,7 +250,7 @@ A scheduler transaction starts with a list of eligible, non-retiring `Sequence` 
 
 ### prefix-prepare
 
-When prefix caching is enabled and the request is trie-eligible, `Scheduler::Accept()` matches the prompt against the prefix trie at admission: full blocks are matched or created and indexed, the first miss may bind a partial-match source (`fork_from`), and a prompt-boundary publish node (`fork_to`) may be created. Both partial-block fork edges are gated on the boundary knobs alone, independent of model type: `fork_from` is bound when `cache_prompt_boundary` or `cache_generation_boundary` is enabled, and `fork_to` is created when `cache_prompt_boundary` is enabled. The partial node carries the partial block's KV for every prefix-cached model; a recurrent model additionally publishes a recurrent-state checkpoint onto the same node (the checkpoint payload attaches only when checkpoint cache ids exist). Accept must not allocate backing memory or select `resume_len`. The `fork_to` node excludes the last prompt token and ends at `prompt_len-1` (the reusable position under the `seq_len-1` resume cap). Accept sets `Sequence::prompt_boundary_node` only when a publish target exists (node insert succeeded, or the single-tail-token boundary case). Fork-edge setup and `prompt_boundary_node` remain gated on the static knobs alone — they are pre-run machinery; whether the partial node's KV and checkpoint are actually published is decided later at runtime by the boundary policy (`concepts.boundary-policy`, `contracts.checkpoint-publish`).
+When prefix caching is enabled and the request is trie-eligible, `Scheduler::Accept()` matches the prompt against the prefix trie at admission: full blocks are matched or created and indexed, the first miss may bind a partial-match source (`fork_from`), and a prompt-boundary publish node (`fork_to`) may be created. Both partial-block fork edges are gated on the boundary knobs alone, independent of model type: `fork_from` is bound when `cache_prompt_boundary` or `cache_generation_boundary` is enabled, and `fork_to` is created when `cache_prompt_boundary` is enabled. The partial node carries the partial block's KV for every prefix-cached model; a recurrent model additionally publishes a recurrent-state checkpoint onto the same node (the checkpoint payload attaches only when checkpoint cache ids exist). Accept must not allocate backing memory or select `resume_len`. The `fork_to` node excludes the last prompt token and ends at `prompt_len-1` (the reusable position under the `seq_len-1` resume cap). Accept sets `Sequence::prompt_boundary_node` only when a publish target exists (node insert succeeded, or the single-tail-token boundary case). Fork-edge setup and `prompt_boundary_node` remain gated on the static knobs alone — they are pre-run machinery; whether the partial node's KV and checkpoint are actually published is decided later at runtime by the boundary policy (`concepts.boundary-policy`, `contracts.checkpoint-publish`). Every indexing site folds each image's fingerprint into the cumulative key at the block where the image starts (from `Sequence::multimodal_spans`) and stores it on that `LogicalBlock`: `Accept`'s block creation, the partial-block `Search` when the boundary knobs are enabled, and `PublishGeneration` when it later indexes the prompt-tail block that block creation left private (an image start can only fall in that block; generated positions never carry one). The folding is therefore uniform across lookup and indexing, so a published prompt-tail node has the same identity a future request's `Accept` rebuilds.
 
 ### cache-prepare
 
@@ -378,7 +382,7 @@ Checkpoint publication is planned and committed entirely by the scheduler. Plann
 
 ### prefix-identity
 
-Prefix identity is token identity plus parent identity. Prefix index lookup must use cumulative `PrefixKey`, exact parent identity (the parent node pointer), and exact segment-token comparison. Hash equality alone is never identity.
+Prefix identity is token identity, per-image content identity, plus parent identity. Index lookup must use cumulative `PrefixKey`, exact parent identity, exact segment-token comparison, and exact comparison of the block's start-fingerprints (`LogicalBlock::image_fps`). A fingerprint is the image's opaque 256-bit content identity; an empty fingerprint never compares equal to anything, including another empty fingerprint. Blocks interior to an image carry no fingerprint of their own — their identity is carried by the cumulative key and the parent chain, since the image's first block exact-compares the fingerprint. Hash equality alone is never identity.
 
 ### prefix-ownership
 
