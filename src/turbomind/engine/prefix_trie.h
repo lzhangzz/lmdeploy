@@ -53,7 +53,7 @@ public:
         }
         for (int i = static_cast<int>(prefixes.size()); i > 0; --i) {
             std::vector<Fingerprint> sub;  // images that begin within [0, i)
-            for (size_t j = 0; j < fps.size() && fp_pos[j] < i; ++j) {
+            for (size_t j = 0; j < fps.size() && j < fp_pos.size() && fp_pos[j] < i; ++j) {
                 sub.push_back(fps[j]);
             }
             PrefixKey ki = prefixes[i - 1];
