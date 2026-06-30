@@ -446,6 +446,7 @@ class Qwen3_5VisionModel(TextModel):
                 raise ValueError(f'Qwen3.5 TurboMind does not support modality {modality!r}')
 
             token_begin, token_end = self._offset_pair(input_mm['offset'])
+            fingerprint = _resolve_fingerprint(input_mm)
             items.append(
                 _tm.multimodal.Qwen3_5VitItem(
                     modality=tm_modality,
@@ -453,7 +454,7 @@ class Qwen3_5VisionModel(TextModel):
                     token_begin=token_begin,
                     token_end=token_end,
                     grid_thw=grid_thw,
-                    fingerprint=input_mm.get('fingerprint', b''),
+                    fingerprint=fingerprint,
                 ))
 
         return _tm.multimodal.Qwen3_5VitInput(items)
