@@ -37,6 +37,8 @@ Spec: `docs/superpowers/specs/2026-06-30-image-fingerprint-generator-design.md`.
 Create `tests/test_lmdeploy/test_vl/test_image_fingerprint.py`:
 
 ```python
+# Copyright (c) OpenMMLab. All rights reserved.
+
 import torch
 
 from lmdeploy.turbomind.models.qwen3_5 import _image_fingerprint, _resolve_fingerprint
@@ -152,20 +154,29 @@ Expected: collection error -- `ImportError: cannot import name '_image_fingerpri
 
 - [ ] **Step 3: Add the imports**
 
-In `lmdeploy/turbomind/models/qwen3_5.py`, the top of the file already has `import math` and `import re` (lines 22-23). Add `hashlib` and `struct` right after them:
+In `lmdeploy/turbomind/models/qwen3_5.py`, the stdlib block at the top is currently:
+
+```python
+import math
+import re
+from typing import TYPE_CHECKING, Any
+```
+
+Insert `import hashlib` BEFORE `import math` and `import struct` AFTER `import re` (i.e. between `import re` and `from typing import ...`), so the block becomes (ruff/isort: straight imports sorted first, then from-imports within the section):
 
 ```python
 import hashlib
 import math
 import re
 import struct
+from typing import TYPE_CHECKING, Any
 ```
 
-(Keep the existing `import` order otherwise unchanged. `torch` and `from lmdeploy.vl.constants import Modality` are already imported.)
+(`torch` and `from lmdeploy.vl.constants import Modality` are imported lower down; leave them untouched.)
 
 - [ ] **Step 4: Add the two helpers**
 
-Add these as module-level functions in `lmdeploy/turbomind/models/qwen3_5.py`, immediately before `class Qwen3_5TextModel:` (i.e. after the `_assert_trivial` / `_pad_head_dim_in` helper block, before the `class` definition at line 76):
+Add these as module-level functions in `lmdeploy/turbomind/models/qwen3_5.py`, immediately before `class Qwen3_5VisionModel:` at line 331 (i.e. after the `_split_packed_vision_qkv` helper at lines 325-328 -- co-located with the other vision-converter helpers `_assert_trivial` / `_pad_head_dim_in` / `_split_packed_vision_qkv` that sit right above the class whose `to_turbomind_multimodal` calls them):
 
 ```python
 def _image_fingerprint(input_mm: dict) -> bytes:
@@ -179,7 +190,11 @@ def _image_fingerprint(input_mm: dict) -> bytes:
     is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
     pv   = input_mm['pixel_values_videos'] if is_video else input_mm['pixel_values']
     gthw = input_mm['video_grid_thw']      if is_video else input_mm['image_grid_thw']
-    t, h, w = (int(x) for x in (gthw.tolist() if hasattr(gthw, 'tolist') else gthw))
+    if isinstance(gthw, torch.Tensor):
+        values = gthw.flatten().tolist()
+    else:
+        values = list(gthw)
+    t, h, w = int(values[0]), int(values[1]), int(values[2])
     spg = input_mm.get('second_per_grid')          # video only; float | None
 
     h_obj = hashlib.sha256()
@@ -390,7 +405,7 @@ All commands here touch CUDA and MUST run outside the sandbox (`required_permiss
 - [ ] **Step 1: Check for an empty GPU**
 
 Run: `nvidia-smi`
-Expected: identify a GPU with ~0% utilization and enough free memory (a 27B fp16 model needs ~54 GB; choose `--tp`/`--gpus` accordingly -- e.g. a single 80 GB card with `--tp 1 --gpus 0`, otherwise `--tp 2 --gpus 0,1`).
+Expected: identify an H200 (140+ GB VRAM) with ~0% utilization. A 27B fp16 model needs ~54 GB and fits comfortably on a single H200, so run **TP1 on one GPU** (`--tp 1 --gpus 0`). Do NOT use TP2 -- the whole model + KV cache fits on one card.
 
 - [ ] **Step 2: Scenario `reuse` (real generator, image KV reuse + ViT skip)**
 
@@ -455,4 +470,4 @@ Iterate until fixed (do not stop with active bugs):
 
 - **Spec coverage:** spec Section 2 (identity inputs) -> Task 1 helper hashes exactly `(modality, grid_thw, second_per_grid, pixel_values)`; spec Section 4 (serialization) -> Task 1 Step 4; spec Section 5 (`is-not-None` phasing hook) -> Task 1 Step 4 `_resolve_fingerprint` + Task 2; spec Section 6 (data flow unchanged) -> no engine task; spec Section 7 (bfloat16, empty sentinel, `None` spg, rollback via revert) -> Task 1 tests + Task 3 dormant; spec Section 8 (testing) -> Tasks 1, 3, 4.
 - **Type/name consistency:** `_image_fingerprint` and `_resolve_fingerprint` are used identically in Task 1 (definition + tests), Task 2 (converter call), Task 3 (dormant patch pre-places `fingerprint = b''` read by the same hook). The converter reads `input_mm['pixel_values']`/`['pixel_values_videos']`, `['image_grid_thw']`/`['video_grid_thw']`, `['modality']`, `['offset']`, and `['second_per_grid']` (video) -- matching the keys `preprocess_utils.get_expanded_mm_items` produces.
-- **Verified against live code:** `qwen3_5.py` already imports `torch` and `from lmdeploy.vl.constants import Modality`; `to_turbomind_multimodal` is at line 387 with the `fingerprint=input_mm.get('fingerprint', b'')` argument at line 411; `import _turbomind` succeeds on CPU (probed), so `from lmdeploy.turbomind.models.qwen3_5 import _image_fingerprint, _resolve_fingerprint` works for the unit test; the harness already uses `images_encoded = sum(images_batched)` as the cache-hit oracle and `cache_prompt_boundary=True`/`cache_generation_boundary=True` for Qwen3.5's hybrid attention (unchanged by this plan); `install_fingerprint_patch` was the only `hashlib` user in the harness.
+- **Verified against live code:** `qwen3_5.py` already imports `torch` and `from lmdeploy.vl.constants import Modality`; the stdlib block is `import math`/`import re`/`from typing import TYPE_CHECKING, Any` (so `hashlib` goes before `math`, `struct` between `re` and `from typing`); `to_turbomind_multimodal` is at line 387 with the `fingerprint=input_mm.get('fingerprint', b'')` argument at line 411; the helpers go immediately before `class Qwen3_5VisionModel:` at line 331 (after `_split_packed_vision_qkv`, lines 325-328); `grid_thw` handling mirrors the converter's `_grid_thw` (`.flatten().tolist()` for tensors, `list(...)` otherwise) so a 2-D `[N,3]` tensor does not crash the helper; `import _turbomind` succeeds on CPU (probed), so `from lmdeploy.turbomind.models.qwen3_5 import _image_fingerprint, _resolve_fingerprint` works for the unit test; the new test file carries the OpenMMLab copyright header matching sibling `test_preprocess_utils.py`; the harness already uses `images_encoded = sum(images_batched)` as the cache-hit oracle and `cache_prompt_boundary=True`/`cache_generation_boundary=True` for Qwen3.5's hybrid attention (unchanged by this plan); `install_fingerprint_patch` was the only `hashlib` user in the harness; the consumer side is already wired (`src/turbomind/models/qwen3_5vit/qwen3_5vit.cc` pushes `MultiModalSpan{interval, item.fingerprint}` into `multimodal_spans`), and `fingerprint` appears only at `qwen3_5.py:411` in all of `lmdeploy/`, so this plan's scope (Python generator + harness + test) is complete.

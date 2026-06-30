@@ -110,7 +110,11 @@ def _image_fingerprint(input_mm: dict) -> bytes:
     is_video = modality in (Modality.VIDEO, Modality.VIDEO.value)
     pv   = input_mm['pixel_values_videos'] if is_video else input_mm['pixel_values']
     gthw = input_mm['video_grid_thw']      if is_video else input_mm['image_grid_thw']
-    t, h, w = (int(x) for x in (gthw.tolist() if hasattr(gthw, 'tolist') else gthw))
+    if isinstance(gthw, torch.Tensor):
+        values = gthw.flatten().tolist()
+    else:
+        values = list(gthw)
+    t, h, w = int(values[0]), int(values[1]), int(values[2])
     spg = input_mm.get('second_per_grid')          # video only; float | None
 
     h_obj = hashlib.sha256()
@@ -237,7 +241,7 @@ _image_fingerprint(input_mm)` hook in the converter.
   For images it is always absent; for videos it may be `None` if the processor did
   not produce it -- handled identically. The `modality` byte distinguishes
   "image, no spg" from "video, spg=None" so they cannot collide.
-- **`grid_thw` as tensor or list:** handled via `hasattr(gthw, 'tolist')`.
+- **`grid_thw` as tensor or list:** mirrored on the converter's `_grid_thw` (`isinstance(torch.Tensor)` -> `.flatten().tolist()`, else `list(...)`) so a 2-D `[N,3]` tensor and a flat `[3]` list/package hash identically, and a 2-D tensor (which `_grid_thw` accepts via flatten) does not crash the helper.
 - **Tensor not contiguous / on GPU:** `.contiguous().cpu()` before `.numpy()`; one
   host sync per image (same as the existing test stand-in). Acceptable for prefill;
   this is the cost of phase A and disappears for images in phase B (which hashes a
