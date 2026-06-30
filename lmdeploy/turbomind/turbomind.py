@@ -583,6 +583,7 @@ class TurboMindInstance:
             8: ResponseType.CANCEL,
             9: ResponseType.PREFIX_CACHE_CONFLICT,
             10: ResponseType.NO_QUEUE,
+            11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
 

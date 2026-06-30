@@ -560,6 +560,7 @@ class ResponseType(enum.Enum):
     PREFIX_CACHE_CONFLICT = enum.auto()
     NO_QUEUE = enum.auto()
     NOT_SUPPORTED = enum.auto()
+    OUT_OF_MEMORY = enum.auto()
 
 
 @dataclass
