@@ -20,8 +20,10 @@ class CacheBoundaryPolicy {
 public:
     virtual ~CacheBoundaryPolicy() = default;
 
-    // Producer side of the prompt boundary: create the fork_to node at
-    // prompt_len-1 and clamp the producer's prefill to populate it (SetupForks).
+    // Producer side of the prompt boundary at B (Sequence::prompt_boundary_pos
+    // = prompt_len - cache_prompt_boundary_skip): admit populating the boundary
+    // (a partial fork_to node when B is mid-block, else the block-aligned
+    // checkpoint).
     virtual bool PublishPromptBoundary(const Sequence& s) const = 0;
 
     // Producer side of the generation boundary: index the terminal partial
