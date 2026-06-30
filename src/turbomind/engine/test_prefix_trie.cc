@@ -3,6 +3,7 @@
 #include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/prefix_key.h"
 #include "src/turbomind/engine/prefix_trie.h"
+#include "src/turbomind/engine/prompt_boundary.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -154,4 +155,93 @@ TEST_CASE("PrefixTrie::Search is bounded when fp_pos is shorter than fps (no OOB
     PrefixKey         key{};
     LogicalBlock*     hit = trie.Search(nullptr, key, MakeTokenSpan(full), {fpA, fpB}, /*fp_pos=*/{0});
     REQUIRE(hit == &blkA);
+}
+
+TEST_CASE("PlanPromptBoundary: geometry and guards", "[prompt_boundary]")
+{
+    const int bs = 8;
+
+    // K=1, last block has >1 token (prompt%bs==3): partial node at prompt_len-1, j==last.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/19, bs, /*skip=*/1, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 18);       // 19 - 1
+        REQUIRE(p.block == 2);      // (18-1)/8
+        REQUIRE(p.node_size == 2);  // 18 - 16
+    }
+    // K=1, last block has exactly 1 token (prompt%bs==1): block-aligned, no partial node.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/17, bs, /*skip=*/1, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE_FALSE(p.partial);
+        REQUIRE(p.pos == 16);       // 17 - 1, block-aligned
+        REQUIRE(p.block == 1);      // (16-1)/8
+    }
+    // K=2, last block has >2 tokens (prompt%bs==3): partial node at prompt_len-2.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/19, bs, /*skip=*/2, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 17);       // 19 - 2
+        REQUIRE(p.block == 2);      // (17-1)/8
+        REQUIRE(p.node_size == 1);  // 17 - 16
+    }
+    // K pushes B into the prior block (prompt%bs==2, K=3): B=18 in block 2, partial.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/21, bs, /*skip=*/3, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 18);       // 21 - 3
+        REQUIRE(p.block == 2);      // (18-1)/8
+        REQUIRE(p.node_size == 2);  // 18 - 16
+    }
+    // Partial node needs st.miss < j: miss at j blocks the node.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/19, bs, /*skip=*/1, /*miss=*/2);  // j==2
+        REQUIRE_FALSE(p.valid);
+    }
+    // Block-aligned allows st.miss <= j: miss at j still publishes the clamp target.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/17, bs, /*skip=*/1, /*miss=*/1);  // j==1
+        REQUIRE(p.valid);
+        REQUIRE_FALSE(p.partial);
+        REQUIRE(p.pos == 16);
+    }
+    // Block-aligned PROMPT at K=1 (prompt%bs==0): NOT suppressed -- a matchable
+    // boundary is published (option B; old code skipped this).
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/16, bs, /*skip=*/1, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 15);       // 16 - 1
+        REQUIRE(p.block == 1);      // (15-1)/8
+        REQUIRE(p.node_size == 7);  // 15 - 8
+    }
+    // Think + full-block case: block-aligned prompt, K=2 -> partial node before
+    // the volatile suffix that lives in the last full block.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/16, bs, /*skip=*/2, /*miss=*/0);
+        REQUIRE(p.valid);
+        REQUIRE(p.partial);
+        REQUIRE(p.pos == 14);       // 16 - 2
+        REQUIRE(p.block == 1);      // (14-1)/8
+        REQUIRE(p.node_size == 6);  // 14 - 8
+    }
+    // Partial geometry with j==0 (B < block_size): must be invalid -- no parent
+    // block exists, and miss < 0 is impossible. Locks Task 3's block_ids[j-1] safety.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/4, bs, /*skip=*/1, /*miss=*/0);  // B=3, j=0
+        REQUIRE_FALSE(p.valid);
+    }
+    // Block-aligned but miss past j: not matchable -> invalid.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/17, bs, /*skip=*/1, /*miss=*/2);  // B=16, j=1
+        REQUIRE_FALSE(p.valid);
+    }
+    // B < 1 -> no boundary.
+    {
+        const auto p = PlanPromptBoundary(/*prompt_len=*/1, bs, /*skip=*/1, /*miss=*/0);
+        REQUIRE_FALSE(p.valid);
+    }
 }
