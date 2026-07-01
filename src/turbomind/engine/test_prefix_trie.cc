@@ -1,13 +1,17 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/core/interval.h"
 #include "src/turbomind/engine/cache_mode.h"
 #include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/prefix_key.h"
 #include "src/turbomind/engine/prefix_trie.h"
 #include "src/turbomind/engine/prompt_boundary.h"
+#include "src/turbomind/engine/request.h"
+#include "src/turbomind/engine/scheduler.h"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <memory>
 #include <vector>
 
 using namespace turbomind;
@@ -271,4 +275,48 @@ TEST_CASE("DecidePromptBoundaryPublish gates by mode/partial/image", "[cache_mod
     CHECK(DecidePromptBoundaryPublish(CacheMode::kAll, /*partial=*/false, /*has_image=*/false));
     CHECK_FALSE(DecidePromptBoundaryPublish(CacheMode::kAuto, false, false));
     CHECK_FALSE(DecidePromptBoundaryPublish(CacheMode::kAuto, false, true));
+}
+
+TEST_CASE("HasMultimodalOverlap: overlaps [lo, hi) with ascending spans", "[multimodal_overlap]")
+{
+    using turbomind::Interval;
+    using turbomind::MultiModalSpan;
+    using turbomind::Scheduler;
+    using turbomind::Sequence;
+
+    auto make_seq = [](std::vector<std::pair<int, int>> spans) {
+        auto s = std::make_shared<Sequence>(std::make_shared<turbomind::Request>());
+        for (const auto& [begin, end] : spans) {
+            s->multimodal_spans.push_back(MultiModalSpan{Interval{begin, end}, {}});
+        }
+        return s;
+    };
+
+    // (a) A span fully inside [lo, hi) -> true.
+    {
+        auto s = make_seq({{12, 14}});
+        CHECK(Scheduler::HasMultimodalOverlap(*s, 8, 16));
+    }
+    // (b) No span, span entirely before lo, or span entirely at-or-after hi -> false.
+    {
+        auto empty = make_seq({});
+        CHECK_FALSE(Scheduler::HasMultimodalOverlap(*empty, 8, 16));
+
+        auto before = make_seq({{2, 8}});  // end == lo, so [2,8) is entirely before lo=8
+        CHECK_FALSE(Scheduler::HasMultimodalOverlap(*before, 8, 16));
+
+        auto after = make_seq({{16, 20}});  // begin == hi -> at-or-after hi
+        CHECK_FALSE(Scheduler::HasMultimodalOverlap(*after, 8, 16));
+    }
+    // (c) A span that begins before lo but ends after lo (begin < hi) -> true.
+    {
+        auto s = make_seq({{4, 10}});  // begins before lo=8, extends into [8,16)
+        CHECK(Scheduler::HasMultimodalOverlap(*s, 8, 16));
+    }
+    // (d) Ascending early-break: a later span with begin >= hi (would return false)
+    //     never masks an earlier overlapping span, which returns true first.
+    {
+        auto s = make_seq({{10, 12}, {20, 24}});  // first overlaps, second is >= hi
+        CHECK(Scheduler::HasMultimodalOverlap(*s, 8, 16));
+    }
 }

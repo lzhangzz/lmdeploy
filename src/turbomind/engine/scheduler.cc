@@ -455,8 +455,9 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
     // Prompt-boundary publish point (fork_to). B = prompt_len - K (K =
     // cache_prompt_boundary_skip). 'all' publishes a partial node whenever B is
     // mid-block and arms the checkpoint clamp when B is block-aligned. 'auto'
-    // publishes the partial node only when its own token range [j*bs, B) holds
-    // image tokens, and never arms the block-aligned clamp.
+    // publishes the partial node only when its own token range [j*bs, B) overlaps
+    // a multimodal span (including a span that began in an earlier block and
+    // extends into this range), and never arms the block-aligned clamp.
     const auto plan = PlanPromptBoundary(prompt, bs, cache_prompt_boundary_skip_, st.miss);
     if (plan.valid) {
         const bool need_image = plan.partial && prompt_cache_mode_ == CacheMode::kAuto;
@@ -970,7 +971,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 }
 
 // Full-block group: coverage-driven checkpoint, published iff a full block ends
-// exactly at `end` (subject to min-interval); no prompt-boundary policy involved.
+// exactly at `end` (subject to min-interval); no prompt-boundary mode involved.
 // The full block's prefix is published in place by Publish() (no KV copy).
 void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
@@ -1182,9 +1183,11 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         evict_pos                  = evicting;
 
         // Optional optimizations (allocated later, from inactive memory). One
-        // checkpoint per forward, routed by its end; on a veto publish_prompt is
-        // false so nothing prompt-boundary is allocated. PlanPromptBoundaryPublication
-        // reserves the fork-to id in pass.planned for cross-request intent dedup.
+        // checkpoint per forward, routed by its end; publish_prompt is false when
+        // prompt_boundary_node was not set in SetupForks, or when this forward's
+        // geometry does not reach B, so nothing prompt-boundary is allocated.
+        // PlanPromptBoundaryPublication reserves the fork-to id in pass.planned for
+        // cross-request intent dedup.
         if (publish_prompt) {
             PlanPromptBoundaryPublication(pass, i, s, end);  // fork_to KV + prompt-boundary checkpoint
         }

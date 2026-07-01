@@ -123,6 +123,10 @@ public:
         return enable_prefix_caching_;
     }
 
+    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupForks to
+    // gate the 'auto' prompt-boundary publish. Public so it can be unit-tested.
+    static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
+
     // Match the prompt against the prefix trie; create missing blocks; set up
     // fork_from (partial match) and fork_to (prompt-boundary publish point).
     void Accept(Sequence& s);
@@ -215,10 +219,6 @@ private:
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
     TokenSpan TokenSegment(const Sequence& s, int offset, int size) const;
-
-    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupForks
-    // to gate the 'auto' prompt-boundary publish.
-    static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
 
     void LogProfile(const PerformanceCounter& counter) const;
 
