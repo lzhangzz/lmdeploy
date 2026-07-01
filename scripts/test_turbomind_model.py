@@ -15,6 +15,9 @@ Stdout is plain text in short sections, for example:
   session_len: 16384
   max_batch_size: 8
   enable_prefix_caching: 0
+  cache_checkpoint_interval: 4096
+  cache_prompt: 'auto'
+  cache_generation: 'auto'
   prompt_count: 1
   prompt_source: default
   CUDA_LAUNCH_BLOCKING: 1    (only if --debug was passed)
@@ -176,13 +179,6 @@ def _positive_int(value: str) -> int:
     n = int(value)
     if n < 1:
         raise argparse.ArgumentTypeError(f'{value!r} must be >= 1')
-    return n
-
-
-def _non_negative_int(value: str) -> int:
-    n = int(value)
-    if n < 0:
-        raise argparse.ArgumentTypeError(f'{value!r} must be >= 0')
     return n
 
 
