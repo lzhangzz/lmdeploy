@@ -1,5 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
+#include "src/turbomind/engine/cache_mode.h"
 #include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/prefix_key.h"
 #include "src/turbomind/engine/prefix_trie.h"
@@ -244,4 +245,30 @@ TEST_CASE("PlanPromptBoundary: geometry and guards", "[prompt_boundary]")
         const auto p = PlanPromptBoundary(/*prompt_len=*/1, bs, /*skip=*/1, /*miss=*/0);
         REQUIRE_FALSE(p.valid);
     }
+}
+
+TEST_CASE("ParseCacheMode maps strings to CacheMode", "[cache_mode]")
+{
+    using turbomind::CacheMode;
+    using turbomind::ParseCacheMode;
+    CHECK(ParseCacheMode("none") == CacheMode::kNone);
+    CHECK(ParseCacheMode("auto") == CacheMode::kAuto);
+    CHECK(ParseCacheMode("all") == CacheMode::kAll);
+}
+
+TEST_CASE("DecidePromptBoundaryPublish gates by mode/partial/image", "[cache_mode]")
+{
+    using turbomind::CacheMode;
+    using turbomind::DecidePromptBoundaryPublish;
+
+    // Partial node (B mid-block): 'all' always publishes; 'auto' only with image.
+    CHECK(DecidePromptBoundaryPublish(CacheMode::kAll, /*partial=*/true, /*has_image=*/false));
+    CHECK(DecidePromptBoundaryPublish(CacheMode::kAll, true, true));
+    CHECK_FALSE(DecidePromptBoundaryPublish(CacheMode::kAuto, true, false));
+    CHECK(DecidePromptBoundaryPublish(CacheMode::kAuto, true, true));
+
+    // Block-aligned B (no partial node): only 'all' arms the checkpoint clamp.
+    CHECK(DecidePromptBoundaryPublish(CacheMode::kAll, /*partial=*/false, /*has_image=*/false));
+    CHECK_FALSE(DecidePromptBoundaryPublish(CacheMode::kAuto, false, false));
+    CHECK_FALSE(DecidePromptBoundaryPublish(CacheMode::kAuto, false, true));
 }
