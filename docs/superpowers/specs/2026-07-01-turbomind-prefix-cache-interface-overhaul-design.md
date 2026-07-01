@@ -179,9 +179,9 @@ Remove the old `ec.linear_prefix_cache_min_interval`,
 
 ```cpp
 // scheduler.h
-CacheMode prompt_mode_{CacheMode::kAuto};       // replaces cache_prompt_boundary_
+CacheMode prompt_cache_mode_{CacheMode::kAuto};       // replaces cache_prompt_boundary_
 int       cache_prompt_boundary_skip_{1};       // unchanged
-CacheMode generation_mode_{CacheMode::kAuto};   // replaces cache_generation_boundary_
+CacheMode generation_cache_mode_{CacheMode::kAuto};   // replaces cache_generation_boundary_
 // removed: bool cache_prompt_boundary_, bool cache_generation_boundary_,
 //          std::unique_ptr<CacheBoundaryPolicy> boundary_policy_
 ```
@@ -194,9 +194,9 @@ Constructor signature changes the two `bool` boundary params to two
 Scheduler::Scheduler(..., const std::string& cache_prompt,
                           int                 cache_prompt_boundary_skip,
                           const std::string&  cache_generation, ...):
-    prompt_mode_{ParseCacheMode(cache_prompt)},
+    prompt_cache_mode_{ParseCacheMode(cache_prompt)},
     cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
-    generation_mode_{ParseCacheMode(cache_generation)},
+    generation_cache_mode_{ParseCacheMode(cache_generation)},
     ...
 ```
 
@@ -206,7 +206,7 @@ Scheduler::Scheduler(..., const std::string& cache_prompt,
 
 ### 4.1 `SetupForks` read/publish sides (`scheduler.cc:418-493`)
 
-`prompt_mode_` is always `kAuto` or `kAll` (no `'none'`), so the prompt-boundary
+`prompt_cache_mode_` is always `kAuto` or `kAll` (no `'none'`), so the prompt-boundary
 attempt and the `fork_from` read side are **always armed** — the guard bools
 `prompt_boundary` / `fork_match` are removed:
 
@@ -247,8 +247,8 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         if (plan.partial) {
             const int  lo   = plan.block * bs;   // j*bs
             const int  hi   = plan.pos;          // B
-            const bool gate = (prompt_mode_ == CacheMode::kAll)
-                              || (prompt_mode_ == CacheMode::kAuto && HasMultimodalOverlap(s, lo, hi));
+            const bool gate = (prompt_cache_mode_ == CacheMode::kAll)
+                              || (prompt_cache_mode_ == CacheMode::kAuto && HasMultimodalOverlap(s, lo, hi));
             if (gate) {
                 const int     j      = plan.block;  // j >= 1 (guaranteed by the planner)
                 LogicalBlock& x      = *s.block_ids[j];
@@ -278,7 +278,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         else {
             // Block-aligned B: only 'all' arms the recurrent-checkpoint clamp;
             // 'auto' has no partial block to hold image KV, so it publishes nothing.
-            have_target = (prompt_mode_ == CacheMode::kAll);
+            have_target = (prompt_cache_mode_ == CacheMode::kAll);
         }
 
         if (have_target) {
@@ -348,13 +348,13 @@ void Scheduler::PublishGeneration(Sequence& s)
     if (!PrefixEligible(s) || s.filled_len <= 0) {
         return;
     }
-    if (generation_mode_ == CacheMode::kNone) {
+    if (generation_cache_mode_ == CacheMode::kNone) {
         return;  // NEW: index no generated blocks at all
     }
 
     // 'all' indexes the terminal partial block + adopts the terminal frontier
     // checkpoint; 'auto' indexes full generated blocks only.
-    const bool publish_generation_boundary = (generation_mode_ == CacheMode::kAll);
+    const bool publish_generation_boundary = (generation_cache_mode_ == CacheMode::kAll);
     ...
 }
 ```
@@ -490,7 +490,7 @@ skip length; new main-`lmdeploy`-CLI flags.
 ```
 TurbomindEngineConfig{cache_prompt, cache_generation, cache_checkpoint_interval, cache_prompt_boundary_skip}
   -> EngineConfig{cache_prompt(str), cache_generation(str), cache_checkpoint_interval(int), cache_prompt_boundary_skip(int)}
-  -> Scheduler ctor: prompt_mode_ = ParseCacheMode(cache_prompt); generation_mode_ = ParseCacheMode(cache_generation)
+  -> Scheduler ctor: prompt_cache_mode_ = ParseCacheMode(cache_prompt); generation_cache_mode_ = ParseCacheMode(cache_generation)
   -> turbomind.cc: cache_registry.set_checkpoint_min_interval(cache_checkpoint_interval)
   -> [Accept/SetupForks] fork_from always armed; PlanPromptBoundary -> mode gate
        ('all': mid-block partial / block-aligned clamp; 'auto': partial only if HasMultimodalOverlap)
