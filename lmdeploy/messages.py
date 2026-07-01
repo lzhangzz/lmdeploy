@@ -251,9 +251,11 @@ class TurbomindEngineConfig:
             linear-attention prefix checkpoints. The default value 0 means
             use `cache_block_seq_len`.
         cache_prompt_boundary: requires `enable_prefix_caching`. When True,
-            publish a reusable partial-block node at `prompt_len - 1` so a
-            duplicate prompt skips prefill (costs one extra prefill forward and a
-            partial block). The node carries the partial block's k/v; a
+            publish a reusable prompt-boundary node at
+            `B = prompt_len - cache_prompt_boundary_skip` (default K=1, i.e.
+            `prompt_len - 1`) so a duplicate prompt skips prefill (costs one extra
+            prefill forward and a partial block when B is mid-block). The node
+            carries the partial block's k/v; a
             recurrent/hybrid model additionally publishes a recurrent-state
             checkpoint onto it. Default False.
         cache_prompt_boundary_skip: number of trailing prompt tokens treated as

@@ -124,7 +124,8 @@ backend_config = TurbomindEngineConfig(
 pipe = pipeline('your-model', backend_config=backend_config)
 ```
 
-- `cache_prompt_boundary`：在 `prompt_len - 1` 处发布可复用的非整块节点，使重复 prompt（例如对同一 prompt 多次采样，或包含图像 token 的 prompt）跳过 prefill。该节点携带非整块的 k/v；对于循环/混合模型还会额外发布循环状态 checkpoint。代价是产生该节点的请求需要额外一次 prefill 前向计算，以及一个非整块缓存块（partial 块）。
+- `cache_prompt_boundary`：在 `B = prompt_len - cache_prompt_boundary_skip`（默认 K=1，即 `prompt_len - 1`）处发布可复用的 prompt 边界节点，使重复 prompt（例如对同一 prompt 多次采样，或包含图像 token 的 prompt）跳过 prefill。仅当 `B` 落在块内部时才会新增一个非整块 fork 节点；`B` 恰好对齐块边界时通过整块复用。该节点携带非整块的 k/v；对于循环/混合模型还会额外发布循环状态 checkpoint。代价是产生该节点的请求需要额外一次 prefill 前向计算，以及（当 `B` 落在块内部时）一个非整块缓存块（partial 块）。
+- `cache_prompt_boundary_skip`：将 prompt 末尾的若干 token 视为易变的生成前缀后缀（例如 chat 模板的 `<think>\n`），从可复用的 prompt 边界节点中排除，使节点移动到 `prompt_len - cache_prompt_boundary_skip`。需要开启 `cache_prompt_boundary`。默认 1（仅排除最后一个 token）。对于 chat 模板会追加多 token 后缀、且下一轮历史会丢弃该后缀的思考型模型，可调大该值。
 - `cache_generation_boundary`：在请求正常结束时索引末端的非整块生成块，使得可以从生成的精确末端恢复（例如多轮对话）；对于循环/混合模型还会额外将末端循环状态写入该块。代价是一个非整块缓存块（partial 块）。无论该开关如何设置，块边界处的整块 checkpoint 始终会发布。
 
 ### kv 量化推理开关
