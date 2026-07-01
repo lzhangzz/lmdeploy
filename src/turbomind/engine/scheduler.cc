@@ -10,6 +10,7 @@
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
+#include "src/turbomind/engine/cache_mode.h"
 #include "src/turbomind/engine/prompt_boundary.h"
 #include "src/turbomind/memory/common.h"
 
@@ -211,6 +212,23 @@ void LogCollision(const Sequence& s, CollisionSite site, int begin, int end);
 
 }  // namespace
 
+// True if any multimodal span overlaps [lo, hi). Interval is the absolute token
+// span [begin, end); a partial prompt block "contains image tokens" when a span
+// intersects it, even one that started in an earlier (full) block and extends
+// in. multimodal_spans is prompt-ordered ascending by interval.begin().
+bool Scheduler::HasMultimodalOverlap(const Sequence& s, int lo, int hi)
+{
+    for (const auto& sp : s.multimodal_spans) {
+        if (sp.interval.begin() >= hi) {
+            break;  // ascending; no later span can overlap
+        }
+        if (sp.interval.end() > lo) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static PerformanceCounter make_perf_counter()
 {
     constexpr int kSchedPerfCounters = 32;
@@ -255,16 +273,14 @@ Scheduler::Scheduler(ObjectAllocator&                     alloc,
                      CacheRegistry                        registry,
                      int                                  cache_block_seq_len,
                      bool                                 enable_prefix_caching,
-                     bool                                 cache_prompt_boundary,
+                     const std::string&                   cache_prompt,
                      int                                  cache_prompt_boundary_skip,
-                     bool                                 cache_generation_boundary,
-                     std::unique_ptr<CacheBoundaryPolicy> boundary_policy,
+                     const std::string&                   cache_generation,
                      const int&                           is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
-    cache_prompt_boundary_{cache_prompt_boundary},
+    prompt_cache_mode_{ParseCacheMode(cache_prompt)},
     cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
-    cache_generation_boundary_{cache_generation_boundary},
-    boundary_policy_{std::move(boundary_policy)},
+    generation_cache_mode_{ParseCacheMode(cache_generation)},
     is_warm_up_{is_warm_up},
     alloc_{alloc},
     registry_{std::move(registry)},
@@ -418,19 +434,10 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
 
     const int all_blocks = (prompt + bs - 1) / bs;
 
-    // Partial-block fork edges publish/match a node that ends mid-block. The
-    // node carries the partial block's KV for every prefix-cached model; a
-    // recurrent model additionally publishes a recurrent-state checkpoint onto
-    // it. So both edges are gated on the boundary knobs alone (not
-    // has_checkpoint) — the checkpoint payload attaches itself only when
-    // checkpoint cache ids exist. fork_to (write side) publishes the
-    // prompt-boundary node; fork_from (read side) is worthwhile whenever either
-    // boundary knob can publish a node to match.
-    const bool prompt_boundary = cache_prompt_boundary_;
-    const bool fork_match      = cache_prompt_boundary_ || cache_generation_boundary_;
-
-    // Partial match for the first missed position (fork_from)
-    if (fork_match && st.miss < all_blocks) {
+    // fork_from (read side) is always armed: any prior request may have published
+    // a prompt partial node (cache_prompt in {all, auto}) or a generation
+    // terminal partial ('all'), so the read edge must always try to match.
+    if (st.miss < all_blocks) {
         LogicalBlock& x      = *s.block_ids[st.miss];
         const int     offset = st.miss * bs;
         const int     size   = std::min(prompt - offset, bs);
@@ -445,13 +452,17 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         }
     }
 
-    // Prompt-boundary publish point (fork_to): only when cache_prompt_boundary is
-    // enabled. The node ends at the reusable boundary B = prompt_len - K (K =
-    // cache_prompt_boundary_skip, default 1). A partial node is published when B
-    // is inside a block (B % bs != 0); a block-aligned B only arms the clamp.
-    if (prompt_boundary) {
-        const auto plan = PlanPromptBoundary(prompt, bs, cache_prompt_boundary_skip_, st.miss);
-        if (plan.valid) {
+    // Prompt-boundary publish point (fork_to). B = prompt_len - K (K =
+    // cache_prompt_boundary_skip). 'all' publishes a partial node whenever B is
+    // mid-block and arms the checkpoint clamp when B is block-aligned. 'auto'
+    // publishes the partial node only when its own token range [j*bs, B) holds
+    // image tokens, and never arms the block-aligned clamp.
+    const auto plan = PlanPromptBoundary(prompt, bs, cache_prompt_boundary_skip_, st.miss);
+    if (plan.valid) {
+        const bool need_image = plan.partial && prompt_cache_mode_ == CacheMode::kAuto;
+        const bool has_image  = need_image && HasMultimodalOverlap(s, plan.block * bs, plan.pos);
+
+        if (DecidePromptBoundaryPublish(prompt_cache_mode_, plan.partial, has_image)) {
             bool have_target = true;
 
             if (plan.partial) {
@@ -771,9 +782,13 @@ void Scheduler::PublishGeneration(Sequence& s)
     if (!PrefixEligible(s) || s.filled_len <= 0) {
         return;
     }
+    if (generation_cache_mode_ == CacheMode::kNone) {
+        return;  // index no generated blocks at all
+    }
 
-    const bool publish_generation_boundary =
-        cache_generation_boundary_ && boundary_policy_->PublishGenerationBoundary(s);
+    // 'all' indexes the terminal partial block + adopts the terminal recurrent
+    // frontier checkpoint; 'auto' indexes full generated blocks only.
+    const bool publish_generation_boundary = (generation_cache_mode_ == CacheMode::kAll);
 
     const LogicalBlock* parent = nullptr;
     PrefixKey           key{};
@@ -799,13 +814,11 @@ void Scheduler::PublishGeneration(Sequence& s)
             break;
         }
         // The terminal partial generated block is the generation-boundary partial
-        // node; index it only when the generation boundary is published
-        // (publish_generation_boundary; its cache_generation_boundary_ component
-        // matches the fork_from gate in Accept, so the node stays reachable). It carries
-        // the partial block's KV for every model; a recurrent model additionally
-        // adopts the terminal frontier checkpoint below (guarded by a valid
-        // frontier id). Full generated blocks always index. It ends at filled_len,
-        // so nothing follows.
+        // node; index it only when generation_cache_mode_ is kAll
+        // (publish_generation_boundary). It carries the partial block's KV for
+        // every model; a recurrent model additionally adopts the terminal frontier
+        // checkpoint below (guarded by a valid frontier id). Full generated blocks
+        // always index. It ends at filled_len, so nothing follows.
         if (size < x.capacity && !publish_generation_boundary) {
             break;
         }
@@ -930,19 +943,6 @@ LogicalBlock* Scheduler::PlanForkToPopulation(Sequence& s, int end, std::unorder
     // prefix blocks, so it never collides with a required allocation id.
     planned.insert(y_cache);
     return x.fork_to.get();
-}
-
-// Runtime prompt-boundary publish veto, resolved once and cached (so a retried
-// admission pass never re-scans). Sole caller: the admission clamp.
-bool Scheduler::ResolvePublishPromptBoundary(Sequence& s)
-{
-    if (!s.prompt_boundary_node) {
-        return false;  // machinery off
-    }
-    if (s.prompt_boundary_publish < 0) {
-        s.prompt_boundary_publish = boundary_policy_->PublishPromptBoundary(s) ? 1 : 0;
-    }
-    return s.prompt_boundary_publish == 1;
 }
 
 // Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): fork_to KV copy +
@@ -1121,11 +1121,11 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
         const int prompt_boundary_pos = s.prompt_boundary_pos;
 
-        // Consult the policy only on the pass that can reach B; >= so an
-        // exact landing isn't truncated away. On a veto, skip the clamp.
-        const bool is_prompt_boundary =
+        // The publish decision is finalized in SetupForks (prompt_boundary_node);
+        // the clamp fires on the pass that can reach B (>= so an exact landing
+        // isn't truncated away).
+        const bool publish_prompt =
             s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
-        const bool publish_prompt = is_prompt_boundary && ResolvePublishPromptBoundary(s);
 
         if (publish_prompt) {
             desired = prompt_boundary_pos;  // land exactly on B
