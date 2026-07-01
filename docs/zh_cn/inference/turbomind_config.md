@@ -109,7 +109,7 @@ cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_da
 
 ### 非整块边界复用
 
-有两个开关控制是否在 prompt 与生成边界处发布非整块（partial-block）前缀节点。二者都需要开启 `enable_prefix_caching`，且适用于所有开启前缀缓存的模型：所发布的节点携带该非整块的 k/v；对于循环/混合模型（例如包含 GatedDeltaNet 层的模型），该节点还会额外携带循环状态 checkpoint。默认均为 `False`。
+有两个模式开关控制是否在 prompt 与生成边界处发布非整块（partial-block）前缀节点：`cache_prompt`（取 `'all'` 或 `'auto'`，默认 `'auto'`）与 `cache_generation`（取 `'all'`、`'auto'` 或 `'none'`，默认 `'auto'`）。二者都需要开启 `enable_prefix_caching`，且适用于所有开启前缀缓存的模型：所发布的节点携带该非整块的 k/v；对于循环/混合模型（例如包含 GatedDeltaNet 层的模型），该节点还会额外携带循环状态 checkpoint。
 
 将 `cache_prompt='all'` 用于同一 prompt 会被反复处理的场景（多次采样解码、共享/系统 prompt），使重复 prompt 跳过 prefill；默认 `'auto'` 仅对包含图像 token 的非整块 prompt 块生效（复用视觉编码 KV），对纯文本 prompt 无效果。将 `cache_generation='all'` 用于需要从生成精确末端恢复的场景（例如多轮对话）；`'auto'`（默认）仅缓存完整生成块；`'none'` 不缓存任何生成块。非整块节点会带来额外的显存与拷贝带宽开销，除非复用收益明确，否则建议使用 `'auto'`。
 

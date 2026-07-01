@@ -107,7 +107,7 @@ Since k/v block is the smallest granularity for reuse in prefix caching, if the 
 
 ### Partial-block boundary reuse
 
-Two flags control whether partial-block prefix nodes are published at the prompt and generation boundaries. Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint. Both default to `False`.
+Two mode knobs control whether partial-block prefix nodes are published at the prompt and generation boundaries: `cache_prompt` (`'all'` or `'auto'`, default `'auto'`) and `cache_generation` (`'all'`, `'auto'`, or `'none'`, default `'auto'`). Both require `enable_prefix_caching` and apply to any prefix-cached model: the published node carries the partial block's k/v, and on a recurrent/hybrid model (e.g. those with GatedDeltaNet layers) it additionally carries a recurrent-state checkpoint.
 
 Set `cache_prompt='all'` when the same prompt is processed repeatedly (multi-sample decoding, shared/system prompts) so a duplicate prompt skips prefill; the default `'auto'` does this only for image-bearing partial prompt blocks (reusing vision-encoded KV) and is inert for text-only prompts. Set `cache_generation='all'` when you need to resume from the exact generation end (e.g. multi-turn chat); `'auto'` (default) caches full generated blocks only; `'none'` caches no generated blocks. The partial-block node costs extra VRAM and copy bandwidth, so prefer `'auto'` unless the reuse pays off.
 
