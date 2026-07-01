@@ -136,8 +136,8 @@ def run(args) -> int:
         cache_max_entry_count=0.5,
         enable_prefix_caching=True,
         enable_metrics=False,
-        cache_prompt_boundary=True,
-        cache_generation_boundary=True,
+        cache_prompt='all',
+        cache_generation='all',
         cache_prompt_boundary_skip=skip,
     )
     gen_config = GenerationConfig(max_new_tokens=args.max_new_tokens, do_sample=False)

@@ -144,8 +144,8 @@ def run(args) -> int:
         # Qwen3.5 is a hybrid linear/full-attention model: linear-attention layers
         # carry recurrent state, so cross-request prefix resume (and the resulting
         # ViT-skip) requires a boundary checkpoint to be published/restored.
-        cache_prompt_boundary=True,
-        cache_generation_boundary=True,
+        cache_prompt='all',
+        cache_generation='all',
     )
     gen_config = GenerationConfig(max_new_tokens=args.max_new_tokens, do_sample=False)
     prompt = args.prompt
