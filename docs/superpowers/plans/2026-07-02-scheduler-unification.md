@@ -591,13 +591,13 @@ git commit -m "feat(scheduler): adopt terminal checkpoint unconditionally, demot
 
 ### Task 7: GPU verification
 
-**Files:** none modified (plan checkboxes only).
+**Files:** plan checkboxes and verification notes only.
 
-- [ ] **Step 1: Pick GPUs**
+- [x] **Step 1: Pick GPUs**
 
 Run `nvidia-smi` (outside the sandbox); pick idle GPUs (no processes, ~0 MiB). Qwen3.5-27B bf16 needs ~54 GB of weights plus cache: use `--tp 2 --gpus <a>,<b>` on two idle GPUs. Qwen3-8B fits one GPU (`--tp 1`).
 
-- [ ] **Step 2: Create the shared-prefix prompt file**
+- [x] **Step 2: Create the shared-prefix prompt file**
 
 ```python
 import json
@@ -610,7 +610,7 @@ json.dump([base + "\nSummarize the text above.",
           open("/tmp/sched_prompts.json", "w"))
 ```
 
-- [ ] **Step 3: Recurrent-model scenario (outside the sandbox)**
+- [x] **Step 3: Recurrent-model scenario (outside the sandbox)**
 
 ```bash
 python scripts/test_turbomind_model.py \
@@ -624,7 +624,7 @@ python scripts/test_turbomind_model.py \
 
 (`--prompt-ids 0 0 1 1`: the repeated prompt 0 exercises prompt-boundary resume via the published partial sibling / boundary checkpoint; prompt 1 extends the shared prefix, exercising checkpoint resume and checkpoint-due truncation; the repeated prompt 1 resumes from the newly published checkpoints. `--cache-generation all` makes terminal adoption fire; with the prompt-boundary checkpoint a short 256-token generation ends well inside the 4096-token default interval, so the demotion path fires too.)
 
-- [ ] **Step 4: Verify the recurrent log**
+- [x] **Step 4: Verify the recurrent log**
 
 In `/tmp/sched_gdn.log` `[TM][WARN]` lines, check all of:
 
@@ -635,7 +635,7 @@ In `/tmp/sched_gdn.log` `[TM][WARN]` lines, check all of:
 5. At least one `finalized gen [...] terminal ckpt (demoted)` line (demotion fired), or `terminal ckpt` when no in-window checkpoint existed — both prove adoption; `(demoted)` proves the new path.
 6. All four responses are meaningful English relevant to the prompts (256 generated tokens requested). Gibberish = a broken restore/publication path — stop and debug (per AGENTS.md, iterate until fixed; do not proceed with active bugs).
 
-- [ ] **Step 5: Attention-model scenario (outside the sandbox)**
+- [x] **Step 5: Attention-model scenario (outside the sandbox)**
 
 ```bash
 python scripts/test_turbomind_model.py \
@@ -648,7 +648,7 @@ python scripts/test_turbomind_model.py \
 
 Check: the repeated prompt 0 logs `resume [0,...) ... source=prefix` or `source=fork` (no checkpoint category exists; the `!ckpt` candidate paths), computed span far smaller than the prompt, and both responses meaningful.
 
-- [ ] **Step 6: Commit plan checkboxes / verification notes**
+- [x] **Step 6: Commit plan checkboxes / verification notes**
 
 Append a `## Verification results` section to this plan (GPUs used, log paths, observed resume/publish/finalize lines), then:
 
@@ -656,3 +656,51 @@ Append a `## Verification results` section to this plan (GPUs used, log paths, o
 git add docs/superpowers/plans/2026-07-02-scheduler-unification.md
 git commit -m "docs: record scheduler-unification verification results"
 ```
+
+## Verification results
+
+Run date: 2026-07-02 UTC.
+
+Pre-GPU verification after Task 6: `ninja` from `build/` exited 0; `./bin/test_prefix_trie` exited 0 with 73 assertions in 10 cases; `git diff --check HEAD~1 HEAD` was clean.
+
+GPU selection: GPU 4 was occupied by pre-existing PID 518828 and was not used. Final `get_gpu_usage` snapshot after verification showed GPUs 1,2,3,5,6,7 at 4 MiB, GPU 0 at 122 MiB, and GPU 4 still occupied at 140605 MiB.
+
+Shared prompt file: `/tmp/sched_prompts.json`, two shared-prefix prompts, 122074 bytes.
+
+Recurrent model, authoritative run: `/tmp/sched_gdn_tp1.log`. The original plan listed `--tp 2`, but the H200 has 141 GiB VRAM and the final run used the user's requested single-GPU shape:
+
+```bash
+TM_CACHE_LOG_INTERVAL=1 python scripts/test_turbomind_model.py --model-id Qwen/Qwen3.5-27B --cache-dir /mnt_cfs/huggingface_hub/hub --tp 1 --gpus 0 --enable-prefix-caching --cache-prompt all --cache-generation all --cache-prompt-boundary-skip 2 --max-prefill-token-num 8192 --session-len 32768 --max-new-tokens 256 --prompt-file /tmp/sched_prompts.json --prompt-ids 0 0 1 1 2>&1 | tee /tmp/sched_gdn_tp1.log
+```
+
+Recurrent setup/tokens: lines 2168-2182 show `model: Qwen/Qwen3.5-27B`, `tp: 1`, `gpus: 0`, `max_new_tokens: 256`, `session_len: 32768`, `cache_checkpoint_interval: 4096`, `cache_prompt: 'all'`, `cache_generation: 'all'`, `cache_prompt_boundary_skip: 2`, `prompt_count: 4`. Lines 2185-2205 show pipeline load 19.15 s, inference 6.59 s, and generated 256 tokens for each of four prompts.
+
+Recurrent cache evidence:
+
+1. Prompt 0 first run published the shared prefix and prompt boundary with checkpoint: lines 313-322 show `published prefix [0,8192) ... ckpt@8192` and `published prefix [8192,9600) ... boundary [9600,9616) ... ckpt@9616`.
+2. Prompt 0 repeat resumed at the boundary with tiny recompute: line 333 shows `resume [0,9616) ... source=fork | computed [9616,9618) 2 tok`.
+3. Prompt 1 first run resumed from the shared checkpoint and then published the extended boundary checkpoint: lines 341-343 show `resume [0,8192) ... source=checkpoint | computed [8192,14417) 6225 tok` and `published prefix [9600,14400) ... boundary [14400,14417) ... ckpt@14417`.
+4. Prompt 1 repeat resumed at the higher checkpoint with tiny recompute: line 351 shows `resume [0,14417) ... source=fork | computed [14417,14419) 2 tok`.
+5. Terminal adoption and demotion fired: lines 2137 and 2153 show `finalized gen ... terminal ckpt (demoted)` for the generated ranges.
+
+Recurrent response quality: lines 2207-2282 show all four 256-token responses were meaningful English relevant to the prompts. The summarize prompts describe the repeated fox/dog/river/sun sentence, and the fact prompts identify facts about the fox, dog, river, and sun.
+
+Checkpoint-due supplement: `/tmp/sched_gdn_checkpoint.log`. This run used `cache_prompt: 'auto'` because the main `cache_prompt: 'all'` run correctly clamps to the prompt boundary first, which masks a clean checkpoint-due split. Command:
+
+```bash
+TM_CACHE_LOG_INTERVAL=1 python scripts/test_turbomind_model.py --model-id Qwen/Qwen3.5-27B --cache-dir /mnt_cfs/huggingface_hub/hub --tp 1 --gpus 0 --enable-prefix-caching --cache-prompt auto --cache-generation all --cache-prompt-boundary-skip 2 --max-prefill-token-num 8192 --session-len 32768 --max-new-tokens 256 --prompt-file /tmp/sched_prompts.json --prompt-ids 0 1 2>&1 | tee /tmp/sched_gdn_checkpoint.log
+```
+
+Checkpoint-due setup/tokens: lines 2154-2168 show `model: Qwen/Qwen3.5-27B`, `tp: 1`, `gpus: 0`, `cache_prompt: 'auto'`, `cache_generation: 'all'`, `cache_prompt_boundary_skip: 2`, `prompt_count: 2`; lines 2171-2183 show pipeline load 19.02 s, inference 6.36 s, and generated 256 tokens for both prompts.
+
+Checkpoint-due cache evidence: lines 313-322 publish `[0,8192)` with `ckpt@8192`; lines 331-332 show prompt 1 resumed from checkpoint at 8192 and split the >4096-token recompute span on a block boundary: `computed [8192,14400) 6208 tok` and `published prefix [9600,14400) ... ckpt@14400`. Lines 2125 and 2140 show terminal checkpoints were adopted and demoted. Lines 2185-2222 show both responses were meaningful and prompt-relevant.
+
+Attention model: `/tmp/sched_attn.log`. Command:
+
+```bash
+TM_CACHE_LOG_INTERVAL=1 python scripts/test_turbomind_model.py --model-id Qwen/Qwen3-8B --cache-dir /mnt_cfs/huggingface_hub/hub --tp 1 --gpus 2 --enable-prefix-caching --cache-prompt all --cache-generation all --max-prefill-token-num 8192 --session-len 32768 --max-new-tokens 256 --prompt-file /tmp/sched_prompts.json --prompt-ids 0 0 2>&1 | tee /tmp/sched_attn.log
+```
+
+Attention setup/tokens: lines 1539-1553 show `model: Qwen/Qwen3-8B`, `tp: 1`, `gpus: 2`, `cache_prompt: 'all'`, `cache_generation: 'all'`, `cache_prompt_boundary_skip: 1`, `prompt_count: 2`; lines 1556-1568 show pipeline load 13.28 s, inference 1.99 s, and generated 256 tokens for both prompts.
+
+Attention cache evidence: lines 228-235 show the first prompt published `[0,8192)` and boundary `[9600,9615)`; line 242 shows the repeat resumed from the forked boundary with `computed [9615,9616) 1 tok`. Line 1528 shows finalization of the generated range. Lines 1570-1593 show both responses were meaningful English summaries of the repeated fox/dog/river/sun text.
