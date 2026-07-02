@@ -6,7 +6,7 @@
 
 **Architecture:** The two per-request fork edges become one structural, first-wins edge on the shared trie node (full/containing block → strictly shorter identity-verified partial sibling; partials carry no outgoing edge, so the graph is acyclic). `Scheduler::Resume` step 2 gains an interior candidate: the sibling's checkpoint restores without any KV copy when its end lies inside the valid prefix. Publication code derives "should I populate this node" from geometry instead of the edge's field name. Spec: `docs/superpowers/specs/2026-07-02-partial-sibling-resume-design.md`.
 
-**Tech Stack:** C++ (TurboMind engine), ninja build in `build/`, GPU smoke test via `scripts/test_turbomind_model.py` (AS IS), model-server MCP tools for model discovery.
+**Tech Stack:** C++ (TurboMind engine), ninja build in `build/`, GPU smoke test via `scripts/test_turbomind_model.py` (AS IS), model index at `/data/models.json` (no MCP in this environment).
 
 **Contract note:** All changes must preserve `src/turbomind/engine/README.md` contracts; the doc itself is updated in Task 4. Relevant items: `contracts.prefix-prepare`, `contracts.cache-prepare`, `contracts.boundary-policy`, `contracts.checkpoint-publish`.
 
@@ -285,9 +285,13 @@ git commit -m "docs: partial sibling edge contract (structural, first-wins, inte
 
 The motivating scenario used images with `--cache-prompt auto`; the test script takes text prompts only, so exercise the identical scheduler path with `--cache-prompt all` (publishes the partial boundary node for any mid-block `B`; the code path from `SetupForks` through `Resume` is the same). Three nested prompts emulate the three rounds: P2 extends P1, P3 extends P2, so round 3 fully matches the block containing round 1's boundary.
 
-- [ ] **Step 1: Pick a model and a free GPU**
+- [ ] **Step 1: Model and GPU selection**
 
-Use the model-server MCP tools: `list_models`, then `get_model_cache_path` for the cache dir. Prefer a recurrent/hybrid (checkpointing) model — the interior-checkpoint path (Task 3 step 1) only activates when `registry_.has_checkpoint()`; also run a plain attention model afterwards as regression. Check `get_gpu_usage` for a free GPU first. GPU commands must run outside the sandbox.
+MCP model-server tools are NOT available in this environment. The model index is at `/data/models.json`; use:
+- Primary model: `Qwen/Qwen3.5-27B`, cache dir `/mnt_cfs/huggingface_hub/hub/` (hybrid model with recurrent checkpointing — exercises the interior-checkpoint path of Task 3, which only activates when `registry_.has_checkpoint()`).
+- Attention regression model (step 6): `Qwen/Qwen3-8B` from the same cache dir.
+
+Check for a free GPU with `nvidia-smi --query-gpu=index,memory.used,memory.total --query-compute-apps=pid --format=csv` (pick a GPU with no compute processes) instead of the `get_gpu_usage` tool. GPU commands must run outside the sandbox.
 
 - [ ] **Step 2: Write the nested prompts file**
 
@@ -297,7 +301,8 @@ Create `/tmp/nested_prompts.json` — a JSON array `[P1, P2, P3]` where P1 is a 
 
 ```bash
 TM_LOG_LEVEL=WARNING python scripts/test_turbomind_model.py \
-    --model-id <MODEL_ID> --cache-dir <CACHE_DIR> --tp 1 --gpus <FREE_GPU> \
+    --model-id Qwen/Qwen3.5-27B --cache-dir /mnt_cfs/huggingface_hub/hub/ \
+    --tp 1 --gpus <FREE_GPU> \
     --enable-prefix-caching --cache-prompt all --cache-generation none \
     --max-batch-size 1 \
     --prompt-file /tmp/nested_prompts.json \
@@ -321,7 +326,7 @@ Read all three `--- response N begin/end ---` sections: each must be meaningful 
 
 - [ ] **Step 6: Attention-model regression**
 
-Repeat steps 3-5 with a plain attention model (no checkpoint category). Expect round 2/3 resumes with `source=prefix` or `source=fork` and meaningful responses; the interior-checkpoint branch must simply never fire (no behavior change).
+Repeat steps 3-5 with `Qwen/Qwen3-8B` (plain attention, no checkpoint category), same cache dir. Expect round 2/3 resumes with `source=prefix` or `source=fork` and meaningful responses; the interior-checkpoint branch must simply never fire (no behavior change).
 
 - [ ] **Step 7: Commit nothing; report**
 
