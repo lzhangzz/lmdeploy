@@ -957,78 +957,49 @@ void Scheduler::Finalize(Sequence& s)
     LogFinalized(s, logical_.block_size(), gen);
 }
 
-// When this pass reaches the prompt boundary, plan the device copy that
-// populates the indexed prompt-end partial sibling. Returns the node when a
-// copy is planned, nullptr otherwise. The geometry guard (y.offset + y.size
-// == end) rejects a sibling belonging to a different boundary.
-LogicalBlock* Scheduler::PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned)
+void Scheduler::PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary)
 {
-    const int bs = logical_.block_size();
+    LogicalBlock& x        = *s.block_ids[(end - 1) / logical_.block_size()];
+    const bool    at_block = x.offset + x.capacity == end;
+    LogicalBlock* sibling =
+        (!at_block && x.partial && x.partial->offset + x.partial->size == end) ? x.partial.get() : nullptr;
+    LogicalBlock* node = at_block ? &x : sibling;
 
-    const LogicalBlock& x = *s.block_ids[(end - 1) / bs];
-    if (!x.partial) {
-        return nullptr;
-    }
-    const LogicalBlock& y       = *x.partial;
-    const int           y_cache = y.prefix_id;
-    if (y.offset + y.size != end || y.is_valid || ValidAlloc(y_cache) || planned.count(y_cache)) {
-        return nullptr;  // boundary not reached, or another request already covers it
-    }
-    // Reserve the node so a later request sharing it does not also plan to
-    // populate it. The slot itself is allocated in the optional phase (from
-    // inactive memory); this reservation only dedups intent within the pass. A
-    // partial sibling is a distinct logical block from any request's required
-    // prefix blocks, so it never collides with a required allocation id.
-    planned.insert(y_cache);
-    return x.partial.get();
-}
-
-// Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): partial sibling KV copy +
-// checkpoint, both partial-block, bypassing the min-interval.
-void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end)
-{
-    // (a) copy the request's partial KV into the shared partial sibling node.
-    if (LogicalBlock* node = PlanForkToPopulation(s, end, pass.planned)) {
-        pass.pending_populate[i] = node;
-        pass.has_optionals   = true;
+    // (a) Population: an indexed, not-yet-populated partial sibling at the
+    // prompt boundary receives this request's partial KV via a device copy.
+    // pass.planned dedups intent across requests sharing the node this pass;
+    // the slot itself is allocated in the optional phase from inactive memory.
+    // A partial sibling is a distinct logical block from any request's
+    // required prefix blocks, so it never collides with a required id.
+    if (at_prompt_boundary && sibling && !sibling->is_valid && !ValidAlloc(sibling->prefix_id)
+        && !pass.planned.count(sibling->prefix_id)) {
+        pass.planned.insert(sibling->prefix_id);
+        pass.pending_populate[i] = sibling;
+        pass.has_optionals       = true;
     }
 
-    // (b) checkpoint onto the partial sibling node, or the block itself when
-    // block-aligned B is a block boundary.
-    if (CheckpointPublicationEligible() && s.publish_cache_id) {
-        LogicalBlock& x          = *s.block_ids[(end - 1) / logical_.block_size()];
-        const bool    at_block   = x.offset + x.capacity == end;
-        const bool    at_partial = x.partial && x.partial->offset + x.partial->size == end;
-        LogicalBlock* target     = at_block ? &x : (at_partial ? x.partial.get() : nullptr);
-        if (target && !ValidAlloc(target->checkpoint_id)) {
-            pass.pending_publish[i] = {target, end, s.publish_cache_id};
-            pass.has_optionals      = true;
+    // (b) Checkpoint onto the node. The prompt-boundary pass bypasses the min
+    // interval; the full-block path requires a block-aligned end and is
+    // subject to the interval and to cache_generation=none suppression of
+    // generation-region checkpoints (a block whose coverage extends past the
+    // prompt holds generated tokens and is never indexed under 'none', so its
+    // checkpoint would only serve this request's own resume).
+    if (!CheckpointPublicationEligible() || s.publish_cache_id == 0 || node == nullptr) {
+        return;
+    }
+    if (!at_prompt_boundary) {
+        if (!at_block) {
+            return;  // full-block group: no full block ends here
+        }
+        if (generation_cache_mode_ == CacheMode::kNone && end > s.prompt_len) {
+            return;
+        }
+        if (end - s.last_ckpt_pos < registry_.checkpoint_min_interval()) {
+            return;
         }
     }
-}
-
-// Full-block group: coverage-driven checkpoint, published iff a full block ends
-// exactly at `end` (subject to min-interval); no prompt-boundary mode involved.
-// The full block's prefix is published in place by MarkProduced() (no KV copy).
-void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end)
-{
-    if (!CheckpointPublicationEligible() || s.publish_cache_id == 0) {
-        return;
-    }
-    LogicalBlock& x = *s.block_ids[(end - 1) / logical_.block_size()];
-    if (x.offset + x.capacity != end) {
-        return;  // partial block — nothing to publish
-    }
-    // cache_generation=none opts out of generation-region checkpoints: a block
-    // whose coverage extends past the prompt (end > prompt_len) holds generated
-    // tokens and is never indexed under 'none', so its checkpoint would only
-    // serve this request's own resume. Prompt-region checkpoints stay always-on.
-    if (generation_cache_mode_ == CacheMode::kNone && end > s.prompt_len) {
-        return;
-    }
-    const int interval = registry_.checkpoint_min_interval();
-    if (end - s.last_ckpt_pos >= interval && !ValidAlloc(x.checkpoint_id)) {
-        pass.pending_publish[i] = {&x, end, s.publish_cache_id};
+    if (!ValidAlloc(node->checkpoint_id)) {
+        pass.pending_publish[i] = {node, end, s.publish_cache_id};
         pass.has_optionals      = true;
     }
 }
@@ -1243,17 +1214,8 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         evict_pos                  = evicting;
 
         // Optional optimizations (allocated later, from inactive memory). One
-        // checkpoint per forward, routed by its end; at_prompt_boundary is false when
-        // prompt_boundary_node was not set in SetupPartialSiblings, or when this forward's
-        // end does not land exactly on B, so nothing prompt-boundary is allocated.
-        // PlanPromptBoundaryPublication reserves the partial sibling id in pass.planned for
-        // cross-request intent dedup.
-        if (at_prompt_boundary) {
-            PlanPromptBoundaryPublication(pass, i, s, end);  // partial sibling KV + prompt-boundary checkpoint
-        }
-        else {
-            PlanFullBlockPublication(pass, i, s, end);  // full-block checkpoint (coverage only)
-        }
+        // checkpoint per forward, routed by its end.
+        PlanPublication(pass, i, s, end, at_prompt_boundary);
 
         SetProducers(s, begin, end);
 

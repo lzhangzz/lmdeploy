@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -161,9 +160,8 @@ private:
     // replay/admission types stay file-local.
     struct ScheduleState;
 
-    // Optional checkpoint-publication intent set by PlanPromptBoundaryPublication /
-    // PlanFullBlockPublication and allocated in the optional admission phase.
-    // cache_id == 0 => nothing.
+    // Optional checkpoint-publication intent allocated in the optional admission
+    // phase. cache_id == 0 => nothing.
     struct PublishPlan {
         LogicalBlock* target{};
         int           end{};
@@ -202,13 +200,14 @@ private:
     // nothing runs this pass. Precedence documented at the definition.
     int ClampForwardEnd(const Sequence& s, int begin, int desired, int ctx_end) const;
 
-    // Admission-loop helpers (called from Schedule only, after input_len is
-    // fixed). They decide and return optional intent; the slots are allocated in
-    // the optional admission phase. PlanForkToPopulation reserves the partial
-    // sibling's prefix_id in `planned` to dedup intent across requests.
-    LogicalBlock* PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned);
-    void          PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
-    void          PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
+    // Publication planning for a committed forward ending at `end`, routed by
+    // whether this is the prompt-boundary pass (end == B). Finds the node
+    // ending exactly at `end` (the block itself when block-aligned, else its
+    // partial sibling), then decides partial sibling KV population and the
+    // checkpoint. Only records intent; slots are allocated in the optional
+    // admission phase. Reserves the sibling's prefix_id in pass.planned to
+    // dedup intent across requests.
+    void PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary);
 
     void EnsureBlocks(Sequence& s);
     void ReleaseCacheId(int cache_id);
