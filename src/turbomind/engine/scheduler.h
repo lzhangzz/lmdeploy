@@ -198,6 +198,10 @@ private:
     void             SetProducers(Sequence& s, int t0, int end);
     ProducerConflict CheckProducers(const Sequence& s, int t0, int end) const;
 
+    // Land the forward end on a boundary candidate; a result <= begin means
+    // nothing runs this pass. Precedence documented at the definition.
+    int ClampForwardEnd(const Sequence& s, int begin, int desired, int ctx_end) const;
+
     // Admission-loop helpers (called from Schedule only, after input_len is
     // fixed). They decide and return optional intent; the slots are allocated in
     // the optional admission phase. PlanForkToPopulation reserves the partial

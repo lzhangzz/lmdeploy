@@ -1033,6 +1033,36 @@ void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s
     }
 }
 
+// Land the forward end on a boundary candidate. Precedence:
+//   1. Prompt-boundary clamp: the boundary node is armed and this pass reaches
+//      B -> land exactly on B (>= so an exact landing is not truncated away).
+//   2. Checkpoint-due alignment: when checkpoint bytes are registered and a
+//      prompt-region pass would run past the due position
+//      (last_ckpt_pos + checkpoint_min_interval), end on the last block
+//      boundary in the admitted range - at or past the due position and
+//      strictly past begin (progress guarantee) - so the full-block checkpoint
+//      can be taken there; the remainder runs in the next pass.
+//   3. Partial-chunk alignment: a pass that does not reach the context end
+//      lands on a block boundary.
+//   4. Otherwise: run to desired.
+int Scheduler::ClampForwardEnd(const Sequence& s, int begin, int desired, int ctx_end) const
+{
+    if (s.prompt_boundary_node && begin < s.prompt_boundary_pos && desired >= s.prompt_boundary_pos) {
+        return s.prompt_boundary_pos;
+    }
+    const int bs      = logical_.block_size();
+    const int aligned = desired / bs * bs;
+    const int due     = s.last_ckpt_pos + registry_.checkpoint_min_interval();
+    if (CheckpointPublicationEligible() && registry_.has_checkpoint() && desired <= s.prompt_len
+        && desired > due && aligned >= due && aligned > begin) {
+        return aligned;
+    }
+    if (desired < ctx_end) {
+        return aligned;
+    }
+    return desired;
+}
+
 void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
 {
     counter_ = make_perf_counter();
@@ -1157,50 +1187,21 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
         s.history_len = s.resume_len;
 
-        // Land the forward end on a checkpoint candidate. The prompt-boundary
-        // clamp (forward ends exactly at B) takes precedence;
-        // otherwise truncate partial prefill chunks to a block boundary.
         const int begin   = s.resume_len + s.inflight_input_len;
         const int ctx_end = s.seq_len + s.inflight_new_tokens;  // == prompt_len for a fresh prefill
-        int       desired = begin + admitted;
 
-        const int prompt_boundary_pos = s.prompt_boundary_pos;
-
-        // The publish decision is finalized in SetupPartialSiblings (prompt_boundary_node);
-        // the clamp fires on the pass that can reach B (>= so an exact landing
-        // isn't truncated away).
-        const bool publish_prompt =
-            s.prompt_boundary_node && begin < prompt_boundary_pos && desired >= prompt_boundary_pos;
-
-        if (publish_prompt) {
-            desired = prompt_boundary_pos;  // land exactly on B
-        }
-        else {
-            // A recurrent checkpoint becomes due at last_ckpt_pos + interval.
-            // The frontier state is checkpointable only at the pass end, so a
-            // prompt-region pass that would run past the due position ends on
-            // a block boundary and PlanFullBlockPublication checkpoints there;
-            // the remaining tokens run in the next pass. `aligned > begin`
-            // guarantees progress (a due position inside the current partial
-            // block cannot be honored and falls through untruncated).
-            const int aligned = desired / bs * bs;
-            const int due     = s.last_ckpt_pos + registry_.checkpoint_min_interval();
-            if (CheckpointPublicationEligible() && registry_.has_checkpoint() && desired <= s.prompt_len
-                && desired > due && aligned >= due && aligned > begin) {
-                desired = aligned;
-            }
-            else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
-                desired = aligned;
-            }
-        }
-
-        const int len = desired - begin;
+        const int end = ClampForwardEnd(s, begin, begin + admitted, ctx_end);
+        const int len = end - begin;
         if (len <= 0) {
             continue;  // nothing admitted this pass; CommitResults leaves it inactive
         }
         s.input_len = len;
 
-        const int end = begin + s.input_len;
+        // The publish decision is finalized in SetupPartialSiblings
+        // (prompt_boundary_node); the clamp lands a pass exactly on B iff it
+        // fired (an end past B implies begin >= B), so end == B identifies the
+        // prompt-boundary pass.
+        const bool at_prompt_boundary = s.prompt_boundary_node && end == s.prompt_boundary_pos;
 
         if (const ProducerConflict conflict = CheckProducers(s, begin, end); conflict.producer) {
             LogDeferred(s, bs, conflict);
@@ -1242,12 +1243,12 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         evict_pos                  = evicting;
 
         // Optional optimizations (allocated later, from inactive memory). One
-        // checkpoint per forward, routed by its end; publish_prompt is false when
+        // checkpoint per forward, routed by its end; at_prompt_boundary is false when
         // prompt_boundary_node was not set in SetupPartialSiblings, or when this forward's
-        // geometry does not reach B, so nothing prompt-boundary is allocated.
+        // end does not land exactly on B, so nothing prompt-boundary is allocated.
         // PlanPromptBoundaryPublication reserves the partial sibling id in pass.planned for
         // cross-request intent dedup.
-        if (publish_prompt) {
+        if (at_prompt_boundary) {
             PlanPromptBoundaryPublication(pass, i, s, end);  // partial sibling KV + prompt-boundary checkpoint
         }
         else {
