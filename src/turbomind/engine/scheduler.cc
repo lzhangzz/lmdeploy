@@ -444,7 +444,9 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         CollectStartFps(s, offset, offset + size, fps, &fp_pos);
 
         if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
-            x.partial = BlockHandle{v};  // edge ref (fresh block; first-wins trivially holds)
+            TM_CHECK(!x.partial);        // first-wins: x created this pass, slot empty
+            TM_CHECK_LT(v->size, size);  // strictly shorter sibling (acyclicity)
+            x.partial = BlockHandle{v};  // edge ref
         }
     }
 
@@ -480,6 +482,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
                 y.image_fps = fps;
                 y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
+                    TM_CHECK(!x.partial);       // first-wins: x created this pass (miss < j), slot empty
                     x.partial = std::move(vh);  // edge holds the only ref
                 }
                 else {
