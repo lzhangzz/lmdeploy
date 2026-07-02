@@ -82,54 +82,66 @@ candidate generation and selection replace steps 2–3:
 ```cpp
 ResumeCandidate best{};  // pos 0, kNone
 
-if (!ckpt) {
-    // Without checkpointing, KV grants per-token resume anywhere in the prefix.
-    best = {prefix_end, prefix_end > 0 ? ResumeSource::kPrefix : ResumeSource::kNone};
-}
-else {
-    // Frontier: live state, no copy.
-    if (const int fpos = s.frontier_pos - s.inflight_input_len;
-        ValidAlloc(s.frontier_cache_id) && 0 < fpos && fpos <= prefix_end) {
-        best = {fpos, ResumeSource::kFrontier};
-    }
-    // Published checkpoints covered by the valid prefix. A block yields its own
-    // (block-end) checkpoint and its interior partial sibling's checkpoint as
-    // the same kind of candidate; both are checkpoint-only restores (KV is
-    // covered by the valid prefix, so no KV copy and no is_valid requirement).
-    for (int i = 0; i < (prefix_end + bs - 1) / bs && i < (int)s.block_ids.size(); ++i) {
-        const LogicalBlock& x = *s.block_ids[i];
-        const int           e = x.key ? x.offset + x.size : x.offset + x.capacity;
-        if (e <= prefix_end && e > best.pos && ValidAlloc(x.checkpoint_id)) {
-            best = {e, ResumeSource::kCheckpoint, x.checkpoint_id};
-        }
-        if (const LogicalBlock* y = x.partial.get()) {
-            const int ye = y->offset + y->size;
-            if (ye <= prefix_end && ye > best.pos && ValidAlloc(y->checkpoint_id)) {
-                best = {ye, ResumeSource::kCheckpoint, y->checkpoint_id};
-            }
-        }
-    }
-}
-// Fork extension past the prefix end (applies with or without checkpointing):
-// copy an indexed, valid sibling's KV into the block at the boundary.
+// Fork extension first (highest precedence, short-circuits everything else):
+// copy an indexed, valid sibling's KV into the block at the prefix boundary.
+// A feasible extension ends strictly past prefix_end while every other
+// candidate is capped at prefix_end, so it always wins; applies with or
+// without checkpointing.
 if (prefix_end % bs == 0 && prefix_end / bs < (int)s.block_ids.size()) {
     LogicalBlock& x = *s.block_ids[prefix_end / bs];
     if (LogicalBlock* y = x.partial.get()) {
         const int e = y->offset + y->size;
-        if (y->is_valid && e <= upper && e > best.pos && ValidAlloc(y->prefix_id)
+        if (y->is_valid && e <= upper && e > prefix_end && ValidAlloc(y->prefix_id)
             && (!ckpt || ValidAlloc(y->checkpoint_id))) {
             best = {e, ResumeSource::kFork, ckpt ? y->checkpoint_id : 0, y, &x};
         }
     }
 }
+
+if (best.pos == 0) {
+    if (!ckpt) {
+        // Without checkpointing, KV grants per-token resume anywhere in the prefix.
+        best = {prefix_end, prefix_end > 0 ? ResumeSource::kPrefix : ResumeSource::kNone};
+    }
+    else {
+        // Frontier: live state, no copy.
+        if (const int fpos = s.frontier_pos - s.inflight_input_len;
+            ValidAlloc(s.frontier_cache_id) && 0 < fpos && fpos <= prefix_end) {
+            best = {fpos, ResumeSource::kFrontier};
+        }
+        // Published checkpoints covered by the valid prefix. A block yields its
+        // own (block-end) checkpoint and its interior partial sibling's
+        // checkpoint as the same kind of candidate; both are checkpoint-only
+        // restores (KV is covered by the valid prefix, so no KV copy and no
+        // is_valid requirement). A sibling-sourced resume reports kFork.
+        for (int i = 0; i < (prefix_end + bs - 1) / bs && i < (int)s.block_ids.size(); ++i) {
+            const LogicalBlock& x = *s.block_ids[i];
+            const int           e = x.key ? x.offset + x.size : x.offset + x.capacity;
+            if (e <= prefix_end && e > best.pos && ValidAlloc(x.checkpoint_id)) {
+                best = {e, ResumeSource::kCheckpoint, x.checkpoint_id};
+            }
+            if (const LogicalBlock* y = x.partial.get()) {
+                const int ye = y->offset + y->size;
+                if (ye <= prefix_end && ye > best.pos && ValidAlloc(y->checkpoint_id)) {
+                    best = {ye, ResumeSource::kFork, y->checkpoint_id};
+                }
+            }
+        }
+    }
+}
 ```
 
-Selection is strict `>` on `pos`; the fixed generation order (frontier, checkpoints, fork)
-reproduces every existing tie-break: the frontier beats an equal-position checkpoint (no copy
-needed), and a checkpoint beats an equal-position fork. The interior-sibling case, previously a
-special sub-branch of the backward walk, is now just another candidate. The backward early-exit
-walk becomes a forward scan over at most `ceil(prefix_end / bs)` blocks — the same order of work
-as the prefix scan preceding it.
+Selection is strict `>` on `pos`. Fork extension short-circuits: when feasible it ends strictly
+past `prefix_end`, which no other candidate can reach, so evaluating it first is exactly
+equivalent to the old last-with-strict-`>` placement and skips the candidate loop entirely.
+Within the loop, the fixed order (frontier, then per-block candidates) reproduces the remaining
+tie-breaks: the frontier beats an equal-position checkpoint (no copy needed), and a block's own
+checkpoint beats its same-position sibling. The interior-sibling case, previously a special
+sub-branch of the backward walk, is now just another candidate — reported as `kFork` since the
+resume point comes from a partial sibling node (previously logged as `checkpoint`; every
+sibling-sourced resume now uniformly reports `fork`). The backward early-exit walk becomes a
+forward scan over at most `ceil(prefix_end / bs)` blocks — the same order of work as the prefix
+scan preceding it.
 
 Steps 4–5 (restore copy plans, allocation and protection sets) consume `best`:
 
@@ -374,8 +386,13 @@ Renamed call sites: `engine.cc` (`Accept`, `Resume`/`Continue` are invoked via t
   `contracts.prefix-prepare`, `contracts.cache-prepare`, `contracts.scheduler-commit`,
   `contracts.resume-selection`, `contracts.prefix-publish`, `checklist.cache-prepare`: follow the
   renames (`Accept` → `AdmitPrompt`, `Resume` → `PlanResume`, `Continue` → `PlanContinue`,
-  `PublishGeneration` → `Finalize`). Behavior text in `resume-selection` / `scheduler-commit`
-  stays (behavior unchanged); wording may be touched only to name the candidate model.
+  `PublishGeneration` → `Finalize`). Behavior text in `scheduler-commit` stays (behavior
+  unchanged); wording may be touched only to name the candidate model.
+- `contracts.resume-selection`: two wording updates — fork extension is the highest-precedence
+  resume source (a feasible extension always ends past the valid prefix, so it dominates), and
+  every sibling-sourced resume reports `source=fork`, including the interior partial-sibling
+  checkpoint-only restore that previously reported `source=checkpoint` (`kCheckpoint` is now
+  exclusively a block's own checkpoint).
 
 ## Testing
 
