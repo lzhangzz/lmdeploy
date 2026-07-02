@@ -564,7 +564,10 @@ void Scheduler::Resume(Sequence& s)
             source = ResumeSource::kFrontier;
         }
 
-        // Latest block checkpoint within the reusable prefix
+        // Latest block checkpoint within the reusable prefix. A block's own
+        // (block-end) checkpoint dominates any partial sibling in the same
+        // block; either hit ends the backward walk (earlier candidates are
+        // strictly smaller).
         if (step < prefix_end) {
             for (int i = std::min<int>(s.block_ids.size(), (prefix_end + bs - 1) / bs); i > 0; --i) {
                 const LogicalBlock& x = *s.block_ids[i - 1];
@@ -578,24 +581,39 @@ void Scheduler::Resume(Sequence& s)
                     restore_ckpt = x.checkpoint_id;
                     break;
                 }
+                // Interior partial sibling: mid-block checkpoint inside the
+                // valid prefix. Its KV range is covered by the valid full
+                // blocks, so this is a checkpoint-only restore (no KV copy,
+                // y.is_valid not required — same trust as the block case).
+                if (const LogicalBlock* y = x.partial.get()) {
+                    const int ye = y->offset + y->size;
+                    if (ye <= prefix_end && ye > step && ValidAlloc(y->checkpoint_id)) {
+                        step         = ye;
+                        source       = ResumeSource::kCheckpoint;
+                        restore_ckpt = y->checkpoint_id;
+                        break;
+                    }
+                }
             }
         }
     }
 
-    // 3. Fork extension: an indexed partial node can beat the current step by
-    //    copying its content into our private block at the boundary.
+    // 3. Fork extension: an indexed partial sibling can beat the current step
+    //    by copying its content into the block at the boundary. The target may
+    //    be a shared indexed node whose KV was evicted (is_valid == false);
+    //    the restore copy re-populates it and Publish flips is_valid after
+    //    the forward proves content.
     if (prefix_end % bs == 0 && prefix_end / bs < static_cast<int>(s.block_ids.size())) {
         LogicalBlock& x = *s.block_ids[prefix_end / bs];
-        if (x.partial) {
-            const LogicalBlock& y = *x.partial;
-            const int           e = y.offset + y.size;
-            if (y.is_valid && e <= upper && e > step && ValidAlloc(y.prefix_id)
-                && (!ckpt || ValidAlloc(y.checkpoint_id))) {
+        if (LogicalBlock* y = x.partial.get()) {
+            const int e = y->offset + y->size;
+            if (y->is_valid && e <= upper && e > step && ValidAlloc(y->prefix_id)
+                && (!ckpt || ValidAlloc(y->checkpoint_id))) {
                 step         = e;
                 source       = ResumeSource::kFork;
                 fork_dst     = &x;
-                fork_src     = x.partial.get();
-                restore_ckpt = ckpt ? y.checkpoint_id : 0;
+                fork_src     = y;
+                restore_ckpt = ckpt ? y->checkpoint_id : 0;
             }
         }
     }
