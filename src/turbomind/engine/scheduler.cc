@@ -179,6 +179,16 @@ void CollectStartFps(const Sequence& s, int lo, int hi, std::vector<Fingerprint>
     }
 }
 
+// Roll a block back to private (un-indexed) state after a failed trie insert.
+void UnindexBlock(LogicalBlock& x)
+{
+    x.parent = nullptr;
+    x.key    = {};
+    x.size   = 0;
+    x.tokens.clear();
+    x.image_fps.clear();
+}
+
 enum class CollisionSite
 {
     kAccept,
@@ -412,11 +422,7 @@ void Scheduler::IndexMissingBlocks(Sequence& s, AcceptState& st)
             if (!trie_.Insert(x)) {
                 LogCollision(s, CollisionSite::kAccept, offset, offset + size);
                 // Stays un-indexed; treated as a private block from here on.
-                x.parent = nullptr;
-                x.key    = {};
-                x.size   = 0;
-                x.tokens.clear();
-                x.image_fps.clear();
+                UnindexBlock(x);
             }
             else {
                 st.parent = h.get();
@@ -871,11 +877,7 @@ void Scheduler::Finalize(Sequence& s)
         x.image_fps = fps;  // usually empty
         if (!trie_.Insert(x)) {
             LogCollision(s, CollisionSite::kPublish, x.offset, x.offset + size);
-            x.parent = nullptr;
-            x.key    = {};
-            x.size   = 0;
-            x.tokens.clear();
-            x.image_fps.clear();
+            UnindexBlock(x);
             break;
         }
         if (gen.indexed == 0) {
