@@ -438,3 +438,116 @@ Renamed call sites: `engine.cc` (`Accept`, `Resume`/`Continue` are invoked via t
   (candidate list + max selection; ordered precedence list; single node-at-end planner).
 - One behavior change, bounded and documented: terminal adoption never skips, and an
   interval-violating terminal checkpoint is evict-first.
+
+## Follow-up: cache-id ownership model
+
+Date: 2026-07-02 (post-implementation audit)
+
+The implemented publication path carried two "stale slot" `Invalidate` sites (`CommitResults`
+attach, `Finalize` adoption) whose safety rests on an unchecked single-holder convention: an
+owner-attached checkpoint id is only ever invalidated by code that overwrites the holding field in
+the same statement group. The convention is correct today but fragile (a violation corrupts the
+free list silently). Replace it with a strict ownership model:
+
+1. A cache id is owned by exactly one entity: a `LogicalBlock` (its `prefix_id` / `checkpoint_id`
+   slots, `CacheBlock::owner` set) or a `Sequence` (`frontier_cache_id`, `owner == nullptr`).
+2. An id is invalidated (returned to the pool free list) only when its owner is destroyed:
+   `LogicalBlockPool::Recycle` for block-owned ids, `Scheduler::Release` for sequence-owned ids.
+   Ownership may be transferred between entities (a single `std::exchange`-shaped move that
+   updates both the field and `CacheBlock::owner`), which moves the invalidation duty with it.
+3. Nothing else invalidates a cache id. Eviction deallocates backing memory but the id stays
+   bound to its owner as an unallocated ("zombie") slot; consumers always test `ValidAlloc`.
+
+### Checkpoint slots become block-owned, allocated in place (the prefix-slot model)
+
+`Sequence::publish_cache_id` is removed. A block's `checkpoint_id` is created lazily at first
+publication planning — owner set to the node at `Create` — and re-allocated in place forever
+after, exactly like `prefix_id`:
+
+```cpp
+// PlanPublication, checkpoint group (replaces the s.publish_cache_id gate):
+if (!CheckpointPublicationEligible() || !registry_.has_checkpoint() || node == nullptr) {
+    return;
+}
+...gates...
+if (!ValidAlloc(node->checkpoint_id)) {
+    if (node->checkpoint_id == 0) {
+        node->checkpoint_id = cache_.Create(registry_.checkpoint().object_id(), node);
+    }
+    pass.pending_publish[i] = {node, end, node->checkpoint_id};
+    pass.has_optionals      = true;
+}
+```
+
+Because the slot is owner-attached at creation, `ReplayMemory` takes/drops the allocation
+reference uniformly (`logical_.Retain(c.owner)` on alloc, `Drop` on evict) — the manual
+`Retain` at attach disappears. The `CommitResults` attach shrinks to metadata + copy:
+
+```cpp
+if (s.publish_target) {
+    // The slot (publish_target->checkpoint_id) was allocated by the optional
+    // phase. Producer exclusion admits at most one publisher per node per
+    // pass, and planning required !ValidAlloc, so no dedup branch is needed.
+    s.last_ckpt_pos = s.publish_end;
+    ckpt_published  = true;
+    s.publish_copies.push_back({s.frontier_cache_id, s.publish_target->checkpoint_id});
+    cache_.Stamp(s.publish_target->checkpoint_id);
+    s.publish_target = nullptr;
+    s.publish_end    = 0;
+}
+```
+
+Deleted outright: the `ValidAlloc(t.checkpoint_id)` dedup + `ReleaseCacheId(publish_cache_id)`
+branch, the stale `Invalidate`, the ownership transfer, the manual `Retain`, the publish-id
+creation in `PlanResume` / `PlanContinue` (the `PlanContinue` checkpoint block empties out and is
+removed), and the publish-id release in `Release`.
+
+### Terminal adoption transfers ownership both ways
+
+Adoption in `Finalize` moves the sequence-owned frontier id into the block (sequence -> block
+transfer). If the block already holds a zombie checkpoint id (created but unallocated), that id
+moves the other way and rides the dying sequence's frontier field to `Release` (block -> sequence
+transfer), where it is invalidated with its new owner:
+
+```cpp
+if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc(s.frontier_cache_id)
+    && !ValidAlloc(x.checkpoint_id)) {
+    const int f = std::exchange(s.frontier_cache_id, 0);
+    if (const int zombie = std::exchange(x.checkpoint_id, 0)) {
+        cache_[zombie].owner = nullptr;  // now sequence-owned; invalidated at Release
+        s.frontier_cache_id  = zombie;
+    }
+    x.checkpoint_id = f;
+    cache_[f].owner = up;
+    logical_.Retain(up);  // the live allocation was taken owner-less; ref moves with ownership
+    gen.terminal_ckpt = true;
+    ...demotion scan unchanged...
+}
+```
+
+The adopted frontier keeps its manual `Retain`: its allocation was committed while the slot was
+sequence-owned (`owner == nullptr`, no ref), so the block->allocation ref is established at
+transfer. `ReleaseCacheId` keeps its `TM_CHECK(c.owner == nullptr)` and now serves the frontier
+and swapped-in zombies only.
+
+### Invariants after the change
+
+- `Invalidate` call sites: `Recycle` (block owner dies), `ReleaseCacheId` from `Release`
+  (sequence owner dies). No others.
+- Every persistent id field is single-holder; transfers are exchanges that update `owner` in the
+  same statement group. No id can be observed after passing through the free list.
+
+### README updates (same change)
+
+- `ownership.prefix`: state the three ownership rules; drop the `CommitResults` clause from the
+  allocation-ref enumeration (publication refs now flow through `ReplayMemory` uniformly).
+- `contracts.checkpoint-publish`: planning targets the block-owned checkpoint slot, created
+  lazily and re-allocated in place; no request-owned publication id exists.
+- `contracts.checkpoint-adoption`: document the two-way transfer (frontier in, zombie out via the
+  finished sequence's frontier field).
+
+### Testing
+
+Same as the main plan: `ninja`, `test_prefix_trie`, and a GDN model scenario via
+`scripts/test_turbomind_model.py` with repeated prompts (resume/publish/finalize log lines
+verified, responses meaningful, >= 128 tokens).
