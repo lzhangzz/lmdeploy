@@ -8,7 +8,9 @@
 
 **Tech Stack:** C++ (TurboMind engine), ninja build in `build/`, GPU verification via `scripts/test_turbomind_model.py` (script must be used AS IS).
 
-**Constraints (from AGENTS.md):** never install lmdeploy or run `setup.py`; GPU commands run outside the sandbox; check `get_gpu_usage` (model-server MCP) for a free GPU before any GPU run; every model test must produce meaningful text (≥128 requested tokens).
+**Constraints (from AGENTS.md):** never install lmdeploy or run `setup.py`; GPU commands run outside the sandbox; check `nvidia-smi` for idle GPUs before any GPU run (MCP model-server tools are NOT available in this environment); every model test must produce meaningful text (≥128 requested tokens).
+
+**Model (fixed):** `Qwen/Qwen3.5-27B`, HF cache dir `/mnt_cfs/huggingface_hub/hub/` (from the index at `/data/models.json`). In every command below: `<MODEL_ID>` = `Qwen/Qwen3.5-27B`, `<CACHE_DIR>` = `/mnt_cfs/huggingface_hub/hub/`.
 
 There is no C++ unit-test harness for the scheduler in this repo; verification is behavioral, via the cache WARN logs (`scheduler.cc` `LogResume`/`LogPublished`) produced by the smoke-test script. Task 1 therefore captures a failing baseline first, and Task 4 re-runs the same scenario as the passing check.
 
@@ -22,9 +24,9 @@ There is no C++ unit-test harness for the scheduler in this repo; verification i
 
 From `build/`: run `ninja`. If the folder is not configured, first run `sh ../my_generate.sh` from `build/`. Expected: exit 0.
 
-- [ ] **Step 2: Pick a model and GPU**
+- [ ] **Step 2: Pick GPUs**
 
-Use model-server MCP tools: `list_models` to find a locally cached **recurrent/GDN** model (checkpoints only exist for recurrent models; the branch is `memory-1b`, so prefer the memory/GDN 1B model used in this workspace), `get_model_cache_path` for its `cache_dir`, and `get_gpu_usage` to pick an idle GPU id.
+Run `nvidia-smi` (outside the sandbox) and pick idle GPUs (no processes, ~0 MiB used). Qwen3.5-27B in bf16 needs ~54 GB of weights plus KV/state cache (`cache_max_entry_count=0.5` in the script): use `--tp 2 --gpus <a>,<b>` on two idle GPUs (or `--tp 1` on a single GPU with ≥ 80 GB free).
 
 - [ ] **Step 3: Create the shared-prefix prompt file**
 
@@ -45,7 +47,8 @@ json.dump([base + "\nSummarize the text above.",
 
 ```bash
 python scripts/test_turbomind_model.py \
-    --model-id <MODEL_ID> --cache-dir <CACHE_DIR> --tp 1 --gpus <GPU> \
+    --model-id Qwen/Qwen3.5-27B --cache-dir /mnt_cfs/huggingface_hub/hub/ \
+    --tp 2 --gpus <a>,<b> \
     --enable-prefix-caching --cache-prompt auto --cache-generation none \
     --cache-prompt-boundary-skip 2 --max-prefill-token-num 8192 \
     --session-len 32768 --max-new-tokens 256 \
@@ -176,7 +179,7 @@ git commit -m "fix(scheduler): end prompt-region passes on a block boundary when
 
 - [ ] **Step 1: Check GPU availability**
 
-`get_gpu_usage` via model-server MCP; use the same (or another idle) GPU as Task 1.
+Run `nvidia-smi` (outside the sandbox); use the same (or other idle) GPUs as Task 1.
 
 - [ ] **Step 2: Re-run the exact Task 1 scenario (outside the sandbox)**
 
@@ -197,7 +200,8 @@ Run the default single-prompt smoke test to confirm decode behavior is untouched
 
 ```bash
 python scripts/test_turbomind_model.py \
-    --model-id <MODEL_ID> --cache-dir <CACHE_DIR> --tp 1 --gpus <GPU> \
+    --model-id Qwen/Qwen3.5-27B --cache-dir /mnt_cfs/huggingface_hub/hub/ \
+    --tp 2 --gpus <a>,<b> \
     --enable-prefix-caching --cache-generation none --max-new-tokens 256
 ```
 
