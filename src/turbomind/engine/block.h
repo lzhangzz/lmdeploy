@@ -128,7 +128,7 @@ struct LogicalBlock {
     int capacity{0};
     int size{0};  // filled tokens of an indexed node; 0 for private blocks
 
-    // Intrusive strong refcount (requests + fork edges + valid allocations)
+    // Intrusive strong refcount (requests + partial sibling edges + valid allocations)
     int               refs{0};
     LogicalBlockPool* mgr{};  // set at Create; used by handle / Retain / Drop
 
@@ -143,9 +143,14 @@ struct LogicalBlock {
     std::vector<Fingerprint> image_fps;       // start-fingerprints of images beginning in this block (usually empty)
     bool                     indexed{false};  // present in the trie index
 
-    // Fork edges (strong, RAII)
-    BlockHandle fork_from;  // partial-match source (read side)
-    BlockHandle fork_to;    // prompt-boundary publish target (write side)
+    // First-known indexed partial sibling at this block index: an identity-
+    // verified node with the same parent and a strict token-prefix of this
+    // block's content. Every edge points to a sibling with strictly smaller
+    // `size` (a carrier indexed later by PublishGeneration only grows), so
+    // size strictly decreases along edge paths and the graph is acyclic.
+    // First-wins: bound at most once, at Accept, on a block created in the
+    // same pass (mirrors trie first-wins insertion). Strong, RAII.
+    BlockHandle partial;
 
     bool     is_valid{false};  // content proven produced; cleared on prefix evict
     uint64_t producer{0};      // request currently writing this range; 0 = none

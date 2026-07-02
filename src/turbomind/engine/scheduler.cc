@@ -239,7 +239,7 @@ struct Scheduler::ScheduleState {
     Replay                     replay;                    // alloc/evict ops of the current phase
     size_t                     committed_replay_size{0};  // replay prefix from committed requests (phase 1)
     std::vector<bool>          committed;
-    std::vector<LogicalBlock*> pending_fork;          // fork_to node per request, nullptr = none
+    std::vector<LogicalBlock*> pending_fork;          // partial sibling node per request, nullptr = none
     std::vector<PublishPlan>   pending_publish;       // checkpoint publication intent per request
     bool                       has_optionals{false};  // any optional intent recorded => run phase 2
     std::vector<int>           evict_ids;             // SortedIndices() snapshot, shared by both phases
@@ -325,7 +325,7 @@ struct Scheduler::AcceptState {
     PrefixKey           key{};
 
     int                 miss{};         // first block index not matched in the trie
-    const LogicalBlock* miss_parent{};  // trie position at the miss, for fork_from
+    const LogicalBlock* miss_parent{};  // trie position at the miss, for matcher-side partial bind
     PrefixKey           miss_key{};
 
     size_t next_fp = 0;  // monotonic cursor into Sequence::multimodal_spans
@@ -341,7 +341,7 @@ void Scheduler::Accept(Sequence& s)
     MatchPrompt(s, st);          // match full blocks to the first miss
     s.matched_blocks = st.miss;  // leading prompt blocks found in the trie
     CreateMissingBlocks(s, st);  // create + index the remaining prompt blocks
-    SetupForks(s, st);           // fork_from (partial match) + fork_to (prompt boundary)
+    SetupForks(s, st);           // partial sibling bind (matcher side) + boundary node creation (creator side)
     LogAccept(s, logical_.block_size());
 }
 
@@ -430,9 +430,9 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
 
     const int all_blocks = (prompt + bs - 1) / bs;
 
-    // fork_from (read side) is always armed: any prior request may have published
-    // a prompt partial node (cache_prompt in {all, auto}) or a generation
-    // terminal partial ('all'), so the read edge must always try to match.
+    // Matcher-side sibling bind: any prior request may have published a
+    // prompt partial node (cache_prompt in {all, auto}) or a generation
+    // terminal partial ('all'), so the miss block must always try to match.
     if (st.miss < all_blocks) {
         LogicalBlock& x      = *s.block_ids[st.miss];
         const int     offset = st.miss * bs;
@@ -444,11 +444,11 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
         CollectStartFps(s, offset, offset + size, fps, &fp_pos);
 
         if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
-            x.fork_from = BlockHandle{v};  // edge ref
+            x.partial = BlockHandle{v};  // edge ref (fresh block; first-wins trivially holds)
         }
     }
 
-    // Prompt-boundary publish point (fork_to). B = prompt_len - K (K =
+    // Prompt-boundary publish point (creator-side partial sibling). B = prompt_len - K (K =
     // cache_prompt_boundary_skip). 'all' publishes a partial node whenever B is
     // mid-block and arms the checkpoint clamp when B is block-aligned. 'auto'
     // publishes the partial node only when its own token range [j*bs, B) overlaps
@@ -480,7 +480,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
                 y.image_fps = fps;
                 y.prefix_id = cache_.Create(registry_.prefix().object_id(), vh.get());
                 if (trie_.Insert(y)) {
-                    x.fork_to = std::move(vh);  // edge holds the only ref
+                    x.partial = std::move(vh);  // edge holds the only ref
                 }
                 else {
                     LogCollision(s, CollisionSite::kPromptBoundary, j * bs, j * bs + plan.node_size);
@@ -583,15 +583,15 @@ void Scheduler::Resume(Sequence& s)
     //    copying its content into our private block at the boundary.
     if (prefix_end % bs == 0 && prefix_end / bs < static_cast<int>(s.block_ids.size())) {
         LogicalBlock& x = *s.block_ids[prefix_end / bs];
-        if (x.fork_from) {
-            const LogicalBlock& y = *x.fork_from;
+        if (x.partial) {
+            const LogicalBlock& y = *x.partial;
             const int           e = y.offset + y.size;
             if (y.is_valid && e <= upper && e > step && ValidAlloc(y.prefix_id)
                 && (!ckpt || ValidAlloc(y.checkpoint_id))) {
                 step         = e;
                 source       = ResumeSource::kFork;
                 fork_dst     = &x;
-                fork_src     = x.fork_from.get();
+                fork_src     = x.partial.get();
                 restore_ckpt = ckpt ? y.checkpoint_id : 0;
             }
         }
@@ -924,17 +924,18 @@ void Scheduler::PublishGeneration(Sequence& s)
 }
 
 // When this pass reaches the prompt boundary, plan the device copy that
-// populates the indexed prompt-end partial node (fork_to). Returns the
-// fork_to node when a copy is planned, nullptr otherwise.
+// populates the indexed prompt-end partial sibling. Returns the node when a
+// copy is planned, nullptr otherwise. The geometry guard (y.offset + y.size
+// == end) rejects a sibling belonging to a different boundary.
 LogicalBlock* Scheduler::PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned)
 {
     const int bs = logical_.block_size();
 
     const LogicalBlock& x = *s.block_ids[(end - 1) / bs];
-    if (!x.fork_to) {
+    if (!x.partial) {
         return nullptr;
     }
-    const LogicalBlock& y       = *x.fork_to;
+    const LogicalBlock& y       = *x.partial;
     const int           y_cache = y.prefix_id;
     if (y.offset + y.size != end || y.is_valid || ValidAlloc(y_cache) || planned.count(y_cache)) {
         return nullptr;  // boundary not reached, or another request already covers it
@@ -942,29 +943,29 @@ LogicalBlock* Scheduler::PlanForkToPopulation(Sequence& s, int end, std::unorder
     // Reserve the node so a later request sharing it does not also plan to
     // populate it. The slot itself is allocated in the optional phase (from
     // inactive memory); this reservation only dedups intent within the pass. A
-    // fork-to node is a distinct logical block from any request's required
+    // partial sibling is a distinct logical block from any request's required
     // prefix blocks, so it never collides with a required allocation id.
     planned.insert(y_cache);
-    return x.fork_to.get();
+    return x.partial.get();
 }
 
-// Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): fork_to KV copy +
+// Prompt-boundary group (caller guarantees end == B == prompt_boundary_pos): partial sibling KV copy +
 // checkpoint, both partial-block, bypassing the min-interval.
 void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
-    // (a) copy the request's partial KV into the shared fork_to node.
+    // (a) copy the request's partial KV into the shared partial sibling node.
     if (LogicalBlock* node = PlanForkToPopulation(s, end, pass.planned)) {
         pass.pending_fork[i] = node;
         pass.has_optionals   = true;
     }
 
-    // (b) checkpoint onto the fork_to node, or the block itself when
+    // (b) checkpoint onto the partial sibling node, or the block itself when
     // block-aligned B is a block boundary.
     if (s.publish_cache_id) {
         LogicalBlock& x          = *s.block_ids[(end - 1) / logical_.block_size()];
         const bool    at_block   = x.offset + x.capacity == end;
-        const bool    at_fork_to = x.fork_to && x.fork_to->offset + x.fork_to->size == end;
-        LogicalBlock* target     = at_block ? &x : (at_fork_to ? x.fork_to.get() : nullptr);
+        const bool    at_partial = x.partial && x.partial->offset + x.partial->size == end;
+        LogicalBlock* target     = at_block ? &x : (at_partial ? x.partial.get() : nullptr);
         if (target && !ValidAlloc(target->checkpoint_id)) {
             pass.pending_publish[i] = {target, end, s.publish_cache_id};
             pass.has_optionals      = true;
@@ -1030,7 +1031,7 @@ void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
     }
     counter_.tick(4);
 
-    CommitResults(pass);  // publication attach, fork_to populate, Publish
+    CommitResults(pass);  // publication attach, partial sibling populate, Publish
 
     counter_.tick(5);
 
@@ -1105,7 +1106,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
     // Required admission loop: place every forward that fits (prefix blocks +
     // frontier), evicting up to each request's cutoff. Optional optimizations
-    // (publication, fork-to population) are only decided here; their slots are
+    // (publication, partial sibling population) are only decided here; their slots are
     // allocated later, in RunOptionalAdmission, from inactive memory.
     for (int i = 0; i < static_cast<int>(pass.requests.size()); ++i) {
         auto& s = *pass.requests[i];
@@ -1195,10 +1196,10 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         // checkpoint per forward, routed by its end; publish_prompt is false when
         // prompt_boundary_node was not set in SetupForks, or when this forward's
         // geometry does not reach B, so nothing prompt-boundary is allocated.
-        // PlanPromptBoundaryPublication reserves the fork-to id in pass.planned for
+        // PlanPromptBoundaryPublication reserves the partial sibling id in pass.planned for
         // cross-request intent dedup.
         if (publish_prompt) {
-            PlanPromptBoundaryPublication(pass, i, s, end);  // fork_to KV + prompt-boundary checkpoint
+            PlanPromptBoundaryPublication(pass, i, s, end);  // partial sibling KV + prompt-boundary checkpoint
         }
         else {
             PlanFullBlockPublication(pass, i, s, end);  // full-block checkpoint (coverage only)
@@ -1240,7 +1241,7 @@ void Scheduler::RunOptionalAdmission(ScheduleState& pass)
     base.SeekTo(pass.evict_pos);
     EvictingIterator evicting{base, pass.floor};
 
-    // Skip only on real, committed memory (c.valid()). A fork-to id reserved in
+    // Skip only on real, committed memory (c.valid()). A partial sibling id reserved in
     // pass.planned during phase 1 still needs its slot allocated here, so we must
     // NOT treat membership in pass.planned as "already allocated".
     auto try_optional = [&](int cache_id) -> bool {
@@ -1267,7 +1268,7 @@ void Scheduler::RunOptionalAdmission(ScheduleState& pass)
         }
         Sequence& s = *pass.requests[i];
 
-        // fork-to population (prefix reuse for future forks)
+        // partial sibling population (prefix reuse for future forks)
         if (LogicalBlock* node = pass.pending_fork[i]) {
             if (!try_optional(node->prefix_id)) {
                 pass.pending_fork[i] = nullptr;  // dropped; CommitResults won't populate it
@@ -1319,7 +1320,7 @@ void Scheduler::CommitResults(ScheduleState& pass)
 {
     const int bs = logical_.block_size();
 
-    // Post-replay commit: publication attach, fork_to population, frontier
+    // Post-replay commit: publication attach, partial sibling population, frontier
     // metadata, and publication of produced ranges.
     for (int i = 0; i < static_cast<int>(pass.requests.size()); ++i) {
         auto& s = *pass.requests[i];
@@ -1447,18 +1448,20 @@ void LogAccept(const Sequence& s, int bs)
         const int   prompt = s.prompt_len, full = prompt / bs, all = (prompt + bs - 1) / bs;
         const int   matched = s.matched_blocks, M = matched * bs;
         std::string mtail, clast, ctail;
-        if (matched < (int)s.block_ids.size() && s.block_ids[matched]->fork_from) {
-            const LogicalBlock& y = *s.block_ids[matched]->fork_from;
-            mtail                 = fmt::format(", fork_from@{}", y.offset + y.size);  // matched-side partial reuse
+        if (matched < (int)s.block_ids.size() && s.block_ids[matched]->partial) {
+            const LogicalBlock& y = *s.block_ids[matched]->partial;
+            mtail                 = fmt::format(", partial@{}", y.offset + y.size);  // matched-side partial reuse
         }
         if (all - matched > 0 && prompt % bs) {
             clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
         }
         if (s.prompt_boundary_pos > 0) {
             const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
-            if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->fork_to) {
-                const LogicalBlock& ft = *s.block_ids[j]->fork_to;
-                ctail = fmt::format(", fork_to@{}", ft.offset + ft.size);  // created-side publish node end
+            if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->partial) {
+                const LogicalBlock& ft = *s.block_ids[j]->partial;
+                if (ft.offset + ft.size == s.prompt_boundary_pos) {
+                    ctail = fmt::format(", partial_to@{}", ft.offset + ft.size);  // created-side publish node end
+                }
             }
         }
         return fmt::format("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
@@ -1574,7 +1577,7 @@ void LogCollision(const Sequence& s, CollisionSite site, int begin, int end)
                 break;
             case CollisionSite::kPromptBoundary:
                 where = "prompt boundary";
-                note  = " (no fork_to)";
+                note  = " (no partial node)";
                 break;
             case CollisionSite::kPublish:
                 where = "publish";

@@ -128,7 +128,7 @@ public:
     static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
 
     // Match the prompt against the prefix trie; create missing blocks; set up
-    // fork_from (partial match) and fork_to (prompt-boundary publish point).
+    // the partial sibling edge (matcher bind + prompt-boundary node creation).
     void Accept(Sequence& s);
 
     // Commit step: per-request planning (Resume/Continue), admission with
@@ -148,7 +148,7 @@ public:
         int  start           = 0;      // first newly-valid prefix block offset (token); Publish()
         int  reusable_blocks = 0;      // indexed nodes whose is_valid flipped true this pass; Publish()
         int  end             = 0;      // highest published prefix position (token); Publish()
-        bool forked          = false;  // a fork_to boundary populated this pass; set by CommitResults()
+        bool forked          = false;  // a partial sibling populated this pass; set by CommitResults()
         bool ckpt            = false;  // a checkpoint published this pass; set by CommitResults()
     };
     struct ProducerConflict {
@@ -200,8 +200,8 @@ private:
 
     // Admission-loop helpers (called from Schedule only, after input_len is
     // fixed). They decide and return optional intent; the slots are allocated in
-    // the optional admission phase. PlanForkToPopulation reserves the fork-to
-    // node's prefix_id in `planned` to dedup intent across requests.
+    // the optional admission phase. PlanForkToPopulation reserves the partial
+    // sibling's prefix_id in `planned` to dedup intent across requests.
     LogicalBlock* PlanForkToPopulation(Sequence& s, int end, std::unordered_set<int>& planned);
     void          PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequence& s, int end);
     void          PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end);
