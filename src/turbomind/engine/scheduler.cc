@@ -256,6 +256,11 @@ bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
            && s.token_ids != nullptr;
 }
 
+bool Scheduler::CheckpointPublicationEligible() const noexcept
+{
+    return !is_warm_up_;
+}
+
 TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
 {
     TM_CHECK_NOTNULL(s.token_ids);
@@ -518,7 +523,7 @@ void Scheduler::Resume(Sequence& s)
             s.frontier_cache_id = cache_.Create(registry_.checkpoint().object_id());
             s.frontier_pos      = 0;
         }
-        if (s.publish_cache_id == 0) {
+        if (CheckpointPublicationEligible() && s.publish_cache_id == 0) {
             s.publish_cache_id = cache_.Create(registry_.checkpoint().object_id());
         }
     }
@@ -674,7 +679,7 @@ void Scheduler::Continue(Sequence& s)
 
     const bool ckpt = registry_.has_checkpoint();
 
-    if (ckpt && s.publish_cache_id == 0) {
+    if (ckpt && CheckpointPublicationEligible() && s.publish_cache_id == 0) {
         s.publish_cache_id = cache_.Create(registry_.checkpoint().object_id());
     }
 
@@ -986,7 +991,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 
     // (b) checkpoint onto the partial sibling node, or the block itself when
     // block-aligned B is a block boundary.
-    if (s.publish_cache_id) {
+    if (CheckpointPublicationEligible() && s.publish_cache_id) {
         LogicalBlock& x          = *s.block_ids[(end - 1) / logical_.block_size()];
         const bool    at_block   = x.offset + x.capacity == end;
         const bool    at_partial = x.partial && x.partial->offset + x.partial->size == end;
@@ -1003,7 +1008,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 // The full block's prefix is published in place by Publish() (no KV copy).
 void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
-    if (s.publish_cache_id == 0) {
+    if (!CheckpointPublicationEligible() || s.publish_cache_id == 0) {
         return;
     }
     LogicalBlock& x = *s.block_ids[(end - 1) / logical_.block_size()];
@@ -1176,8 +1181,8 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
             // block cannot be honored and falls through untruncated).
             const int aligned = desired / bs * bs;
             const int due     = s.last_ckpt_pos + registry_.checkpoint_min_interval();
-            if (registry_.has_checkpoint() && desired <= s.prompt_len && desired > due
-                && aligned >= due && aligned > begin) {
+            if (CheckpointPublicationEligible() && registry_.has_checkpoint() && desired <= s.prompt_len
+                && desired > due && aligned >= due && aligned > begin) {
                 desired = aligned;
             }
             else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary

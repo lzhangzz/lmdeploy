@@ -218,6 +218,7 @@ private:
     }
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
+    bool      CheckpointPublicationEligible() const noexcept;
     TokenSpan TokenSegment(const Sequence& s, int offset, int size) const;
 
     void LogProfile(const PerformanceCounter& counter) const;
