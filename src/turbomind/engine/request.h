@@ -165,7 +165,7 @@ enum class ResumeSource
     kPrefix,      // contiguous valid prefix-category cache (no checkpoint category)
     kFrontier,    // request's own checkpoint frontier (no restore copy)
     kCheckpoint,  // restored a published block checkpoint into the frontier
-    kFork,        // extended from a forked sibling's prefix node
+    kFork,        // sibling-sourced: KV fork extension or partial-sibling checkpoint restore
 };
 
 // Unlike `Request` which is shared by all local TP ranks, each rank has its own `Sequence`.

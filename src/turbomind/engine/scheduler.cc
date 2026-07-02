@@ -189,6 +189,16 @@ void UnindexBlock(LogicalBlock& x)
     x.image_fps.clear();
 }
 
+// One feasible resume position with the copies it needs. Selection is strict
+// > on pos; kNone/pos 0 is the empty candidate.
+struct ResumeCandidate {
+    int           pos{};                            // resume position (token)
+    ResumeSource  source{ResumeSource::kNone};
+    int           ckpt_id{};                        // checkpoint to restore into the frontier; 0 = none
+    LogicalBlock* fork_src{};                       // sibling KV to copy from; nullptr = none
+    LogicalBlock* fork_dst{};                       // block receiving the KV copy
+};
+
 enum class CollisionSite
 {
     kAccept,
@@ -557,51 +567,63 @@ void Scheduler::PlanResume(Sequence& s)
     prefix_end           = std::min(prefix_end, upper);  // resume bound, unchanged
     s.readonly_block_num = readonly_block_num;
 
-    // 2. PlanResume step selection
-    int           step         = prefix_end;  // without checkpointing, KV grants per-token resume
-    ResumeSource  source       = prefix_end > 0 ? ResumeSource::kPrefix : ResumeSource::kNone;
-    LogicalBlock* fork_dst     = nullptr;
-    LogicalBlock* fork_src     = nullptr;
-    int           restore_ckpt = 0;  // checkpoint cache id to copy into the frontier
+    // 2. Resume candidate selection: strict > on pos.
+    ResumeCandidate best{};
 
-    if (ckpt) {
-        step   = 0;
-        source = ResumeSource::kNone;
-
-        // Frontier fast path (no copy needed)
-        const int fpos = s.frontier_pos - s.inflight_input_len;
-        if (ValidAlloc(s.frontier_cache_id) && 0 < fpos && fpos <= prefix_end) {
-            step   = fpos;
-            source = ResumeSource::kFrontier;
+    // Fork extension first (highest precedence): copy an indexed, valid
+    // sibling's KV into the block at the prefix boundary. A feasible extension
+    // ends strictly past prefix_end while every other candidate is capped at
+    // prefix_end, so it always wins; short-circuit. Applies with or without
+    // checkpointing. The target may be a shared indexed node whose KV was
+    // evicted (is_valid == false); the restore copy re-populates it and
+    // MarkProduced flips is_valid after the forward proves content.
+    if (prefix_end % bs == 0 && prefix_end / bs < static_cast<int>(s.block_ids.size())) {
+        LogicalBlock& x = *s.block_ids[prefix_end / bs];
+        if (LogicalBlock* y = x.partial.get()) {
+            const int e = y->offset + y->size;
+            if (y->is_valid && e <= upper && e > prefix_end && ValidAlloc(y->prefix_id)
+                && (!ckpt || ValidAlloc(y->checkpoint_id))) {
+                best = {e, ResumeSource::kFork, ckpt ? y->checkpoint_id : 0, y, &x};
+            }
         }
+    }
 
-        // Latest block checkpoint within the reusable prefix. A block's own
-        // (block-end) checkpoint dominates any partial sibling in the same
-        // block; either hit ends the backward walk (earlier candidates are
-        // strictly smaller).
-        if (step < prefix_end) {
+    if (best.pos == 0) {
+        if (!ckpt) {
+            // Without checkpointing, KV grants per-token resume anywhere in the prefix.
+            if (prefix_end > 0) {
+                best = {prefix_end, ResumeSource::kPrefix};
+            }
+        }
+        else {
+            // Frontier: live state, no copy; seeding best makes it beat an
+            // equal-position checkpoint.
+            if (const int fpos = s.frontier_pos - s.inflight_input_len;
+                ValidAlloc(s.frontier_cache_id) && 0 < fpos && fpos <= prefix_end) {
+                best = {fpos, ResumeSource::kFrontier};
+            }
+            // Published checkpoints covered by the valid prefix, scanned
+            // backward. A block yields its own (block-end) checkpoint and its
+            // interior partial sibling's checkpoint as the same checkpoint-only
+            // restore shape (KV is covered by the valid prefix, so no KV copy
+            // and no is_valid requirement). A sibling-sourced resume reports
+            // kFork. Block ends strictly decrease going backward and a sibling
+            // is strictly shorter than its block, so once a block cannot beat best
+            // (e <= best.pos) nothing earlier can either, and any hit ends the walk.
             for (int i = std::min<int>(s.block_ids.size(), (prefix_end + bs - 1) / bs); i > 0; --i) {
                 const LogicalBlock& x = *s.block_ids[i - 1];
                 const int           e = x.key ? x.offset + x.size : x.offset + x.capacity;
-                if (e <= step) {
+                if (e <= best.pos) {
                     break;
                 }
                 if (e <= prefix_end && ValidAlloc(x.checkpoint_id)) {
-                    step         = e;
-                    source       = ResumeSource::kCheckpoint;
-                    restore_ckpt = x.checkpoint_id;
+                    best = {e, ResumeSource::kCheckpoint, x.checkpoint_id};
                     break;
                 }
-                // Interior partial sibling: mid-block checkpoint inside the
-                // valid prefix. Its KV range is covered by the valid full
-                // blocks, so this is a checkpoint-only restore (no KV copy,
-                // y.is_valid not required — same trust as the block case).
                 if (const LogicalBlock* y = x.partial.get()) {
                     const int ye = y->offset + y->size;
-                    if (ye <= prefix_end && ye > step && ValidAlloc(y->checkpoint_id)) {
-                        step         = ye;
-                        source       = ResumeSource::kCheckpoint;
-                        restore_ckpt = y->checkpoint_id;
+                    if (ye <= prefix_end && ye > best.pos && ValidAlloc(y->checkpoint_id)) {
+                        best = {ye, ResumeSource::kFork, y->checkpoint_id};
                         break;
                     }
                 }
@@ -609,45 +631,25 @@ void Scheduler::PlanResume(Sequence& s)
         }
     }
 
-    // 3. Fork extension: an indexed partial sibling can beat the current step
-    //    by copying its content into the block at the boundary. The target may
-    //    be a shared indexed node whose KV was evicted (is_valid == false);
-    //    the restore copy re-populates it and MarkProduced flips is_valid after
-    //    the forward proves content.
-    if (prefix_end % bs == 0 && prefix_end / bs < static_cast<int>(s.block_ids.size())) {
-        LogicalBlock& x = *s.block_ids[prefix_end / bs];
-        if (LogicalBlock* y = x.partial.get()) {
-            const int e = y->offset + y->size;
-            if (y->is_valid && e <= upper && e > step && ValidAlloc(y->prefix_id)
-                && (!ckpt || ValidAlloc(y->checkpoint_id))) {
-                step         = e;
-                source       = ResumeSource::kFork;
-                fork_dst     = &x;
-                fork_src     = y;
-                restore_ckpt = ckpt ? y->checkpoint_id : 0;
-            }
-        }
-    }
+    s.resume_len = best.pos;
+    // source is kNone exactly when pos == 0, so no extra guard is needed.
+    s.resume_source = best.source;
 
-    s.resume_len = step;
-    // source is kNone exactly when step == 0, so no extra guard is needed.
-    s.resume_source = source;
-
-    // 4. Restore copy plans (cache ids; resolved to pointers at setup)
-    if (fork_dst) {
-        s.restore_copies.push_back({fork_src->prefix_id, fork_dst->prefix_id});
+    // 3. Restore copy plans (cache ids; resolved to pointers at setup)
+    if (best.fork_dst) {
+        s.restore_copies.push_back({best.fork_src->prefix_id, best.fork_dst->prefix_id});
     }
-    if (ckpt && step > 0 && restore_ckpt) {
-        s.restore_copies.push_back({restore_ckpt, s.frontier_cache_id});
+    if (ckpt && best.pos > 0 && best.ckpt_id) {
+        s.restore_copies.push_back({best.ckpt_id, s.frontier_cache_id});
         // Measure recurrent-checkpoint spacing from the restored position, not
         // from 0: without this a fresh request resuming deep into a shared
         // prefix believes a checkpoint is immediately due.
-        s.last_ckpt_pos = std::max(s.last_ckpt_pos, step);
+        s.last_ckpt_pos = std::max(s.last_ckpt_pos, best.pos);
     }
-    // step == 0 with checkpointing: GDN recognizes a forward starting at
+    // best.pos == 0 with checkpointing: GDN recognizes a forward starting at
     // position 0 (history_len + inflight_input_len == 0) and resets.
 
-    // 5. Allocation set and eviction-protection set. Protect only what is
+    // 4. Allocation set and eviction-protection set. Protect only what is
     //    needed to run the forward: the prefix blocks (read-only context + the
     //    written tail) and the single frontier. Published checkpoints are
     //    resume-time optimizations, not run-time state — they stay out of the
