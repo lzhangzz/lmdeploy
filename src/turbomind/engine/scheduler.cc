@@ -1166,8 +1166,23 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         if (publish_prompt) {
             desired = prompt_boundary_pos;  // land exactly on B
         }
-        else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
-            desired = desired / bs * bs;
+        else {
+            // A recurrent checkpoint becomes due at last_ckpt_pos + interval.
+            // The frontier state is checkpointable only at the pass end, so a
+            // prompt-region pass that would run past the due position ends on
+            // a block boundary and PlanFullBlockPublication checkpoints there;
+            // the remaining tokens run in the next pass. `aligned > begin`
+            // guarantees progress (a due position inside the current partial
+            // block cannot be honored and falls through untruncated).
+            const int aligned = desired / bs * bs;
+            const int due     = s.last_ckpt_pos + registry_.checkpoint_min_interval();
+            if (registry_.has_checkpoint() && desired <= s.prompt_len && desired > due
+                && aligned >= due && aligned > begin) {
+                desired = aligned;
+            }
+            else if (desired < ctx_end) {  // partial chunk: truncate to a block boundary
+                desired = aligned;
+            }
         }
 
         const int len = desired - begin;
