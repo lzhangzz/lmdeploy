@@ -38,10 +38,11 @@ with:
 ```cpp
     // First-known indexed partial sibling at this block index: an identity-
     // verified node with the same parent and a strict token-prefix of this
-    // block's content. Full/containing block -> partial only, never the
-    // reverse; partial nodes carry no outgoing sibling edge, so the edge
-    // graph is acyclic. First-wins: never rebound while set (mirrors trie
-    // first-wins insertion). Strong, RAII.
+    // block's content. Every edge points to a sibling with strictly smaller
+    // `size` (a carrier indexed later by PublishGeneration only grows), so
+    // size strictly decreases along edge paths and the graph is acyclic.
+    // First-wins: bound at most once, at Accept, on a block created in the
+    // same pass (mirrors trie first-wins insertion). Strong, RAII.
     BlockHandle partial;
 ```
 
@@ -79,11 +80,13 @@ All current `fork_from`/`fork_to` member accesses collapse onto `.partial`. This
             mtail                 = fmt::format(", partial@{}", y.offset + y.size);  // matched-side partial reuse
         }
 ```
-10. Lines 1459-1461 (`LogAccept` ctail): field rename plus log token:
+10. Lines 1459-1461 (`LogAccept` ctail): field rename, log token, and a new end guard. With the unified field, block `j` could in principle expose a matcher-bound sibling that does not end at `B` (block-aligned boundary case); the guard keeps the created-side tail truthful:
 ```cpp
             if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->partial) {
                 const LogicalBlock& ft = *s.block_ids[j]->partial;
-                ctail = fmt::format(", partial_to@{}", ft.offset + ft.size);  // created-side publish node end
+                if (ft.offset + ft.size == s.prompt_boundary_pos) {
+                    ctail = fmt::format(", partial_to@{}", ft.offset + ft.size);  // created-side publish node end
+                }
             }
 ```
 11. Line 1577 (`LogCollision`): `note  = " (no partial node)";`
@@ -117,31 +120,43 @@ git commit -m "refactor: unify fork_from/fork_to into one partial sibling edge"
 **Files:**
 - Modify: `src/turbomind/engine/scheduler.cc` (`SetupForks`, the two bind sites from Task 1)
 
-- [ ] **Step 1: Matcher-side asserts**
+Important: do NOT assert on the bound-to node's own `partial` edge. An indexed
+partial node may legitimately carry one — `PublishGeneration`
+(`cache_generation=all`) indexes a former miss block in place as the terminal
+generation partial, keeping its matcher-bound edge. Acyclicity holds because
+`size` strictly decreases along every edge, not because partials are sinks.
+Only first-wins on the *binding* block is assertable (both bind sites target a
+block created in the same pass, so the slot is provably empty).
+
+- [ ] **Step 1: Matcher-side assert**
 
 Around the (post-Task-1) miss-block bind:
 
 ```cpp
         if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
-            // Invariants: first-wins (x is created this pass, so the slot is
-            // empty) and acyclicity (an indexed partial is an edge sink).
-            TM_CHECK(!x.partial);
-            TM_CHECK(!v->partial);
+            TM_CHECK(!x.partial);  // first-wins: x created this pass, slot empty
+            TM_CHECK_LT(v->size, size);  // strictly shorter sibling (acyclicity)
             x.partial = BlockHandle{v};  // edge ref
         }
 ```
 
-- [ ] **Step 2: Creator-side asserts**
+(`size` here is the local `std::min(prompt - offset, bs)` — the binding block's
+Accept-time content extent; `trie_.Search` never returns a full-length match,
+so the check documents rather than changes behavior.)
+
+- [ ] **Step 2: Creator-side assert**
 
 Around the (post-Task-1) boundary-node bind:
 
 ```cpp
                 if (trie_.Insert(y)) {
-                    TM_CHECK(!x.partial);  // x created this pass (miss < j): slot empty
-                    TM_CHECK(!y.partial);  // partial nodes are edge sinks (acyclic)
+                    TM_CHECK(!x.partial);  // first-wins: x created this pass (miss < j), slot empty
                     x.partial = std::move(vh);  // edge holds the only ref
                 }
 ```
+
+(`y.size == plan.node_size < bs <= x.capacity` by `PlanPromptBoundary`
+geometry; no additional size assert needed.)
 
 - [ ] **Step 3: Build**
 
@@ -257,7 +272,7 @@ In `contracts.boundary-policy` and `contracts.checkpoint-publish`: replace `fork
 Append to the section (as its own sentence, keeping surrounding wrapping intact):
 
 ```
-The partial sibling edge is structural, not per-request intent: it lives on the shared indexed block, points full/containing block -> strictly shorter identity-verified sibling (partials carry no outgoing edge, keeping the graph acyclic), and is first-wins — bound at most once, at Accept, on a block created in the same pass (matcher side at the miss block, creator side at the boundary block).
+The partial sibling edge is structural, not per-request intent: it lives on the indexed block, points to an identity-verified sibling with strictly smaller size (size strictly decreases along edge paths, keeping the graph acyclic even when a generation-indexed partial carries an edge), and is first-wins — bound at most once, at Accept, on a block created in the same pass (matcher side at the miss block, creator side at the boundary block).
 ```
 
 - [ ] **Step 3: `contracts.cache-prepare` — add the interior-resume sentence**

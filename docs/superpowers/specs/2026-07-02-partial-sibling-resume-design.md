@@ -37,9 +37,10 @@ index, not request intent. We unify them:
 
 // First-known indexed partial sibling at this block index: an identity-
 // verified node with the same parent and a strict token-prefix of this
-// block's content. Full/containing block -> partial only (never the
-// reverse); partial nodes carry no outgoing sibling edge (acyclic).
-// First-wins: never rebound while set (mirrors trie first-wins insertion).
+// block's content. Every edge points to a sibling with strictly smaller
+// `size`, so the edge graph is acyclic. First-wins: bound at most once, at
+// Accept, on a block created in the same pass (mirrors trie first-wins
+// insertion).
 BlockHandle partial;
 ```
 
@@ -55,22 +56,36 @@ The two old roles become uses of the one edge:
 
 ### First-wins binding rule
 
-`x.partial` is bound at most once and never overwritten:
+`x.partial` is bound at most once and never overwritten. Both bind sites in
+`SetupForks` target a block created in the same pass, so the slot is provably
+empty and the rule reduces to a `TM_CHECK(!x.partial)` assertion:
 
-- Matcher path (miss-block `trie_.Search` in `SetupForks`): bind only when the
-  slot is empty.
-- Creator path (boundary-node creation in `SetupForks`): the edge is the only
-  ref keeping the new node alive. If `x.partial` is already occupied by a
-  different-length sibling, the new node cannot be published — treat exactly
-  like the existing trie-collision case (`LogCollision`-style log,
-  `have_target = false`, node recycles at scope end). Rare (two boundaries in
-  the same block index under the same parent); degrades to current behavior.
+- Matcher path (miss-block `trie_.Search`): `x` is the miss block, created
+  this pass by `CreateMissingBlocks`.
+- Creator path (boundary-node creation): `x` is block `j` with `miss < j`
+  (guaranteed by `PlanPromptBoundary`), so it is also created this pass and
+  distinct from the miss block. The edge is the only ref keeping the new node
+  alive; a genuine occupied-slot conflict is unreachable.
 
 Rationale for first-wins over keep-longest: the payoff of keep-longest is
 bounded by one block of recompute (< block_size tokens); keep-longest requires
 rebind logic whose edge-drop can recycle a node (and its checkpoint) other
 sequences still want. First-wins never releases anything and matches the
 trie's conflict rule.
+
+### Edge-carrying partial nodes (generation boundary)
+
+`PublishGeneration` (`cache_generation=all`) indexes the request's private
+blocks in place, including the terminal partial block. A former miss block
+indexed this way keeps its matcher-bound `partial` edge, so an indexed
+partial node *can* carry an outgoing edge — this exists today with
+`fork_from` and remains legal. Acyclicity does not rely on partials being
+edge sinks: every edge points to a sibling with strictly smaller `size`
+(the matcher binds a strict prefix of the block's Accept-time content, and
+generation indexing only grows the carrier's `size`), so size strictly
+decreases along any edge path and no reference cycle can form. Consumers
+never traverse more than one edge hop, so edge-carrying partials need no
+special handling.
 
 ### Why discovery needs no new trie searches
 
@@ -176,18 +191,22 @@ flips `is_valid` back after the forward proves content (existing flow).
 Asserted at both bind sites in `SetupForks` and stated in
 `src/turbomind/engine/README.md`:
 
-- A partial node (`size < capacity` while indexed) never carries an outgoing
-  `partial` edge: `TM_CHECK(!y.partial)` on the node being bound to.
-- `partial` edges point full/containing block → strictly shorter,
-  identity-verified sibling at the same block index. The edge graph is a DAG
-  by construction (partials are sinks), so no circular refcount is possible.
-- `partial` is first-wins: never rebound while set.
+- `partial` edges point to an identity-verified sibling at the same block
+  index with strictly smaller `size`; size strictly decreases along edge
+  paths, so the graph is a DAG and no circular refcount is possible. (An
+  indexed partial node may itself carry an edge — see the generation-boundary
+  section — but only to a strictly shorter sibling.)
+- `partial` is first-wins and both bind sites target same-pass-created
+  blocks: `TM_CHECK(!x.partial)` on the binding block. No assert on the
+  bound-to node's own edge (it may legitimately carry one).
 
 ## Logging and docs
 
 - `LogAccept`: the matched-side tail prints `partial@<end>` (was
   `fork_from@`); the created-side tail keeps reporting the boundary node end
-  (was `fork_to@`), derived from `x.partial` at the boundary block.
+  (was `fork_to@`), derived from `x.partial` at the boundary block and
+  guarded by `end == prompt_boundary_pos` so a matcher-bound sibling that
+  does not end at `B` is never misreported as the publish node.
 - `LogResume` unchanged (`source=checkpoint` with a mid-block resume position
   is self-explanatory).
 - `README.md` updates, referencing by section: `contracts.prefix-prepare`
