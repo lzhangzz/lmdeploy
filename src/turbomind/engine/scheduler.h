@@ -123,21 +123,21 @@ public:
         return enable_prefix_caching_;
     }
 
-    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupForks to
+    // True if any multimodal span overlaps [lo, hi). Pure; used by SetupPartialSiblings to
     // gate the 'auto' prompt-boundary publish. Public so it can be unit-tested.
     static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);
 
     // Match the prompt against the prefix trie; create missing blocks; set up
     // the partial sibling edge (matcher bind + prompt-boundary node creation).
-    void Accept(Sequence& s);
+    void AdmitPrompt(Sequence& s);
 
-    // Commit step: per-request planning (Resume/Continue), admission with
-    // scratch allocation + eviction, memory replay, publication, Publish.
+    // Commit step: per-request planning (PlanResume/PlanContinue), admission with
+    // scratch allocation + eviction, memory replay, publication, MarkProduced.
     void Schedule(std::vector<Sequence*> requests, Resource& resource);
 
     // Index generated blocks into the trie; adopt the frontier into the last
     // partial block. Called on normal finish.
-    void PublishGeneration(Sequence& s);
+    void Finalize(Sequence& s);
 
     // Drop the request's references; pool recycling does the rest.
     void Release(Sequence& s);
@@ -145,9 +145,9 @@ public:
     // Observability-only records consumed by the file-local prefix-cache log
     // helpers in scheduler.cc. Public so those file-local helpers can name them.
     struct PublishStat {
-        int  start           = 0;      // first newly-valid prefix block offset (token); Publish()
-        int  reusable_blocks = 0;      // indexed nodes whose is_valid flipped true this pass; Publish()
-        int  end             = 0;      // highest published prefix position (token); Publish()
+        int  start           = 0;      // first newly-valid prefix block offset (token); MarkProduced()
+        int  reusable_blocks = 0;      // indexed nodes whose is_valid flipped true this pass; MarkProduced()
+        int  end             = 0;      // highest published prefix position (token); MarkProduced()
         bool forked          = false;  // a partial sibling populated this pass; set by CommitResults()
         bool ckpt            = false;  // a checkpoint published this pass; set by CommitResults()
     };
@@ -177,23 +177,23 @@ private:
     void ReplayMemory(ScheduleState& pass);
     void CommitResults(ScheduleState& pass);
 
-    // Trie cursor threaded through the Accept phases; defined in scheduler.cc.
+    // Trie cursor threaded through the AdmitPrompt phases; defined in scheduler.cc.
     struct AcceptState;
 
     void MatchPrompt(Sequence& s, AcceptState& cur);
-    void CreateMissingBlocks(Sequence& s, AcceptState& cur);
-    void SetupForks(Sequence& s, AcceptState& cur);
+    void IndexMissingBlocks(Sequence& s, AcceptState& cur);
+    void SetupPartialSiblings(Sequence& s, AcceptState& cur);
 
     // Per-request planning for inactive sequences: find the latest feasible
     // resume step, emit restore copy plans, fill resume_len/alloc/involved.
-    void Resume(Sequence& s);
+    void PlanResume(Sequence& s);
 
     // Per-request planning for sequences active in the last iteration.
-    void Continue(Sequence& s);
+    void PlanContinue(Sequence& s);
 
     // Clear producer marks and mark produced blocks valid for [t0, end). Returns
     // the indexed blocks that became cross-request reusable this pass.
-    PublishStat Publish(Sequence& s, int t0, int end);
+    PublishStat MarkProduced(Sequence& s, int t0, int end);
 
     void             SetProducers(Sequence& s, int t0, int end);
     ProducerConflict CheckProducers(const Sequence& s, int t0, int end) const;

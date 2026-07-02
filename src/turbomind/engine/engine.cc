@@ -405,7 +405,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
 
     for (auto& x : incoming) {
         if (x->status == 0) {
-            scheduler_.Accept(*x);
+            scheduler_.AdmitPrompt(*x);
             s.rc.push_back(std::move(x));
         }
         else {
@@ -704,7 +704,7 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
                 }
                 if (TM_UNLIKELY(finished[j])) {
                     if (!c.is_canceled) {
-                        scheduler_.PublishGeneration(c);
+                        scheduler_.Finalize(c);
                     }
                     signals.push_back([r = c.req, l = c.seq_len] { UpdateState(*r, Request::kFinish, l); });
                     c.retiring = true;

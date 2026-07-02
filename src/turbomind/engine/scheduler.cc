@@ -34,7 +34,7 @@ inline void ResetPassBuffers(Sequence& s)
     s.publish_end    = 0;
 }
 
-// Full rebuild: per-pass buffers plus involved_cache_ids (Resume only).
+// Full rebuild: per-pass buffers plus involved_cache_ids (PlanResume only).
 inline void ResetPlanBuffers(Sequence& s)
 {
     ResetPassBuffers(s);
@@ -186,7 +186,7 @@ enum class CollisionSite
     kPublish
 };
 
-// Finalize-event record, filled by PublishGeneration's index loop.
+// Finalize-event record, filled by Finalize's index loop.
 struct GenStat {
     int  first_offset  = 0;  // offset of first newly-indexed generated block (token)
     int  indexed       = 0;  // generated blocks newly inserted into the trie
@@ -239,7 +239,7 @@ struct Scheduler::ScheduleState {
     Replay                     replay;                    // alloc/evict ops of the current phase
     size_t                     committed_replay_size{0};  // replay prefix from committed requests (phase 1)
     std::vector<bool>          committed;
-    std::vector<LogicalBlock*> pending_fork;          // partial sibling node per request, nullptr = none
+    std::vector<LogicalBlock*> pending_populate;      // partial sibling node per request, nullptr = none
     std::vector<PublishPlan>   pending_publish;       // checkpoint publication intent per request
     bool                       has_optionals{false};  // any optional intent recorded => run phase 2
     std::vector<int>           evict_ids;             // SortedIndices() snapshot, shared by both phases
@@ -336,7 +336,7 @@ struct Scheduler::AcceptState {
     size_t next_fp = 0;  // monotonic cursor into Sequence::multimodal_spans
 };
 
-void Scheduler::Accept(Sequence& s)
+void Scheduler::AdmitPrompt(Sequence& s)
 {
     TM_CHECK(s.block_ids.empty());
     if (!PrefixEligible(s)) {
@@ -345,8 +345,8 @@ void Scheduler::Accept(Sequence& s)
     AcceptState st{};            // parent defaults to nullptr (root)
     MatchPrompt(s, st);          // match full blocks to the first miss
     s.matched_blocks = st.miss;  // leading prompt blocks found in the trie
-    CreateMissingBlocks(s, st);  // create + index the remaining prompt blocks
-    SetupForks(s, st);           // partial sibling bind (matcher side) + boundary node creation (creator side)
+    IndexMissingBlocks(s, st);   // create + index the remaining prompt blocks
+    SetupPartialSiblings(s, st);  // partial sibling bind (matcher side) + boundary node creation (creator side)
     LogAccept(s, logical_.block_size());
 }
 
@@ -382,7 +382,7 @@ void Scheduler::MatchPrompt(Sequence& s, AcceptState& st)
     st.miss_key    = st.key;
 }
 
-void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
+void Scheduler::IndexMissingBlocks(Sequence& s, AcceptState& st)
 {
     const int bs     = logical_.block_size();
     const int prompt = s.prompt_len;
@@ -428,7 +428,7 @@ void Scheduler::CreateMissingBlocks(Sequence& s, AcceptState& st)
     }
 }
 
-void Scheduler::SetupForks(Sequence& s, AcceptState& st)
+void Scheduler::SetupPartialSiblings(Sequence& s, AcceptState& st)
 {
     const int bs     = logical_.block_size();
     const int prompt = s.prompt_len;
@@ -504,7 +504,7 @@ void Scheduler::SetupForks(Sequence& s, AcceptState& st)
     }
 }
 
-void Scheduler::Resume(Sequence& s)
+void Scheduler::PlanResume(Sequence& s)
 {
     TM_CHECK(!s.is_active);
 
@@ -551,7 +551,7 @@ void Scheduler::Resume(Sequence& s)
     prefix_end           = std::min(prefix_end, upper);  // resume bound, unchanged
     s.readonly_block_num = readonly_block_num;
 
-    // 2. Resume step selection
+    // 2. PlanResume step selection
     int           step         = prefix_end;  // without checkpointing, KV grants per-token resume
     ResumeSource  source       = prefix_end > 0 ? ResumeSource::kPrefix : ResumeSource::kNone;
     LogicalBlock* fork_dst     = nullptr;
@@ -606,7 +606,7 @@ void Scheduler::Resume(Sequence& s)
     // 3. Fork extension: an indexed partial sibling can beat the current step
     //    by copying its content into the block at the boundary. The target may
     //    be a shared indexed node whose KV was evicted (is_valid == false);
-    //    the restore copy re-populates it and Publish flips is_valid after
+    //    the restore copy re-populates it and MarkProduced flips is_valid after
     //    the forward proves content.
     if (prefix_end % bs == 0 && prefix_end / bs < static_cast<int>(s.block_ids.size())) {
         LogicalBlock& x = *s.block_ids[prefix_end / bs];
@@ -664,7 +664,7 @@ void Scheduler::Resume(Sequence& s)
     }
 }
 
-void Scheduler::Continue(Sequence& s)
+void Scheduler::PlanContinue(Sequence& s)
 {
     TM_CHECK(s.is_active);
 
@@ -696,7 +696,7 @@ void Scheduler::Continue(Sequence& s)
         s.alloc_cache_ids.push_back(p);
     }
 
-    // The frontier was added to involved_cache_ids by the activating Resume and
+    // The frontier was added to involved_cache_ids by the activating PlanResume and
     // stays valid while active (it is in the protected set); nothing to re-add.
     if (ckpt) {
         TM_CHECK(ValidAlloc(s.frontier_cache_id));
@@ -723,14 +723,14 @@ Scheduler::ProducerConflict Scheduler::CheckProducers(const Sequence& s, int t0,
     return {};
 }
 
-Scheduler::PublishStat Scheduler::Publish(Sequence& s, int t0, int end)
+Scheduler::PublishStat Scheduler::MarkProduced(Sequence& s, int t0, int end)
 {
     const int   bs   = logical_.block_size();
     const int   last = std::min<int>((end + bs - 1) / bs, s.block_ids.size());
     PublishStat stat{};
     // Start at t0/bs, mirroring SetProducers/CheckProducers: this pass only
     // marks producers on [t0/bs, ceil(end/bs)) and clears them here, and every
-    // indexed block below t0 is already valid (Resume advances resume_len only
+    // indexed block below t0 is already valid (PlanResume advances resume_len only
     // over valid prefix; the in-flight [resume_len, t0) region was published at
     // the prior forward's commit). The block straddling t0 sits at index t0/bs,
     // so it is still processed.
@@ -810,7 +810,7 @@ void Scheduler::Release(Sequence& s)
     s.history_len        = 0;
 }
 
-void Scheduler::PublishGeneration(Sequence& s)
+void Scheduler::Finalize(Sequence& s)
 {
     if (!PrefixEligible(s) || s.filled_len <= 0) {
         return;
@@ -985,7 +985,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 {
     // (a) copy the request's partial KV into the shared partial sibling node.
     if (LogicalBlock* node = PlanForkToPopulation(s, end, pass.planned)) {
-        pass.pending_fork[i] = node;
+        pass.pending_populate[i] = node;
         pass.has_optionals   = true;
     }
 
@@ -1005,7 +1005,7 @@ void Scheduler::PlanPromptBoundaryPublication(ScheduleState& pass, int i, Sequen
 
 // Full-block group: coverage-driven checkpoint, published iff a full block ends
 // exactly at `end` (subject to min-interval); no prompt-boundary mode involved.
-// The full block's prefix is published in place by Publish() (no KV copy).
+// The full block's prefix is published in place by MarkProduced() (no KV copy).
 void Scheduler::PlanFullBlockPublication(ScheduleState& pass, int i, Sequence& s, int end)
 {
     if (!CheckpointPublicationEligible() || s.publish_cache_id == 0) {
@@ -1036,7 +1036,7 @@ void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
     counter_.tick(0);
 
     ScheduleState pass{std::move(requests)};
-    PlanRequests(pass);  // Resume/Continue, sort, stamp involved + restore srcs, pass.floor
+    PlanRequests(pass);  // PlanResume/PlanContinue, sort, stamp involved + restore srcs, pass.floor
 
     counter_.tick(1);
 
@@ -1061,7 +1061,7 @@ void Scheduler::Schedule(std::vector<Sequence*> requests, Resource& resource)
     }
     counter_.tick(4);
 
-    CommitResults(pass);  // publication attach, partial sibling populate, Publish
+    CommitResults(pass);  // publication attach, partial sibling populate, MarkProduced
 
     counter_.tick(5);
 
@@ -1080,10 +1080,10 @@ void Scheduler::PlanRequests(ScheduleState& pass)
 {
     for (Sequence* sp : pass.requests) {
         if (sp->is_active) {
-            Continue(*sp);
+            PlanContinue(*sp);
         }
         else {
-            Resume(*sp);
+            PlanResume(*sp);
         }
     }
 
@@ -1105,14 +1105,14 @@ void Scheduler::PlanRequests(ScheduleState& pass)
         // request's involved set, but must survive eviction until the restore
         // copy runs before kPrepare. They land just above this request's cutoff,
         // in the same band the old code gave them when they lived in involved.
-        // restore_copies is empty on the Continue path, so this adds nothing there.
+        // restore_copies is empty on the PlanContinue path, so this adds nothing there.
         for (const CacheCopy& c : s.restore_copies) {
             cache_.Stamp(c.src);
         }
     }
 
     pass.committed.assign(pass.requests.size(), false);
-    pass.pending_fork.assign(pass.requests.size(), nullptr);
+    pass.pending_populate.assign(pass.requests.size(), nullptr);
     pass.pending_publish.assign(pass.requests.size(), PublishPlan{});
 }
 
@@ -1162,7 +1162,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
         const int prompt_boundary_pos = s.prompt_boundary_pos;
 
-        // The publish decision is finalized in SetupForks (prompt_boundary_node);
+        // The publish decision is finalized in SetupPartialSiblings (prompt_boundary_node);
         // the clamp fires on the pass that can reach B (>= so an exact landing
         // isn't truncated away).
         const bool publish_prompt =
@@ -1239,7 +1239,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
 
         // Optional optimizations (allocated later, from inactive memory). One
         // checkpoint per forward, routed by its end; publish_prompt is false when
-        // prompt_boundary_node was not set in SetupForks, or when this forward's
+        // prompt_boundary_node was not set in SetupPartialSiblings, or when this forward's
         // geometry does not reach B, so nothing prompt-boundary is allocated.
         // PlanPromptBoundaryPublication reserves the partial sibling id in pass.planned for
         // cross-request intent dedup.
@@ -1314,9 +1314,9 @@ void Scheduler::RunOptionalAdmission(ScheduleState& pass)
         Sequence& s = *pass.requests[i];
 
         // partial sibling population (prefix reuse for future forks)
-        if (LogicalBlock* node = pass.pending_fork[i]) {
+        if (LogicalBlock* node = pass.pending_populate[i]) {
             if (!try_optional(node->prefix_id)) {
-                pass.pending_fork[i] = nullptr;  // dropped; CommitResults won't populate it
+                pass.pending_populate[i] = nullptr;  // dropped; CommitResults won't populate it
             }
         }
         // checkpoint publication
@@ -1401,7 +1401,7 @@ void Scheduler::CommitResults(ScheduleState& pass)
 
         bool ckpt_published = false;
 
-        if (LogicalBlock* v = pass.pending_fork[i]) {
+        if (LogicalBlock* v = pass.pending_populate[i]) {
             LogicalBlock& y = *v;
             y.is_valid      = true;  // content arrives via the device-ordered copy below
             s.publish_copies.push_back({s.block_ids[(end - 1) / bs]->prefix_id, y.prefix_id});
@@ -1441,8 +1441,8 @@ void Scheduler::CommitResults(ScheduleState& pass)
 
         // Content is guaranteed to be produced by this iteration (device
         // execution is in submission order); no point deferring to Update().
-        PublishStat pub = Publish(s, begin, end);
-        pub.forked      = pass.pending_fork[i] != nullptr;
+        PublishStat pub = MarkProduced(s, begin, end);
+        pub.forked      = pass.pending_populate[i] != nullptr;
         pub.ckpt        = ckpt_published;
         LogPublished(s, bs, pub);
     }
