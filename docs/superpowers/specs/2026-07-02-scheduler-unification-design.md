@@ -109,21 +109,30 @@ if (best.pos == 0) {
             ValidAlloc(s.frontier_cache_id) && 0 < fpos && fpos <= prefix_end) {
             best = {fpos, ResumeSource::kFrontier};
         }
-        // Published checkpoints covered by the valid prefix. A block yields its
-        // own (block-end) checkpoint and its interior partial sibling's
-        // checkpoint as the same kind of candidate; both are checkpoint-only
-        // restores (KV is covered by the valid prefix, so no KV copy and no
-        // is_valid requirement). A sibling-sourced resume reports kFork.
-        for (int i = 0; i < (prefix_end + bs - 1) / bs && i < (int)s.block_ids.size(); ++i) {
-            const LogicalBlock& x = *s.block_ids[i];
+        // Published checkpoints covered by the valid prefix, scanned backward.
+        // A block yields its own (block-end) checkpoint and its interior
+        // partial sibling's checkpoint as the same kind of candidate; both are
+        // checkpoint-only restores (KV is covered by the valid prefix, so no
+        // KV copy and no is_valid requirement). A sibling-sourced resume
+        // reports kFork. Block ends strictly decrease going backward and a
+        // sibling is strictly shorter than its block, so once a block cannot
+        // beat best (e <= best.pos) nothing earlier can either; the first hit
+        // ends the walk via the same check on the next iteration.
+        for (int i = std::min<int>(s.block_ids.size(), (prefix_end + bs - 1) / bs); i > 0; --i) {
+            const LogicalBlock& x = *s.block_ids[i - 1];
             const int           e = x.key ? x.offset + x.size : x.offset + x.capacity;
-            if (e <= prefix_end && e > best.pos && ValidAlloc(x.checkpoint_id)) {
+            if (e <= best.pos) {
+                break;
+            }
+            if (e <= prefix_end && ValidAlloc(x.checkpoint_id)) {
                 best = {e, ResumeSource::kCheckpoint, x.checkpoint_id};
+                break;
             }
             if (const LogicalBlock* y = x.partial.get()) {
                 const int ye = y->offset + y->size;
                 if (ye <= prefix_end && ye > best.pos && ValidAlloc(y->checkpoint_id)) {
                     best = {ye, ResumeSource::kFork, y->checkpoint_id};
+                    break;
                 }
             }
         }
@@ -133,15 +142,14 @@ if (best.pos == 0) {
 
 Selection is strict `>` on `pos`. Fork extension short-circuits: when feasible it ends strictly
 past `prefix_end`, which no other candidate can reach, so evaluating it first is exactly
-equivalent to the old last-with-strict-`>` placement and skips the candidate loop entirely.
-Within the loop, the fixed order (frontier, then per-block candidates) reproduces the remaining
-tie-breaks: the frontier beats an equal-position checkpoint (no copy needed), and a block's own
-checkpoint beats its same-position sibling. The interior-sibling case, previously a special
-sub-branch of the backward walk, is now just another candidate — reported as `kFork` since the
-resume point comes from a partial sibling node (previously logged as `checkpoint`; every
-sibling-sourced resume now uniformly reports `fork`). The backward early-exit walk becomes a
-forward scan over at most `ceil(prefix_end / bs)` blocks — the same order of work as the prefix
-scan preceding it.
+equivalent to the old last-with-strict-`>` placement and skips the candidate loop entirely. The
+checkpoint walk stays backward with the old early exits (`e <= best.pos` prunes everything
+earlier; a hit breaks immediately, since all remaining candidates are strictly smaller), seeded
+by the frontier candidate — which is how the frontier beats an equal-position checkpoint (no
+copy needed) and a block's own checkpoint dominates its same-block sibling. The interior-sibling
+case, previously a special sub-branch of the walk, is now just another candidate — reported as
+`kFork` since the resume point comes from a partial sibling node (previously logged as
+`checkpoint`; every sibling-sourced resume now uniformly reports `fork`).
 
 Steps 4–5 (restore copy plans, allocation and protection sets) consume `best`:
 
