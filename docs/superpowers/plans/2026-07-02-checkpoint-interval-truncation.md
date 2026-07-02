@@ -20,15 +20,15 @@ There is no C++ unit-test harness for the scheduler in this repo; verification i
 
 **Files:** none modified.
 
-- [ ] **Step 1: Ensure the tree is built**
+- [x] **Step 1: Ensure the tree is built**
 
 From `build/`: run `ninja`. If the folder is not configured, first run `sh ../my_generate.sh` from `build/`. Expected: exit 0.
 
-- [ ] **Step 2: Pick GPUs**
+- [x] **Step 2: Pick GPUs**
 
 Run `nvidia-smi` (outside the sandbox) and pick idle GPUs (no processes, ~0 MiB used). Qwen3.5-27B in bf16 needs ~54 GB of weights plus KV/state cache (`cache_max_entry_count=0.5` in the script): use `--tp 2 --gpus <a>,<b>` on two idle GPUs (or `--tp 1` on a single GPU with ≥ 80 GB free).
 
-- [ ] **Step 3: Create the shared-prefix prompt file**
+- [x] **Step 3: Create the shared-prefix prompt file**
 
 Write `/tmp/ckpt_prompts.json`: a JSON array of 2 strings. Prompt 0 is a long base document (~10k tokens, e.g. a paragraph repeated many times) ending with a question. Prompt 1 is the same base document plus a distinct extra ~5000-token section and a different question (so the recompute region past the shared prefix exceeds `cache_checkpoint_interval=4096` in one pass). Generate it with a short Python snippet, e.g.:
 
@@ -43,7 +43,7 @@ json.dump([base + "\nSummarize the text above.",
           open("/tmp/ckpt_prompts.json", "w"))
 ```
 
-- [ ] **Step 4: Run the baseline scenario (outside the sandbox, on the chosen GPU)**
+- [x] **Step 4: Run the baseline scenario (outside the sandbox, on the chosen GPU)**
 
 ```bash
 python scripts/test_turbomind_model.py \
@@ -57,7 +57,7 @@ python scripts/test_turbomind_model.py \
 
 (`--prompt-ids 0 1 1` runs the base prompt, then the extended prompt twice; the second extended run resumes from whatever checkpoints the first one published.)
 
-- [ ] **Step 5: Confirm the failure signature**
+- [x] **Step 5: Confirm the failure signature**
 
 In `/tmp/ckpt_baseline.log`, find the `[TM][WARN]` scheduler lines. Expected failure: the pass for prompt-id 1 that computes > 4096 tokens past its resume point publishes **no** `ckpt@`, and the repeated prompt-id 1 resumes (`resume ... source=...`) from the old prompt-0-era checkpoint, recomputing thousands of tokens. Also verify all three responses are meaningful English (per AGENTS.md). Record the resume positions for comparison in Task 4.
 
@@ -66,7 +66,7 @@ In `/tmp/ckpt_baseline.log`, find the `[TM][WARN]` scheduler lines. Expected fai
 **Files:**
 - Modify: `src/turbomind/engine/scheduler.cc` (in `Scheduler::Resume`, restore-copy section, currently lines 629–631)
 
-- [ ] **Step 1: Apply the edit**
+- [x] **Step 1: Apply the edit**
 
 Replace:
 
@@ -88,11 +88,11 @@ with:
     }
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 From `build/`: `ninja`. Expected: exit 0, no warnings about `scheduler.cc`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/turbomind/engine/scheduler.cc
@@ -105,7 +105,7 @@ git commit -m "fix(scheduler): measure checkpoint spacing from the restored chec
 - Modify: `src/turbomind/engine/scheduler.cc` (forward-end clamp in `RunRequiredAdmission`, currently lines 1162–1167)
 - Modify: `src/turbomind/engine/README.md` (`contracts.scheduler-commit` line 266, `contracts.checkpoint-publish` line 384)
 
-- [ ] **Step 1: Apply the scheduler edit**
+- [x] **Step 1: Apply the scheduler edit**
 
 Replace:
 
@@ -146,11 +146,11 @@ with:
 
 (`begin`, `bs`, `ctx_end`, `registry_` are all already in scope at this point in the function.)
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 From `build/`: `ninja`. Expected: exit 0.
 
-- [ ] **Step 3: Update the normative contract (README.md)**
+- [x] **Step 3: Update the normative contract (README.md)**
 
 Per AGENTS.md: edit content only, do not re-wrap existing lines.
 
@@ -166,7 +166,7 @@ In `contracts.checkpoint-publish` (line 384), after the sentence ending "with no
 
 > The admission clamp (`contracts.scheduler-commit`) guarantees the full-block group a block-aligned pass end whenever the minimum interval is due in the prompt region, and `Resume` seeds `last_ckpt_pos` from a restored checkpoint's position so spacing is measured from it.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/turbomind/engine/scheduler.cc src/turbomind/engine/README.md
@@ -177,15 +177,15 @@ git commit -m "fix(scheduler): end prompt-region passes on a block boundary when
 
 **Files:** none modified.
 
-- [ ] **Step 1: Check GPU availability**
+- [x] **Step 1: Check GPU availability**
 
 Run `nvidia-smi` (outside the sandbox); use the same (or other idle) GPUs as Task 1.
 
-- [ ] **Step 2: Re-run the exact Task 1 scenario (outside the sandbox)**
+- [x] **Step 2: Re-run the exact Task 1 scenario (outside the sandbox)**
 
 Same command as Task 1 Step 4, with `tee /tmp/ckpt_fixed.log`.
 
-- [ ] **Step 3: Verify the fix against the baseline**
+- [x] **Step 3: Verify the fix against the baseline**
 
 In `/tmp/ckpt_fixed.log` check all of:
 
@@ -194,7 +194,7 @@ In `/tmp/ckpt_fixed.log` check all of:
 3. The repeated prompt-id 1 run resumes with `source=checkpoint` (or fork) at the new, higher checkpoint position; its `computed` span is < 4096 + block_size tokens (versus thousands in `/tmp/ckpt_baseline.log`).
 4. All three responses are meaningful English relevant to the prompts, ≥ 128 generated tokens requested (`--max-new-tokens 256`). Gibberish means the truncation broke resume state — stop and debug, do not proceed.
 
-- [ ] **Step 4: Decode-region sanity check (outside the sandbox)**
+- [x] **Step 4: Decode-region sanity check (outside the sandbox)**
 
 Run the default single-prompt smoke test to confirm decode behavior is untouched under `cache_generation none`:
 
@@ -207,9 +207,19 @@ python scripts/test_turbomind_model.py \
 
 Expected: exit 0, meaningful response, no `ckpt@` positions past the prompt length in the WARN log.
 
-- [ ] **Step 5: Commit the plan checkboxes / any log notes**
+- [x] **Step 5: Commit the plan checkboxes / any log notes**
 
 ```bash
 git add docs/superpowers/plans/2026-07-02-checkpoint-interval-truncation.md
 git commit -m "docs: record checkpoint-interval verification results"
 ```
+
+## Verification results (2026-07-02)
+
+GPUs: `--tp 2 --gpus 0,1`. Logs: `/tmp/ckpt_baseline.log`, `/tmp/ckpt_fixed.log`, `/tmp/ckpt_decode_sanity.log`.
+
+**Baseline (broken):** req 1 (uid 22) resumed `source=checkpoint` at 8192 and computed `[8192,14419)` (6227 tok) with **no** intermediate `ckpt@`. Repeated req 1 (uid 23) also resumed at 8192 and recomputed 6227 tok.
+
+**Fixed:** req 1 (uid 22) computed `[8192,14400)` and published `ckpt@14400` (block-aligned). Repeated req 1 (uid 23) resumed at 14400 and computed only `[14400,14419)` (19 tok). Spacing 8192→14400 = 6208 ≥ 4096. All three responses meaningful English (256 generated tokens).
+
+**Decode sanity:** default short prompt, `cache_generation none` — exit 0, meaningful response, no `ckpt@` past prompt length (prompt 21 tok).
