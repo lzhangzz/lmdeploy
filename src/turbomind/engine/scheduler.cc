@@ -628,6 +628,10 @@ void Scheduler::Resume(Sequence& s)
     }
     if (ckpt && step > 0 && restore_ckpt) {
         s.restore_copies.push_back({restore_ckpt, s.frontier_cache_id});
+        // Measure recurrent-checkpoint spacing from the restored position, not
+        // from 0: without this a fresh request resuming deep into a shared
+        // prefix believes a checkpoint is immediately due.
+        s.last_ckpt_pos = std::max(s.last_ckpt_pos, step);
     }
     // step == 0 with checkpointing: GDN recognizes a forward starting at
     // position 0 (history_len + inflight_input_len == 0) and resets.
