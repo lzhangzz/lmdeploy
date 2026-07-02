@@ -343,8 +343,9 @@ demotion value.)
 
 ### 5. Collision rollback helper
 
-Three sites (Accept full-block insert, prompt-boundary node insert, generation indexing) roll back
-an un-inserted block identically. Fold into a file-local helper:
+Two sites (Accept full-block insert and generation indexing) roll back an un-inserted block
+identically; the prompt-boundary insert discards its node instead (no rollback). Fold the two
+into a file-local helper:
 
 ```cpp
 // Roll a block back to private (un-indexed) state after a failed trie insert.
