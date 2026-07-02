@@ -157,9 +157,9 @@ struct LogicalBlock {
     // First-known indexed partial sibling at this block index: an identity-
     // verified node with the same parent and a strict token-prefix of this
     // block's content. Every edge points to a sibling with strictly smaller
-    // `size` (a carrier indexed later by PublishGeneration only grows), so
+    // `size` (a carrier indexed later by Finalize only grows), so
     // size strictly decreases along edge paths and the graph is acyclic.
-    // First-wins: bound at most once, at Accept, on a block created in the
+    // First-wins: bound at most once, at AdmitPrompt, on a block created in the
     // same pass (mirrors trie first-wins insertion). Strong, RAII.
     BlockHandle partial;
 
