@@ -520,7 +520,10 @@ Replace the whole `if (publish_generation_boundary && x.offset + size == s.fille
 
 ```cpp
         if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc(s.frontier_cache_id)
-            && x.checkpoint_id == 0) {
+            && !ValidAlloc(x.checkpoint_id)) {
+            if (const int stale = x.checkpoint_id) {
+                cache_.Invalidate(stale);  // evicted leftover slot
+            }
             const int f     = std::exchange(s.frontier_cache_id, 0);
             x.checkpoint_id = f;
             cache_[f].owner = up;
