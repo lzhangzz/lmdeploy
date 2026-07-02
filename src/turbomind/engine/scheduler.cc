@@ -212,7 +212,7 @@ struct GenStat {
     int  indexed       = 0;  // generated blocks newly inserted into the trie
     int  last_size     = 0;  // filled tokens of the last inserted block
     bool terminal_ckpt = false;
-    int  dropped       = 0;  // redundant full-block checkpoints dropped on terminal adoption
+    bool demoted       = false;  // adopted checkpoint undercuts the interval -> evict-first
 };
 
 // Prefix-cache log helpers (definitions at the bottom of this file). Each opens
@@ -903,49 +903,38 @@ void Scheduler::Finalize(Sequence& s)
         // under has_checkpoint()), so no separate has_checkpoint() gate here.
         if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc(s.frontier_cache_id)
             && x.checkpoint_id == 0) {
+            const int f     = std::exchange(s.frontier_cache_id, 0);
+            x.checkpoint_id = f;
+            cache_[f].owner = up;
+            logical_.Retain(up);  // ref held by the live allocation
+            gen.terminal_ckpt = true;
 
+            // If another valid checkpoint lies within checkpoint_min_interval
+            // below filled_len, this adoption undercuts the interval. Keep it
+            // (terminal state is the best resume point) but demote it to
+            // evict-first priority so the redundancy is reclaimed first while
+            // it remains demoted.
             const int interval = registry_.checkpoint_min_interval();
-
-            // Classify in-window checkpoints below filled_len. A checkpoint on a
-            // block being indexed in *this* call (pos > prompt_len, still
-            // private until now -> no consumer ref) is droppable; one on an
-            // already-shared block (pos <= prompt_len) is a blocker we must not
-            // touch, so we skip adoption to preserve min_interval spacing.
-            bool blocked = false;
-            for (int j = static_cast<int>(i); j-- > 0;) {
-                const LogicalBlock& p   = *s.block_ids[j];
-                const int           pos = p.offset + p.size;
-                if (s.filled_len - pos >= interval) {
-                    break;  // outside the window
-                }
-                if (const int c = p.checkpoint_id; ValidAlloc(c) && pos <= s.prompt_len) {
-                    blocked = true;
-                    break;
-                }
-            }
-
-            if (!blocked) {
-                const int f     = std::exchange(s.frontier_cache_id, 0);
-                x.checkpoint_id = f;
-                cache_[f].owner = up;
-                logical_.Retain(up);  // ref held by the live allocation
-                gen.terminal_ckpt = true;
-
-                // Drop droppable redundant full-block checkpoints in the window;
-                // the terminal checkpoint supersedes them. Mirror eviction
-                // exactly: free memory + drop the allocation's logical ref.
-                for (int j = static_cast<int>(i); j-- > 0;) {
-                    LogicalBlock& p   = *s.block_ids[j];
-                    const int     pos = p.offset + p.size;
-                    if (s.filled_len - pos >= interval) {
-                        break;  // outside the window; spacing already satisfies min_interval
+            for (int j = static_cast<int>(i); j >= 0; --j) {
+                const LogicalBlock& p         = *s.block_ids[j];
+                const int           block_pos = p.offset + p.size;
+                if (block_pos < s.filled_len) {
+                    if (s.filled_len - block_pos >= interval) {
+                        break;  // outside the window; earlier block/partial positions are older
                     }
-                    if (pos > s.prompt_len) {
-                        if (const int c = p.checkpoint_id; ValidAlloc(c)) {
-                            cache_.Deallocate(alloc_, c);  // free memory + drop the alloc ref
-                            logical_.Drop(&p);  // block stays (request + index refs); slot left as evicted leftover
-                            ++gen.dropped;      // observability only (LogFinalized)
-                        }
+                    if (ValidAlloc(p.checkpoint_id)) {
+                        cache_.Demote(f);
+                        gen.demoted = true;  // observability (LogFinalized)
+                        break;
+                    }
+                }
+
+                if (const LogicalBlock* y = p.partial.get()) {
+                    const int pos = y->offset + y->size;
+                    if (pos < s.filled_len && s.filled_len - pos < interval && ValidAlloc(y->checkpoint_id)) {
+                        cache_.Demote(f);
+                        gen.demoted = true;  // observability (LogFinalized)
+                        break;
                     }
                 }
             }
@@ -1562,9 +1551,7 @@ void LogFinalized(const Sequence& s, int bs, const GenStat& g)
     }  // terminal_ckpt implies indexed > 0
     auto msg = [&] {
         std::string tail = (g.last_size < bs) ? fmt::format(", last {}/{}", g.last_size, bs) : "";
-        std::string ckpt =
-            g.terminal_ckpt ? (g.dropped ? fmt::format(", terminal ckpt (dropped {})", g.dropped) : ", terminal ckpt") :
-                              "";
+        std::string ckpt = g.terminal_ckpt ? (g.demoted ? ", terminal ckpt (demoted)" : ", terminal ckpt") : "";
         return fmt::format("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
                            s.req->id,
                            s.req->unique_id,

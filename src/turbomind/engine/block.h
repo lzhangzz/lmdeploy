@@ -101,6 +101,17 @@ public:
     uint64_t Stamp(const std::vector<int>& cache_ids);
     uint64_t Stamp(int cache_id);
 
+    // Demote a slot to evict-first priority: timestamp 0 sorts first in
+    // SortedIndices() and is below every eviction cutoff and pass floor.
+    // Stamp never hands out 0 (next_timestamp_ starts at 1).
+    void Demote(int cache_id)
+    {
+        TM_CHECK_GT(cache_id, 0);
+        TM_CHECK_LT(cache_id, static_cast<int>(blocks_.size()));
+        TM_CHECK(blocks_[cache_id].valid());
+        blocks_[cache_id].timestamp = 0;
+    }
+
     CacheBlock& operator[](int index) noexcept
     {
         return blocks_[index];
