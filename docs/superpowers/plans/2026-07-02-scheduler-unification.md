@@ -533,19 +533,30 @@ Replace the whole `if (publish_generation_boundary && x.offset + size == s.fille
             // If another valid checkpoint lies within checkpoint_min_interval
             // below filled_len, this adoption undercuts the interval. Keep it
             // (terminal state is the best resume point) but demote it to
-            // evict-first priority so the redundancy never displaces other
-            // cache state.
+            // evict-first priority so the redundancy is reclaimed first while
+            // it remains demoted.
             const int interval = registry_.checkpoint_min_interval();
-            for (int j = static_cast<int>(i); j-- > 0;) {
-                const LogicalBlock& p   = *s.block_ids[j];
-                const int           pos = p.offset + p.size;
-                if (s.filled_len - pos >= interval) {
-                    break;  // outside the window
+            for (int j = static_cast<int>(i); j >= 0; --j) {
+                const LogicalBlock& p         = *s.block_ids[j];
+                const int           block_pos = p.offset + p.size;
+                if (block_pos < s.filled_len) {
+                    if (s.filled_len - block_pos >= interval) {
+                        break;  // outside the window; earlier block/partial positions are older
+                    }
+                    if (ValidAlloc(p.checkpoint_id)) {
+                        cache_.Demote(f);
+                        gen.demoted = true;  // observability (LogFinalized)
+                        break;
+                    }
                 }
-                if (ValidAlloc(p.checkpoint_id)) {
-                    cache_.Demote(f);
-                    gen.demoted = true;  // observability (LogFinalized)
-                    break;
+
+                if (const LogicalBlock* y = p.partial.get()) {
+                    const int pos = y->offset + y->size;
+                    if (pos < s.filled_len && s.filled_len - pos < interval && ValidAlloc(y->checkpoint_id)) {
+                        cache_.Demote(f);
+                        gen.demoted = true;  // observability (LogFinalized)
+                        break;
+                    }
                 }
             }
         }
