@@ -161,7 +161,8 @@ private:
     struct ScheduleState;
 
     // Optional checkpoint-publication intent allocated in the optional admission
-    // phase. cache_id == 0 => nothing.
+    // phase. cache_id is the target's own (block-owned) checkpoint slot;
+    // 0 => nothing.
     struct PublishPlan {
         LogicalBlock* target{};
         int           end{};

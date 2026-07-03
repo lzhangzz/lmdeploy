@@ -238,7 +238,6 @@ struct Sequence {
 
     int           frontier_cache_id = 0;        // checkpoint working state for the next forward
     int           frontier_pos      = 0;        // sequence position the frontier corresponds to
-    int           publish_cache_id  = 0;        // reserved slot for the next checkpoint publication
     LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
     int           publish_end       = 0;        // sequence position of the pending publication
     int           last_ckpt_pos     = 0;        // end of the last published checkpoint

@@ -474,10 +474,17 @@ if (!ValidAlloc(node->checkpoint_id)) {
     if (node->checkpoint_id == 0) {
         node->checkpoint_id = cache_.Create(registry_.checkpoint().object_id(), node);
     }
+    TM_CHECK(pass.planned.insert(node->checkpoint_id).second);  // one publisher per node per pass
     pass.pending_publish[i] = {node, end, node->checkpoint_id};
     pass.has_optionals      = true;
 }
 ```
+
+At most one request can plan a given node per pass: a block target is producer-excluded (the
+committed forward writes `end-1` inside it), and a sibling target is reachable only by the
+request whose trie insert created the boundary node (first-wins arming of
+`prompt_boundary_node`). The checked `pass.planned` reservation turns any violation of that
+argument into a crash instead of a silent double-allocation in the optional phase.
 
 Because the slot is owner-attached at creation, `ReplayMemory` takes/drops the allocation
 reference uniformly (`logical_.Retain(c.owner)` on alloc, `Drop` on evict) — the manual
@@ -486,8 +493,8 @@ reference uniformly (`logical_.Retain(c.owner)` on alloc, `Drop` on evict) — t
 ```cpp
 if (s.publish_target) {
     // The slot (publish_target->checkpoint_id) was allocated by the optional
-    // phase. Producer exclusion admits at most one publisher per node per
-    // pass, and planning required !ValidAlloc, so no dedup branch is needed.
+    // phase. Single-publisher-per-node-per-pass is enforced at plan time,
+    // and planning required !ValidAlloc, so no dedup branch is needed.
     s.last_ckpt_pos = s.publish_end;
     ckpt_published  = true;
     s.publish_copies.push_back({s.frontier_cache_id, s.publish_target->checkpoint_id});

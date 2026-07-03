@@ -534,14 +534,9 @@ void Scheduler::PlanResume(Sequence& s)
     const int  upper = InitialResumeUpperBound(s);
     const int  bs    = logical_.block_size();
 
-    if (ckpt) {
-        if (s.frontier_cache_id == 0) {
-            s.frontier_cache_id = cache_.Create(registry_.checkpoint().object_id());
-            s.frontier_pos      = 0;
-        }
-        if (CheckpointPublicationEligible() && s.publish_cache_id == 0) {
-            s.publish_cache_id = cache_.Create(registry_.checkpoint().object_id());
-        }
+    if (ckpt && s.frontier_cache_id == 0) {
+        s.frontier_cache_id = cache_.Create(registry_.checkpoint().object_id());
+        s.frontier_pos      = 0;
     }
 
     // 1. Contiguous reusable prefix end (token level). Indexed nodes carry
@@ -685,12 +680,6 @@ void Scheduler::PlanContinue(Sequence& s)
 
     ResetPassBuffers(s);  // per-pass buffers only; involved_cache_ids persists
 
-    const bool ckpt = registry_.has_checkpoint();
-
-    if (ckpt && CheckpointPublicationEligible() && s.publish_cache_id == 0) {
-        s.publish_cache_id = cache_.Create(registry_.checkpoint().object_id());
-    }
-
     // Active-request invariant: a request that committed last pass kept every
     // involved cache id (none were evicted) and allocated its whole required
     // set, so the persistent involved set is still valid. Only the blocks
@@ -706,7 +695,7 @@ void Scheduler::PlanContinue(Sequence& s)
 
     // The frontier was added to involved_cache_ids by the activating PlanResume and
     // stays valid while active (it is in the protected set); nothing to re-add.
-    if (ckpt) {
+    if (registry_.has_checkpoint()) {
         TM_CHECK(ValidAlloc(s.frontier_cache_id));
     }
 }
@@ -775,7 +764,7 @@ void Scheduler::ReleaseCacheId(int cache_id)
     }
     auto& c = cache_[cache_id];
     if (c.object_id >= 0) {
-        TM_CHECK(c.owner == nullptr);  // request-owned ids only (frontier/publish)
+        TM_CHECK(c.owner == nullptr);  // sequence-owned ids only (frontier / adopted zombie)
         if (c.valid()) {
             cache_.Deallocate(alloc_, cache_id);
         }
@@ -801,7 +790,6 @@ void Scheduler::Release(Sequence& s)
     s.block_ids.clear();  // request refs -> recycles unreferenced blocks
 
     ReleaseCacheId(std::exchange(s.frontier_cache_id, 0));
-    ReleaseCacheId(std::exchange(s.publish_cache_id, 0));
 
     s.frontier_pos   = 0;
     s.last_ckpt_pos  = 0;
@@ -903,13 +891,19 @@ void Scheduler::Finalize(Sequence& s)
         // under has_checkpoint()), so no separate has_checkpoint() gate here.
         if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc(s.frontier_cache_id)
             && !ValidAlloc(x.checkpoint_id)) {
-            if (const int stale = x.checkpoint_id) {
-                cache_.Invalidate(stale);  // evicted leftover slot
+            const int f = std::exchange(s.frontier_cache_id, 0);
+            if (const int zombie = std::exchange(x.checkpoint_id, 0)) {
+                // Created-but-unallocated slot: transfer it to the dying
+                // sequence so it is invalidated with its owner at Release.
+                TM_CHECK(!cache_[zombie].valid());
+                cache_[zombie].owner = nullptr;
+                s.frontier_cache_id  = zombie;
             }
-            const int f     = std::exchange(s.frontier_cache_id, 0);
             x.checkpoint_id = f;
             cache_[f].owner = up;
-            logical_.Retain(up);  // ref held by the live allocation
+            // The frontier's allocation was committed while the slot was
+            // sequence-owned (no ref); the ref moves with the ownership.
+            logical_.Retain(up);
             gen.terminal_ckpt = true;
 
             // If another valid checkpoint lies within checkpoint_min_interval
@@ -976,7 +970,7 @@ void Scheduler::PlanPublication(ScheduleState& pass, int i, Sequence& s, int end
     // generation-region checkpoints (a block whose coverage extends past the
     // prompt holds generated tokens and is never indexed under 'none', so its
     // checkpoint would only serve this request's own resume).
-    if (!CheckpointPublicationEligible() || s.publish_cache_id == 0 || node == nullptr) {
+    if (!CheckpointPublicationEligible() || !registry_.has_checkpoint() || node == nullptr) {
         return;
     }
     if (!at_prompt_boundary) {
@@ -990,8 +984,20 @@ void Scheduler::PlanPublication(ScheduleState& pass, int i, Sequence& s, int end
             return;
         }
     }
+    // The node owns its checkpoint slot: created lazily here (once per block
+    // lifetime, owner attached) and re-allocated in place ever after, exactly
+    // like prefix_id. At most one request can plan a given node per pass: a
+    // block target is producer-excluded (the forward writes end-1 inside it),
+    // and a sibling target is only reachable by the one request whose insert
+    // created the boundary node (first-wins arming of prompt_boundary_node).
+    // The pass.planned insert turns any violation into a crash instead of a
+    // silent double-allocation in the optional phase.
     if (!ValidAlloc(node->checkpoint_id)) {
-        pass.pending_publish[i] = {node, end, s.publish_cache_id};
+        if (node->checkpoint_id == 0) {
+            node->checkpoint_id = cache_.Create(registry_.checkpoint().object_id(), node);
+        }
+        TM_CHECK(pass.planned.insert(node->checkpoint_id).second);
+        pass.pending_publish[i] = {node, end, node->checkpoint_id};
         pass.has_optionals      = true;
     }
 }
@@ -1284,7 +1290,10 @@ void Scheduler::RunOptionalAdmission(ScheduleState& pass)
                 s.publish_target = pub.target;  // confirmed; CommitResults attaches it
                 s.publish_end    = pub.end;
             }
-            // else: skip publication this pass; publish_cache_id stays reserved
+            // else: skip publication this pass. The node keeps its unallocated
+            // slot; it is planned again only if a later forward (possibly of
+            // another request) ends at this node again, and otherwise dies
+            // with the block at Recycle.
         }
     }
 }
@@ -1312,7 +1321,7 @@ void Scheduler::ReplayMemory(ScheduleState& pass)
                     c.allocation = alloc_.Allocate(c.object_id);  // single-object; {nullptr} on OOM
                     TM_CHECK(c.allocation.a);                     // admission guarantees capacity
                     c.alloc_key = c.allocation->key;              // snapshot for stale detection
-                    logical_.Retain(c.owner);                     // no-op when owner == nullptr (request-owned)
+                    logical_.Retain(c.owner);                     // no-op when owner == nullptr (sequence-owned)
                 }
             },
             op);
@@ -1370,26 +1379,18 @@ void Scheduler::CommitResults(ScheduleState& pass)
         }
 
         if (s.publish_target) {
-            LogicalBlock& t = *s.publish_target;
-            if (ValidAlloc(t.checkpoint_id)) {
-                // Another request in this pass already published this node
-                ReleaseCacheId(std::exchange(s.publish_cache_id, 0));
-            }
-            else {
-                if (const int stale = t.checkpoint_id) {
-                    cache_.Invalidate(stale);  // evicted leftover slot
-                }
-                const int id     = std::exchange(s.publish_cache_id, 0);
-                t.checkpoint_id  = id;
-                cache_[id].owner = s.publish_target;
-                logical_.Retain(s.publish_target);  // ref held by the live allocation
-                s.last_ckpt_pos = s.publish_end;
-                ckpt_published  = true;
-                s.publish_copies.push_back({s.frontier_cache_id, id});
-                // Allocated outside the stamped involved sets: stamp now so
-                // the fresh checkpoint is not the top eviction candidate.
-                cache_.Stamp(id);
-            }
+            // The target's own (block-owned) checkpoint slot was allocated by
+            // the optional phase, which also took the allocation ref via the
+            // slot's owner. Single-publisher-per-node-per-pass is enforced at
+            // plan time (PlanPublication), so no dedup branch is needed here.
+            const int id = s.publish_target->checkpoint_id;
+            TM_CHECK(ValidAlloc(id));
+            s.last_ckpt_pos = s.publish_end;
+            ckpt_published  = true;
+            s.publish_copies.push_back({s.frontier_cache_id, id});
+            // Allocated outside the stamped involved sets: stamp now so
+            // the fresh checkpoint is not the top eviction candidate.
+            cache_.Stamp(id);
             s.publish_target = nullptr;
             s.publish_end    = 0;
         }

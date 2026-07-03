@@ -60,7 +60,7 @@ struct CacheBlock {
     uint64_t       alloc_key{};    // snapshot of allocation->key at replay (ABA stale check)
 
     // Slot -> owning logical block (weak identity). Set at Create; persists
-    // across evict/realloc. nullptr = request-owned (frontier/publish).
+    // across evict/realloc. nullptr = sequence-owned (frontier).
     LogicalBlock* owner{};
 
     // Base of part `p`; `part` indexes the resolved Allocation.
