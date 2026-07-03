@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <memory_resource>
 #include <utility>
 #include <vector>
 
@@ -159,15 +158,14 @@ struct LogicalBlock {
     uint64_t producer{0};      // request currently writing this range; 0 = none
 };
 
-// Owns logical block lifetime via an intrusive refcount. Nodes are allocated
-// discretely from a pooled memory resource, so a LogicalBlock* is a stable
-// identity. When refs reaches 0 the node is recycled: a recycle hook removes
-// it from the PrefixTrie index, every attached cache slot's allocation is
-// already invalid (a valid allocation holds a ref via CacheBlock::owner), so
-// Invalidate only returns slot metadata.
+// Owns logical block lifetime via an intrusive refcount. Nodes live in a
+// deque with a free list (stable addresses, never shrinks), so a
+// LogicalBlock* is a stable identity. When refs reaches 0 the node is
+// recycled: a recycle hook removes it from the PrefixTrie index, every
+// attached cache slot's allocation is already invalid (a valid allocation
+// holds a ref via CacheBlock::owner), so Invalidate only returns slot
+// metadata.
 class LogicalBlockPool {
-    using NodeAlloc = std::pmr::polymorphic_allocator<LogicalBlock>;
-
 public:
     LogicalBlockPool(CacheBlockPool& cache, int block_size = 0): block_size_{block_size}, cache_{cache} {}
 
@@ -222,9 +220,10 @@ private:
 
     CacheBlockPool& cache_;
 
-    std::pmr::unsynchronized_pool_resource res_;
-    NodeAlloc                              alloc_{&res_};
-    std::function<void(LogicalBlock&)>     on_recycle_;
+    std::deque<LogicalBlock>   nodes_;  // stable addresses; never shrinks
+    std::vector<LogicalBlock*> free_;
+
+    std::function<void(LogicalBlock&)> on_recycle_;
 };
 
 inline BlockHandle::BlockHandle(LogicalBlock* p): p_{p}

@@ -1,7 +1,6 @@
 #include "src/turbomind/engine/block.h"
 
 #include <algorithm>
-#include <memory>
 #include <utility>
 
 namespace turbomind {
@@ -84,8 +83,14 @@ BlockHandle LogicalBlockPool::Create(int logical_index)
     TM_CHECK_GT(block_size_, 0);
     TM_CHECK_GE(logical_index, 0);
 
-    LogicalBlock* p = alloc_.allocate(1);
-    std::allocator_traits<NodeAlloc>::construct(alloc_, p);
+    LogicalBlock* p;
+    if (TM_UNLIKELY(free_.empty())) {
+        p = &nodes_.emplace_back();
+    }
+    else {
+        p = free_.back();
+        free_.pop_back();
+    }
     p->mgr      = this;
     p->offset   = logical_index * block_size_;
     p->capacity = block_size_;
@@ -104,8 +109,8 @@ void LogicalBlockPool::Recycle(LogicalBlock* p)
     if (CacheBlock* c = p->checkpoint) {
         cache_.Invalidate(c);
     }
-    std::allocator_traits<NodeAlloc>::destroy(alloc_, p);  // ~LogicalBlock drops fork edges, frees tokens
-    alloc_.deallocate(p, 1);                               // back to the pmr pool
+    *p = LogicalBlock{};  // drops fork edge, frees tokens (was destroy+deallocate)
+    free_.push_back(p);
     --live_;
 }
 
