@@ -12,15 +12,20 @@
 
 **Testing note:** There is no C++ unit-test harness for the scheduler; each task is verified by a full `ninja` build, and end-to-end behavior is verified once on GPU in Task 5. Do not modify `scripts/test_turbomind_model.py`.
 
----
+______________________________________________________________________
 
 ### Task 1: Unify the edge — mechanical rename to `partial`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/block.h:146-148`
+
 - Modify: `src/turbomind/engine/scheduler.cc` (all `fork_from` / `fork_to` uses; exact sites below)
+
 - Modify: `src/turbomind/engine/scheduler.h:130-131,151,203-206`
+
 - Modify: `src/turbomind/engine/request.h:245-249` (comment only)
+
 - Modify: `src/turbomind/engine/cache_mode.h:38-42` (comment only)
 
 - [ ] **Step 1: Replace the two fields in `block.h`**
@@ -52,35 +57,44 @@ All current `fork_from`/`fork_to` member accesses collapse onto `.partial`. This
 
 1. Line 344 comment: `SetupForks(s, st);           // partial sibling bind (matcher side) + boundary node creation (creator side)`
 2. Lines 433-435 comment block: replace with
+
 ```cpp
     // Matcher-side sibling bind: any prior request may have published a
     // prompt partial node (cache_prompt in {all, auto}) or a generation
     // terminal partial ('all'), so the miss block must always try to match.
 ```
+
 3. Line 447: `x.partial = BlockHandle{v};  // edge ref (fresh block; first-wins trivially holds)`
 4. Line 451 comment: `// Prompt-boundary publish point (creator-side partial sibling). B = prompt_len - K ...` (keep the rest of the sentence about `all`/`auto` unchanged).
 5. Line 483: `x.partial = std::move(vh);  // edge holds the only ref`
 6. Lines 586-596 (Resume step 3) — rewritten fully in Task 3; for this task just rename `x.fork_from` → `x.partial` (3 places) so it compiles.
 7. Lines 926-948 (`PlanForkToPopulation`): rename `x.fork_to` → `x.partial` (3 places) and update the function comment to:
+
 ```cpp
 // When this pass reaches the prompt boundary, plan the device copy that
 // populates the indexed prompt-end partial sibling. Returns the node when a
 // copy is planned, nullptr otherwise. The geometry guard (y.offset + y.size
 // == end) rejects a sibling belonging to a different boundary.
 ```
+
 8. Lines 961-967 (`PlanPromptBoundaryPublication`): comments say "partial sibling" instead of "fork_to node"; code becomes
+
 ```cpp
         const bool    at_partial = x.partial && x.partial->offset + x.partial->size == end;
         LogicalBlock* target     = at_block ? &x : (at_partial ? x.partial.get() : nullptr);
 ```
+
 9. Line 1450-1452 (`LogAccept` mtail): field rename plus log token:
+
 ```cpp
         if (matched < (int)s.block_ids.size() && s.block_ids[matched]->partial) {
             const LogicalBlock& y = *s.block_ids[matched]->partial;
             mtail                 = fmt::format(", partial@{}", y.offset + y.size);  // matched-side partial reuse
         }
 ```
+
 10. Lines 1459-1461 (`LogAccept` ctail): field rename, log token, and a new end guard. With the unified field, block `j` could in principle expose a matcher-bound sibling that does not end at `B` (block-aligned boundary case); the guard keeps the created-side tail truthful:
+
 ```cpp
             if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->partial) {
                 const LogicalBlock& ft = *s.block_ids[j]->partial;
@@ -89,6 +103,7 @@ All current `fork_from`/`fork_to` member accesses collapse onto `.partial`. This
                 }
             }
 ```
+
 11. Line 1577 (`LogCollision`): `note  = " (no partial node)";`
 12. Comment-only touches: lines 242, 328, 433, 620, 951, 955, 1033, 1108, 1198, 1201, 1243, 1270, 1322 — replace `fork_to`/`fork_from`/`fork-to` wording with "partial sibling" / "partial node". Do NOT rename the identifiers `pending_fork`, `PlanForkToPopulation`, `PublishStat::forked`, `ResumeSource::kFork`, or the `source=fork` log string — the fork *event* (a request seeding from / populating a sibling) keeps its name; only the stored edge is renamed.
 
@@ -113,11 +128,12 @@ git add src/turbomind/engine/block.h src/turbomind/engine/scheduler.cc src/turbo
 git commit -m "refactor: unify fork_from/fork_to into one partial sibling edge"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Assert the edge invariants at both bind sites
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc` (`SetupForks`, the two bind sites from Task 1)
 
 Important: do NOT assert on the bound-to node's own `partial` edge. An indexed
@@ -169,11 +185,12 @@ git add src/turbomind/engine/scheduler.cc
 git commit -m "feat: assert partial-sibling edge invariants (first-wins, acyclic)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Resume selects interior partial checkpoints
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc:553-598` (`Scheduler::Resume`, steps 2 and 3)
 
 - [ ] **Step 1: Extend the step-2 checkpoint walk**
@@ -254,11 +271,12 @@ git add src/turbomind/engine/scheduler.cc
 git commit -m "feat: resume from interior partial-sibling checkpoints inside the valid prefix"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: README and terminology updates
 
 **Files:**
+
 - Modify: `src/turbomind/engine/README.md` (sections: `boundary-policy` ~line 126, `prefix-prepare` ~line 256, `cache-prepare` ~line 260, `checkpoint-publish` ~line 384)
 
 Preserve the file's existing line breaks; edit content, not wrapping. Reference items by `<section>.<leaf>`.
@@ -292,7 +310,7 @@ git add src/turbomind/engine/README.md
 git commit -m "docs: partial sibling edge contract (structural, first-wins, interior resume)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: GPU end-to-end verification
 
@@ -303,6 +321,7 @@ The motivating scenario used images with `--cache-prompt auto`; the test script 
 - [ ] **Step 1: Model and GPU selection**
 
 MCP model-server tools are NOT available in this environment. The model index is at `/data/models.json`; use:
+
 - Primary model: `Qwen/Qwen3.5-27B`, cache dir `/mnt_cfs/huggingface_hub/hub/` (hybrid model with recurrent checkpointing — exercises the interior-checkpoint path of Task 3, which only activates when `registry_.has_checkpoint()`).
 - Attention regression model (step 6): `Qwen/Qwen3-8B` from the same cache dir.
 
@@ -329,6 +348,7 @@ TM_LOG_LEVEL=WARNING python scripts/test_turbomind_model.py \
 - [ ] **Step 4: Verify scheduler logs**
 
 Inspect `/tmp/partial_sibling_test.log` for the `[scheduler.cc]` WARN lines:
+
 - Round 1 (`req 0`): `published prefix ... boundary [b0,B) ... ckpt@B` with mid-block `B` — the partial sibling exists.
 - Round 2 (`req 1`): `matched ..., partial@B` and `resume [0,B) ... source=fork` (or `source=checkpoint`) — regression: the old miss-block path still works.
 - Round 3 (`req 2`): matched extent strictly greater than `B`, and **`resume [0,B') ... source=checkpoint` where `B'` is round 2's boundary (mid-block), not a fallback to an earlier block-aligned checkpoint**. This is the fixed behavior; pre-fix it resumed at the last `cache_checkpoint_interval`-aligned position.

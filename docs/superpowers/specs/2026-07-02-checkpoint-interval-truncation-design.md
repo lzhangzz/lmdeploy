@@ -5,8 +5,7 @@ Status: approved
 
 ## Problem
 
-With `--enable-prefix-caching --cache-prompt auto --cache-generation none
---cache-prompt-boundary-skip 2` and `cache_checkpoint_interval = 4096`, no
+With `--enable-prefix-caching --cache-prompt auto --cache-generation none --cache-prompt-boundary-skip 2` and `cache_checkpoint_interval = 4096`, no
 recurrent checkpoints are published past the prompt boundary of the first
 request. Every later request resumes from the same old checkpoint
 (`source=checkpoint` at 10579 in the observed log) and recomputes an
@@ -115,10 +114,10 @@ from the restored checkpoint. Frontier and prefix resumes leave
 
 ## Expected behavior on the observed log
 
-req 1 (10579 → 10941): no checkpoint (362 < 4096 past the restored
+req 1 (10579 → 10941): no checkpoint (362 \< 4096 past the restored
 checkpoint). req 4 (10579 → 15478): due at 14675, pass truncates to the last
 block boundary 15424, publishes `ckpt@15424`, second pass finishes
-[15424, 15478). Subsequent requests resume from 15424 instead of 10579.
+\[15424, 15478). Subsequent requests resume from 15424 instead of 10579.
 
 ## Contract impact (`src/turbomind/engine/README.md`)
 

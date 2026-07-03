@@ -337,8 +337,7 @@ if (publish_generation_boundary && x.offset + size == s.filled_len && ValidAlloc
 }
 ```
 
-`GenStat` drops `dropped` and gains `bool demoted`; `LogFinalized` reports `", terminal ckpt
-(demoted)"` in place of the dropped count.
+`GenStat` drops `dropped` and gains `bool demoted`; `LogFinalized` reports `", terminal ckpt (demoted)"` in place of the dropped count.
 
 New pool primitive:
 
@@ -376,17 +375,17 @@ void UnindexBlock(LogicalBlock& x)
 
 ### 6. Renames
 
-| Old | New | Why |
-| --- | --- | --- |
-| `Accept` | `AdmitPrompt` | It binds the prompt to the trie at admission; "Accept" reads as request admission. |
-| `Resume` | `PlanResume` | Pure planning (cache-prepare phase); groups with `PlanRequests` / `PlanPublication`. |
-| `Continue` | `PlanContinue` | Same. |
-| `PublishGeneration` | `Finalize` | Indexes generated blocks and adopts the terminal checkpoint on normal finish; the log already says "finalized". |
-| `Publish(s, t0, end)` | `MarkProduced` | Clears producer marks, flips `is_valid`; frees "publish" for checkpoint publication, a different mechanism. |
-| `SetupForks` | `SetupPartialSiblings` | Finishes the fork → partial-sibling terminology migration (`0c311642`). |
-| `CreateMissingBlocks` | `IndexMissingBlocks` | It creates and indexes; indexing is the part that matters. |
-| `ScheduleState::pending_fork` | `pending_populate` | Holds the sibling node awaiting KV population; reads next to `pending_publish`. |
-| `PlanPromptBoundaryPublication`, `PlanFullBlockPublication`, `PlanForkToPopulation` | `PlanPublication` | Merged (Section 3). |
+| Old                                                                                 | New                    | Why                                                                                                             |
+| ----------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `Accept`                                                                            | `AdmitPrompt`          | It binds the prompt to the trie at admission; "Accept" reads as request admission.                              |
+| `Resume`                                                                            | `PlanResume`           | Pure planning (cache-prepare phase); groups with `PlanRequests` / `PlanPublication`.                            |
+| `Continue`                                                                          | `PlanContinue`         | Same.                                                                                                           |
+| `PublishGeneration`                                                                 | `Finalize`             | Indexes generated blocks and adopts the terminal checkpoint on normal finish; the log already says "finalized". |
+| `Publish(s, t0, end)`                                                               | `MarkProduced`         | Clears producer marks, flips `is_valid`; frees "publish" for checkpoint publication, a different mechanism.     |
+| `SetupForks`                                                                        | `SetupPartialSiblings` | Finishes the fork → partial-sibling terminology migration (`0c311642`).                                         |
+| `CreateMissingBlocks`                                                               | `IndexMissingBlocks`   | It creates and indexes; indexing is the part that matters.                                                      |
+| `ScheduleState::pending_fork`                                                       | `pending_populate`     | Holds the sibling node awaiting KV population; reads next to `pending_publish`.                                 |
+| `PlanPromptBoundaryPublication`, `PlanFullBlockPublication`, `PlanForkToPopulation` | `PlanPublication`      | Merged (Section 3).                                                                                             |
 
 Kept: `Schedule`, `PlanRequests`, `RunRequiredAdmission`, `RunOptionalAdmission`, `ReplayMemory`,
 `CommitResults`, `EnsureBlocks`, `MatchPrompt`, `SetProducers` / `CheckProducers`, `Release`,

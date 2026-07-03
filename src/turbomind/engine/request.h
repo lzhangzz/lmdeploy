@@ -242,10 +242,10 @@ struct Sequence {
     int           publish_end    = 0;        // sequence position of the pending publication
     int           last_ckpt_pos  = 0;        // end of the last published checkpoint
     bool          prompt_boundary_node =
-        false;                    // a reusable prompt-boundary exists and WILL be published: a partial sibling
-                                  // node when B is mid-block, else a block-aligned checkpoint clamp target. The
-                                  // producer clamps its forward to prompt_boundary_pos to populate the node's KV
-                                  // (and publish a checkpoint when the model is recurrent). Decided in SetupPartialSiblings.
+        false;  // a reusable prompt-boundary exists and WILL be published: a partial sibling
+                // node when B is mid-block, else a block-aligned checkpoint clamp target. The
+                // producer clamps its forward to prompt_boundary_pos to populate the node's KV
+                // (and publish a checkpoint when the model is recurrent). Decided in SetupPartialSiblings.
     int prompt_boundary_pos = 0;  // resolved boundary B = prompt_len - cache_prompt_boundary_skip; 0 = none
 
     std::vector<int> tokens;

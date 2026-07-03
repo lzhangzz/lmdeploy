@@ -14,12 +14,14 @@
 
 **Contract:** `src/turbomind/engine/README.md` is normative. This refactor changes handle representation only; every rule in `ownership.prefix`, `contracts.scheduler-admission`, `contracts.allocation` etc. must hold unchanged. Task 8 updates the document's terminology in the same change (`checklist.contract-sync`).
 
----
+______________________________________________________________________
 
 ### Task 1: `block.h` / `block.cc` — pool and block API
 
 **Files:**
+
 - Modify: `src/turbomind/engine/block.h`
+
 - Modify: `src/turbomind/engine/block.cc`
 
 - [ ] **Step 1.1: Rewrite `CacheBlock` and `CacheBlockPool` in `block.h`**
@@ -218,6 +220,7 @@ Delete the old `CacheBlockPool::Invalidate(int)`, `Create(int, LogicalBlock*) ->
 ### Task 2: `request.h` — Sequence fields and CacheCopy
 
 **Files:**
+
 - Modify: `src/turbomind/engine/request.h`
 
 - [ ] **Step 2.1: `CacheCopy` holds pointers**
@@ -254,6 +257,7 @@ and (currently line 239):
 ### Task 3: `scheduler.h`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.h`
 
 - [ ] **Step 3.1: Update the Scheduler class surface**
@@ -267,21 +271,22 @@ and (currently line 239):
 ### Task 4: `scheduler.cc` — the bulk conversion
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc`
 
 This is a mechanical sweep. Global substitutions (apply everywhere in this file):
 
-| old | new |
-|---|---|
-| `x.prefix_id` / `->prefix_id` | `x.prefix` / `->prefix` |
+| old                                   | new                             |
+| ------------------------------------- | ------------------------------- |
+| `x.prefix_id` / `->prefix_id`         | `x.prefix` / `->prefix`         |
 | `x.checkpoint_id` / `->checkpoint_id` | `x.checkpoint` / `->checkpoint` |
-| `s.frontier_cache_id` | `s.frontier` |
-| `s.alloc_cache_ids` | `s.alloc_blocks` |
-| `s.involved_cache_ids` | `s.involved_blocks` |
-| `ValidAlloc(e)` | `is_valid(e)` |
-| `cache_.Deallocate(alloc_, e)` | `e->Deallocate(alloc_)` |
-| `cache_.Demote(e)` | `e->Demote()` |
-| `cache_.SortedIndices()` | `cache_.SortedBlocks()` |
+| `s.frontier_cache_id`                 | `s.frontier`                    |
+| `s.alloc_cache_ids`                   | `s.alloc_blocks`                |
+| `s.involved_cache_ids`                | `s.involved_blocks`             |
+| `ValidAlloc(e)`                       | `is_valid(e)`                   |
+| `cache_.Deallocate(alloc_, e)`        | `e->Deallocate(alloc_)`         |
+| `cache_.Demote(e)`                    | `e->Demote()`                   |
+| `cache_.SortedIndices()`              | `cache_.SortedBlocks()`         |
 
 Then the structural edits, in file order:
 
@@ -598,6 +603,7 @@ Uncommitted reset: `s.alloc_blocks.clear();`. Populate branch: `s.publish_copies
 ### Task 5: `engine.cc` — setup resolution, drop the pool env entry
 
 **Files:**
+
 - Modify: `src/turbomind/engine/engine.cc:613-642`
 
 - [ ] **Step 5.1: Resolve copies through the pointers**
@@ -630,6 +636,7 @@ Delete lines 637 (`const CacheBlockPool* cache_block_pool = ...`) and the `{"cac
 ### Task 6: `unified_attention_layer.cc`
 
 **Files:**
+
 - Modify: `src/turbomind/models/llama/unified_attention_layer.cc:294-310`
 
 - [ ] **Step 6.1: Dereference blocks directly**
@@ -658,6 +665,7 @@ Also remove the now-unused `CacheBlockPool` include if this file includes `block
 ### Task 7: `GatedDeltaNetLayer.cc`
 
 **Files:**
+
 - Modify: `src/turbomind/models/llama/GatedDeltaNetLayer.cc:158-167`
 
 - [ ] **Step 7.1: Dereference the frontier directly**
@@ -693,6 +701,7 @@ git commit -m "refactor: refer to CacheBlock by pointer instead of pool index"
 ### Task 8: README contract terminology
 
 **Files:**
+
 - Modify: `src/turbomind/engine/README.md`
 
 - [ ] **Step 8.1: Update handle terminology**
@@ -739,7 +748,7 @@ Expected: the model responds with meaningful human words relevant to the prompt.
 
 Run the same test script a second time with the same prompt (prefix caching path) and verify the response is still meaningful. This exercises `SortedBlocks`, eviction stamps, and restore copies with the pointer representation.
 
----
+______________________________________________________________________
 
 ## Self-Review Notes
 

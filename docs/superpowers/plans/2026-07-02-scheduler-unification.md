@@ -14,35 +14,43 @@
 
 There is no C++ unit-test harness for the scheduler; verification is behavioral via the cache WARN logs (`LogResume`/`LogPublished`/`LogFinalized` in `scheduler.cc`) plus response quality. Tasks 1–6 are gated by clean builds; Task 7 is the behavioral check for the whole stack.
 
----
+______________________________________________________________________
 
 ### Task 1: Mechanical renames (behavior-preserving)
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.h`
+
 - Modify: `src/turbomind/engine/scheduler.cc`
+
 - Modify: `src/turbomind/engine/engine.cc` (call sites at lines 408, 707)
+
 - Modify: `src/turbomind/engine/request.h` (comments only)
+
 - Modify: `src/turbomind/engine/README.md` (code-reference names only)
 
 - [ ] **Step 1: Apply the rename mapping to `scheduler.h` and `scheduler.cc`**
 
 Rename declarations, definitions, call sites, and comment references. Mapping (old → new):
 
-| Old | New |
-| --- | --- |
-| `Scheduler::Accept` | `Scheduler::AdmitPrompt` |
-| `Scheduler::Resume` | `Scheduler::PlanResume` |
-| `Scheduler::Continue` | `Scheduler::PlanContinue` |
-| `Scheduler::PublishGeneration` | `Scheduler::Finalize` |
-| `Scheduler::Publish` (the `(Sequence&, int t0, int end)` overload) | `Scheduler::MarkProduced` |
-| `Scheduler::SetupForks` | `Scheduler::SetupPartialSiblings` |
-| `Scheduler::CreateMissingBlocks` | `Scheduler::IndexMissingBlocks` |
-| `ScheduleState::pending_fork` | `ScheduleState::pending_populate` |
+| Old                                                                | New                               |
+| ------------------------------------------------------------------ | --------------------------------- |
+| `Scheduler::Accept`                                                | `Scheduler::AdmitPrompt`          |
+| `Scheduler::Resume`                                                | `Scheduler::PlanResume`           |
+| `Scheduler::Continue`                                              | `Scheduler::PlanContinue`         |
+| `Scheduler::PublishGeneration`                                     | `Scheduler::Finalize`             |
+| `Scheduler::Publish` (the `(Sequence&, int t0, int end)` overload) | `Scheduler::MarkProduced`         |
+| `Scheduler::SetupForks`                                            | `Scheduler::SetupPartialSiblings` |
+| `Scheduler::CreateMissingBlocks`                                   | `Scheduler::IndexMissingBlocks`   |
+| `ScheduleState::pending_fork`                                      | `ScheduleState::pending_populate` |
 
 Notes:
+
 - In `scheduler.cc`, internal calls live in `AdmitPrompt` (calls `MatchPrompt`, `IndexMissingBlocks`, `SetupPartialSiblings`), `PlanRequests` (calls `PlanContinue`/`PlanResume`), `CommitResults` (calls `MarkProduced`), and `RunOptionalAdmission`/`CommitResults` (use `pending_populate`).
+
 - Update comments that name the old functions, e.g. the `PublishStat` field comments in `scheduler.h` (`Publish()` → `MarkProduced()`; `CommitResults()` stays), the header comments above `Accept`/`Schedule`/`PublishGeneration`/`Resume`/`Continue` declarations, and `scheduler.cc` comments such as "Publish flips is_valid", "publication, Publish", "PlanFullBlockPublication checkpoints there" (leave `PlanFullBlockPublication` alone — it is removed in Task 5; rename only the eight identifiers above).
+
 - Do NOT rename: `ResumeSource::kFork`, `fork_src`/`fork_dst` locals, `PlanForkToPopulation` / `PlanPromptBoundaryPublication` / `PlanFullBlockPublication` (deleted in Task 5), `Publish` in the identifiers `publish_cache_id` / `publish_target` / `publish_end` / `publish_copies` / `PublishPlan` / `pending_publish` (checkpoint publication keeps the word).
 
 - [ ] **Step 2: Update `engine.cc` call sites**
@@ -71,7 +79,7 @@ In `src/turbomind/engine/README.md`, apply the mapping to code references only �
 - `` `PublishGeneration` `` / `` `Scheduler::PublishGeneration()` `` → `Finalize` forms.
 - `` `SetupForks` `` → `` `SetupPartialSiblings` ``.
 
-Run: `rg -n "SetupForks|PublishGeneration|Scheduler::Resume|Scheduler::Accept|\`Accept\`|\`Resume\`|\`Continue\`" src/turbomind/engine/README.md`
+Run: `rg -n "SetupForks|PublishGeneration|Scheduler::Resume|Scheduler::Accept|\`Accept\`|\`Resume\`|\`Continue\`" src/turbomind/engine/README.md\`
 Expected: no matches.
 
 - [ ] **Step 5: Build**
@@ -88,6 +96,7 @@ git commit -m "refactor(scheduler): rename drifted function names (AdmitPrompt/P
 ### Task 2: `UnindexBlock` rollback helper
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc` (anonymous namespace; two rollback sites in `IndexMissingBlocks` and `Finalize`)
 
 - [ ] **Step 1: Add the helper to the anonymous namespace** (next to `CollectStartFps`)
@@ -166,7 +175,9 @@ git commit -m "refactor(scheduler): fold duplicated trie-insert rollback into Un
 ### Task 3: `ResumeCandidate` model in `PlanResume`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc` (anonymous namespace + `PlanResume` sections 2–4)
+
 - Modify: `src/turbomind/engine/README.md` (`contracts.resume-selection`)
 
 - [ ] **Step 1: Add the candidate type to the anonymous namespace** (next to `UnindexBlock`)
@@ -298,7 +309,9 @@ git commit -m "refactor(scheduler): unify resume step selection into ResumeCandi
 ### Task 4: Extract `ClampForwardEnd`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.h` (private method declaration)
+
 - Modify: `src/turbomind/engine/scheduler.cc` (new method + call site in `RunRequiredAdmission`)
 
 - [ ] **Step 1: Declare in `scheduler.h`** (next to `PlanPromptBoundaryPublication` / `PlanFullBlockPublication`)
@@ -376,7 +389,9 @@ git commit -m "refactor(scheduler): extract forward-end clamp into ClampForwardE
 ### Task 5: Merge publication planning into `PlanPublication`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.h` (replace three declarations with one)
+
 - Modify: `src/turbomind/engine/scheduler.cc` (replace three definitions with one; update call site)
 
 - [ ] **Step 1: Replace declarations in `scheduler.h`**
@@ -484,8 +499,11 @@ git commit -m "refactor(scheduler): merge publication planners into PlanPublicat
 ### Task 6: `Demote` + unconditional terminal adoption (behavior change)
 
 **Files:**
+
 - Modify: `src/turbomind/engine/block.h` (new `CacheBlockPool::Demote`)
+
 - Modify: `src/turbomind/engine/scheduler.cc` (`GenStat`, adoption block in `Finalize`, `LogFinalized`)
+
 - Modify: `src/turbomind/engine/README.md` (`contracts.checkpoint-adoption`, `contracts.checkpoint-publish`, `contracts.cache-eviction`)
 
 - [ ] **Step 1: Add `Demote` to `CacheBlockPool` in `block.h`** (after the `Stamp` declarations)

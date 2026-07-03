@@ -5,8 +5,7 @@ Status: approved design, pending implementation plan
 
 ## Problem
 
-With `--enable-prefix-caching --cache-prompt-boundary-skip 2 --cache-prompt auto
---cache-generation none`, a 3-round conversation (round 1 carries 3 images,
+With `--enable-prefix-caching --cache-prompt-boundary-skip 2 --cache-prompt auto --cache-generation none`, a 3-round conversation (round 1 carries 3 images,
 boundary checkpoint published at 10586 on a partial fork node):
 
 - Round 2 misses at block 165, binds `fork_from` to the partial node
@@ -68,7 +67,7 @@ empty and the rule reduces to a `TM_CHECK(!x.partial)` assertion:
   alive; a genuine occupied-slot conflict is unreachable.
 
 Rationale for first-wins over keep-longest: the payoff of keep-longest is
-bounded by one block of recompute (< block_size tokens); keep-longest requires
+bounded by one block of recompute (\< block_size tokens); keep-longest requires
 rebind logic whose edge-drop can recycle a node (and its checkpoint) other
 sequences still want. First-wins never releases anything and matches the
 trie's conflict rule.
@@ -231,8 +230,7 @@ Asserted at both bind sites in `SetupForks` and stated in
 - Build in `build/` with `ninja`.
 - Reproduce the motivating scenario with `scripts/test_turbomind_model.py`
   (multi-round conversation, round 1 with images, server flags
-  `--enable-prefix-caching --cache-prompt-boundary-skip 2 --cache-prompt auto
-  --cache-generation none`), verifying:
+  `--enable-prefix-caching --cache-prompt-boundary-skip 2 --cache-prompt auto --cache-generation none`), verifying:
   - round 3 logs `resume [0,10586)`-style mid-block resume with
     `source=checkpoint` (not a fallback to the earlier block-aligned ckpt);
   - responses remain meaningful (>= 128 tokens, relevant to the prompt) in

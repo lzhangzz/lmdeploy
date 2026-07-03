@@ -814,9 +814,9 @@ TEST_CASE("ObjectAllocator composite lifecycle", "[memory][object][composite]")
     using core::Buffer;
 
     constexpr size_t kBytes = 3 * kObjectAllocatorPageBytes;
-    constexpr size_t kRec   = 65536;       // recurrent part size
-    constexpr size_t kConv  = 131072;      // conv part size (distinct slab class)
-    constexpr int    kN     = 4;           // recurrent parts
+    constexpr size_t kRec   = 65536;   // recurrent part size
+    constexpr size_t kConv  = 131072;  // conv part size (distinct slab class)
+    constexpr int    kN     = 4;       // recurrent parts
 
     Allocator alloc{kCPU};
     Buffer    buf{kBytes, data_type_v<int8_t>, alloc};

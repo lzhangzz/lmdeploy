@@ -10,12 +10,14 @@
 
 **Contract note:** This touches scheduler/cache management, so `src/turbomind/engine/README.md` must be updated in the same change (Task 4) per `checklist.contract-sync`. No normative rule changes — only the enforcement-mechanism wording.
 
----
+______________________________________________________________________
 
 ### Task 1: Handle types and pools (`block.h`, `block.cc`)
 
 **Files:**
+
 - Modify: `src/turbomind/engine/block.h` (full rewrite below)
+
 - Modify: `src/turbomind/engine/block.cc` (full rewrite below)
 
 - [ ] **Step 1: Replace `src/turbomind/engine/block.h` with:**
@@ -341,10 +343,15 @@ inline LogicalBlock& LogicalBlockPtr::operator*() const noexcept
 ```
 
 Notes on what changed vs the old file:
+
 - `BlockHandle` renamed `LogicalBlockPtr`; new `CacheBlockPtr` inserted before `CacheBlock` (it only needs forward declarations; its `valid()`-touching bodies are out of line after `CacheBlockPool`).
+
 - `CacheBlock` gained `pin` and `mgr`; `LogicalBlock::prefix`/`checkpoint` are now `CacheBlockPtr` (this makes both structs move-only — the pools' `emplace_back` and `*p = T{}` move-assign resets still compile).
+
 - `CacheBlockPool::Invalidate` is private (`friend class CacheBlockPtr`); `Create` returns `CacheBlockPtr`.
+
 - `LogicalBlockPool` no longer needs `CacheBlockPool& cache_` (its only use was `Recycle`'s manual `Invalidate` calls, now gone), so the constructor loses that parameter.
+
 - Added `is_valid(const CacheBlockPtr&)` overload so most call sites compile unchanged.
 
 - [ ] **Step 2: Replace `src/turbomind/engine/block.cc` with:**
@@ -469,11 +476,12 @@ void LogicalBlockPool::Recycle(LogicalBlock* p)
 
 - [ ] **Step 3: Do NOT build yet** — `request.h` and `scheduler.cc` still use the old names; continue to Task 2.
 
----
+______________________________________________________________________
 
 ### Task 2: Owner fields in `request.h`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/request.h:220` and `:239`
 
 - [ ] **Step 1: Rename the block-handle vector**
@@ -506,14 +514,18 @@ to:
 
 (`CacheCopy` and the surrounding raw-pointer fields — `publish_target`, `alloc_blocks`, `involved_blocks` — are borrows and stay unchanged.)
 
----
+______________________________________________________________________
 
 ### Task 3: Scheduler and module call sites
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.h` (remove `ReleaseFrontier` declaration, line 208)
+
 - Modify: `src/turbomind/engine/scheduler.cc` (sites listed below; line numbers are pre-change)
+
 - Modify: `src/turbomind/models/llama/GatedDeltaNetLayer.cc:162`
+
 - (No change needed: `src/turbomind/engine/engine.cc` and `src/turbomind/models/llama/unified_attention_layer.cc:302` — `CacheCopy` already carries raw pointers, and `*h->prefix` compiles via `CacheBlockPtr::operator*`.)
 
 - [ ] **Step 1: `scheduler.h` — delete the declaration**
@@ -739,18 +751,19 @@ git commit -m "refactor: owned handles for cache slots (LogicalBlockPtr/CacheBlo
 
 (Include any additional files fixed in Step 14.)
 
----
+______________________________________________________________________
 
 ### Task 4: Contract document update (`src/turbomind/engine/README.md`)
 
 **Files:**
+
 - Modify: `src/turbomind/engine/README.md` — leaves `concepts.logical-block`, `ownership.prefix`, `contracts.cache-metadata`, `contracts.eviction`, `contracts.cancel-release`, `contracts.checkpoint-adoption`
 
 Rules: terminology/mechanism updates only, no normative rule changes. Preserve existing line wrapping; edit content, not wrapping. The recurring transformation: "strong references held through RAII `BlockHandle`s" → "`LogicalBlockPtr`s"; "the allocation reference taken and dropped explicitly via `LogicalBlockPool::Retain`/`Drop` keyed on `CacheBlock::owner`" → "the allocation reference held as the slot's `LogicalBlockPtr pin`, taken at replay-commit and dropped by `Deallocate`"; slot invalidation "called at owner destruction" → "performed by the owning `CacheBlockPtr`'s destruction".
 
 - [ ] **Step 1: `concepts.logical-block`**
 
-In the sentence describing the refcount, replace the parenthetical `(request and fork references held through `BlockHandle`s; the cache-allocation reference taken via `Retain`/`Drop` keyed on the slot's `CacheBlock::owner` identity)` with `(request and fork references held through `LogicalBlockPtr`s; the cache-allocation reference held as the slot's `LogicalBlockPtr pin`)`.
+In the sentence describing the refcount, replace the parenthetical `(request and fork references held through `BlockHandle`s; the cache-allocation reference taken via `Retain`/`Drop`keyed on the slot's`CacheBlock::owner` identity)` with `(request and fork references held through `LogicalBlockPtr`s; the cache-allocation reference held as the slot's `LogicalBlockPtr pin`)`.
 
 - [ ] **Step 2: `ownership.prefix`**
 
@@ -779,7 +792,7 @@ git add src/turbomind/engine/README.md
 git commit -m "docs: update engine contract wording for owned block handles"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: End-to-end model verification
 

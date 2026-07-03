@@ -14,7 +14,7 @@
 
 There is no C++ unit-test harness for the scheduler in this repo; verification is behavioral, via the cache WARN logs (`scheduler.cc` `LogResume`/`LogPublished`) produced by the smoke-test script. Task 1 therefore captures a failing baseline first, and Task 4 re-runs the same scenario as the passing check.
 
----
+______________________________________________________________________
 
 ### Task 1: Baseline reproduction (failing test)
 
@@ -64,6 +64,7 @@ In `/tmp/ckpt_baseline.log`, find the `[TM][WARN]` scheduler lines. Expected fai
 ### Task 2: `Resume` records `last_ckpt_pos` for checkpoint-sourced resumes
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc` (in `Scheduler::Resume`, restore-copy section, currently lines 629–631)
 
 - [x] **Step 1: Apply the edit**
@@ -102,7 +103,9 @@ git commit -m "fix(scheduler): measure checkpoint spacing from the restored chec
 ### Task 3: Checkpoint-due truncation in `RunRequiredAdmission`
 
 **Files:**
+
 - Modify: `src/turbomind/engine/scheduler.cc` (forward-end clamp in `RunRequiredAdmission`, currently lines 1162–1167)
+
 - Modify: `src/turbomind/engine/README.md` (`contracts.scheduler-commit` line 266, `contracts.checkpoint-publish` line 384)
 
 - [x] **Step 1: Apply the scheduler edit**
@@ -191,7 +194,7 @@ In `/tmp/ckpt_fixed.log` check all of:
 
 1. The prompt-id 1 pass that computes > 4096 tokens past its resume point is now split: its first pass ends block-aligned and logs `published ... ckpt@<pos>` with `<pos>` a multiple of 64, followed by a short second pass finishing the prompt tail.
 2. Consecutive `ckpt@` positions along one request's trajectory are ≥ 4096 apart (no redundant checkpoint right after a `source=checkpoint` resume — this exercises the Task 2 fix).
-3. The repeated prompt-id 1 run resumes with `source=checkpoint` (or fork) at the new, higher checkpoint position; its `computed` span is < 4096 + block_size tokens (versus thousands in `/tmp/ckpt_baseline.log`).
+3. The repeated prompt-id 1 run resumes with `source=checkpoint` (or fork) at the new, higher checkpoint position; its `computed` span is \< 4096 + block_size tokens (versus thousands in `/tmp/ckpt_baseline.log`).
 4. All three responses are meaningful English relevant to the prompts, ≥ 128 generated tokens requested (`--max-new-tokens 256`). Gibberish means the truncation broke resume state — stop and debug, do not proceed.
 
 - [x] **Step 4: Decode-region sanity check (outside the sandbox)**

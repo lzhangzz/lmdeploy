@@ -110,7 +110,7 @@ public:
 
     // Idempotent: blocks already allocated for real (cached alloc set), or
     // planned by an earlier request in this pass, are skipped.
-    bool Allocate(ScratchAllocator&               scratch,
+    bool Allocate(ScratchAllocator&                scratch,
                   std::unordered_set<CacheBlock*>& planned,
                   std::vector<CacheBlock*>&        planned_now,
                   Replay&                          replay)
@@ -184,11 +184,11 @@ void UnindexBlock(LogicalBlock& x)
 // One feasible resume position with the copies it needs. Selection is strict
 // > on pos; kNone/pos 0 is the empty candidate.
 struct ResumeCandidate {
-    int           pos{};                         // resume position (token)
+    int           pos{};  // resume position (token)
     ResumeSource  source{ResumeSource::kNone};
-    CacheBlock*   ckpt{};                        // checkpoint to restore into the frontier; nullptr = none
-    LogicalBlock* fork_src{};                    // sibling KV to copy from; nullptr = none
-    LogicalBlock* fork_dst{};                    // block receiving the KV copy
+    CacheBlock*   ckpt{};      // checkpoint to restore into the frontier; nullptr = none
+    LogicalBlock* fork_src{};  // sibling KV to copy from; nullptr = none
+    LogicalBlock* fork_dst{};  // block receiving the KV copy
 };
 
 enum class CollisionSite
@@ -246,17 +246,17 @@ static PerformanceCounter make_perf_counter()
 struct Scheduler::ScheduleState {
     std::vector<Sequence*> requests;
 
-    std::vector<uint64_t>      cutoff;                    // per-request eviction cutoff stamps
-    uint64_t                   floor{};                   // pass-start timestamp; inactive < floor <= cutoff[i]
-    Replay                     replay;                    // alloc/evict ops of the current phase
-    size_t                     committed_replay_size{0};  // replay prefix from committed requests (phase 1)
-    std::vector<bool>          committed;
-    std::vector<LogicalBlock*> pending_populate;      // partial sibling node per request, nullptr = none
-    std::vector<PublishPlan>   pending_publish;       // checkpoint publication intent per request
-    bool                       has_optionals{false};  // any optional intent recorded => run phase 2
-    std::vector<CacheBlock*>        evict_blocks;  // SortedBlocks() snapshot, shared by both phases
-    size_t                          evict_pos{0};  // oldest-first eviction cursor shared by both phases
-    std::unordered_set<CacheBlock*> planned;       // cache blocks planned/reserved for allocation
+    std::vector<uint64_t>           cutoff;                    // per-request eviction cutoff stamps
+    uint64_t                        floor{};                   // pass-start timestamp; inactive < floor <= cutoff[i]
+    Replay                          replay;                    // alloc/evict ops of the current phase
+    size_t                          committed_replay_size{0};  // replay prefix from committed requests (phase 1)
+    std::vector<bool>               committed;
+    std::vector<LogicalBlock*>      pending_populate;      // partial sibling node per request, nullptr = none
+    std::vector<PublishPlan>        pending_publish;       // checkpoint publication intent per request
+    bool                            has_optionals{false};  // any optional intent recorded => run phase 2
+    std::vector<CacheBlock*>        evict_blocks;          // SortedBlocks() snapshot, shared by both phases
+    size_t                          evict_pos{0};          // oldest-first eviction cursor shared by both phases
+    std::unordered_set<CacheBlock*> planned;               // cache blocks planned/reserved for allocation
 };
 
 bool Scheduler::PrefixEligible(const Sequence& s) const noexcept
@@ -329,10 +329,10 @@ void Scheduler::EnsureBlocks(Sequence& s)
     const int length = s.seq_len + s.inflight_new_tokens;
     const int needed = (length + bs - 1) / bs;
     while (static_cast<int>(s.block_ids.size()) < needed) {
-        const int   i = static_cast<int>(s.block_ids.size());
+        const int       i = static_cast<int>(s.block_ids.size());
         LogicalBlockPtr h = logical_.Create(i);
-        h->prefix = cache_.Create(registry_.prefix().object_id(), h.get());  // owner = node
-        s.block_ids.push_back(std::move(h));                                     // request ref
+        h->prefix         = cache_.Create(registry_.prefix().object_id(), h.get());  // owner = node
+        s.block_ids.push_back(std::move(h));                                         // request ref
     }
 }
 
@@ -353,10 +353,10 @@ void Scheduler::AdmitPrompt(Sequence& s)
     if (!PrefixEligible(s)) {
         return;  // blocks are created lazily by EnsureBlocks
     }
-    AcceptState st{};            // parent defaults to nullptr (root)
-    MatchPrompt(s, st);          // match full blocks to the first miss
-    s.matched_blocks = st.miss;  // leading prompt blocks found in the trie
-    IndexMissingBlocks(s, st);   // create + index the remaining prompt blocks
+    AcceptState st{};             // parent defaults to nullptr (root)
+    MatchPrompt(s, st);           // match full blocks to the first miss
+    s.matched_blocks = st.miss;   // leading prompt blocks found in the trie
+    IndexMissingBlocks(s, st);    // create + index the remaining prompt blocks
     SetupPartialSiblings(s, st);  // partial sibling bind (matcher side) + boundary node creation (creator side)
     LogAccept(s, logical_.block_size());
 }
@@ -409,10 +409,10 @@ void Scheduler::IndexMissingBlocks(Sequence& s, AcceptState& st)
             fps.push_back(s.multimodal_spans[st.next_fp].fingerprint);
             ++st.next_fp;
         }
-        const auto    tokens = TokenSegment(s, offset, size);
-        LogicalBlockPtr   h      = logical_.Create(i);
-        LogicalBlock& x = *h;
-        x.prefix         = cache_.Create(registry_.prefix().object_id(), h.get());
+        const auto      tokens = TokenSegment(s, offset, size);
+        LogicalBlockPtr h      = logical_.Create(i);
+        LogicalBlock&   x      = *h;
+        x.prefix               = cache_.Create(registry_.prefix().object_id(), h.get());
         if (size == bs) {
             const auto next = ExtendPrefixKey(st.key, tokens, fps);
             x.parent        = st.parent;
@@ -456,8 +456,8 @@ void Scheduler::SetupPartialSiblings(Sequence& s, AcceptState& st)
         CollectStartFps(s, offset, offset + size, fps, &fp_pos);
 
         if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
-            TM_CHECK(!x.partial);        // first-wins: x created this pass, slot empty
-            TM_CHECK_LT(v->size, size);  // strictly shorter sibling (acyclicity)
+            TM_CHECK(!x.partial);            // first-wins: x created this pass, slot empty
+            TM_CHECK_LT(v->size, size);      // strictly shorter sibling (acyclicity)
             x.partial = LogicalBlockPtr{v};  // edge ref
         }
     }
@@ -484,12 +484,12 @@ void Scheduler::SetupPartialSiblings(Sequence& s, AcceptState& st)
                 std::vector<Fingerprint> fps;
                 CollectStartFps(s, j * bs, j * bs + plan.node_size, fps);
 
-                const auto    next = ExtendPrefixKey(s.block_ids[j - 1]->key, tokens, fps);
-                LogicalBlockPtr   vh   = logical_.Create(j);
-                LogicalBlock& y    = *vh;
-                y.parent           = s.block_ids[j - 1].get();
-                y.key              = next;
-                y.size             = plan.node_size;
+                const auto      next = ExtendPrefixKey(s.block_ids[j - 1]->key, tokens, fps);
+                LogicalBlockPtr vh   = logical_.Create(j);
+                LogicalBlock&   y    = *vh;
+                y.parent             = s.block_ids[j - 1].get();
+                y.key                = next;
+                y.size               = plan.node_size;
                 y.tokens.assign(tokens.begin(), tokens.end());
                 y.image_fps = fps;
                 y.prefix    = cache_.Create(registry_.prefix().object_id(), vh.get());
@@ -882,11 +882,11 @@ void Scheduler::Finalize(Sequence& s)
                 zombie->owner = nullptr;
                 s.frontier    = std::move(zombie);
             }
-            f->owner     = up;
+            f->owner = up;
             // The frontier's allocation was committed while the slot was
             // sequence-owned (no pin); the pin is taken as ownership moves.
-            f->pin       = LogicalBlockPtr{up};
-            x.checkpoint = std::move(f);
+            f->pin            = LogicalBlockPtr{up};
+            x.checkpoint      = std::move(f);
             gen.terminal_ckpt = true;
 
             // If another valid checkpoint lies within checkpoint_min_interval
@@ -1005,8 +1005,8 @@ int Scheduler::ClampForwardEnd(const Sequence& s, int begin, int desired, int ct
     const int bs      = logical_.block_size();
     const int aligned = desired / bs * bs;
     const int due     = s.last_ckpt_pos + registry_.checkpoint_min_interval();
-    if (CheckpointPublicationEligible() && registry_.has_checkpoint() && desired <= s.prompt_len
-        && desired > due && aligned >= due && aligned > begin) {
+    if (CheckpointPublicationEligible() && registry_.has_checkpoint() && desired <= s.prompt_len && desired > due
+        && aligned >= due && aligned > begin) {
         return aligned;
     }
     if (desired < ctx_end) {
