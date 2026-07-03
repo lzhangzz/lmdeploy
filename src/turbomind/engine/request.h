@@ -217,7 +217,7 @@ struct Sequence {
 
     ////////////////////////// Engine-local execution state ///////////////////////////
 
-    std::vector<BlockHandle> block_ids;  // logical (each holds one request ref)
+    std::vector<LogicalBlockPtr> block_ids;  // logical (each holds one request ref)
 
     std::vector<CacheBlock*> alloc_blocks;     // cache blocks needing allocation this schedule pass
     std::vector<CacheBlock*> involved_blocks;  // cache blocks stamped for eviction protection (= required alloc set);
@@ -236,7 +236,7 @@ struct Sequence {
     bool         resuming       = false;                // transient: planned by PlanResume() this pass
     ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
 
-    CacheBlock*   frontier       = nullptr;  // checkpoint working state for the next forward
+    CacheBlockPtr frontier;                  // checkpoint working state for the next forward
     int           frontier_pos   = 0;        // sequence position the frontier corresponds to
     LogicalBlock* publish_target = nullptr;  // logical block selected for publication this pass
     int           publish_end    = 0;        // sequence position of the pending publication

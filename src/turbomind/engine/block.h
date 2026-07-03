@@ -16,23 +16,25 @@ namespace turbomind {
 
 struct LogicalBlock;
 class LogicalBlockPool;
+struct CacheBlock;
+class CacheBlockPool;
 
 // Intrusive, non-atomic strong handle to a logical block (engine-thread only).
 // Holds one ref for its lifetime; copy retains, destruction drops.
-class BlockHandle {
+class LogicalBlockPtr {
     LogicalBlock* p_{};
 
 public:
-    BlockHandle() = default;
-    explicit BlockHandle(LogicalBlock* p);
-    BlockHandle(const BlockHandle& o);
-    BlockHandle(BlockHandle&& o) noexcept: p_{std::exchange(o.p_, nullptr)} {}
-    BlockHandle& operator=(BlockHandle o) noexcept
+    LogicalBlockPtr() = default;
+    explicit LogicalBlockPtr(LogicalBlock* p);
+    LogicalBlockPtr(const LogicalBlockPtr& o);
+    LogicalBlockPtr(LogicalBlockPtr&& o) noexcept: p_{std::exchange(o.p_, nullptr)} {}
+    LogicalBlockPtr& operator=(LogicalBlockPtr o) noexcept
     {
         std::swap(p_, o.p_);
         return *this;
     }
-    ~BlockHandle();
+    ~LogicalBlockPtr();
 
     LogicalBlock& operator*() const noexcept;  // defined after LogicalBlock is complete
     LogicalBlock* operator->() const noexcept
@@ -47,9 +49,43 @@ public:
     {
         return p_ != nullptr;
     }
-    friend bool operator==(const BlockHandle& a, const BlockHandle& b) noexcept
+    friend bool operator==(const LogicalBlockPtr& a, const LogicalBlockPtr& b) noexcept
     {
         return a.p_ == b.p_;
+    }
+};
+
+// Unique, non-atomic owning handle to a cache slot (engine-thread only).
+// Destruction invalidates the slot. Precondition at destruction: the slot's
+// allocation is already gone (memory release is a separate concern; the
+// normal path is ReplayMemory, the release paths call Deallocate first).
+class CacheBlockPtr {
+    CacheBlock* p_{};
+
+public:
+    CacheBlockPtr() = default;
+    explicit CacheBlockPtr(CacheBlock* p) noexcept: p_{p} {}
+    CacheBlockPtr(const CacheBlockPtr&) = delete;
+    CacheBlockPtr(CacheBlockPtr&& o) noexcept: p_{std::exchange(o.p_, nullptr)} {}
+    CacheBlockPtr& operator=(CacheBlockPtr o) noexcept
+    {
+        std::swap(p_, o.p_);
+        return *this;
+    }
+    ~CacheBlockPtr();
+
+    CacheBlock& operator*() const noexcept;
+    CacheBlock* operator->() const noexcept
+    {
+        return p_;
+    }
+    CacheBlock* get() const noexcept
+    {
+        return p_;
+    }
+    explicit operator bool() const noexcept
+    {
+        return p_ != nullptr;
     }
 };
 
@@ -62,6 +98,9 @@ struct CacheBlock {
     // Slot -> owning logical block (weak identity). Set at Create; persists
     // across evict/realloc. nullptr = sequence-owned (frontier).
     LogicalBlock* owner{};
+    // Non-empty iff allocation is valid and owner is not null.
+    LogicalBlockPtr pin;
+    CacheBlockPool* mgr{};
 
     // Base of part `p`; `part` indexes the resolved Allocation.
     char* base(int part) const
@@ -79,7 +118,8 @@ struct CacheBlock {
 
     // Deallocates the backing object and clears the slot back to "no
     // allocation" state (the owner identity persists). Pre-condition: the
-    // slot has a live allocation.
+    // slot has a live allocation. Dropping the pin may recycle the owner and
+    // invalidate this slot, so callers must not touch the slot after return.
     void Deallocate(ObjectAllocator& alloc);
 
     // Demote to evict-first priority: timestamp 0 sorts first in
@@ -98,12 +138,14 @@ inline bool is_valid(const CacheBlock* b) noexcept
     return b != nullptr && b->valid();
 }
 
+inline bool is_valid(const CacheBlockPtr& b) noexcept
+{
+    return is_valid(b.get());
+}
+
 class CacheBlockPool {
 public:
-    CacheBlock* Create(int object_id, LogicalBlock* owner = nullptr);
-
-    // Owner destroyed; reset the slot and return it for reuse.
-    void Invalidate(CacheBlock* b);
+    CacheBlockPtr Create(int object_id, LogicalBlock* owner = nullptr);
 
     // Eviction candidates: exactly the currently allocated blocks. The cached
     // allocation handle is the validity flag; the timestamp only orders the candidates.
@@ -118,6 +160,11 @@ public:
     }
 
 private:
+    friend class CacheBlockPtr;
+
+    // Owner destroyed; reset the slot and return it for reuse.
+    void Invalidate(CacheBlock* b);
+
     uint64_t next_timestamp_{1};
 
     std::deque<CacheBlock>   blocks_;  // stable addresses; never shrinks
@@ -134,9 +181,10 @@ struct LogicalBlock {
     int               refs{0};
     LogicalBlockPool* mgr{};  // set at Create; used by handle / Retain / Drop
 
-    // Cache slots, one per category; nullptr = not created
-    CacheBlock* prefix{};
-    CacheBlock* checkpoint{};
+    // Cache slots, one per category; empty = not created. Destroying a handle
+    // invalidates the slot.
+    CacheBlockPtr prefix;
+    CacheBlockPtr checkpoint;
 
     // Prefix trie node state (mutated only via the trie methods)
     const LogicalBlock*      parent{};  // nullptr = root; non-owning identity
@@ -152,7 +200,7 @@ struct LogicalBlock {
     // size strictly decreases along edge paths and the graph is acyclic.
     // First-wins: bound at most once, at AdmitPrompt, on a block created in the
     // same pass (mirrors trie first-wins insertion). Strong, RAII.
-    BlockHandle partial;
+    LogicalBlockPtr partial;
 
     bool     is_valid{false};  // content proven produced; cleared on prefix evict
     uint64_t producer{0};      // request currently writing this range; 0 = none
@@ -162,12 +210,12 @@ struct LogicalBlock {
 // deque with a free list (stable addresses, never shrinks), so a
 // LogicalBlock* is a stable identity. When refs reaches 0 the node is
 // recycled: a recycle hook removes it from the PrefixTrie index, every
-// attached cache slot's allocation is already invalid (a valid allocation
-// holds a ref via CacheBlock::owner), so Invalidate only returns slot
-// metadata.
+// attached cache slot's allocation is already invalid (valid allocations hold
+// refs through CacheBlock::pin), then destroying prefix/checkpoint handles
+// invalidates their slots.
 class LogicalBlockPool {
 public:
-    LogicalBlockPool(CacheBlockPool& cache, int block_size = 0): block_size_{block_size}, cache_{cache} {}
+    explicit LogicalBlockPool(int block_size = 0): block_size_{block_size} {}
 
     ~LogicalBlockPool();
 
@@ -188,7 +236,7 @@ public:
         on_recycle_ = std::move(h);
     }
 
-    BlockHandle Create(int logical_index);
+    LogicalBlockPtr Create(int logical_index);
 
     void Retain(LogicalBlock* p) noexcept
     {
@@ -218,36 +266,47 @@ private:
     int block_size_{};
     int live_{};
 
-    CacheBlockPool& cache_;
-
     std::deque<LogicalBlock>   nodes_;  // stable addresses; never shrinks
     std::vector<LogicalBlock*> free_;
 
     std::function<void(LogicalBlock&)> on_recycle_;
 };
 
-inline BlockHandle::BlockHandle(LogicalBlock* p): p_{p}
+inline LogicalBlockPtr::LogicalBlockPtr(LogicalBlock* p): p_{p}
 {
     if (p_) {
         p_->mgr->Retain(p_);
     }
 }
 
-inline BlockHandle::BlockHandle(const BlockHandle& o): p_{o.p_}
+inline LogicalBlockPtr::LogicalBlockPtr(const LogicalBlockPtr& o): p_{o.p_}
 {
     if (p_) {
         p_->mgr->Retain(p_);
     }
 }
 
-inline BlockHandle::~BlockHandle()
+inline LogicalBlockPtr::~LogicalBlockPtr()
 {
     if (p_) {
         p_->mgr->Drop(p_);
     }
 }
 
-inline LogicalBlock& BlockHandle::operator*() const noexcept
+inline LogicalBlock& LogicalBlockPtr::operator*() const noexcept
+{
+    return *p_;
+}
+
+inline CacheBlockPtr::~CacheBlockPtr()
+{
+    if (p_) {
+        TM_CHECK(!p_->valid());
+        p_->mgr->Invalidate(p_);
+    }
+}
+
+inline CacheBlock& CacheBlockPtr::operator*() const noexcept
 {
     return *p_;
 }

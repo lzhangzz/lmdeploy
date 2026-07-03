@@ -159,7 +159,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         auto& s         = *rc[i];
         d.input_lens[i] = s.input_len;
 
-        const CacheBlock& cb = *TM_CHECK_NOTNULL(s.frontier);
+        const CacheBlock& cb = *TM_CHECK_NOTNULL(s.frontier.get());
         TM_CHECK_NOTNULL(cb.allocation.a);
 
         conv_state_ptrs_buf_[i] = cb.base(0);  // conv accumulation part

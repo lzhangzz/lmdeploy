@@ -297,7 +297,7 @@ Scheduler::Scheduler(ObjectAllocator&   alloc,
     is_warm_up_{is_warm_up},
     alloc_{alloc},
     registry_{std::move(registry)},
-    logical_{cache_, cache_block_seq_len},
+    logical_{cache_block_seq_len},
     trie_{cache_block_seq_len},
     accum_{make_perf_counter()},
     interv_{make_perf_counter()}
@@ -313,14 +313,13 @@ Scheduler::~Scheduler()
     }
     LogProfile(accum_);
 
-    // Drain all live allocations so allocation-held refs are released and the
+    // Drain all live allocations so allocation-held pins are released and the
     // remaining trie nodes recycle before the pools are destroyed.
     // SortedBlocks() returns exactly the allocated blocks (alloc set).
+    // A block with two valid slots holds two pins, so it recycles only after
+    // its last slot deallocates -- same order as the old explicit Drop.
     for (CacheBlock* b : cache_.SortedBlocks()) {
         b->Deallocate(alloc_);
-        if (LogicalBlock* o = b->owner) {
-            logical_.Drop(o);
-        }
     }
 }
 
@@ -331,7 +330,7 @@ void Scheduler::EnsureBlocks(Sequence& s)
     const int needed = (length + bs - 1) / bs;
     while (static_cast<int>(s.block_ids.size()) < needed) {
         const int   i = static_cast<int>(s.block_ids.size());
-        BlockHandle h = logical_.Create(i);
+        LogicalBlockPtr h = logical_.Create(i);
         h->prefix = cache_.Create(registry_.prefix().object_id(), h.get());  // owner = node
         s.block_ids.push_back(std::move(h));                                     // request ref
     }
@@ -379,7 +378,7 @@ void Scheduler::MatchPrompt(Sequence& s, AcceptState& st)
         const auto tokens = TokenSegment(s, offset, bs);
         const auto next   = ExtendPrefixKey(st.key, tokens, fps);
         if (LogicalBlock* b = trie_.Find(st.parent, next, tokens, fps)) {
-            s.block_ids.emplace_back(b);  // retain via BlockHandle copy
+            s.block_ids.emplace_back(b);  // retain via LogicalBlockPtr copy
             st.parent  = b;
             st.key     = next;
             st.next_fp = cur;  // commit advance only on a match
@@ -411,7 +410,7 @@ void Scheduler::IndexMissingBlocks(Sequence& s, AcceptState& st)
             ++st.next_fp;
         }
         const auto    tokens = TokenSegment(s, offset, size);
-        BlockHandle   h      = logical_.Create(i);
+        LogicalBlockPtr   h      = logical_.Create(i);
         LogicalBlock& x = *h;
         x.prefix         = cache_.Create(registry_.prefix().object_id(), h.get());
         if (size == bs) {
@@ -459,7 +458,7 @@ void Scheduler::SetupPartialSiblings(Sequence& s, AcceptState& st)
         if (LogicalBlock* v = trie_.Search(st.miss_parent, k, TokenSegment(s, offset, size), fps, fp_pos)) {
             TM_CHECK(!x.partial);        // first-wins: x created this pass, slot empty
             TM_CHECK_LT(v->size, size);  // strictly shorter sibling (acyclicity)
-            x.partial = BlockHandle{v};  // edge ref
+            x.partial = LogicalBlockPtr{v};  // edge ref
         }
     }
 
@@ -486,7 +485,7 @@ void Scheduler::SetupPartialSiblings(Sequence& s, AcceptState& st)
                 CollectStartFps(s, j * bs, j * bs + plan.node_size, fps);
 
                 const auto    next = ExtendPrefixKey(s.block_ids[j - 1]->key, tokens, fps);
-                BlockHandle   vh   = logical_.Create(j);
+                LogicalBlockPtr   vh   = logical_.Create(j);
                 LogicalBlock& y    = *vh;
                 y.parent           = s.block_ids[j - 1].get();
                 y.key              = next;
@@ -526,7 +525,7 @@ void Scheduler::PlanResume(Sequence& s)
     const int  upper = InitialResumeUpperBound(s);
     const int  bs    = logical_.block_size();
 
-    if (ckpt && s.frontier == nullptr) {
+    if (ckpt && !s.frontier) {
         s.frontier     = cache_.Create(registry_.checkpoint().object_id());
         s.frontier_pos = 0;
     }
@@ -536,7 +535,7 @@ void Scheduler::PlanResume(Sequence& s)
     //    this request has proven produced (filled_len).
     int prefix_end         = 0;
     int readonly_block_num = 0;
-    for (const BlockHandle& h : s.block_ids) {
+    for (const LogicalBlockPtr& h : s.block_ids) {
         const LogicalBlock& x = *h;
         if (!x.is_valid || !is_valid(x.prefix)) {
             break;
@@ -570,7 +569,7 @@ void Scheduler::PlanResume(Sequence& s)
             const int e = y->offset + y->size;
             if (y->is_valid && e <= upper && e > prefix_end && is_valid(y->prefix)
                 && (!ckpt || is_valid(y->checkpoint))) {
-                best = {e, ResumeSource::kFork, ckpt ? y->checkpoint : nullptr, y, &x};
+                best = {e, ResumeSource::kFork, ckpt ? y->checkpoint.get() : nullptr, y, &x};
             }
         }
     }
@@ -604,13 +603,13 @@ void Scheduler::PlanResume(Sequence& s)
                     break;
                 }
                 if (e <= prefix_end && is_valid(x.checkpoint)) {
-                    best = {e, ResumeSource::kCheckpoint, x.checkpoint};
+                    best = {e, ResumeSource::kCheckpoint, x.checkpoint.get()};
                     break;
                 }
                 if (const LogicalBlock* y = x.partial.get()) {
                     const int ye = y->offset + y->size;
                     if (ye <= prefix_end && ye > best.pos && is_valid(y->checkpoint)) {
-                        best = {ye, ResumeSource::kFork, y->checkpoint};
+                        best = {ye, ResumeSource::kFork, y->checkpoint.get()};
                         break;
                     }
                 }
@@ -624,10 +623,10 @@ void Scheduler::PlanResume(Sequence& s)
 
     // 3. Restore copy plans (cache blocks; resolved to addresses at setup)
     if (best.fork_dst) {
-        s.restore_copies.push_back({best.fork_src->prefix, best.fork_dst->prefix});
+        s.restore_copies.push_back({best.fork_src->prefix.get(), best.fork_dst->prefix.get()});
     }
     if (ckpt && best.pos > 0 && best.ckpt) {
-        s.restore_copies.push_back({best.ckpt, s.frontier});
+        s.restore_copies.push_back({best.ckpt, s.frontier.get()});
         // Measure recurrent-checkpoint spacing from the restored position, not
         // from 0: without this a fresh request resuming deep into a shared
         // prefix believes a checkpoint is immediately due.
@@ -644,17 +643,17 @@ void Scheduler::PlanResume(Sequence& s)
     //    can reclaim its own prior checkpoints to run). The one checkpoint (or
     //    fork source) actually restored this pass is protected separately via
     //    its restore_copies entry (stamped in PlanRequests, Section 4).
-    for (const BlockHandle& h : s.block_ids) {
+    for (const LogicalBlockPtr& h : s.block_ids) {
         const LogicalBlock& x = *h;
-        s.involved_blocks.push_back(x.prefix);
+        s.involved_blocks.push_back(x.prefix.get());
         if (!is_valid(x.prefix)) {
-            s.alloc_blocks.push_back(x.prefix);
+            s.alloc_blocks.push_back(x.prefix.get());
         }
     }
     if (ckpt) {
-        s.involved_blocks.push_back(s.frontier);
+        s.involved_blocks.push_back(s.frontier.get());
         if (!is_valid(s.frontier)) {
-            s.alloc_blocks.push_back(s.frontier);
+            s.alloc_blocks.push_back(s.frontier.get());
         }
     }
 }
@@ -680,7 +679,7 @@ void Scheduler::PlanContinue(Sequence& s)
     // tracked here: they are not needed to run and must stay evictable so the
     // sequence can run with just its prefix blocks and frontier.
     for (int i = first_new; i < static_cast<int>(s.block_ids.size()); ++i) {
-        CacheBlock* p = s.block_ids[i]->prefix;
+        CacheBlock* p = s.block_ids[i]->prefix.get();
         s.involved_blocks.push_back(p);
         s.alloc_blocks.push_back(p);
     }
@@ -749,38 +748,31 @@ Scheduler::PublishStat Scheduler::MarkProduced(Sequence& s, int t0, int end)
     return stat;
 }
 
-void Scheduler::ReleaseFrontier(CacheBlock* b)
-{
-    if (b == nullptr) {
-        return;
-    }
-    if (b->object_id >= 0) {
-        TM_CHECK(b->owner == nullptr);  // sequence-owned slots only (frontier / adopted zombie)
-        if (b->valid()) {
-            b->Deallocate(alloc_);
-        }
-        cache_.Invalidate(b);
-    }
-}
-
 void Scheduler::Release(Sequence& s)
 {
-    for (const BlockHandle& h : s.block_ids) {
+    for (const LogicalBlockPtr& h : s.block_ids) {
         LogicalBlock& x = *h;
         if (!x.indexed) {
             // Private blocks are undiscoverable: drop their allocations now so
-            // the allocation-held refs go away and the block can recycle.
-            for (CacheBlock* c : {x.prefix, x.checkpoint}) {
+            // the allocation-held pins go away and the block can recycle.
+            for (CacheBlock* c : {x.prefix.get(), x.checkpoint.get()}) {
                 if (is_valid(c)) {
-                    c->Deallocate(alloc_);
-                    logical_.Drop(&x);  // the allocation's ref (request ref still pins x)
+                    c->Deallocate(alloc_);  // drops the pin (request ref still pins x)
                 }
             }
         }
     }
-    s.block_ids.clear();  // request refs -> recycles unreferenced blocks
+    s.block_ids.clear();
 
-    ReleaseFrontier(std::exchange(s.frontier, nullptr));
+    // Sequence-owned slot (frontier / adopted zombie): release the memory,
+    // then drop the handle (its destructor invalidates the slot).
+    if (s.frontier) {
+        TM_CHECK(s.frontier->owner == nullptr);
+        if (s.frontier->valid()) {
+            s.frontier->Deallocate(alloc_);
+        }
+        s.frontier = {};
+    }
 
     s.frontier_pos   = 0;
     s.last_ckpt_pos  = 0;
@@ -882,19 +874,19 @@ void Scheduler::Finalize(Sequence& s)
         // under has_checkpoint()), so no separate has_checkpoint() gate here.
         if (publish_generation_boundary && x.offset + size == s.filled_len && is_valid(s.frontier)
             && !is_valid(x.checkpoint)) {
-            CacheBlock* f = std::exchange(s.frontier, nullptr);
-            if (CacheBlock* zombie = std::exchange(x.checkpoint, nullptr)) {
+            CacheBlockPtr f = std::move(s.frontier);
+            if (CacheBlockPtr zombie = std::move(x.checkpoint)) {
                 // Created-but-unallocated slot: transfer it to the dying
                 // sequence so it is invalidated with its owner at Release.
                 TM_CHECK(!zombie->valid());
                 zombie->owner = nullptr;
-                s.frontier    = zombie;
+                s.frontier    = std::move(zombie);
             }
-            x.checkpoint = f;
             f->owner     = up;
             // The frontier's allocation was committed while the slot was
-            // sequence-owned (no ref); the ref moves with the ownership.
-            logical_.Retain(up);
+            // sequence-owned (no pin); the pin is taken as ownership moves.
+            f->pin       = LogicalBlockPtr{up};
+            x.checkpoint = std::move(f);
             gen.terminal_ckpt = true;
 
             // If another valid checkpoint lies within checkpoint_min_interval
@@ -911,7 +903,7 @@ void Scheduler::Finalize(Sequence& s)
                         break;  // outside the window; earlier block/partial positions are older
                     }
                     if (is_valid(p.checkpoint)) {
-                        f->Demote();
+                        x.checkpoint->Demote();
                         gen.demoted = true;  // observability (LogFinalized)
                         break;
                     }
@@ -920,7 +912,7 @@ void Scheduler::Finalize(Sequence& s)
                 if (const LogicalBlock* y = p.partial.get()) {
                     const int pos = y->offset + y->size;
                     if (pos < s.filled_len && s.filled_len - pos < interval && is_valid(y->checkpoint)) {
-                        f->Demote();
+                        x.checkpoint->Demote();
                         gen.demoted = true;  // observability (LogFinalized)
                         break;
                     }
@@ -949,8 +941,8 @@ void Scheduler::PlanPublication(ScheduleState& pass, int i, Sequence& s, int end
     // A partial sibling is a distinct logical block from any request's
     // required prefix blocks, so it never collides with a required slot.
     if (at_prompt_boundary && sibling && !sibling->is_valid && !is_valid(sibling->prefix)
-        && !pass.planned.count(sibling->prefix)) {
-        pass.planned.insert(sibling->prefix);
+        && !pass.planned.count(sibling->prefix.get())) {
+        pass.planned.insert(sibling->prefix.get());
         pass.pending_populate[i] = sibling;
         pass.has_optionals       = true;
     }
@@ -984,11 +976,11 @@ void Scheduler::PlanPublication(ScheduleState& pass, int i, Sequence& s, int end
     // The pass.planned insert turns any violation into a crash instead of a
     // silent double-allocation in the optional phase.
     if (!is_valid(node->checkpoint)) {
-        if (node->checkpoint == nullptr) {
+        if (!node->checkpoint) {
             node->checkpoint = cache_.Create(registry_.checkpoint().object_id(), node);
         }
-        TM_CHECK(pass.planned.insert(node->checkpoint).second);
-        pass.pending_publish[i] = {node, end, node->checkpoint};
+        TM_CHECK(pass.planned.insert(node->checkpoint.get()).second);
+        pass.pending_publish[i] = {node, end, node->checkpoint.get()};
         pass.has_optionals      = true;
     }
 }
@@ -1270,7 +1262,7 @@ void Scheduler::RunOptionalAdmission(ScheduleState& pass)
 
         // partial sibling population (prefix reuse for future forks)
         if (LogicalBlock* node = pass.pending_populate[i]) {
-            if (!try_optional(node->prefix)) {
+            if (!try_optional(node->prefix.get())) {
                 pass.pending_populate[i] = nullptr;  // dropped; CommitResults won't populate it
             }
         }
@@ -1299,19 +1291,18 @@ void Scheduler::ReplayMemory(ScheduleState& pass)
                 CacheBlock& c = *item.block;
                 if constexpr (std::is_same_v<T, EvictReplay>) {
                     const bool is_prefix = c.object_id == registry_.prefix().object_id_or_negative();
-                    c.Deallocate(alloc_);  // clears allocation; owner persists
                     if (LogicalBlock* o = c.owner) {
                         if (is_prefix) {
                             o->is_valid = false;
                         }
-                        logical_.Drop(o);  // may recycle the block and free this slot
                     }
+                    c.Deallocate(alloc_);  // drops the pin; may recycle the owner and free this slot
                 }
                 else {
                     c.allocation = alloc_.Allocate(c.object_id);  // single-object; {nullptr} on OOM
                     TM_CHECK(c.allocation.a);                     // admission guarantees capacity
                     c.alloc_key = c.allocation->key;              // snapshot for stale detection
-                    logical_.Retain(c.owner);                     // no-op when owner == nullptr (sequence-owned)
+                    c.pin       = LogicalBlockPtr{c.owner};       // empty when owner == nullptr
                 }
             },
             op);
@@ -1362,10 +1353,10 @@ void Scheduler::CommitResults(ScheduleState& pass)
         if (LogicalBlock* v = pass.pending_populate[i]) {
             LogicalBlock& y = *v;
             y.is_valid      = true;  // content arrives via the device-ordered copy below
-            s.publish_copies.push_back({s.block_ids[(end - 1) / bs]->prefix, y.prefix});
+            s.publish_copies.push_back({s.block_ids[(end - 1) / bs]->prefix.get(), y.prefix.get()});
             // Allocated outside the stamped involved sets: stamp now so the
             // freshly populated node is not the top eviction candidate.
-            cache_.Stamp(y.prefix);
+            cache_.Stamp(y.prefix.get());
         }
 
         if (s.publish_target) {
@@ -1373,11 +1364,11 @@ void Scheduler::CommitResults(ScheduleState& pass)
             // the optional phase, which also took the allocation ref via the
             // slot's owner. Single-publisher-per-node-per-pass is enforced at
             // plan time (PlanPublication), so no dedup branch is needed here.
-            CacheBlock* slot = s.publish_target->checkpoint;
+            CacheBlock* slot = s.publish_target->checkpoint.get();
             TM_CHECK(is_valid(slot));
             s.last_ckpt_pos = s.publish_end;
             ckpt_published  = true;
-            s.publish_copies.push_back({s.frontier, slot});
+            s.publish_copies.push_back({s.frontier.get(), slot});
             // Allocated outside the stamped involved sets: stamp now so
             // the fresh checkpoint is not the top eviction candidate.
             cache_.Stamp(slot);

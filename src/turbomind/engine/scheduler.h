@@ -205,7 +205,6 @@ private:
     void PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary);
 
     void EnsureBlocks(Sequence& s);
-    void ReleaseFrontier(CacheBlock* b);
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
     bool      CheckpointPublicationEligible() const noexcept;
