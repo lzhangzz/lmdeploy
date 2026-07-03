@@ -97,11 +97,6 @@ public:
 
     ~Scheduler();
 
-    const CacheBlockPool& cache() const noexcept
-    {
-        return cache_;
-    }
-
     const LogicalBlockPool& logical() const noexcept
     {
         return logical_;
@@ -161,12 +156,11 @@ private:
     struct ScheduleState;
 
     // Optional checkpoint-publication intent allocated in the optional admission
-    // phase. cache_id is the target's own (block-owned) checkpoint slot;
-    // 0 => nothing.
+    // phase. slot is the target's own (block-owned) checkpoint slot; nullptr => nothing.
     struct PublishPlan {
         LogicalBlock* target{};
         int           end{};
-        int           cache_id{};
+        CacheBlock*   slot{};
     };
 
     // Schedule phases, called in order; see Schedule's body.
@@ -206,20 +200,12 @@ private:
     // ending exactly at `end` (the block itself when block-aligned, else its
     // partial sibling), then decides partial sibling KV population and the
     // checkpoint. Only records intent; slots are allocated in the optional
-    // admission phase. Reserves the sibling's prefix_id in pass.planned to
+    // admission phase. Reserves the sibling's prefix slot in pass.planned to
     // dedup intent across requests.
     void PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary);
 
     void EnsureBlocks(Sequence& s);
-    void ReleaseCacheId(int cache_id);
-
-    // The cached CacheBlock::allocation is the allocation-validity flag (set by
-    // the alloc replay, cleared by every deallocation path), so no
-    // ObjectAllocator::IsValid lookup is needed on the hot path.
-    bool ValidAlloc(int cache_id) const
-    {
-        return cache_id != 0 && cache_[cache_id].valid();
-    }
+    void ReleaseFrontier(CacheBlock* b);
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
     bool      CheckpointPublicationEligible() const noexcept;

@@ -148,12 +148,12 @@ struct MultiModalSpan {
     Fingerprint fingerprint;  // empty until the generation PR
 };
 
-// A scheduler-planned device copy between two cache blocks of the same
-// category. Resolved to pointers on the engine thread at setup and executed
-// as a whole-object copy by the model executor.
+// A scheduler-planned device copy between two cache blocks of the same category.
+// Setup resolves each block's allocation into byte ranges/device addresses, then
+// the model executor runs it as a whole-object copy.
 struct CacheCopy {
-    int src{};
-    int dst{};
+    CacheBlock* src{};
+    CacheBlock* dst{};
 };
 
 // What set this pass's resume_len. resume_len is a single number, produced by
@@ -219,9 +219,9 @@ struct Sequence {
 
     std::vector<BlockHandle> block_ids;  // logical (each holds one request ref)
 
-    std::vector<int> alloc_cache_ids;     // cache ids needing allocation this schedule pass
-    std::vector<int> involved_cache_ids;  // cache ids stamped for eviction protection (= required alloc set);
-                                          // persistent across PlanContinue, rebuilt by PlanResume
+    std::vector<CacheBlock*> alloc_blocks;     // cache blocks needing allocation this schedule pass
+    std::vector<CacheBlock*> involved_blocks;  // cache blocks stamped for eviction protection (= required alloc set);
+                                               // persistent across PlanContinue, rebuilt by PlanResume
 
     std::vector<CacheCopy> restore_copies;  // run before BatchOp::kPrepare
     std::vector<CacheCopy> publish_copies;  // run after BatchOp::kUnprep
@@ -236,11 +236,11 @@ struct Sequence {
     bool         resuming       = false;                // transient: planned by PlanResume() this pass
     ResumeSource resume_source  = ResumeSource::kNone;  // transient: mechanism that set resume_len
 
-    int           frontier_cache_id = 0;        // checkpoint working state for the next forward
-    int           frontier_pos      = 0;        // sequence position the frontier corresponds to
-    LogicalBlock* publish_target    = nullptr;  // logical block selected for publication this pass
-    int           publish_end       = 0;        // sequence position of the pending publication
-    int           last_ckpt_pos     = 0;        // end of the last published checkpoint
+    CacheBlock*   frontier       = nullptr;  // checkpoint working state for the next forward
+    int           frontier_pos   = 0;        // sequence position the frontier corresponds to
+    LogicalBlock* publish_target = nullptr;  // logical block selected for publication this pass
+    int           publish_end    = 0;        // sequence position of the pending publication
+    int           last_ckpt_pos  = 0;        // end of the last published checkpoint
     bool          prompt_boundary_node =
         false;                    // a reusable prompt-boundary exists and WILL be published: a partial sibling
                                   // node when B is mid-block, else a block-aligned checkpoint clamp target. The

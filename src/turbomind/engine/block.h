@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory_resource>
 #include <utility>
@@ -76,61 +77,52 @@ struct CacheBlock {
     {
         return allocation.a != nullptr;
     }
+
+    // Deallocates the backing object and clears the slot back to "no
+    // allocation" state (the owner identity persists). Pre-condition: the
+    // slot has a live allocation.
+    void Deallocate(ObjectAllocator& alloc);
+
+    // Demote to evict-first priority: timestamp 0 sorts first in
+    // SortedBlocks() and is below every eviction cutoff and pass floor.
+    // Stamp never hands out 0 (next_timestamp_ starts at 1).
+    void Demote() noexcept
+    {
+        TM_CHECK(valid());
+        timestamp = 0;
+    }
 };
+
+// nullptr replaces the old index-0 sentinel ("no slot").
+inline bool is_valid(const CacheBlock* b) noexcept
+{
+    return b != nullptr && b->valid();
+}
 
 class CacheBlockPool {
 public:
-    CacheBlockPool()
-    {
-        blocks_.emplace_back();
-    }
+    CacheBlock* Create(int object_id, LogicalBlock* owner = nullptr);
 
-    void Invalidate(int index);
-
-    int Create(int object_id, LogicalBlock* owner = nullptr);
-
-    // Deallocates the slot's backing object and clears it back to "no
-    // allocation" state (the owner identity persists). Pre-condition: the slot
-    // has a live allocation (allocation set).
-    void Deallocate(ObjectAllocator& alloc, int cache_id);
+    // Owner destroyed; reset the slot and return it for reuse.
+    void Invalidate(CacheBlock* b);
 
     // Eviction candidates: exactly the currently allocated blocks. The cached
     // allocation handle is the validity flag; the timestamp only orders the candidates.
-    std::vector<int> SortedIndices() const;
+    std::vector<CacheBlock*> SortedBlocks();
 
-    uint64_t Stamp(const std::vector<int>& cache_ids);
-    uint64_t Stamp(int cache_id);
-
-    // Demote a slot to evict-first priority: timestamp 0 sorts first in
-    // SortedIndices() and is below every eviction cutoff and pass floor.
-    // Stamp never hands out 0 (next_timestamp_ starts at 1).
-    void Demote(int cache_id)
-    {
-        TM_CHECK_GT(cache_id, 0);
-        TM_CHECK_LT(cache_id, static_cast<int>(blocks_.size()));
-        TM_CHECK(blocks_[cache_id].valid());
-        blocks_[cache_id].timestamp = 0;
-    }
-
-    CacheBlock& operator[](int index) noexcept
-    {
-        return blocks_[index];
-    }
-    const CacheBlock& operator[](int index) const noexcept
-    {
-        return blocks_[index];
-    }
+    uint64_t Stamp(const std::vector<CacheBlock*>& blocks);
+    uint64_t Stamp(CacheBlock* b);
 
     size_t size() const noexcept
     {
-        return blocks_.size() - free_list_.size();
+        return blocks_.size() - free_.size();
     }
 
 private:
     uint64_t next_timestamp_{1};
 
-    std::vector<CacheBlock> blocks_;
-    std::vector<int>        free_list_;
+    std::deque<CacheBlock>   blocks_;  // stable addresses; never shrinks
+    std::vector<CacheBlock*> free_;
 };
 
 struct LogicalBlock {
@@ -143,9 +135,9 @@ struct LogicalBlock {
     int               refs{0};
     LogicalBlockPool* mgr{};  // set at Create; used by handle / Retain / Drop
 
-    // Cache slots, one per category
-    int prefix_id{0};
-    int checkpoint_id{0};
+    // Cache slots, one per category; nullptr = not created
+    CacheBlock* prefix{};
+    CacheBlock* checkpoint{};
 
     // Prefix trie node state (mutated only via the trie methods)
     const LogicalBlock*      parent{};  // nullptr = root; non-owning identity

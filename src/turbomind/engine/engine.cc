@@ -614,8 +614,8 @@ void Engine::Impl::Setup(BatchData& d)
         const ObjectAllocator& alloc   = scheduler_.allocator();
         auto                   resolve = [&](std::vector<CacheCopy>& in, std::vector<ResolvedCopy>& out) {
             for (const auto& [src, dst] : in) {
-                const auto& cs = scheduler_.cache()[src];
-                const auto& cd = scheduler_.cache()[dst];
+                const CacheBlock& cs = *TM_CHECK_NOTNULL(src);
+                const CacheBlock& cd = *TM_CHECK_NOTNULL(dst);
                 TM_CHECK_NOTNULL(cs.allocation.a);  // validity (resolved allocation) on both ends
                 TM_CHECK_NOTNULL(cd.allocation.a);
                 TM_CHECK_EQ(cs.object_id, cd.object_id);        // same object => same part layout
@@ -634,12 +634,7 @@ void Engine::Impl::Setup(BatchData& d)
         }
     }
 
-    const CacheBlockPool* cache_block_pool = &scheduler_.cache();
-
-    TensorMap env{{"requests", rs},
-                  {"batch", d.buf()},
-                  {"copy", copy.buf()},
-                  {"cache_block_pool", Buffer_<const CacheBlockPool*>{&cache_block_pool, 1, kCPU}}};
+    TensorMap env{{"requests", rs}, {"batch", d.buf()}, {"copy", copy.buf()}};
 
     Run(BatchOp::kSetup, d.phase, env);
 
