@@ -262,6 +262,7 @@ and (currently line 239):
 2. In `PublishPlan` (lines 166–170), replace `int cache_id{};` with `CacheBlock* slot{};` and update its comment: `slot is the target's own (block-owned) checkpoint slot; nullptr => nothing.`
 3. Replace `void ReleaseCacheId(int cache_id);` with `void ReleaseFrontier(CacheBlock* b);`
 4. Delete the `ValidAlloc` member function (lines 216–222) including its comment block — the free `is_valid()` in `block.h` replaces it (the comment about the cached allocation being the validity flag lives on `CacheBlock::valid()` / spec).
+5. In the `PlanPublication` doc comment (line ~209), "Reserves the sibling's prefix_id in pass.planned" → "Reserves the sibling's prefix slot in pass.planned".
 
 ### Task 4: `scheduler.cc` — the bulk conversion
 
@@ -427,7 +428,23 @@ Update the comment above: `SortedIndices()` → `SortedBlocks()`.
 1. Frontier creation (line 537): `if (ckpt && s.frontier == nullptr) { s.frontier = cache_.Create(registry_.checkpoint().object_id()); ... }`
 2. Candidate writers (lines 581, 615, 621): `best = {e, ResumeSource::kFork, ckpt ? y->checkpoint : nullptr, y, &x};`, `best = {e, ResumeSource::kCheckpoint, x.checkpoint};`, `best = {ye, ResumeSource::kFork, y->checkpoint};`
 3. Restore plans (lines 633–643): comment becomes `// 3. Restore copy plans (cache blocks; resolved to addresses at setup)`; `s.restore_copies.push_back({best.fork_src->prefix, best.fork_dst->prefix});` and `if (ckpt && best.pos > 0 && best.ckpt) { s.restore_copies.push_back({best.ckpt, s.frontier}); ... }`
-4. Section 4 (lines 655–667): push `x.prefix` / `s.frontier` into `s.involved_blocks` / `s.alloc_blocks` guarded by `is_valid(...)`.
+4. Section 4 (lines 655–667) — note `involved_blocks` pushes are UNCONDITIONAL (only the alloc push is guarded), same as today:
+
+```cpp
+    for (const BlockHandle& h : s.block_ids) {
+        const LogicalBlock& x = *h;
+        s.involved_blocks.push_back(x.prefix);
+        if (!is_valid(x.prefix)) {
+            s.alloc_blocks.push_back(x.prefix);
+        }
+    }
+    if (ckpt) {
+        s.involved_blocks.push_back(s.frontier);
+        if (!is_valid(s.frontier)) {
+            s.alloc_blocks.push_back(s.frontier);
+        }
+    }
+```
 
 - [ ] **Step 4.9: `PlanContinue` (lines 690–700)**
 
@@ -702,6 +719,11 @@ git commit -m "docs: cache handle terminology follows CacheBlock pointer refacto
 ```
 
 ### Task 9: Verification
+
+- [ ] **Step 9.0: Memory unit test (CPU, no GPU needed)**
+
+Run from `build/`: `ninja test_memory && ./bin/test_memory`
+Expected: all Catch2 assertions pass (`test_memory.cc` is unaffected by the refactor — its only `CacheBlock` reference is a comment — but it guards the `ObjectAllocator` invariants the refactor relies on, e.g. durable `Allocation*` handles).
 
 - [ ] **Step 9.1: Check GPU availability**
 
