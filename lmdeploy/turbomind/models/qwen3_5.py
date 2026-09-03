@@ -33,6 +33,7 @@ from lmdeploy.vl.constants import Modality
 from ..builders import (
     AttentionBuilder,
     Builder,
+    Context,
     DecoderLayerBuilder,
     DecoderLayerConfig,
     DeltaNetBuilder,
@@ -150,7 +151,7 @@ class Qwen3_5TextModel(TextModel):
         q, gate = split_output_gate(q, head_num=cfg.head_num)
 
         def reorder(x):
-            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, resolver=self._resolver)
+            return reorder_rotary_emb(x, cfg.head_dim, cfg.rope.dim, dtype=self._ctx.dtype)
 
         q, k = [reorder(x) for x in (q, k)]
 
@@ -466,22 +467,12 @@ class Qwen3_5VisionModel(TextModel):
     def model(self, pfx):
         self._build_vision_model(pfx + 'model.visual')
 
-    def _restore_dtype(self, builder):
-        """Builder.__init__ unconditionally overwrites cfg.data_type with the
-        context's (text-engine) dtype.
-
-        The cfg is held by reference, so re-pinning it here propagates to every downstream _add_linear call on this
-        builder, keeping the vision sub-tree on its native dtype.
-        """
-        builder.config.data_type = self._resolver.data_type
-        return builder
-
     def _build_vision_model(self, pfx):
         cfg = self._make_vision_root_cfg()
-        root = self._restore_dtype(VisionModelBuilder(
+        root = VisionModelBuilder(
             cfg, self._ctx,
             root_handles=self._root_handles,
-            tp=self._model_tp))
+            tp=self._model_tp)
 
         root._add_tensor('pos_embed', (pfx + 'pos_embed').pop('weight'))
         root._add_linear('patch_embed', self._patch_embed(pfx + 'patch_embed.proj'))
@@ -496,7 +487,7 @@ class Qwen3_5VisionModel(TextModel):
 
     def _make_vision_root_cfg(self):
         cfg = _tm.Qwen3_5VitConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.out_hidden_dim = self._vis_out_hidden
         cfg.depth = self._vis_depth
@@ -517,7 +508,12 @@ class Qwen3_5VisionModel(TextModel):
         tensors = {'weight': weight}
         if pfx.has('bias'):
             tensors['bias'] = pfx.pop('bias')
-        return Linear(tensors=tensors, weight_format=TrivialFormat())
+        return Linear(
+            tensors=tensors,
+            weight_format=TrivialFormat(
+                weight_dtype=self._ctx.data_type,
+            ),
+        )
 
     def vit_blocks(self, pfx):
         blocks = ModuleListBuilder(ModuleListConfig(), self._ctx)
@@ -529,13 +525,13 @@ class Qwen3_5VisionModel(TextModel):
 
     def vit_block(self, pfx):
         cfg = _tm.Qwen3_5VitBlockConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_num = self._vis_heads
         cfg.intermediate_size = self._vis_inter
         cfg.norm_eps = self._vis_norm_eps
 
-        b = self._restore_dtype(Builder(cfg, self._ctx))
+        b = Builder(cfg, self._ctx)
         b.tp = self._model_tp
 
         b.norm1 = self._layer_norm(pfx + 'norm1', dim=self._vis_hidden)
@@ -550,7 +546,7 @@ class Qwen3_5VisionModel(TextModel):
         real_hd = self._vis_hidden // self._vis_heads
         padded_hd = _padded_vit_head_dim(real_hd)
         cfg = _tm.AttentionConfig()
-        cfg.data_type = self._resolver.data_type
+        cfg.data_type = self._ctx.data_type
         cfg.hidden_dim = self._vis_hidden
         cfg.head_dim = padded_hd
         cfg.head_num = self._vis_heads
@@ -577,8 +573,8 @@ class Qwen3_5VisionModel(TextModel):
         # Reorder Q/K once at export time so the runtime can use the same
         # adjacent-pair RoPE layout as TurboMind's attention kernels.
         # RoPE is computed at the real head_dim regardless of padding.
-        q = reorder_rotary_emb(q, real_hd, real_hd, resolver=self._resolver)
-        k = reorder_rotary_emb(k, real_hd, real_hd, resolver=self._resolver)
+        q = reorder_rotary_emb(q, real_hd, real_hd, dtype=self._ctx.dtype)
+        k = reorder_rotary_emb(k, real_hd, real_hd, dtype=self._ctx.dtype)
 
         proj = self._linear(pfx + 'proj')
 
@@ -593,8 +589,7 @@ class Qwen3_5VisionModel(TextModel):
             v = _pad_head_dim_out(v, **pad_kwargs)
             proj = _pad_head_dim_in(proj, **pad_kwargs)
 
-        m = self._restore_dtype(
-            AttentionBuilder(cfg, self._ctx, tp=self._model_tp))
+        m = AttentionBuilder(cfg, self._ctx, tp=self._model_tp)
         m.add_qkv_proj(q, k, v)
         m.add_o_proj(proj)
         return m.build()
@@ -607,9 +602,9 @@ class Qwen3_5VisionModel(TextModel):
         weight = pfx.pop('weight')
         bias = pfx.pop('bias') if pfx.has('bias') else None
         cfg = make_layer_norm_config(dim=dim,
-                                     data_type=self._resolver.data_type,
+                                     data_type=self._ctx.data_type,
                                      norm_eps=self._vis_norm_eps)
-        m = self._restore_dtype(LayerNormBuilder(cfg, self._ctx))
+        m = LayerNormBuilder(cfg, self._ctx)
         m.set_weight(weight, bias=bias)
         return m.build()
 
@@ -623,7 +618,7 @@ class Qwen3_5Model:
     _vision = True
 
     def __init__(self, cfg: Qwen3_5Config | Qwen3_5MoeConfig, *, resolver,
-                 vision_resolver=None,
+                 vision_resolver=None, vision_data_type=None,
                  language_model_only: bool = False):
         text_cfg = getattr(cfg, 'text_config', cfg)
         if text_cfg is None:
@@ -634,22 +629,39 @@ class Qwen3_5Model:
         vision_cfg = getattr(cfg, 'vision_config', None)
         if language_model_only or vision_cfg is None:
             self.vision_model = None
+            self._vision_data_type = None
         else:
+            if vision_resolver is None or vision_data_type is None:
+                raise TypeError(
+                    'vision_resolver and vision_data_type are required '
+                    'when the vision model is enabled')
             self.vision_model = Qwen3_5VisionModel(
-                vision_cfg, resolver=vision_resolver or resolver)
+                vision_cfg, resolver=vision_resolver)
+            self._vision_data_type = vision_data_type
 
     def bind_runtime(self, *, ctx, root_handles,
                      attn_tp, mlp_tp, ep, model_tp):
-        for m in (self.text_model, self.vision_model):
-            if m is not None:
-                m.bind_runtime(
-                    ctx=ctx,
-                    root_handles=root_handles,
-                    attn_tp=attn_tp,
-                    mlp_tp=mlp_tp,
-                    ep=ep,
-                    model_tp=model_tp,
-                )
+        self.text_model.bind_runtime(
+            ctx=ctx,
+            root_handles=root_handles,
+            attn_tp=attn_tp,
+            mlp_tp=mlp_tp,
+            ep=ep,
+            model_tp=model_tp)
+
+        if self.vision_model is not None:
+            vision_ctx = Context(
+                ctx.devices,
+                ctx.gemm,
+                data_type=self._vision_data_type,
+                gemm_input_dtype=ctx.gemm_input_dtype)
+            self.vision_model.bind_runtime(
+                ctx=vision_ctx,
+                root_handles=root_handles,
+                attn_tp=attn_tp,
+                mlp_tp=mlp_tp,
+                ep=ep,
+                model_tp=model_tp)
 
     @property
     def _vocab_size(self):

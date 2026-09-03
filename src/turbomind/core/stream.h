@@ -9,15 +9,19 @@ namespace turbomind::core {
 
 class StreamImpl {
 public:
-    StreamImpl(int priority): stream_{}
+    explicit StreamImpl(int priority): stream_{}, owned_{true}
     {
         TM_CUDA_CHECK(cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, priority));
     }
 
+    explicit StreamImpl(cudaStream_t stream): stream_{stream}, owned_{false} {}
+
     ~StreamImpl()
     {
-        if (auto ec = cudaStreamDestroy(stream_); ec != cudaSuccess) {
-            TM_LOG_ERROR("{}", cudaGetErrorString(ec));
+        if (owned_) {
+            if (auto ec = cudaStreamDestroy(stream_); ec != cudaSuccess) {
+                TM_LOG_ERROR("{}", cudaGetErrorString(ec));
+            }
         }
         stream_ = {};
     }
@@ -34,13 +38,15 @@ public:
         return stream_;
     }
 
-public:
+private:
     cudaStream_t stream_;
+    bool         owned_;
 };
 
 class Stream {
 public:
     Stream() = default;
+    explicit Stream(cudaStream_t stream);
 
     static Stream create(int priority = 0);
 

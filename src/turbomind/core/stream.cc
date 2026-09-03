@@ -4,6 +4,8 @@
 
 namespace turbomind::core {
 
+Stream::Stream(cudaStream_t handle): impl_{std::make_shared<StreamImpl>(handle)} {}
+
 Stream Stream::create(int priority)
 {
     Stream stream;

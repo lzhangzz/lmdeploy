@@ -7,7 +7,6 @@
 #include <stdexcept>
 
 #include <cuda_runtime.h>
-
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
@@ -26,6 +25,7 @@
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
@@ -241,6 +241,8 @@ ft::DataType getDataType(DLDataType data_type)
             break;
         case DLDataTypeCode::kDLBool:
             return data_type_v<bool>;
+        case DLDataTypeCode::kDLFloat8_e4m3fn:
+            return data_type_v<turbomind::fp8_e4m3_t>;
         default:
             return data_type_v<void>;
     }
@@ -560,7 +562,8 @@ PYBIND11_MODULE(_turbomind, m)
             .value("TYPE_BF16", kBfloat16)
             .value("TYPE_FP8_E4M3", kFloat8_e4m3)
             .value("TYPE_FP4_E2M1", kFloat4_e2m1)
-            .value("TYPE_UINT4", kUint4);
+            .value("TYPE_UINT4", kUint4)
+            .value("TYPE_GENERIC_FLOAT", kGenericFloat);
 
         // memory type
         py::enum_<ft::DeviceType>(m, "MemoryType")
@@ -572,24 +575,21 @@ PYBIND11_MODULE(_turbomind, m)
     // DataFormat descriptors
     py::class_<turbomind::QuantParamDesc>(m, "QuantParamDesc")
         .def_readwrite("dtype", &turbomind::QuantParamDesc::dtype)
-        .def_readwrite("transposed", &turbomind::QuantParamDesc::transposed)
         .def("present", &turbomind::QuantParamDesc::present);
 
     py::class_<turbomind::DataFormat>(m, "DataFormat")
+        .def(py::init<turbomind::DataType>(), py::arg("dtype"))
+        .def(py::init<turbomind::DataType, std::vector<int>, turbomind::DataType, turbomind::DataType>(),
+             py::arg("dtype"),
+             py::arg("block_sizes"),
+             py::arg("scales_dtype") = turbomind::kNull,
+             py::arg("zeros_dtype")  = turbomind::kNull)
         .def_readwrite("dtype", &turbomind::DataFormat::dtype)
         .def_readwrite("block_sizes", &turbomind::DataFormat::block_sizes)
         .def_readwrite("scales", &turbomind::DataFormat::scales)
         .def_readwrite("zeros", &turbomind::DataFormat::zeros)
         .def("is_quantized", &turbomind::DataFormat::is_quantized)
         .def("rank", &turbomind::DataFormat::rank);
-
-    m.def("ResolveLinearWeightFormat",
-          &turbomind::ResolveLinearWeightFormat,
-          py::arg("data_type"),
-          py::arg("weight_dtype"),
-          py::arg("block_in"),
-          py::arg("block_out"));
-    m.def("has_sm90_mixed_kernel", &turbomind::gemm::HasSm90MixedKernel);
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
@@ -670,6 +670,15 @@ PYBIND11_MODULE(_turbomind, m)
             return ret;
         },
         "dl_managed_tensor"_a);
+    m.def("from_dlpack", [](py::object obj, std::vector<ft::core::ssize_t> logical_shape, ft::DataType logical_dtype) {
+        py::capsule cap = obj.attr("__dlpack__")();
+        auto* dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+        auto  physical = DLManagedTensorToTritonTensor(dlmt);
+        cap.set_name("used_dltensor");
+
+        ft::core::Layout logical_layout{std::move(logical_shape)};
+        return std::make_shared<Tensor>(physical->buffer().view(logical_dtype), std::move(logical_layout));
+    }, "dl_managed_tensor"_a, "logical_shape"_a, "logical_dtype"_a);
     m.def(
         "from_dlpack_with_strides",
         [](py::object obj) {
@@ -691,6 +700,14 @@ PYBIND11_MODULE(_turbomind, m)
         "src"_a,
         "dst"_a,
         "stream_ptr"_a);
+    m.def("copy_bytes_on_stream", [](py::object src_obj, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
+        py::capsule cap = src_obj.attr("__dlpack__")();
+        auto* dlmt = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
+        auto  src  = DLManagedTensorToTritonTensor(dlmt);
+        cap.set_name("used_dltensor");
+
+        TM_CUDA_CHECK(cudaMemcpyAsync(dst->raw_data(), src->raw_data(), dst->byte_size(), cudaMemcpyDefault, reinterpret_cast<cudaStream_t>(stream_ptr)));
+    }, "src"_a, "dst"_a, "stream_ptr"_a);
 
     py::bind_map<TensorMap, std::shared_ptr<TensorMap>>(m, "TensorMap");
 
@@ -796,16 +813,10 @@ PYBIND11_MODULE(_turbomind, m)
             [](const PyContextGuard& g) { return reinterpret_cast<std::uintptr_t>(g.stream.handle()); },
             "Underlying cudaStream_t as an integer (for torch.cuda.ExternalStream).");
 
-    m.def(
-        "create_device_context",
-        []() {
-            auto stream = ft::core::Stream::create();
-            return std::make_unique<PyContextGuard>(
-                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, false});
-        },
-        "Create a ContextGuard with stream + host + device allocators.\n\n"
-        "Objects that use core::Context::stream() in their constructor or destructor "
-        "(notably LlamaLinear) must be destroyed before this context exits.");
+    m.def("create_device_context", [](std::uintptr_t stream_ptr) {
+        auto stream = ft::core::Stream{reinterpret_cast<cudaStream_t>(stream_ptr)};
+        return std::make_unique<PyContextGuard>(stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, true});
+    }, "stream_ptr"_a, "Create a ContextGuard over a caller-owned CUDA stream and the device default memory pool. The caller retains stream ownership.");
 
     // Param — lightweight handle to a Module parameter slot
     py::class_<ft::core::Param>(m, "Param")
@@ -924,6 +935,7 @@ PYBIND11_MODULE(_turbomind, m)
                 return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
             },
             "index"_a)
+        .def("gemm", &TurboMind::gemm, py::return_value_policy::reference, "index"_a)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },
