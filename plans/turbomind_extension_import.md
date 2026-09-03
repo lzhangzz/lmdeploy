@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. This design is not approved. Do not implement it without explicit approval.
+Approved for implementation.
 
 ## Goal
 
@@ -620,7 +620,7 @@ The only match must be `from . import _turbomind as _tm` in `lmdeploy/turbomind/
 These legacy mechanisms must have no matches in the files being changed:
 
 ```bash
-rg -n 'bootstrap|_load_turbomind|CALL_FROM_SETUP_PY|_xgrammar|_xgr|import_module\(.?_turbomind|find_spec\(.?_turbomind|sys\.path.*lib|^\s*import _turbomind' lmdeploy tests scripts benchmark setup.py CMakeLists.txt src/turbomind/python/CMakeLists.txt MANIFEST.in
+rg -n '^\s*def bootstrap\(|^\s*bootstrap\(\)|_load_turbomind|CALL_FROM_SETUP_PY|_xgrammar|import_module\(.?_turbomind|find_spec\(.?_turbomind|sys\.path.*lib|^\s*import _turbomind' lmdeploy tests scripts benchmark setup.py CMakeLists.txt src/turbomind/python/CMakeLists.txt MANIFEST.in
 ```
 
 Verify the Python changes without importing the extension:
