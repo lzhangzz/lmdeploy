@@ -2,7 +2,9 @@
 
 ## Status
 
-Approved for implementation on 2026-09-07. Implementation has not started.
+Approved and implemented on 2026-09-07. Verification found no changes relative to the baseline; the preexisting full-suite failures and numerical coverage limitations are recorded in [Execution results](#execution-results--2026-09-07).
+
+Implementation finding: NVCC 12.8 rejects omitted trailing arguments through the proposed variadic template-template parameter, although the host C++17 check accepted them. Catalog declarations therefore repeat the selected factory's parameter types and defaults. The single template-template parameter, `add<K<...>>(c)` entry spelling, shared free catalogs, and type-only factories remain the same.
 
 ## Goal and registration contract
 
@@ -14,7 +16,7 @@ add<K<_128x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
 
 The first three parameters of every `K` and its underlying factory's `Type` are **configuration, pipeline stages, raster order**, in that order. The remaining parameters describe variations supported by the selected implementation. They must not freeze cache policies, split-K, epilogue geometry, multicast, MMA configuration, or other existing tuning choices inside an opaque alias.
 
-Each catalog is a free function taking the bound kernel alias as a template-template parameter `K`. Native SM90 uses `template<template<class, auto...> class K>`; SM70–SM80 use `template<template<class, int, Order, class, class, auto...> class K>` to account for their cache-policy type arguments. Bind a concrete factory's `Type` when selecting the catalog function for a `Registrar`. Individual entries use `add<K<...>>(c)` without `typename`, `template`, or `::Type`.
+Each catalog is a free function taking the bound kernel alias as one template-template parameter `K`. Its declaration lists the selected factory's parameter types and defaults explicitly, including the legacy cache-policy type arguments. Bind a concrete factory's `Type` when selecting the catalog function for a `Registrar`. Individual entries use `add<K<...>>(c)` without `typename`, `template`, or `::Type`.
 
 Factories bind architecture, data types, packed format, quantization group sizes, and the selected implementation once. They only construct types; the complete catalog stays in its free function and can be instantiated for multiple families. The W8A8 catalog uses separate `ConfigV3` and `ConfigWA` factories for activation-as-A and weight-as-A FP8. Its single existing registrar invokes the V3 catalog, then the WA catalog, passing each factory's `Type` as `K` and preserving the current order.
 
@@ -110,7 +112,7 @@ The common types have no stages, raster order, striding, architecture, data type
 The aliases live inside catalog functions or other local scopes. Import the shared types used by a catalog once at the start of its registration function, then use the short names in every configuration alias. Keep these explicit using-declarations inside the function so `Config` resolves to the shared structural type even when the enclosing GEMM namespace contains the conversion `Config`:
 
 ```cpp
-template<template<class, auto...> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
 void register_kernels(Collector& c)
 {
     using config::Config;
@@ -308,7 +310,7 @@ template<class Config_, int Stages_, Order Raster, int MmaN>
 struct GemmUniversalSm90MxFp4Fp8Unfolded;
 ```
 
-Replace the corresponding class template prefixes, including forward declarations and all instantiations, in one migration. Keep tuning defaults on the factory `Type` aliases in section 5; device templates receive every argument explicitly. Remove defaults from the old device-template parameter lists.
+Replace the corresponding class template prefixes, including forward declarations and all instantiations, in one migration. Keep tuning defaults on the factory `Type` aliases in section 5 and repeat them on each catalog's template-template declaration for NVCC compatibility; device templates receive every argument explicitly. Remove defaults from the old device-template parameter lists.
 
 For native 2D configurations, the directly consumed members are:
 
@@ -413,7 +415,7 @@ struct ConfigWA {
 Move the current V3 entries into `register_v3<K>` and the current WA entries into `register_wa<K>`, both in the existing anonymous namespace. Keep one W8A8 registrar that invokes them in that order. These representative entries show the complete function and binding syntax; migration retains every existing entry in each function, including the final WA blocks for two math warp groups:
 
 ```cpp
-template<template<class, auto...> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MaxOpN = 128, int EpiStages = 1> class K>
 void register_v3(Collector& c)
 {
     using config::Config;
@@ -425,7 +427,7 @@ void register_v3(Collector& c)
     add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true, 1, 2>>(c);
 }
 
-template<template<class, auto...> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1> class K>
 void register_wa(Collector& c)
 {
     using config::Config;
@@ -443,7 +445,7 @@ Registrar reg(w8a8, [](Collector& c) {
 });
 ```
 
-Each `Type` directly names its concrete device implementation and host wrapper. `ConfigV3::Type` exposes the named `MaxOpN` and `EpiStages` parameters with defaults `128` and `1`; `ConfigWA::Type` ends at `MulticastB`. Registration lines use the selected `K` and pass striding as the fourth argument. All tuning arguments are named template parameters on the factory; the catalog's `auto...` accepts their differing signatures and preserves their defaults.
+Each `Type` directly names its concrete device implementation and host wrapper. `ConfigV3::Type` exposes the named `MaxOpN` and `EpiStages` parameters with defaults `128` and `1`; `ConfigWA::Type` ends at `MulticastB`. Registration lines use the selected `K` and pass striding as the fourth argument. All tuning arguments are named template parameters on the factory; each catalog declaration repeats that factory's signature and defaults for NVCC compatibility.
 
 The existing V3 128x256 case uses `MaxOpN=128, EpiStages=1`. Existing 128x192 entries explicitly pass `192, 2`; existing 64x256 entries explicitly pass `128, 2`. Copy these values from the current catalog and traits during migration, not from the example's defaults.
 
@@ -462,7 +464,7 @@ struct C {
 Pass the bound factory alias into the shared free catalog. For U4, these two representative entries show the explicit MMA-N override and the defaulted indexed case, with both dtype bindings:
 
 ```cpp
-template<template<class, auto...> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
 void register_kernels(Collector& c)
 {
     using config::Config;
@@ -502,7 +504,7 @@ struct C {
 
 BF16 retains its configurable K dimension through `Shape<M, N, K>`. Keep the current catalog's multicast values at `(1, 1)`; exposing the existing device-template arguments does not add catalog entries. Preserve its L2-hint entry explicitly.
 
-Move the existing registration body into `register_kernels<K>` with the same native template-template declaration shown above, and bind it with `Registrar reg(bf16, register_kernels<C::Type>);`. Keep `add_cublas(c, Sm90::is_compatible)` as the function's first registration, followed by the existing ordered tunable entries using `add<K<...>>(c)`.
+Move the existing registration body into `register_kernels<K>` with a template-template declaration matching this BF16 factory, and bind it with `Registrar reg(bf16, register_kernels<C::Type>);`. Keep `add_cublas(c, Sm90::is_compatible)` as the function's first registration, followed by the existing ordered tunable entries using `add<K<...>>(c)`.
 
 ### SM90 folded MXFP4 x FP8
 
@@ -537,7 +539,7 @@ struct C {
 };
 ```
 
-It retains its existing dense-only behavior. Its sole current configuration uses `Shape<64, 128>`, `Shape<1, 2>`, `Registers<40, 232>`, stage 3, and row-major raster. Use the same native `register_kernels<K>` function declaration and bind it with `Registrar reg(unfolded, register_kernels<C::Type>);`. Do not add unsupported grouped/fusion arguments or enable its CMake source as part of migration.
+It retains its existing dense-only behavior. Its sole current configuration uses `Shape<64, 128>`, `Shape<1, 2>`, `Registers<40, 232>`, stage 3, and row-major raster. Use a `register_kernels<K>` function declaration matching this unfolded factory and bind it with `Registrar reg(unfolded, register_kernels<C::Type>);`. Do not add unsupported grouped/fusion arguments or enable its CMake source as part of migration.
 
 ## 6. Catalog migration and preservation
 
@@ -569,7 +571,7 @@ No new cache version is needed if descriptor values and ordering are preserved. 
 
 ## 8. Verification
 
-All implementation verification in this plan is transient or uses existing tests. Do not add a permanent test file or benchmark case. Drafting has not built the project or run GPU workloads. Validate the shared structural definitions and the separate V3/WA factory interfaces with the compile checks below.
+All implementation verification in this plan is transient or uses existing tests. Do not add a permanent test file or benchmark case. Validate the shared structural definitions and the separate V3/WA factory interfaces with the compile checks below.
 
 ### Static and compile verification
 
@@ -580,6 +582,8 @@ Before implementation, capture baseline descriptors and resource reports with th
 The current `90a-real` build excludes SM70/SM75/SM80 catalogs, and `Registry` filters kernels by device architecture. Independently of the runtime descriptor dump, capture a complete ordered source inventory for each of those catalogs before editing. Resolve family bindings, configuration aliases, and template defaults into the parameters listed in section 6, including architecture, data types, packing, and quantization groups. Record each entry's position within its source and family, preserve duplicate entries, and record retained disabled candidates separately with their disabled status.
 
 After migration, derive the same inventories from the new factories and registrations and compare the complete ordered records and counts per source and family. Require identical values, ordering, multiplicity, and enabled/disabled status. This source comparison requires no legacy GPU hardware; compiling the migrated translation units is a separate check and does not establish catalog preservation.
+
+Resolve native configuration aliases using the host compiler's lexical scope and preprocessing rules. Check the production catalog, commented candidates with their local aliases enabled, `#if 0` blocks enabled, and both forms enabled together. A declaration or scope boundary inside `#if 0` must not affect a candidate outside that block. Record comment suppression and preprocessor suppression separately; do not resolve aliases through a file-wide dictionary.
 
 Run static searches over the GEMM source tree to confirm:
 
@@ -664,10 +668,10 @@ Confirm this model/cache entry still exists in `/data/models.json` when implemen
 
 ## Representative legacy catalog binding
 
-Legacy catalogs use the same `add<K<...>>(c)` spelling, with cache policies still passed as types. The first five template-template parameters describe configuration, stages, raster, and the two cache policies; `auto...` accepts the remaining scalar parameters. Defaults remain on the selected factory's `Type`. This example shows two existing SM80 U4 dense entries; migrate the complete ordered list into the same shared function:
+Legacy catalogs use the same `add<K<...>>(c)` spelling, with cache policies still passed as types. The template-template declaration repeats the selected factory's parameter types and defaults. This example shows two existing SM80 U4 dense entries; migrate the complete ordered list into the same shared function:
 
 ```cpp
-template<template<class, int, Order, class, class, auto...> class K>
+template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
 void register_u4_d(Collector& c)
 {
     using config::Config;
@@ -690,3 +694,27 @@ Replace the callbacks at their existing positions in the registrar array:
 | `u4_d_128` | `register_u4_d<D128::Type>` |
 
 Apply the same pattern to the grouped catalog with its own factory and complete entry list. Preserve the array order `u4_d_32`, `u4_g_32`, `u4_d_128`, `u4_g_128`, `mxfp4`; do not move the dense families together. Existing catalogs whose entry lists differ, such as SM70 U4 group sizes 32 and 128, remain separate free functions accepting `K`.
+
+## Execution results — 2026-09-07
+
+The approved plan was committed as `22c5e50ee` before implementation. All catalogs and configuration consumers in scope have been migrated. The CUDA 12.8 `90a-real` configuration and enabled source list are unchanged. Verification uses existing tests and transient probes under `/tmp/gemm_config_refactor_22c5e50ee/`; no permanent tests or production instrumentation were added.
+
+| Check | Result |
+| --- | --- |
+| Production build | `env -u PYTHONPATH ninja -j 4` passed in `build`, including the in-tree Python extension. |
+| Legacy and retained sources | All 11 SM70/SM75/SM80 and retained SM90 s16816 translation units compiled at their supported targets; retained SM90 unfolded compiled separately. |
+| Ordered source inventories | All 395 legacy records and 392 native records matched, including disabled candidates, duplicate entries, family bindings, parameters, and order. Native record count precedes the U4 dtype expansion. |
+| Runtime registry | All 588 ordered descriptors and resource records matched on the same H200 GPU, including transposed wrappers. |
+| Native compiler output | All 304 CUDA function bodies matched at the SASS instruction and scheduling/control-word level across eight translation units. Register, stack, spill, and shared-memory reports matched, including NVFP4 and retained unfolded. |
+| Existing linear pytest | Eight tests passed before and after. |
+| Tuner | All 160 `(KernelDesc, swizzle, splits)` records matched as multisets: 65 dense, 63 blocked, and 32 indexed. All three tuned outputs passed validation. |
+| Qwen3-8B smoke | The unchanged model script passed with TP1 and 128 generated tokens. The response was inspected and contained coherent human text relevant to the transformer matrix-multiplication prompt. |
+| Full numerical sweep | All 1,520 case configurations matched the baseline status inventory, with no new failures or unsupported cases. All 10 seeded U4 tolerance-failure metrics matched exactly. |
+
+Follow-up review found that the retained BF16 dense L2 candidates for 192x128 and 256x128 inherited indexed register budgets when the dedicated blocked catalog remained under `#if 0`. The dense L2 candidates now have their own TMA configuration scope, and the conditional block contains balanced scope boundaries. The transient inventory checker now compiles the catalog bodies with a host recorder and preprocesses the baseline entry list. It reproduces all four former mismatches and passes after the correction: 256 active records, 374 records with commented candidates enabled, 260 with only `#if 0` enabled, and all 392 with both enabled. The `gemm2_sm90` target rebuilt successfully; all 28 BF16 SASS function bodies and resource reports still match the baseline. GPU workloads were not rerun for this scope correction. The revised inventories and comparison logs are under `bf16-scope-fix/` in the evidence directory.
+
+The stock full-suite command aborts on preexisting E4M3 packing and large-expert TMA workspace assertions. A transient driver therefore uses the unchanged `LinearFixture` and the complete existing full-suite matrix, records those restrictions explicitly, and continues after tolerance failures without weakening thresholds. The matrix contains 1,520 case configurations and 40 batch sizes each, or 60,800 requested runs. All 13,520 supported U4 runs use identical per-case and per-batch RNG seeds before and after. Earlier successful non-U4 baseline runs reuse the original full-suite results; other runs use the same seeded driver.
+
+Before and after both produced 51,550 passing batch runs and 10 U4 tolerance failures. The same 231 unsupported case configurations comprise 210 API exclusions, nine packing restrictions, and 12 workspace restrictions. Of the API exclusions, 172 are NVFP4 and 38 are BF16-input FP8 fused-SiLU cases. All case/batch statuses and all 10 seeded U4 failure metrics matched exactly. The stock full suite retains these preexisting failures and restrictions; this refactor does not provide a clean full-suite pass. The complete comparison is saved in `after/full-comparison.json` within the transient evidence directory.
+
+NVFP4 numerical correctness remains unverified under the accepted limitation. Its compilation, descriptors, compiler resources, and SASS comparisons passed. Legacy architectures and retained disabled kernels received source/compile coverage; numerical execution was on H200 with the production SM90 registry.
