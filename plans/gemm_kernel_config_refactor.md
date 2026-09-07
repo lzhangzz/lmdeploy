@@ -40,6 +40,7 @@ The migration covers the active SM70, SM75, SM80, and SM90 catalogs and the reta
 | Files | Change |
 | --- | --- |
 | `src/turbomind/kernels/gemm/kernel/config.h` | Shared structural types defined below. |
+| `src/turbomind/kernels/gemm/kernel/geometry.h` | Define each legacy tile/thread-group geometry alias once for all families. |
 | `src/turbomind/kernels/gemm/registrar.h` | One registration function and one host-kernel construction contract. |
 | `src/turbomind/kernels/gemm/arch/config_sm70_s884.h`, `config_sm75_s16816.h`, `config_sm80_s16816.h` | Adapt existing family configuration factories to the shared configuration and parameter ordering. |
 | `src/turbomind/kernels/gemm/kernel/sm70_*.cu`, `sm75_*.cu`, `sm80_*.cu`, `sm90_16816_*.cu` | Migrate registrations, including currently disabled SM90 sources. |
@@ -109,7 +110,15 @@ The common types have no stages, raster order, striding, architecture, data type
 
 `Shape<M, N, K>` in the legacy path follows the existing CTA and thread-group axes of that implementation. `Shape<M, N>` in native SM90 follows the public tile axes: M is batch, N is output. Preserve the existing transpose inside weight-as-A traits; do not exchange the configuration's axes to match WGMMA operands.
 
-The aliases live inside catalog functions or other local scopes. Import the shared types used by a catalog once at the start of its registration function, then use the short names in every configuration alias. Keep these explicit using-declarations inside the function so `Config` resolves to the shared structural type even when the enclosing GEMM namespace contains the conversion `Config`:
+Legacy aliases contain only geometry and belong in `kernel/geometry.h`, under `config::geometry`. Define each unique alias once and import that namespace once in each translation unit's existing unnamed namespace. Do not repeat identical definitions for each family or catalog. Keep separate sections for weights in A and weights in B, sorting each section by logical output tile width, then logical batch tile size: output is M for families with packed weights in A and N for families with packed weights in B. Determine the axis from the family bindings. For example, the shared header defines the following configuration for use by multiple SM80 and retained SM90 catalogs:
+
+```cpp
+namespace turbomind::gemm::config::geometry {
+using _128x256x32_1x8x1 = Config<Shape<128, 256, 32>, Shape<1, 8, 1>>;
+}
+```
+
+Native SM90 configurations include register budgets and use local scopes when those budgets differ. Import the shared types once at the start of the registration function, then use the short names in each local configuration. These explicit using-declarations ensure `Config` resolves to the structural type even when the enclosing GEMM namespace contains the conversion `Config`:
 
 ```cpp
 template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
@@ -657,7 +666,7 @@ Confirm this model/cache entry still exists in `/data/models.json` when implemen
 
 ## Completion criteria
 
-- All tunable GEMM catalogs use the shared `Config`, named local geometry aliases, the common `Config, Stages, Raster` parameter prefix, and `add<K<...>>(c)` in free catalog functions.
+- All tunable GEMM catalogs use the shared `Config`, the common `Config, Stages, Raster` parameter prefix, and `add<K<...>>(c)` in free catalog functions. Legacy geometry aliases are defined once in the shared header; native SM90 configurations use local scopes for different register budgets.
 - Each family retains every existing implementation and tunable variation through its factories and their parameters. Factories only construct types; their bound `Type` aliases select catalog instantiations. The single W8A8 registrar invokes the V3 catalog followed by the WA catalog.
 - Register budgets are explicit in named configurations and contain exactly the active producer/math pair. They do not appear on individual registration lines or behind a lookup trait.
 - One geometry/register configuration can be reused with different stages and other free tuning arguments.
@@ -671,13 +680,13 @@ Confirm this model/cache entry still exists in `/data/models.json` when implemen
 Legacy catalogs use the same `add<K<...>>(c)` spelling, with cache policies still passed as types. The template-template declaration repeats the selected factory's parameter types and defaults. This example shows two existing SM80 U4 dense entries; migrate the complete ordered list into the same shared function:
 
 ```cpp
+#include "src/turbomind/kernels/gemm/kernel/geometry.h"
+
+using namespace config::geometry;
+
 template<template<class Config_, int Stages, Order Raster, class PolicyA, class PolicyB, bool SplitK, int EpiM = -1, int EpiN = -1, bool FusePrefetch = true> class K>
 void register_u4_d(Collector& c)
 {
-    using config::Config;
-    using config::Shape;
-
-    using _128x256x32_1x8x1 = Config<Shape<128, 256, 32>, Shape<1, 8, 1>>;
     add<K<_128x256x32_1x8x1, 3, kColMajor, D, D, true, 128, 128>>(c);
     add<K<_128x256x32_1x8x1, 4, kColMajor, D, D, true, 128, 128>>(c);
 }
@@ -718,3 +727,5 @@ The stock full-suite command aborts on preexisting E4M3 packing and large-expert
 Before and after both produced 51,550 passing batch runs and 10 U4 tolerance failures. The same 231 unsupported case configurations comprise 210 API exclusions, nine packing restrictions, and 12 workspace restrictions. Of the API exclusions, 172 are NVFP4 and 38 are BF16-input FP8 fused-SiLU cases. All case/batch statuses and all 10 seeded U4 failure metrics matched exactly. The stock full suite retains these preexisting failures and restrictions; this refactor does not provide a clean full-suite pass. The complete comparison is saved in `after/full-comparison.json` within the transient evidence directory.
 
 NVFP4 numerical correctness remains unverified under the accepted limitation. Its compilation, descriptors, compiler resources, and SASS comparisons passed. Legacy architectures and retained disabled kernels received source/compile coverage; numerical execution was on H200 with the production SM90 registry.
+
+A subsequent cleanup consolidated 230 legacy geometry-alias declarations into 71 unique definitions in `kernel/geometry.h`. Each of the 11 legacy translation units imports `config::geometry` once; family catalog functions contain the registration rows. C++17 host `std::is_same_v` assertions verified all 71 aliases against their original definitions, all 395 ordered legacy inventory records matched, and all 11 affected CUDA translation units compiled successfully. Registration expressions, factory bindings, scope boundaries, and preprocessor directives were preserved. Evidence is under `/tmp/gemm_geometry_alias_dedup_bccf2b207/`; this cleanup ran no GPU workloads.
