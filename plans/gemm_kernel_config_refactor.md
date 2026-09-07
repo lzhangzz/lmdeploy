@@ -11,7 +11,7 @@ Implementation finding: NVCC 12.8 rejects omitted trailing arguments through the
 Use the same structural configuration and registration expression in every GEMM catalog:
 
 ```cpp
-add<K<_128x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
+add<K<_128x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
 ```
 
 The first three parameters of every `K` and its underlying factory's `Type` are **configuration, pipeline stages, raster order**, in that order. The remaining parameters describe variations supported by the selected implementation. They must not freeze cache policies, split-K, epilogue geometry, multicast, MMA configuration, or other existing tuning choices inside an opaque alias.
@@ -20,14 +20,16 @@ Each catalog is a free function taking the bound kernel alias as one template-te
 
 Factories bind architecture, data types, packed format, quantization group sizes, and the selected implementation once. They only construct types; the complete catalog stays in its free function and can be instantiated for multiple families. The W8A8 catalog uses separate `ConfigV3` and `ConfigWA` factories for activation-as-A and weight-as-A FP8. Its single existing registrar invokes the V3 catalog, then the WA catalog, passing each factory's `Type` as `K` and preserving the current order.
 
-The named `_128x256_1x2` configuration contains tile geometry, the distribution of math workers, and exactly one active producer/math register budget. Registers are written in its definition. There is no lookup of registers by shape or striding, no second unused register pair, and no register argument on each registration line.
+Native factories take a 2D `ClusterShape` after `Silu`, defaulting to `Shape<1, 1>`. Its M and N are the cluster extents reported by `KernelDesc::cluster_shape`. A is shared across the cluster N axis, so `kMulticastA = ClusterShape::N`; B is shared across the M axis, so `kMulticastB = ClusterShape::M`. Convert the old `(MulticastA, MulticastB)` pair to `Shape<MulticastB, MulticastA>`: old `2, 1` becomes `Shape<1, 2>`, and old `1, 2` becomes `Shape<2, 1>`. The internal flattened CuTe pipeline shape retains its existing construction. Unfolded has no multicast tuning parameter and keeps its fixed single-CTA behavior.
+
+The shared `_128x256_1x2<Producer, Math>` alias contains tile geometry, the distribution of math workers, and exactly one active producer/math register budget. Each native registration supplies the two register counts explicitly. There is no lookup of registers by shape or striding and no second unused register pair.
 
 Other requirements:
 
 - Use `_128x256_1x2`, with no `Tile_`, architecture, data-type, or stage prefix/suffix. Use `_128x256x32_1x8x1` where the K dimensions are variable, as in SM70–SM80.
 - Stages remain independent of configuration aliases; reuse an alias across stage counts.
 - Reuse one configuration alias across raster, striding, fusion, and multicast variants when its geometry and active register budget are the same.
-- When budgets differ, use separate local scopes with the same short alias spelling. Each scope states its own budget explicitly.
+- Define each native geometry once in the shared header as an alias template taking `Producer, Math`. Each registration selects its budget through those arguments; families do not repeat shape definitions or introduce local aliases for different budgets.
 - Every catalog registration is one physical line. Do not wrap code to fit a width limit.
 - Do not add a universal option parser, a `Policy` wrapper, a second register-policy lookup, registration macros, or tag classes for individual scalar parameters.
 - Do not change the registered kernel set, registration order, family IDs, priorities, packing, feasibility, scheduler behavior, or the configured architecture/source lists.
@@ -40,7 +42,7 @@ The migration covers the active SM70, SM75, SM80, and SM90 catalogs and the reta
 | Files | Change |
 | --- | --- |
 | `src/turbomind/kernels/gemm/kernel/config.h` | Shared structural types defined below. |
-| `src/turbomind/kernels/gemm/kernel/geometry.h` | Define each legacy tile/thread-group geometry alias once for all families. |
+| `src/turbomind/kernels/gemm/kernel/geometry.h` | Define each tile/thread-group geometry alias once for all families; native aliases take producer/math register counts. |
 | `src/turbomind/kernels/gemm/registrar.h` | One registration function and one host-kernel construction contract. |
 | `src/turbomind/kernels/gemm/arch/config_sm70_s884.h`, `config_sm75_s16816.h`, `config_sm80_s16816.h` | Adapt existing family configuration factories to the shared configuration and parameter ordering. |
 | `src/turbomind/kernels/gemm/kernel/sm70_*.cu`, `sm75_*.cu`, `sm80_*.cu`, `sm90_16816_*.cu` | Migrate registrations, including currently disabled SM90 sources. |
@@ -118,27 +120,33 @@ using _128x256x32_1x8x1 = Config<Shape<128, 256, 32>, Shape<1, 8, 1>>;
 }
 ```
 
-Native SM90 configurations include register budgets and use local scopes when those budgets differ. Import the shared types once at the start of the registration function, then use the short names in each local configuration. These explicit using-declarations ensure `Config` resolves to the structural type even when the enclosing GEMM namespace contains the conversion `Config`:
+Native SM90 aliases also belong in `kernel/geometry.h`, under `config::geometry`. They take two required integer parameters for the active register budget. Keep these definitions in a native section sorted by logical output tile width, then batch tile size, K, and thread-group geometry. Both native weight orientations use public axes M = batch and N = output; their internal WGMMA operand remapping does not change these aliases. BF16 retains its explicit K dimension and two-dimensional math-group shape.
+
+For example, define the following alias once in that shared header:
 
 ```cpp
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+namespace turbomind::gemm::config::geometry {
+
+template<int Producer, int Math>
+using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<Producer, Math>>;
+
+}
+```
+
+Each translation unit includes `kernel/geometry.h` and imports `config::geometry` and `config::Shape` once in its existing unnamed namespace. Catalog rows select register counts directly, with no local shape declarations or budget scopes:
+
+```cpp
+using config::Shape;
+using namespace config::geometry;
+
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
 void register_kernels(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
-
-    {
-        using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<72, 216>>;
-        add<K<_128x256_1x2, 3, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_128x256_1x2, 4, kRowMajor, Striding::kFlat, true>>(c);
-        add<K<_128x256_1x2, 3, kColMajor, Striding::kBlocked, true>>(c);
-    }
-    {
-        using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<120, 192>>;
-        add<K<_128x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
-        add<K<_128x256_1x2, 3, kColMajor, Striding::kIndexed, true>>(c);
-    }
+    add<K<_128x256_1x2<72, 216>, 3, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_128x256_1x2<72, 216>, 4, kRowMajor, Striding::kFlat, true>>(c);
+    add<K<_128x256_1x2<72, 216>, 3, kColMajor, Striding::kBlocked, true>>(c);
+    add<K<_128x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_128x256_1x2<120, 192>, 3, kColMajor, Striding::kIndexed, true>>(c);
 }
 ```
 
@@ -300,19 +308,19 @@ Native device kernels consume the shared configuration directly. Do not create a
 The following are complete replacement template declarations for the existing device classes. They specify their new parameter lists; they do not replace the existing kernel bodies with empty structs.
 
 ```cpp
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MaxOpN, int EpiStages_>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MaxOpN, int EpiStages_>
 struct GemmUniversalSm90_v3;
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_>
 struct GemmUniversalSm90_Fp8Wa;
 
-template<class Format_, class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
+template<class Format_, class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90Mixed;
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int L2HintW, int MmaN, bool SeparateMmaAtoms, int EpiM, int EpiStages_>
 struct GemmUniversalSm90_Bf16;
 
-template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, int MulticastA, int MulticastB, int MmaN, int EpilogueStages>
+template<class Config_, int Stages_, Order Raster, Striding Mode, bool Silu, class ClusterShape_, int MmaN, int EpilogueStages>
 struct GemmUniversalSm90MxFp4Fp8Folded;
 
 template<class Config_, int Stages_, Order Raster, int MmaN>
@@ -357,13 +365,15 @@ static constexpr bool kIndexedGather = Mode == Striding::kIndexed;
 
 Use these existing member names wherever the old template boolean was consumed. Keep the unfolded kernel dense-only.
 
-Map the remaining common scalar parameters to the existing kernel members directly:
+Map the remaining common parameters to the existing kernel members directly:
 
 ```cpp
 static constexpr Order kRasterOrder = Raster;
 static constexpr bool kSupportsFusedSilu = Silu;
-static constexpr int kMulticastA = MulticastA;
-static constexpr int kMulticastB = MulticastB;
+static constexpr int kMulticastA = ClusterShape_::N;
+static constexpr int kMulticastB = ClusterShape_::M;
+
+using Cluster = arch::Cluster<ClusterShape_::M, ClusterShape_::N, kRowMajor>;
 ```
 
 Update uses of the removed template-parameter spellings throughout each existing body, including `Grouped`, `StridingA`, `raster_order`, and the old stage/epilogue arguments. Retain derived values such as cluster size, chunk size, and grouped multicast restrictions.
@@ -410,42 +420,37 @@ Delete the now-unused `MixedMmaN`, `MixedSeparateMmaAtoms`, `MixedEpiM`, and `Mi
 Place these two factory classes in the existing anonymous namespace of `sm90_64n32_8.cu`:
 
 ```cpp
+using config::Shape;
+
 struct ConfigV3 {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MaxOpN = 128, int EpiStages = 1>
-    using Type = KernelImplSm90<GemmUniversalSm90_v3<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, MaxOpN, EpiStages>>;
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MaxOpN = 128, int EpiStages = 1>
+    using Type = KernelImplSm90<GemmUniversalSm90_v3<Config_, Stages, Raster, Mode, Silu, ClusterShape, MaxOpN, EpiStages>>;
 };
 
 struct ConfigWA {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1>
-    using Type = KernelImplSm90<GemmUniversalSm90_Fp8Wa<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB>>;
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>>
+    using Type = KernelImplSm90<GemmUniversalSm90_Fp8Wa<Config_, Stages, Raster, Mode, Silu, ClusterShape>>;
 };
 ```
 
 Move the current V3 entries into `register_v3<K>` and the current WA entries into `register_wa<K>`, both in the existing anonymous namespace. Keep one W8A8 registrar that invokes them in that order. These representative entries show the complete function and binding syntax; migration retains every existing entry in each function, including the final WA blocks for two math warp groups:
 
 ```cpp
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MaxOpN = 128, int EpiStages = 1> class K>
+using config::Shape;
+using namespace config::geometry;
+
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MaxOpN = 128, int EpiStages = 1> class K>
 void register_v3(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
-
-    using _128x256_2x1 = Config<Shape<128, 256>, Shape<2, 1>, Registers<88, 208>>;
-    add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true>>(c);
-    add<K<_128x256_2x1, 4, kColMajor, Striding::kIndexed, true, 1, 2>>(c);
+    add<K<_128x256_2x1<88, 208>, 4, kColMajor, Striding::kIndexed, true>>(c);
+    add<K<_128x256_2x1<88, 208>, 4, kColMajor, Striding::kIndexed, true, Shape<2, 1>>>(c);
 }
 
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1> class K>
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>> class K>
 void register_wa(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
-
-    using _8x128_1x1 = Config<Shape<8, 128>, Shape<1, 1>, Registers<40, 168>>;
-    add<K<_8x128_1x1, 4, kRowMajor, Striding::kFlat>>(c);
-    add<K<_8x128_1x1, 4, kRowMajor, Striding::kFlat, false, 1, 2>>(c);
+    add<K<_8x128_1x1<40, 168>, 4, kRowMajor, Striding::kFlat>>(c);
+    add<K<_8x128_1x1<40, 168>, 4, kRowMajor, Striding::kFlat, false, Shape<2, 1>>>(c);
 }
 
 Registrar reg(w8a8, [](Collector& c) {
@@ -454,7 +459,7 @@ Registrar reg(w8a8, [](Collector& c) {
 });
 ```
 
-Each `Type` directly names its concrete device implementation and host wrapper. `ConfigV3::Type` exposes the named `MaxOpN` and `EpiStages` parameters with defaults `128` and `1`; `ConfigWA::Type` ends at `MulticastB`. Registration lines use the selected `K` and pass striding as the fourth argument. All tuning arguments are named template parameters on the factory; each catalog declaration repeats that factory's signature and defaults for NVCC compatibility.
+Each `Type` directly names its concrete device implementation and host wrapper. `ConfigV3::Type` exposes the named `MaxOpN` and `EpiStages` parameters with defaults `128` and `1`; `ConfigWA::Type` ends at `ClusterShape`. Registration lines use the selected `K` and pass striding as the fourth argument. All tuning arguments are named template parameters on the factory; each catalog declaration repeats that factory's signature and defaults for NVCC compatibility.
 
 The existing V3 128x256 case uses `MaxOpN=128, EpiStages=1`. Existing 128x192 entries explicitly pass `192, 2`; existing 64x256 entries explicitly pass `128, 2`. Copy these values from the current catalog and traits during migration, not from the example's defaults.
 
@@ -465,26 +470,22 @@ Replace the forwarding function in `sm90_64n16_mixed_reg.h` with this reusable f
 ```cpp
 template<class Format>
 struct C {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0>
-    using Type = KernelImplSm90Mixed<GemmUniversalSm90Mixed<Format, Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, MmaN, SeparateMmaAtoms, EpiM, EpiStages>>;
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = config::Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0>
+    using Type = KernelImplSm90Mixed<GemmUniversalSm90Mixed<Format, Config_, Stages, Raster, Mode, Silu, ClusterShape, MmaN, SeparateMmaAtoms, EpiM, EpiStages>>;
 };
 ```
 
 Pass the bound factory alias into the shared free catalog. For U4, these two representative entries show the explicit MMA-N override and the defaulted indexed case, with both dtype bindings:
 
 ```cpp
-template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
+using config::Shape;
+using namespace config::geometry;
+
+template<template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0> class K>
 void register_kernels(Collector& c)
 {
-    using config::Config;
-    using config::Registers;
-    using config::Shape;
-
-    using _384x128_1x2 = Config<Shape<384, 128>, Shape<1, 2>, Registers<40, 232>>;
-    add<K<_384x128_1x2, 3, kRowMajor, Striding::kFlat, false, 1, 1, 192>>(c);
-
-    using _128x256_1x2 = Config<Shape<128, 256>, Shape<1, 2>, Registers<120, 192>>;
-    add<K<_128x256_1x2, 3, kRowMajor, Striding::kIndexed, true>>(c);
+    add<K<_384x128_1x2<40, 232>, 3, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 192>>(c);
+    add<K<_128x256_1x2<120, 192>, 3, kRowMajor, Striding::kIndexed, true>>(c);
 }
 
 using BF16 = detail::C<Sm90U4Format<32, kBfloat16>>;
@@ -505,13 +506,15 @@ Keep the complete existing ordered U4 catalog in this one function; replace its 
 Place this factory in the existing anonymous namespace of `sm90_64n16_16.cu`:
 
 ```cpp
+using config::Shape;
+
 struct C {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int L2HintW = 0, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0>
-    using Type = KernelImplSm90Bf16<GemmUniversalSm90_Bf16<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, L2HintW, MmaN, SeparateMmaAtoms, EpiM, EpiStages>>;
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int L2HintW = 0, int MmaN = 0, bool SeparateMmaAtoms = false, int EpiM = 0, int EpiStages = 0>
+    using Type = KernelImplSm90Bf16<GemmUniversalSm90_Bf16<Config_, Stages, Raster, Mode, Silu, ClusterShape, L2HintW, MmaN, SeparateMmaAtoms, EpiM, EpiStages>>;
 };
 ```
 
-BF16 retains its configurable K dimension through `Shape<M, N, K>`. Keep the current catalog's multicast values at `(1, 1)`; exposing the existing device-template arguments does not add catalog entries. Preserve its L2-hint entry explicitly.
+BF16 retains its configurable K dimension through `Shape<M, N, K>`. Keep the current catalog's cluster shape at `Shape<1, 1>`; exposing the existing device-template arguments does not add catalog entries. Preserve its L2-hint entry explicitly.
 
 Move the existing registration body into `register_kernels<K>` with a template-template declaration matching this BF16 factory, and bind it with `Registrar reg(bf16, register_kernels<C::Type>);`. Keep `add_cublas(c, Sm90::is_compatible)` as the function's first registration, followed by the existing ordered tunable entries using `add<K<...>>(c)`.
 
@@ -520,21 +523,22 @@ Move the existing registration body into `register_kernels<K>` with a template-t
 Place this factory in the existing folded translation unit:
 
 ```cpp
+using config::Shape;
+
 struct C {
-    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, int MulticastA = 1, int MulticastB = 1, int MmaN = Config_::Tile::M / Config_::Groups::M, int EpiStages = 2>
-    using Type = KernelImplSm90MxFp4Fp8<GemmUniversalSm90MxFp4Fp8Folded<Config_, Stages, Raster, Mode, Silu, MulticastA, MulticastB, MmaN, EpiStages>>;
+    template<class Config_, int Stages, Order Raster, Striding Mode, bool Silu = false, class ClusterShape = Shape<1, 1>, int MmaN = Config_::Tile::M / Config_::Groups::M, int EpiStages = 2>
+    using Type = KernelImplSm90MxFp4Fp8<GemmUniversalSm90MxFp4Fp8Folded<Config_, Stages, Raster, Mode, Silu, ClusterShape, MmaN, EpiStages>>;
 };
 ```
 
 Use `Registers<40, 232>` for existing flat/blocked entries and `Registers<72, 216>` for existing indexed entries. The existing 192x128 entry passes MMA N96 explicitly. Small plain-output entries with one epilogue stage pass that value explicitly. Preserve all fusion and multicast restrictions enforced by the kernel.
 
-Move the existing catalog into `register_kernels<K>` and bind it with `Registrar reg(folded, register_kernels<C::Type>);`. The three existing 256x128 entries must explicitly pass `MmaN=128` after `MulticastA, MulticastB`; the factory default would evaluate to `256 / 1 = 256`. Preserve these entries in their current order within that function, using its local `config` imports:
+Move the existing catalog into `register_kernels<K>` and bind it with `Registrar reg(folded, register_kernels<C::Type>);`. The three existing 256x128 entries must explicitly pass `MmaN=128` after `ClusterShape`; the factory default would evaluate to `256 / 1 = 256`. Preserve these entries in their current order within that function, using the shared geometry and `Shape` imports:
 
 ```cpp
-using _256x128_1x2 = Config<Shape<256, 128>, Shape<1, 2>, Registers<40, 232>>;
-add<K<_256x128_1x2, 4, kRowMajor, Striding::kFlat, false, 1, 1, 128>>(c);
-add<K<_256x128_1x2, 4, kRowMajor, Striding::kFlat, false, 2, 1, 128>>(c);
-add<K<_256x128_1x2, 4, kRowMajor, Striding::kFlat, false, 1, 2, 128>>(c);
+add<K<_256x128_1x2<40, 232>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 1>, 128>>(c);
+add<K<_256x128_1x2<40, 232>, 4, kRowMajor, Striding::kFlat, false, Shape<1, 2>, 128>>(c);
+add<K<_256x128_1x2<40, 232>, 4, kRowMajor, Striding::kFlat, false, Shape<2, 1>, 128>>(c);
 ```
 
 ### SM90 unfolded MXFP4 x FP8
@@ -552,7 +556,7 @@ It retains its existing dense-only behavior. Its sole current configuration uses
 
 ## 6. Catalog migration and preservation
 
-Preserve the complete ordered list of active kernel descriptors per family. Scope configuration aliases around existing ordered blocks; do not regroup registrations by shape if doing so changes their order.
+Preserve the complete ordered list of active kernel descriptors per family. Import shared geometry aliases and attach the existing register pair to every native entry; do not regroup registrations by shape if doing so changes their order.
 
 For every existing entry, record and preserve:
 
@@ -586,19 +590,22 @@ All implementation verification in this plan is transient or uses existing tests
 
 Use the current C++17 standard. Check the complete shared definitions, representative instantiations of both `ConfigV3::Type` and `ConfigWA::Type`, V3's default and explicit `MaxOpN`/`EpiStages` values, and representative factories for the other families with the repository's actual host/CUDA compiler. Instantiate the native and legacy catalog template-template parameters with the actual factory aliases, including omitted trailing arguments, explicit overrides, and both U4 dtype/group-size bindings. A transient compile check may contain `static_assert`s for the exact geometry, stage, active registers, and mapped host-wrapper type; do not introduce APIs for those checks.
 
+For the cluster-shape interface, compile actual device types with `Shape<1, 1>`, `Shape<2, 1>`, and `Shape<1, 2>` for V3, WA, mixed, BF16, and folded. Check that `Cluster::M/N` equal the supplied shape, multicast A/B equal N/M respectively, and the pipeline shape and cluster size retain their old values. Compare each original registration with its converted entry, including asymmetric cluster shapes and later MMA/epilogue arguments.
+
 Before implementation, capture baseline descriptors and resource reports with the current build. After implementation, compare the ordered descriptors and counts per family, not just which kernel happened to win one dispatch. Use a transient native program through the existing registry accessors if the Python API does not expose the required data. Retain no production logging or test-only binding changes.
 
 The current `90a-real` build excludes SM70/SM75/SM80 catalogs, and `Registry` filters kernels by device architecture. Independently of the runtime descriptor dump, capture a complete ordered source inventory for each of those catalogs before editing. Resolve family bindings, configuration aliases, and template defaults into the parameters listed in section 6, including architecture, data types, packing, and quantization groups. Record each entry's position within its source and family, preserve duplicate entries, and record retained disabled candidates separately with their disabled status.
 
 After migration, derive the same inventories from the new factories and registrations and compare the complete ordered records and counts per source and family. Require identical values, ordering, multiplicity, and enabled/disabled status. This source comparison requires no legacy GPU hardware; compiling the migrated translation units is a separate check and does not establish catalog preservation.
 
-Resolve native configuration aliases using the host compiler's lexical scope and preprocessing rules. Check the production catalog, commented candidates with their local aliases enabled, `#if 0` blocks enabled, and both forms enabled together. A declaration or scope boundary inside `#if 0` must not affect a candidate outside that block. Record comment suppression and preprocessor suppression separately; do not resolve aliases through a file-wide dictionary.
+Resolve native configuration aliases using the actual shared header and the host compiler's lexical scope and preprocessing rules. Check the production catalog, commented candidates enabled, `#if 0` blocks enabled, and both forms enabled together. A declaration or scope boundary inside `#if 0` must not affect a candidate outside that block. Record comment suppression and preprocessor suppression separately; do not resolve aliases through a file-wide dictionary. When checking the earlier source, enable the commented candidates' local aliases as well.
 
 Run static searches over the GEMM source tree to confirm:
 
 - Every tunable catalog uses `add<K<...>>(c)`, with the concrete factory's `Type` bound at the catalog invocation. Every such `Type` starts with configuration, stages, and raster; no individual entry needs a dependent-name qualifier.
 - No catalog still uses `add_v3`, `add_wa`, `add_kernel`, the old mixed forwarding function, or `c.add` directly.
 - No migrated configuration contains stages or both TMA/indexed register pairs.
+- No native catalog repeats a geometry definition; all native shape uses supply explicit producer/math counts to shared alias templates.
 - No references remain to removed tile aliases, detection helpers, or old template argument orders.
 - No active catalog entry, family field, CMake architecture selection, or enabled-source list changed.
 
@@ -666,9 +673,9 @@ Confirm this model/cache entry still exists in `/data/models.json` when implemen
 
 ## Completion criteria
 
-- All tunable GEMM catalogs use the shared `Config`, the common `Config, Stages, Raster` parameter prefix, and `add<K<...>>(c)` in free catalog functions. Legacy geometry aliases are defined once in the shared header; native SM90 configurations use local scopes for different register budgets.
+- All tunable GEMM catalogs use the shared `Config`, the common `Config, Stages, Raster` parameter prefix, and `add<K<...>>(c)` in free catalog functions. Both legacy and native geometry aliases are defined once in the shared header; native aliases take explicit producer/math counts.
 - Each family retains every existing implementation and tunable variation through its factories and their parameters. Factories only construct types; their bound `Type` aliases select catalog instantiations. The single W8A8 registrar invokes the V3 catalog followed by the WA catalog.
-- Register budgets are explicit in named configurations and contain exactly the active producer/math pair. They do not appear on individual registration lines or behind a lookup trait.
+- Register budgets contain exactly the active producer/math pair, supplied explicitly on each native registration through the shape alias's arguments. They do not depend on local alias scopes or a lookup trait.
 - One geometry/register configuration can be reused with different stages and other free tuning arguments.
 - The family registry, packing, descriptors, active kernel set/order, and numeric computation retain their existing behavior; complete before/after source inventories match for every SM70/SM75/SM80 catalog.
 - Obsolete tile records, parameter-detection helpers, and family-specific registration forwarding functions have no remaining users and are removed.
@@ -720,7 +727,7 @@ The approved plan was committed as `22c5e50ee` before implementation. All catalo
 | Qwen3-8B smoke | The unchanged model script passed with TP1 and 128 generated tokens. The response was inspected and contained coherent human text relevant to the transformer matrix-multiplication prompt. |
 | Full numerical sweep | All 1,520 case configurations matched the baseline status inventory, with no new failures or unsupported cases. All 10 seeded U4 tolerance-failure metrics matched exactly. |
 
-Follow-up review found that the retained BF16 dense L2 candidates for 192x128 and 256x128 inherited indexed register budgets when the dedicated blocked catalog remained under `#if 0`. The dense L2 candidates now have their own TMA configuration scope, and the conditional block contains balanced scope boundaries. The transient inventory checker now compiles the catalog bodies with a host recorder and preprocesses the baseline entry list. It reproduces all four former mismatches and passes after the correction: 256 active records, 374 records with commented candidates enabled, 260 with only `#if 0` enabled, and all 392 with both enabled. The `gemm2_sm90` target rebuilt successfully; all 28 BF16 SASS function bodies and resource reports still match the baseline. GPU workloads were not rerun for this scope correction. The revised inventories and comparison logs are under `bf16-scope-fix/` in the evidence directory.
+Follow-up review found that the retained BF16 dense L2 candidates for 192x128 and 256x128 inherited indexed register budgets when the dedicated blocked catalog remained under `#if 0`. That correction gave the dense L2 candidates their own TMA configuration scope and balanced the conditional block's scope boundaries; the later native alias cleanup below makes the budget explicit on each entry. The transient inventory checker now compiles the catalog bodies with a host recorder and preprocesses the baseline entry list. It reproduces all four former mismatches and passes after the correction: 256 active records, 374 records with commented candidates enabled, 260 with only `#if 0` enabled, and all 392 with both enabled. The `gemm2_sm90` target rebuilt successfully; all 28 BF16 SASS function bodies and resource reports still match the baseline. GPU workloads were not rerun for this scope correction. The revised inventories and comparison logs are under `bf16-scope-fix/` in the evidence directory.
 
 The stock full-suite command aborts on preexisting E4M3 packing and large-expert TMA workspace assertions. A transient driver therefore uses the unchanged `LinearFixture` and the complete existing full-suite matrix, records those restrictions explicitly, and continues after tolerance failures without weakening thresholds. The matrix contains 1,520 case configurations and 40 batch sizes each, or 60,800 requested runs. All 13,520 supported U4 runs use identical per-case and per-batch RNG seeds before and after. Earlier successful non-U4 baseline runs reuse the original full-suite results; other runs use the same seeded driver.
 
@@ -729,3 +736,11 @@ Before and after both produced 51,550 passing batch runs and 10 U4 tolerance fai
 NVFP4 numerical correctness remains unverified under the accepted limitation. Its compilation, descriptors, compiler resources, and SASS comparisons passed. Legacy architectures and retained disabled kernels received source/compile coverage; numerical execution was on H200 with the production SM90 registry.
 
 A subsequent cleanup consolidated 230 legacy geometry-alias declarations into 71 unique definitions in `kernel/geometry.h`. Each of the 11 legacy translation units imports `config::geometry` once; family catalog functions contain the registration rows. C++17 host `std::is_same_v` assertions verified all 71 aliases against their original definitions, all 395 ordered legacy inventory records matched, and all 11 affected CUDA translation units compiled successfully. Registration expressions, factory bindings, scope boundaries, and preprocessor directives were preserved. Evidence is under `/tmp/gemm_geometry_alias_dedup_bccf2b207/`; this cleanup ran no GPU workloads.
+
+The native cleanup replaced 210 local geometry/register declarations across eight source files with 53 shared alias templates. Each entry supplies its original producer/math counts, including retained candidates, and the redundant local budget scopes were removed. The shared native section is sorted by public output width, batch size, K, and math-group geometry. The legacy weight-as-A and weight-as-B sections retain their separate axis conventions. The plan examples and registration contract above reflect this approved spelling.
+
+For this cleanup, all 392 native records matched in the same four compiler/preprocessor modes, all 395 legacy records matched, and C++17 type-equivalence checks passed for all 210 original native declarations plus 71 legacy aliases. The full `ninja -j4` build passed and relinked the in-tree extension; all 11 legacy CUDA sources and the retained unfolded source also compiled. All 304 named native SASS function bodies, including instruction/control words, and their per-function resource reports match the saved pre-cleanup objects exactly. Packing, family records, factory declarations, registrar callbacks, registration arguments other than the explicit register spelling, and preprocessor gates are preserved. Evidence is under `/tmp/gemm_native_geometry_alias_dedup_2f5700cc0/`. No GPU workloads were rerun for this cleanup; the existing numerical limitations, including unverified NVFP4 correctness, remain as recorded above.
+
+The cluster-shape update replaces the two native multicast integers with a `ClusterShape` type defaulting to `Shape<1, 1>`. Its axes match the scheduler and `KernelDesc`: `kMulticastA` comes from N, `kMulticastB` from M, and `arch::Cluster` consumes M/N directly. All 133 explicit cluster arguments were converted, including 76 asymmetric entries, by replacing old `(A, B)` with `Shape<B, A>`. Factories forward the shape directly to the five device implementations; their existing flattened CuTe pipeline shape is unchanged.
+
+Verification for the cluster-shape update passed: all 392 source records in the four preprocessing modes, CUDA assertions for three cluster shapes across all five device implementations, the full build, and a separate retained unfolded compile. All 588 ordered runtime descriptors and resource records match exactly on H200, including cluster dimensions. All 304 native SASS function bodies and per-function resource records match after normalizing only the changed cluster template spelling in function names. The eight existing linear pytest cases passed. The full numerical sweep and model smoke were not repeated; NVFP4 numerical correctness retains its accepted limitation. Evidence is under `/tmp/gemm_cluster_shape_refactor_20260907/`.
