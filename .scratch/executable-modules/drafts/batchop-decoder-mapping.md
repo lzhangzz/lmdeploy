@@ -80,3 +80,7 @@ Per `checklist.contract-sync`, these land in the same change as the code that re
 - `ownership.module-cache` and `contracts.category-registration`: "during construction" → "during the `register_cache` pass" (registration timing moved out of constructors).
 - New lifecycle paragraph: the pass order above, and the default no-op `Run` dispatch rule.
 - `concepts.module` needs no change — the merged modules are exactly what it already describes.
+
+## Amendment (Rework the ExecContext design)
+
+The pass order's final injection step is `bind(Context&)` on the surviving `turbomind::Context` (not `ExecContext`): modules capture typed references — Linear the GEMM engine, Attention/Moe/DeltaNet their kind states. No other part of this mapping changes.

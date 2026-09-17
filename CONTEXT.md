@@ -11,9 +11,13 @@ _Avoid_: Layer, executor, weight class
 **Layer**:
 Legacy name for the pre-merge per-kind executor classes (`LlamaLinear`, `UnifiedAttentionLayer`, `LlamaFfnLayer`, `MoeFfnLayer`, `GatedDeltaNetLayer`); retires as Module absorbs forward execution. Do not use for new design.
 
-**ExecContext**:
-The per-rank provider of shared execution resources (GEMM engine, workspace pools, stream factory, comm handles), injected into Modules once after construction via a bind pass.
-_Avoid_: Context (the thread-local core::Context keeps that name), device resources, global state
+**Context**:
+The engine-side composition root holding per-rank infrastructure (GEMM engine, build stream and allocator, comm); executable Modules capture typed references from it via the bind pass.
+_Avoid_: ExecContext (dead name), services bundle, god-object framings
+
+**Kind state**:
+The single shared state object for a module kind with cross-layer state (Attention, Moe, DeltaNet), held once per rank and bound to every Module of that kind.
+_Avoid_: executor, per-module copies
 
 **Binding surface**:
 The Python-visible construction surface of the module tree: type names, child names, param names. Frozen by contract while internals may change.

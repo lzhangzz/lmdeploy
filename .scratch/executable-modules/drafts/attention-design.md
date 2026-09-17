@@ -118,3 +118,7 @@ Python builds the module tree by name
 ```
 
 Ordering rules: `register_cache` must complete before category finalization; `bind` must complete before the first `Run`; the two injection passes are otherwise independent, with the canonical order above. This pass structure is shared by all module kinds and lands in BatchOp and decoder mapping for the op-level wiring.
+
+## Amendment (Rework the ExecContext design)
+
+`bind(ExecContext&)` becomes `bind(Context&)` on the surviving `turbomind::Context`: each Attention module captures a reference to `AttentionState` (the per-phase batch slots, fp32 workspace, pinned staging, CP context, aux stream — held once per rank). The "attention kind pool" language above reads as `AttentionState`. Everything else (per-layer modules, `register_cache` pass, batch-level data, offsets, naming) stands.

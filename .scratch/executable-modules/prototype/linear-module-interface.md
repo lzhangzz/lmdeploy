@@ -197,3 +197,7 @@ Unchanged public names, now bound on the module instead of a wrapper: `get_weigh
 2. **Warm-up/tuning ops all on the module**: `set_measure`, `Export`, `Import`, `GetTuningSeq` are `Linear` methods delegating to the injected `ExecContext` (no facade object).
 3. **Naming**: C++ class `Linear`; `type()` keeps returning `"LinearWeight"` so Python's create-by-name is untouched.
 4. **Call-site style**: weight-is-executor (`mlp.w2->Forward(...)`); executor members (`linear_`) disappear from every layer class.
+
+## Amendment (Rework the ExecContext design)
+
+The `ExecContext`/`bind(ExecContext&)`/`xc_` machinery above is superseded: `turbomind::Context` survives as the engine root, and `Linear::bind(Context&)` captures a reference to the GEMM engine living in `Context` (`engine_ = &ctx.linear_engine()`). There is no `LinearState`. The standalone `linear.py` path constructs a `Context` and binds it after `prepare`. Everything else in this prototype (params, Forward overloads, frozen `"LinearWeight"` string, call sites, Python surface mapping) stands.

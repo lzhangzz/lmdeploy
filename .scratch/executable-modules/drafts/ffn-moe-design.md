@@ -125,6 +125,10 @@ The embedded `LlamaFfnLayer ffn_` member disappears: the shared expert is `share
 
 ## Amendment to the context contract
 
+**Reversed by [Rework the ExecContext design](../issues/10-rework-execcontext-design.md)**: MoE transport/routing state — `TokenDispatcher`, routing buffers, scales-copy stream — is now held once per rank in a shared `MoeState`, bound to every Moe module via `bind(Context&)`. The original per-module decision below is retained for the record; its memory/JIT multiplication consequence no longer applies, and the migration-gate item was softened to a general footprint check.
+
+<details><summary>Original (superseded) amendment</summary>
+
 The context contract's never-hold rule ("per-kind persistent workspaces: request from `pools()`; shared across layer instances") is **waived for Moe transport/routing state by explicit decision**: each per-layer Moe instance owns its `TokenDispatcher`, routing buffers, and scales-copy stream (factory-made). Consequences, recorded so the spec review sees them:
 
 - Dispatcher buffers scale with max tokens × hidden × topk and now multiply by layer count; the DeepEP JIT compile loop also runs per layer.
@@ -132,3 +136,4 @@ The context contract's never-hold rule ("per-kind persistent workspaces: request
 - Migration gates must therefore include a MoE-stage memory-footprint and startup-cost check (folded into Migration order and verification gates).
 
 Streams remain factory-made (`make_stream`) — per-module ownership of a handle is consistent with the factory clause; only the pooling clause is waived.
+</details>
