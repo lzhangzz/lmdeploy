@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -36,6 +37,7 @@
 #include "src/turbomind/models/internvit/internvit_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
@@ -820,6 +822,34 @@ PYBIND11_MODULE(_turbomind, m)
         "stream_ptr"_a,
         "Create a ContextGuard over a caller-owned CUDA stream and the device default memory pool. The caller retains stream ownership.");
 
+    // Engine-root Context — standalone path (linear.py): owns the per-rank
+    // GEMM engine the created modules capture in bind().
+    py::class_<ft::Context, std::unique_ptr<ft::Context>>(m, "Context")
+        .def(py::init<int>(),
+             "device_id"_a,
+             "Engine-root Context on the given CUDA device: stream, allocator and the per-rank GEMM engine.")
+        .def(
+            "gemm",
+            [](ft::Context& c) -> turbomind::gemm::Gemm& { return c.linear_engine().gemm(); },
+            py::return_value_policy::reference_internal,
+            "The GEMM engine object (weight-plan query surface).")
+        .def(
+            "import_records",
+            [](ft::Context& c, const std::string& path) {
+                std::ifstream ifs(path, std::ios::binary);
+                return c.linear_engine().Import(ifs);
+            },
+            "path"_a,
+            "Import cached kernel-selection records into the engine's dispatch cache.")
+        .def(
+            "export_records",
+            [](ft::Context& c, const std::string& path) {
+                std::ofstream ofs(path, std::ios::binary);
+                return c.linear_engine().Export(ofs);
+            },
+            "path"_a,
+            "Export the engine's kernel-selection records to a file.");
+
     // Param — lightweight handle to a Module parameter slot
     py::class_<ft::core::Param>(m, "Param")
         .def(
@@ -846,6 +876,11 @@ PYBIND11_MODULE(_turbomind, m)
             [](ft::core::Module& m, const std::string& name) -> ft::core::Param { return m.param(name); },
             "name"_a)
         .def("prepare", [](ft::core::Module& m) { m.prepare(); })
+        .def(
+            "bind",
+            [](ft::core::Module& m, ft::Context& ctx) { m.bind(ctx); },
+            "ctx"_a,
+            "Engine-binding walk: the module (and its children) capture per-rank services from the engine root.")
         .def(
             "child",
             [](ft::core::Module& m, const std::string& name) -> ft::core::Module* { return m.child(name); },
@@ -949,6 +984,16 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },
+            py::call_guard<py::gil_scoped_release>(),
+            "index"_a)
+        .def(
+            "register_cache",
+            [](TurboMind* model, int index) { model->RegisterCache(index); },
+            py::call_guard<py::gil_scoped_release>(),
+            "index"_a)
+        .def(
+            "bind",
+            [](TurboMind* model, int index) { model->Bind(index); },
             py::call_guard<py::gil_scoped_release>(),
             "index"_a)
         .def(

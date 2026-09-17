@@ -99,10 +99,30 @@ struct TurboMind::Impl {
         auto ctx_guard = weights_[index]->context();
         weights_[index]->prepare();
         TM_CUDA_CHECK(cudaGetLastError());
+    }
+
+    void RegisterCache(int index)
+    {
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
+        TM_CHECK(weights_[index] != nullptr) << "RegisterCache(" << index << ") must run after ProcessWeights";
+        // Cache-registration walk: modules register their blocks with the
+        // shared CacheRegistry. The pass is empty until Attention and
+        // DeltaNet become modules; the entry point exists now so the load
+        // driver's sequence is normative from stage 1 on.
+    }
+
+    void Bind(int index)
+    {
+        CudaDeviceGuard dev_guard(engine_param_.devices[index]);
+        TM_CHECK(weights_[index] != nullptr) << "Bind(" << index << ") must run after RegisterCache";
+        TM_CHECK(contexts_[index] != nullptr) << "CreateContext(" << index << ") must run before Bind";
+
+        auto ctx_guard = weights_[index]->context();
 
         // Engine-binding walk: modules capture per-rank services (the GEMM
         // engine for Linear; kind states in later stages) before first Run.
         weights_[index]->bind(*contexts_[index]);
+        TM_CUDA_CHECK(cudaGetLastError());
     }
 
     void CreateEngine(int index);
@@ -555,6 +575,16 @@ gemm::Gemm& TurboMind::gemm(int index)
 void TurboMind::ProcessWeights(int index)
 {
     return impl_->ProcessWeights(index);
+}
+
+void TurboMind::RegisterCache(int index)
+{
+    return impl_->RegisterCache(index);
+}
+
+void TurboMind::Bind(int index)
+{
+    return impl_->Bind(index);
 }
 
 void TurboMind::CreateEngine(int index)

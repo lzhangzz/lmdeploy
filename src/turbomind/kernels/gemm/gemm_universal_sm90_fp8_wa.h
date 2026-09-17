@@ -37,7 +37,7 @@
 /*
  * SM90 blockscaled FP8 GEMM — weight-as-A (WA) GMMA binding.
  *
- *   LlamaLinear API: A=act (M,K), B=weight (K,N), U/V scales
+ *   Linear API: A=act (M,K), B=weight (K,N), U/V scales
  *   GMMA: A_smem=weight (OUT×K), B_smem=act (BATCH×K)
  *   TileShape (OUT,BATCH,K)=(TILE_N,TILE_M,TILE_K)
  *   Scales: V sparse on GMMA-M (OUT); U dense on GMMA-N (BATCH)

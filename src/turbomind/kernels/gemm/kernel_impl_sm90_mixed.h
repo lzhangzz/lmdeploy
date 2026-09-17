@@ -68,7 +68,7 @@ public:
 
     explicit KernelImplSm90Mixed(const Family& family): Kernel{family}
     {
-        // Direct LlamaLinear API.  Internally the mainloop swaps operands so
+        // Direct Linear API.  Internally the mainloop swaps operands so
         // packed B is WGMMA RS operand A.
         desc_.order_a = kRowMajor;
         desc_.order_b = Gemm::Format::kPublicWeightOrder;

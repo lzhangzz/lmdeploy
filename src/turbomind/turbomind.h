@@ -40,6 +40,10 @@ public:
 
     void ProcessWeights(int index);
 
+    void RegisterCache(int index);
+
+    void Bind(int index);
+
     void CreateEngine(int index);
 
     void Sleep(int index, int level);

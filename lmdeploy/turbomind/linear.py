@@ -128,19 +128,18 @@ class Linear:
     """Plan, prepare, tune, and execute TurboMind linear operations from
     Torch."""
 
-    __slots__ = ('device', '_impl', '_workspaces', '_context', '__weakref__')
+    __slots__ = ('device', '_engine', '_context', '__weakref__')
 
     def __init__(self):
-        """Create an executor for the current CUDA device."""
+        """Create an engine-root Context for the current CUDA device."""
         self.device = torch.device('cuda', torch.cuda.current_device())
-        self._impl = None
-        self._workspaces = {}
+        self._engine = None
         self._context = None
-        with self._activate():
-            self._impl = _tm.LlamaLinear()
+        with torch.cuda.device(self.device):
+            self._engine = _tm.Context(self.device.index)
 
     def __del__(self):
-        """Release the native executor when its last reference is dropped."""
+        """Release the engine root when its last reference is dropped."""
         try:
             self.close()
         except Exception:
@@ -160,26 +159,10 @@ class Linear:
                 yield stream
 
     def close(self) -> None:
-        """Release the native executor on its device."""
+        """Release the engine root on its device."""
         with self._activate():
-            self._impl = None
-            # Workspace destruction is a plain cudaFree with no implicit
-            # synchronization; ensure all work using them has completed first.
-            torch.cuda.synchronize(self.device)
-            self._workspaces.clear()
+            self._engine = None
         self._context = None
-
-    def _workspace(self, stream):
-        """Default GEMM workspace for a stream, created on first use.
-
-        One per stream, kept for the lifetime of this executor (PyTorch
-        convention: like per-stream cuBLAS workspaces).
-        """
-        ws = self._workspaces.get(stream.cuda_stream)
-        if ws is None:
-            ws = _tm.GemmWorkspace(stream.cuda_stream)
-            self._workspaces[stream.cuda_stream] = ws
-        return ws
 
     def get_weight_plan(
         self,
@@ -201,7 +184,7 @@ class Linear:
         query.output_dtype = _to_tm_dtype(dtype if output_dtype is None else output_dtype)
         query.grouped = grouped
 
-        impl = self._impl.get_weight_plan(query)
+        impl = self._engine.gemm().get_weight_plan(query)
         if impl is None:
             raise NotImplementedError(
                 f'no GEMM family accepts format={data_format}, dtype={dtype}, '
@@ -267,6 +250,7 @@ class Linear:
             )
 
         impl.prepare()
+        impl.bind(self._engine)
 
         handle = Weight()
         handle._impl = impl
@@ -291,6 +275,7 @@ class Linear:
                 )
 
             impl = _tm.LinkLinearExperts([expert._impl for expert in experts])
+            impl.bind(self._engine)
             handle = Weight()
             handle._impl = impl
             handle._experts = experts
@@ -439,12 +424,7 @@ class Linear:
         """Select an immutable execution plan for an input and prepared
         weight."""
         tm = _tm
-        stream = torch.cuda.current_stream(self.device)
-        with torch.cuda.device(self.device):
-            workspace = self._workspace(stream)
-        impl = self._impl.get_exec_plan(
-            workspace,
-            weight._impl,
+        impl = weight._impl.get_exec_plan(
             tm.from_dlpack(x),
             None if indices is None else tm.from_dlpack(indices),
             None if offsets is None else tm.from_dlpack(offsets),
@@ -486,11 +466,9 @@ class Linear:
         """Execute a dense linear operation with an explicit execution plan."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_dense(
-                self._workspace(torch.cuda.current_stream(self.device)),
+            weight._impl.forward_dense(
                 exec_plan._impl,
                 _tm.from_dlpack(x),
-                weight._impl,
                 _tm.from_dlpack(out),
                 None if input_scales is None else _tm.from_dlpack(input_scales),
                 None if out_scales is None else _tm.from_dlpack(out_scales),
@@ -512,11 +490,9 @@ class Linear:
         """Execute a grouped linear operation with optional indexed input."""
         with self._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            self._impl.forward_moe(
-                self._workspace(torch.cuda.current_stream(self.device)),
+            weight._impl.forward_moe(
                 exec_plan._impl,
                 _tm.from_dlpack(x),
-                weight._impl,
                 None if indices is None else _tm.from_dlpack(indices),
                 _tm.from_dlpack(offsets),
                 _tm.from_dlpack(out),
@@ -544,12 +520,10 @@ class Linear:
         offsets_impl = None if offsets is None else tm.from_dlpack(offsets)
         input_scales_impl = None if input_scales is None else tm.from_dlpack(input_scales)
         with self._activate():
-            output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
+            output_spec = weight._impl._get_output_spec(input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
-            impl = self._impl.tune(
-                self._workspace(torch.cuda.current_stream(self.device)),
+            impl = weight._impl.tune(
                 input_impl,
-                weight._impl,
                 indices_impl,
                 offsets_impl,
                 tm.from_dlpack(out),
@@ -564,11 +538,11 @@ class Linear:
 
     def import_records(self, path: str | os.PathLike[str]) -> int:
         """Import cached kernel-selection records from a file."""
-        return int(self._impl.import_records(os.fspath(path)))
+        return int(self._engine.import_records(os.fspath(path)))
 
     def export_records(self, path: str | os.PathLike[str]) -> int:
         """Export cached kernel-selection records to a file."""
-        return int(self._impl.export_records(os.fspath(path)))
+        return int(self._engine.export_records(os.fspath(path)))
 
 
 _linears: weakref.WeakValueDictionary[int, Linear] = weakref.WeakValueDictionary()

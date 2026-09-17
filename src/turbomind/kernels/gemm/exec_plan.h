@@ -6,7 +6,6 @@
 #include "src/turbomind/kernels/gemm/output_spec.h"
 
 namespace turbomind {
-class LlamaLinear;
 class Linear;
 }  // namespace turbomind
 
@@ -21,7 +20,6 @@ public:
 
 private:
     friend class Gemm;
-    friend class ::turbomind::LlamaLinear;
     friend class ::turbomind::Linear;
 
     ExecPlan(GemmDesc desc, LaunchSpec launch): desc_{std::move(desc)}, launch_{launch} {}

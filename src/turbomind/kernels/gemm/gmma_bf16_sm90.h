@@ -74,7 +74,7 @@ CUTE_HOST_DEVICE constexpr auto gmma_ss_smem_selector()
 
 // TILE_OUT  = GMMA-M extent = problem N_out (weight output)  → GMMA-A = weight
 // TILE_BATCH = GMMA-N extent = problem M_batch (tokens)       → GMMA-B = activation
-// LlamaLinear API A/B stay act/weight; MMA operands are swapped relative to that API.
+// Linear API A/B stay act/weight; MMA operands are swapped relative to that API.
 // AtomLayoutMNK comes from the Tile_ (CuTe Layout<Shape<...>>).
 template<int TILE_OUT, int TILE_BATCH, int TILE_K, class AtomLayoutMNK_, int MmaN_ = 0>
 struct GmmaBF16Traits {

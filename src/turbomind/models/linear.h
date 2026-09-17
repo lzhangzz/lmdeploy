@@ -165,7 +165,7 @@ public:
     TM_MODULE_DECLARE(Linear, LINEAR_CHILDREN, LINEAR_PARAMS)
 
 private:
-    // absorbed from the retired executor (LlamaLinear::Impl)
+    // absorbed from the retired executor
     GEMMEngine& engine() const;
 
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB() const;

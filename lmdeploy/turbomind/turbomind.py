@@ -167,6 +167,8 @@ class TurboMind:
             with torch.cuda.device(self.devices[0]):
                 model_loader.export()
             self._process_weights()
+            self._register_cache()
+            self._bind()
             self._create_engine()
 
         self.session_len = _engine_config.session_len
@@ -185,6 +187,18 @@ class TurboMind:
         """Process weight."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             for _ in e.map(self.model_comm.process_weight, range(self.gpu_count)):
+                pass
+
+    def _register_cache(self):
+        """Register module caches (empty pass until attention layers are modules)."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.register_cache, range(self.gpu_count)):
+                pass
+
+    def _bind(self):
+        """Bind the engine root to each module tree."""
+        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
+            for _ in e.map(self.model_comm.bind, range(self.gpu_count)):
                 pass
 
     def _create_engine(self):
@@ -351,6 +365,8 @@ class TurboMind:
 
         if request.finished:
             self._process_weights()
+            self._register_cache()
+            self._bind()
             if self._engine_created is False:
                 self._create_engine()
 

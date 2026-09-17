@@ -11,16 +11,15 @@
 namespace turbomind {
 
 // Per-rank GEMM engine: engine object, dispatch cache, workspace and measure
-// policy, re-homed from LlamaLinear's private implementation. Owned by the
-// engine-root Context; delegates and modules capture it by reference and never
-// copy it.
+// policy. Owned by the engine-root Context; delegates and modules capture it
+// by reference and never copy it.
 class GEMMEngine {
 public:
     GEMMEngine();
 
     ~GEMMEngine();
 
-    GEMMEngine(const GEMMEngine&)            = delete;
+    GEMMEngine(const GEMMEngine&) = delete;
     GEMMEngine& operator=(const GEMMEngine&) = delete;
 
     gemm::Gemm& gemm() noexcept

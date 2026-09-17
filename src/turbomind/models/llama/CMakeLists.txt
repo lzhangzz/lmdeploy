@@ -8,7 +8,6 @@ find_package(CUDAToolkit REQUIRED)
 add_library(Llama STATIC
         LlamaV2.cc
         LlamaBatch.cc
-        LlamaLinear.cu
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
         LlamaFfnLayer.cc

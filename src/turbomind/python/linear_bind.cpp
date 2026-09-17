@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <cstdint>
-#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,7 +21,6 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
 #include "src/turbomind/models/linear.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/moe_weight.h"
 
 namespace py = pybind11;
@@ -118,9 +116,7 @@ void bind_linear(py::module_& m)
         .def("gate_up", &gemm::WeightPlan::gate_up, py::arg("act_type"), py::arg("projection_n"))
         .def(
             "pack",
-            [](const gemm::WeightPlan& plan, Linear& linear) {
-                plan.pack(linear, core::Context::stream().handle());
-            },
+            [](const gemm::WeightPlan& plan, Linear& linear) { plan.pack(linear, core::Context::stream().handle()); },
             py::arg("linear"),
             py::call_guard<py::gil_scoped_release>());
 
@@ -165,45 +161,31 @@ void bind_linear(py::module_& m)
         .def_readwrite("output_format", &Linear::output_format)
         .def_readwrite("epilogue", &Linear::epilogue)
         .def_readwrite("k_desc", &Linear::k_desc)
-        .def_readwrite("q_desc", &Linear::q_desc);
-
-    py::class_<LlamaLinear, std::shared_ptr<LlamaLinear>>(m, "LlamaLinear")
-        .def(py::init<>())
-        .def(
-            "get_weight_plan",
-            [](LlamaLinear& self, const gemm::WeightQuery& query) { return self.gemm().GetWeightPlan(query); },
-            py::arg("query"))
+        .def_readwrite("q_desc", &Linear::q_desc)
         .def(
             "get_exec_plan",
-            [](LlamaLinear&                  self,
-               const Linear&           weight,
+            [](Linear&                       self,
                std::shared_ptr<core::Tensor> input,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets) {
                 return self.GetExecPlan(
-                    TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
+                    TensorFromShared(input, "input"), IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
             },
-            py::arg("weight"),
             py::arg("input"),
             py::arg("indices") = py::none(),
             py::arg("offsets") = py::none())
         .def(
             "_get_output_spec",
-            [](const LlamaLinear&            self,
-               const Linear&           weight,
-               std::shared_ptr<core::Tensor> input,
-               std::shared_ptr<core::Tensor> indices) {
-                return self.GetOutputSpec(TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices));
+            [](const Linear& self, std::shared_ptr<core::Tensor> input, std::shared_ptr<core::Tensor> indices) {
+                return self.GetOutputSpec(TensorFromShared(input, "input"), IntBufferOrEmpty(indices));
             },
-            py::arg("weight"),
             py::arg("input"),
             py::arg("indices") = py::none())
         .def(
             "forward_dense",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
-               Linear&                 weight,
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
@@ -212,20 +194,18 @@ void bind_linear(py::module_& m)
                 core::Tensor           in_s  = TensorOrEmpty(input_scales);
                 core::Tensor           out_s = TensorOrEmpty(output_scales);
                 py::gil_scoped_release release;
-                self.Forward(plan, in, in_s, weight, {}, {}, out, out_s);
+                self.Forward(plan, in, in_s, {}, {}, out, out_s);
             },
             py::arg("plan"),
             py::arg("input"),
-            py::arg("weight"),
             py::arg("output"),
             py::arg("input_scales")  = py::none(),
             py::arg("output_scales") = py::none())
         .def(
             "forward_moe",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
-               Linear&                 weight,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets,
                std::shared_ptr<core::Tensor> output,
@@ -238,11 +218,10 @@ void bind_linear(py::module_& m)
                 Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
                 Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
                 py::gil_scoped_release release;
-                self.Forward(plan, in, in_s, weight, index_buffer, offset_buffer, out, out_s);
+                self.Forward(plan, in, in_s, index_buffer, offset_buffer, out, out_s);
             },
             py::arg("plan"),
             py::arg("input"),
-            py::arg("weight"),
             py::arg("indices") = py::none(),
             py::arg("offsets"),
             py::arg("output"),
@@ -250,9 +229,8 @@ void bind_linear(py::module_& m)
             py::arg("output_scales") = py::none())
         .def(
             "tune",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                std::shared_ptr<core::Tensor> input,
-               Linear&                 weight,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets,
                std::shared_ptr<core::Tensor> output,
@@ -265,29 +243,14 @@ void bind_linear(py::module_& m)
                 Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
                 Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
                 py::gil_scoped_release release;
-                return self.Tune(in, in_s, weight, index_buffer, offset_buffer, out, out_s);
+                return self.Tune(in, in_s, index_buffer, offset_buffer, out, out_s);
             },
             py::arg("input"),
-            py::arg("weight"),
             py::arg("indices") = py::none(),
             py::arg("offsets") = py::none(),
             py::arg("output"),
             py::arg("input_scales")  = py::none(),
-            py::arg("output_scales") = py::none())
-        .def(
-            "import_records",
-            [](LlamaLinear& self, const std::string& path) {
-                std::ifstream ifs(path, std::ios::binary);
-                return self.Import(ifs);
-            },
-            py::arg("path"))
-        .def(
-            "export_records",
-            [](LlamaLinear& self, const std::string& path) {
-                std::ofstream ofs(path, std::ios::binary);
-                return self.Export(ofs);
-            },
-            py::arg("path"));
+            py::arg("output_scales") = py::none());
 
     // --- Quantization helpers (stream defaults to Context::stream) ---
 
