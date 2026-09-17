@@ -50,6 +50,7 @@ Each executable module reads services only through its `ExecContext* xc_` member
 - Raw `cudaStream_t`, `cudaEvent_t`, or communicator handles. Request via `make_stream` / `make_event` / `comm()`. Today's per-executor aux streams and events (attention `aux_stream_`/`qkv_event_`, GDN, MoE A2A `scales_copy_stream_`) migrate to factory-made handles.
 - Its own `gemm::Gemm`, `DispatchCache`, or GEMM workspace. The per-rank instance in `ExecContext` is the only one on the engine path.
 - Per-kind persistent workspaces. Request from `pools()` at Setup; capacity is shared across all layer instances of a kind (this is what preserves today's memory profile when modules multiply per-layer: attention `partial_O_`/`partial_ML_`, MoE routing buffers, the decoder `symm_buf_`).
+  - **Amendment (Merged FFN and MoE module design)**: MoE transport/routing state — `TokenDispatcher`, routing buffers, scales-copy stream — is owned per module instance instead, by explicit decision. See `drafts/ffn-moe-design.md` for the recorded consequences (per-layer memory and JIT multiplication; migration gates must check).
 
 Module-owned, allowed and expected: weights and their packed forms; persistent device buffers sized at Setup from pools or module registrations (pinned staging included); cache-category byte offsets per `ownership.module-cache`.
 
