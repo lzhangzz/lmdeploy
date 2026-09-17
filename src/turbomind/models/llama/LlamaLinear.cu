@@ -14,10 +14,12 @@
 #include "src/turbomind/kernels/quantization.h"
 
 #include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/llama/GEMMEngine.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 
+#include <memory>
 #include <optional>
 
 namespace turbomind {
@@ -25,6 +27,17 @@ namespace turbomind {
 using namespace gemm;
 
 struct LlamaLinear::Impl {
+
+    // Engine-path construction: delegate over the Context-owned engine.
+    explicit Impl(GEMMEngine& engine): engine_{&engine} {}
+
+    // Standalone construction: the delegate owns a private engine.
+    Impl(): owned_engine_{std::make_unique<GEMMEngine>()}, engine_{owned_engine_.get()} {}
+
+    std::unique_ptr<GEMMEngine> owned_engine_;  // standalone path only
+    GEMMEngine*                 engine_;        // engine this delegate runs on
+
+    gemm::Workspace* workspace_ = nullptr;  // With() override; falls back to the engine workspace
 
     std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LinearWeight& weight)
     {
@@ -72,7 +85,7 @@ struct LlamaLinear::Impl {
     Operation GetOperation(const LinearWeight& weight) const
     {
         Operation operation{};
-        operation.dispatch  = dispatch_policy_;
+        operation.dispatch  = engine_->dispatch_policy();
         operation.epilogue  = weight.epilogue;
         operation.quant_a   = MakeQuantDesc(weight.input_format);
         operation.quant_b   = MakeQuantDesc(weight.weight_format);
@@ -109,8 +122,6 @@ struct LlamaLinear::Impl {
                                  Tensor&             output,
                                  Tensor&             output_scales)
     {
-        TM_CHECK(workspace_);
-
         Tensor       in = input.view({-1, input.shape(-1)});
         MatrixLayout desc_A;
         MatrixLayout desc_U;
@@ -176,7 +187,7 @@ struct LlamaLinear::Impl {
         args.Ddesc             = desc_D;
         args.W                 = W_ptr;
         args.Wdesc             = desc_W;
-        args.workspace         = workspace_;
+        args.workspace         = workspace_ ? workspace_ : engine_->workspace();
         args.stream            = core::Context::stream().handle();
         return args;
     }
@@ -195,17 +206,14 @@ struct LlamaLinear::Impl {
         Tensor          U;
         Gemm::Arguments args = GetArguments(
             A, U, plan.output_spec(), input, input_scales, weight, indices, offsets, output, output_scales);
-        const int ec = gemm_.Run(plan, args);
+        const int ec = engine_->gemm().Run(plan, args);
         if (ec) {
             TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
         }
     }
-
-    gemm::Gemm           gemm_;
-    gemm::DispatchPolicy dispatch_policy_{gemm::DispatchPolicy::kDefault};
-
-    gemm::Workspace* workspace_ = nullptr;
 };
+
+LlamaLinear::LlamaLinear(GEMMEngine& engine): impl_{std::make_shared<Impl>(engine)} {}
 
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
 
@@ -227,7 +235,7 @@ LlamaLinear::WorkspaceScope::~WorkspaceScope()
 
 gemm::Gemm& LlamaLinear::gemm() noexcept
 {
-    return impl_->gemm_;
+    return impl_->engine_->gemm();
 }
 
 void LlamaLinear::Forward(const Tensor&       input,  //
@@ -265,12 +273,13 @@ void LlamaLinear::Forward(const Tensor&       input,
     Gemm::Arguments args = impl_->GetArguments(
         A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 
-    auto exec_plan =
-        impl_->dispatch_policy_ & DispatchPolicy::kMeasure ? impl_->gemm_.Tune(args) : impl_->gemm_.GetExecPlan(args);
+    auto&     gemm      = impl_->engine_->gemm();
+    auto      exec_plan = impl_->engine_->dispatch_policy() & DispatchPolicy::kMeasure ? gemm.Tune(args)
+                                                                                      : gemm.GetExecPlan(args);
 
     TM_CHECK(exec_plan);
     exec_plan->output_spec_ = std::move(output_spec);
-    const int ec            = impl_->gemm_.Run(*exec_plan, args);
+    const int ec            = gemm.Run(*exec_plan, args);
     if (ec) {
         TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
     }
@@ -308,8 +317,6 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
                                                  const Buffer_<int>& indices,
                                                  const Buffer_<int>& offsets)
 {
-    TM_CHECK(impl_->workspace_);
-
     const bool indexed = static_cast<bool>(indices) && indices.size() > 0;
     const int  k       = input.shape(-1);
     const int  m       = indexed ? indices.size() : input.size() / k;
@@ -339,9 +346,10 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
     args.Vdesc     = desc_V;
     args.Cdesc     = desc_D;
     args.Ddesc     = desc_D;
-    args.workspace = impl_->workspace_;
+    args.workspace = impl_->workspace_ ? impl_->workspace_ : impl_->engine_->workspace();
 
-    auto plan = impl_->gemm_.GetExecPlan(args);
+    auto& gemm = impl_->engine_->gemm();
+    auto  plan = gemm.GetExecPlan(args);
     if (plan) {
         plan->output_spec_ = std::move(output_spec);
     }
@@ -362,12 +370,13 @@ std::optional<ExecPlan> LlamaLinear::Tune(const Tensor&       input,
     Gemm::Arguments args = impl_->GetArguments(
         A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
     args.operation.dispatch = DispatchPolicy::kMeasure;
-    auto exec_plan          = impl_->gemm_.Tune(args);
+    auto& gemm              = impl_->engine_->gemm();
+    auto  exec_plan         = gemm.Tune(args);
     if (!exec_plan) {
         return std::nullopt;
     }
     exec_plan->output_spec_ = std::move(output_spec);
-    if (impl_->gemm_.Run(*exec_plan, args)) {
+    if (gemm.Run(*exec_plan, args)) {
         return std::nullopt;
     }
     return exec_plan;
@@ -375,32 +384,22 @@ std::optional<ExecPlan> LlamaLinear::Tune(const Tensor&       input,
 
 void LlamaLinear::set_measure(bool measure)
 {
-    impl_->dispatch_policy_ = measure ? gemm::DispatchPolicy::kAppend : gemm::DispatchPolicy::kReuse;
+    impl_->engine_->set_measure(measure);
 }
 
 int LlamaLinear::Export(std::ostream& os)
 {
-    if (os) {
-        return impl_->gemm_.Export(os);
-    }
-    return 0;
+    return impl_->engine_->Export(os);
 }
 
 int LlamaLinear::Import(std::istream& is)
 {
-    auto n_records = 0;
-    if (is) {
-        n_records = impl_->gemm_.Import(is);
-    }
-    if (n_records) {
-        impl_->dispatch_policy_ = gemm::DispatchPolicy::kReuse;
-    };
-    return n_records;
+    return impl_->engine_->Import(is);
 }
 
 std::vector<int> LlamaLinear::GetTuningSeq() const
 {
-    return impl_->gemm_.GetTuningSeq();
+    return impl_->engine_->GetTuningSeq();
 }
 
 }  // namespace turbomind

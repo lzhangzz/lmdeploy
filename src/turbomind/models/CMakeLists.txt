@@ -24,6 +24,7 @@ add_library(models STATIC
         internvit/internvit_weight.cc
         internvit/internvit.cc
         llama/LlamaLinear.cu
+        llama/GEMMEngine.cu
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
         llama/unified_decoder.cc

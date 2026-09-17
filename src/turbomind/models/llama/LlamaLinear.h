@@ -11,6 +11,8 @@
 
 namespace turbomind {
 
+class GEMMEngine;
+
 class LlamaLinear {
 public:
     // Opaque, non-copyable, non-movable RAII token. While alive, this linear
@@ -35,7 +37,11 @@ public:
     // Bind this linear to `workspace` for the enclosing scope.
     [[nodiscard]] WorkspaceScope With(gemm::Workspace& workspace);
 
-    explicit LlamaLinear();
+    /// Delegate over the Context-owned GEMMEngine (engine path).
+    explicit LlamaLinear(GEMMEngine& engine);
+
+    /// Standalone construction (Python binding): owns a private GEMMEngine.
+    LlamaLinear();
 
     void Forward(const Tensor&       input,  //
                  const LinearWeight& weight,

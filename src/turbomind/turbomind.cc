@@ -106,7 +106,7 @@ struct TurboMind::Impl {
 
     gemm::Gemm& gemm(int index)
     {
-        return contexts_.at(index)->linear->gemm();
+        return contexts_.at(index)->linear_engine().gemm();
     }
 
     void WarmUp(int index);
@@ -398,11 +398,11 @@ void TurboMind::Impl::WarmUp(int index)
     auto& ctx = *TM_CHECK_NOTNULL(contexts_[index]);
 
     auto& global = ctx.comm.h_global;
-    auto& linear = *ctx.linear;
+    auto& engine = ctx.linear_engine();
 
     if (auto str = std::getenv("TM_GEMM_IMPORT")) {
         std::ifstream ifs(str);
-        const int     n_imported = linear.Import(ifs);
+        const int     n_imported = engine.Import(ifs);
         if (index == 0) {
             TM_LOG_INFO("{} records imported", n_imported);
         }
@@ -412,7 +412,7 @@ void TurboMind::Impl::WarmUp(int index)
     global->Sync();
 
     *ctx.is_warm_up = 1;
-    linear.set_measure(true);
+    engine.set_measure(true);
 
     if (index == 0) {
         gateway_->set_threshold(engine_param_.attn_dp_size);
@@ -422,7 +422,7 @@ void TurboMind::Impl::WarmUp(int index)
 
     if (ctx.comm.h_tp_group->rank() == 0) {
 
-        std::vector<int> bss = linear.GetTuningSeq();
+        std::vector<int> bss = engine.GetTuningSeq();
         if (bss.empty()) {
             bss = gemm::GenerateTuningSequence(gemm::GetDefaultTuningGenerators());
         }
@@ -496,13 +496,13 @@ void TurboMind::Impl::WarmUp(int index)
 
     global->Sync();
 
-    linear.set_measure(false);
+    engine.set_measure(false);
     *ctx.is_warm_up = 0;
 
     if (index == 0) {
         if (auto path = std::getenv("TM_GEMM_EXPORT")) {
             std::ofstream ofs(path);
-            const auto    n_records = linear.Export(ofs);
+            const auto    n_records = engine.Export(ofs);
             TM_LOG_INFO("{} records exported.", n_records);
         }
 
