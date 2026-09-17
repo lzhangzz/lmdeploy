@@ -190,7 +190,7 @@ class TurboMind:
                 pass
 
     def _register_cache(self):
-        """Register module caches (empty pass until attention layers are modules)."""
+        """Register module caches with the engine's cache registry."""
         with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
             for _ in e.map(self.model_comm.register_cache, range(self.gpu_count)):
                 pass

@@ -63,6 +63,14 @@ void Module::prepare()
     });
 }
 
+void Module::register_cache(::turbomind::CacheRegistry& registry)
+{
+    for_each_child([&registry](const char* /*name*/, Module* child) {
+        if (child)
+            child->register_cache(registry);
+    });
+}
+
 void Module::Run(BatchOp /*op*/, int /*phase*/, TensorMap& /*env*/)
 {
     // default: no-op

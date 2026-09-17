@@ -57,9 +57,10 @@ struct TurboMind::Impl {
     vector<int> global_rank_;
 
     // Weights & engine instances for the ranks
-    vector<shared_ptr<ModelRoot>> weights_;
-    vector<shared_ptr<Context>>   contexts_;
-    vector<Engine>                engines_;
+    vector<shared_ptr<ModelRoot>>     weights_;
+    vector<shared_ptr<Context>>       contexts_;
+    vector<unique_ptr<CacheRegistry>> cache_registries_;
+    vector<Engine>                    engines_;
 
     string model_dir_;
 
@@ -105,10 +106,19 @@ struct TurboMind::Impl {
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
         TM_CHECK(weights_[index] != nullptr) << "RegisterCache(" << index << ") must run after ProcessWeights";
-        // Cache-registration walk: modules register their blocks with the
-        // shared CacheRegistry. The pass is empty until Attention and
-        // DeltaNet become modules; the entry point exists now so the load
-        // driver's sequence is normative from stage 1 on.
+
+        // Cache-registration pass: every module in the tree registers its
+        // per-layer cache byte requirements with the rank's registry and
+        // keeps only the returned offsets. The registry lives here until
+        // CreateEngine finalizes categories into object ids — registration
+        // must complete before that. Attention and DeltaNet modules begin
+        // registering here in stage 3; the engine-side layer classes keep
+        // their construction-time registrations until they retire.
+        // Idempotent: update_params reloads run the pass again, after the
+        // previous registry moved into the live engine.
+        cache_registries_[index] = std::make_unique<CacheRegistry>();
+        cache_registries_[index]->set_checkpoint_min_interval(engine_param_.cache_checkpoint_interval);
+        weights_[index]->register_cache(*cache_registries_[index]);
     }
 
     void Bind(int index)
@@ -218,6 +228,7 @@ TurboMind::Impl::Impl(string model_dir, EngineConfig config, FFICtxFactory ffi_c
     weights_.resize(engine_param_.devices.size());
     engines_.resize(engine_param_.devices.size());
     contexts_.resize(engine_param_.devices.size());
+    cache_registries_.resize(engine_param_.devices.size());
 
     // NOTE: This runs on Python main thread
     group_id_ = comm::CreateHostGroupId((engine_param_.nnodes == 1) ? "" : "hybrid");
@@ -367,8 +378,11 @@ void TurboMind::Impl::CreateEngine(int index)
 
     Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
     ObjectAllocator alloc{std::move(cache_region)};
-    CacheRegistry   cache_registry;
-    cache_registry.set_checkpoint_min_interval(param.cache_checkpoint_interval);
+    // The registry was created and populated by the RegisterCache pass; the
+    // engine-side layer classes still add their construction-time
+    // registrations into it below. Category finalization must run only
+    // after all registrations — enforced by the CacheCategory checks.
+    auto& cache_registry = *TM_CHECK_NOTNULL(cache_registries_[index]);  // RegisterCache must run first
 
     // create model
     LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
@@ -392,6 +406,7 @@ void TurboMind::Impl::CreateEngine(int index)
                              engine_param_.devices[index],
                              queue_id_[index],
                              phases_};
+    cache_registries_[index].reset();  // the registry moved into the engine
 
     core::Context::stream().Sync();
 

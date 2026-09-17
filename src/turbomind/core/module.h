@@ -20,6 +20,7 @@ namespace turbomind {
 
 struct Context;
 enum class BatchOp;
+class CacheRegistry;
 
 }  // namespace turbomind
 
@@ -255,6 +256,12 @@ public:
     /// Post-load processing: weight format conversion, fusion.
     /// Default recurses into children via for_each_child.
     virtual void prepare();
+
+    /// Cache-registration walk: each module registers its per-layer cache
+    /// byte requirements with the registry and keeps only the returned
+    /// offsets. Runs after prepare and before category finalization.
+    /// Default recurses into children via for_each_child.
+    virtual void register_cache(::turbomind::CacheRegistry& registry);
 
     /// Engine-run dispatch (contract-native BatchOp walk). Kinds implement
     /// their subset of ops and ignore the rest; the default is a no-op.
