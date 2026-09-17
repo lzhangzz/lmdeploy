@@ -1,0 +1,2 @@
+backend,bs,dataset_name,sharegpt_output_len,random_input_len,random_output_len,random_range_ratio,num_prompts,completed,total_input_tokens,total_output_tokens,duration,request_throughput,input_throughput,output_throughput,mean_e2e_latency_ms,mean_ttft_ms,mean_tpot_ms,mean_itl_ms
+turbomind,1,random,,128,256,0.0,16,16,1156,2152,17.005569767206907,0.941,67.978,126.547,1062.740,25.240,7.765,7.772

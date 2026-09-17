@@ -1,0 +1,56 @@
+Traceback (most recent call last):
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 460, in <module>
+    main()
+    ~~~~^^
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 402, in main
+    engine = Engine(args.model_path, engine_config, speculative_config, trust_remote_code=args.trust_remote_code)
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 149, in __init__
+    tm_model = TurboMind.from_pretrained(
+        model_path, engine_config=engine_config, trust_remote_code=trust_remote_code
+    )
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 383, in from_pretrained
+    return cls(model_path=pretrained_model_name_or_path,
+               model_name=model_name,
+    ...<2 lines>...
+               trust_remote_code=trust_remote_code,
+               **kwargs)
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 160, in __init__
+    self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
+                                    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                  trust_remote_code=trust_remote_code)
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 228, in _from_hf
+    model, model_path, data_type = get_tm_config(model_path, engine_config,
+                                   ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                 trust_remote_code=trust_remote_code)
+                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/converter.py", line 184, in get_tm_config
+    assert engine_config.model_format is None or engine_config.model_format == quant_method, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: mismatched quant method: user input "hf" vs model quant_config "awq"
+Loading:   0%|          | 0/36 [00:00<?, ?it/s]Loading:  11%|█         | 4/36 [00:00<00:01, 31.26it/s]Loading:  25%|██▌       | 9/36 [00:00<00:00, 37.78it/s]Loading:  39%|███▉      | 14/36 [00:00<00:00, 40.04it/s]Loading:  53%|█████▎    | 19/36 [00:00<00:00, 41.13it/s]Loading:  67%|██████▋   | 24/36 [00:00<00:00, 41.80it/s]Loading:  81%|████████  | 29/36 [00:00<00:00, 42.24it/s]Loading:  94%|█████████▍| 34/36 [00:00<00:00, 42.32it/s]                                                        #Input tokens: 32222
+#Output tokens: 66819
+  0%|          | 0/512 [00:00<?, ?it/s]  0%|          | 1/512 [00:00<02:20,  3.64it/s]  2%|▏         | 8/512 [00:00<00:21, 23.77it/s]  3%|▎         | 13/512 [00:00<00:16, 30.18it/s]  4%|▎         | 19/512 [00:00<00:14, 34.22it/s]  5%|▍         | 24/512 [00:00<00:14, 34.03it/s]  6%|▌         | 30/512 [00:00<00:12, 39.74it/s]  7%|▋         | 35/512 [00:01<00:12, 38.22it/s]  8%|▊         | 40/512 [00:01<00:13, 34.53it/s]  9%|▉         | 47/512 [00:01<00:11, 41.94it/s] 11%|█         | 55/512 [00:01<00:08, 51.07it/s] 12%|█▏        | 62/512 [00:01<00:08, 52.35it/s] 13%|█▎        | 69/512 [00:01<00:07, 56.38it/s] 16%|█▌        | 80/512 [00:01<00:06, 69.45it/s] 17%|█▋        | 88/512 [00:01<00:07, 60.09it/s] 19%|█▊        | 95/512 [00:02<00:07, 58.81it/s] 21%|██        | 106/512 [00:02<00:05, 68.79it/s] 23%|██▎       | 117/512 [00:02<00:05, 75.18it/s] 25%|██▍       | 127/512 [00:02<00:04, 80.88it/s] 27%|██▋       | 136/512 [00:02<00:04, 76.97it/s] 29%|██▊       | 147/512 [00:02<00:04, 78.83it/s] 31%|███       | 157/512 [00:02<00:04, 83.94it/s] 34%|███▍      | 174/512 [00:02<00:03, 103.12it/s] 36%|███▌      | 185/512 [00:03<00:03, 101.60it/s] 38%|███▊      | 196/512 [00:03<00:03, 98.11it/s]  40%|████      | 207/512 [00:03<00:03, 98.49it/s] 42%|████▏     | 217/512 [00:03<00:03, 96.38it/s] 44%|████▍     | 227/512 [00:03<00:03, 88.13it/s] 46%|████▌     | 236/512 [00:03<00:03, 83.93it/s] 48%|████▊     | 245/512 [00:03<00:03, 75.39it/s] 49%|████▉     | 253/512 [00:03<00:03, 74.34it/s] 51%|█████▏    | 263/512 [00:04<00:03, 77.34it/s] 53%|█████▎    | 273/512 [00:04<00:02, 80.46it/s] 56%|█████▋    | 288/512 [00:04<00:02, 95.84it/s] 58%|█████▊    | 298/512 [00:04<00:02, 91.03it/s] 60%|██████    | 308/512 [00:04<00:02, 74.52it/s] 62%|██████▏   | 318/512 [00:04<00:02, 78.83it/s] 64%|██████▍   | 328/512 [00:04<00:02, 80.93it/s] 66%|██████▌   | 338/512 [00:04<00:02, 84.78it/s] 68%|██████▊   | 347/512 [00:04<00:02, 82.30it/s] 70%|██████▉   | 356/512 [00:05<00:02, 76.63it/s] 71%|███████▏  | 366/512 [00:05<00:01, 80.65it/s] 73%|███████▎  | 375/512 [00:05<00:01, 79.90it/s] 75%|███████▌  | 384/512 [00:05<00:01, 76.09it/s] 77%|███████▋  | 393/512 [00:05<00:01, 77.67it/s] 79%|███████▊  | 403/512 [00:05<00:01, 82.72it/s] 80%|████████  | 412/512 [00:05<00:01, 78.05it/s] 82%|████████▏ | 421/512 [00:05<00:01, 80.09it/s] 84%|████████▍ | 432/512 [00:06<00:00, 84.47it/s] 87%|████████▋ | 443/512 [00:06<00:00, 87.66it/s] 88%|████████▊ | 453/512 [00:06<00:00, 86.94it/s] 90%|█████████ | 462/512 [00:06<00:00, 87.19it/s] 92%|█████████▏| 471/512 [00:06<00:00, 76.56it/s] 94%|█████████▍| 480/512 [00:06<00:00, 72.26it/s] 95%|█████████▌| 488/512 [00:06<00:00, 63.16it/s] 97%|█████████▋| 495/512 [00:07<00:00, 45.61it/s] 98%|█████████▊| 503/512 [00:07<00:00, 50.20it/s] 99%|█████████▉| 509/512 [00:07<00:00, 40.84it/s]100%|██████████| 512/512 [00:07<00:00, 65.64it/s]
+
+=================================== Profile Throughput ===================================
+Benchmark duration                           7.800
+Total requests                                 512
+Successful requests                            512
+Concurrency                                    128
+Cancel rate                                      0
+Stream output                                 true
+Skip tokenize                                false
+Skip detokenize                              false
+Total input tokens                           32222
+Total generated tokens                       66822
+Input throughput (tok/s)                  4131.036
+Output throughput (tok/s)                 8566.944
+Request throughput (req/s)                  65.641
+------------------------------------------------------------------------------------------
+                                              mean       P50       P75       P95       P99
+End-to-end Latency                           1.577     1.570     2.218     2.846     3.065
+Time to First Token (TTFT)                   0.091     0.041     0.053     0.254     0.257
+Time per Output Token (TPOT)                 0.012     0.012     0.012     0.012     0.013
+Inter-token Latency (ITL)                    0.011     0.011     0.013     0.015     0.016
+Tokens per Tick                              1.000         1         1         1         1
+==========================================================================================

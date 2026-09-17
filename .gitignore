@@ -99,3 +99,6 @@ proxy_config.yml
 # Claude Code local config
 CLAUDE.local.md
 .worktrees/
+
+# executable-modules-impl perf baseline records (raw benchmark CSVs and logs)
+!.scratch/executable-modules-impl/perf/raw/**

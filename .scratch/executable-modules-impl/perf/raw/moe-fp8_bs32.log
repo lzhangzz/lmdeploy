@@ -1,0 +1,57 @@
+Traceback (most recent call last):
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 460, in <module>
+    main()
+    ~~~~^^
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 402, in main
+    engine = Engine(args.model_path, engine_config, speculative_config, trust_remote_code=args.trust_remote_code)
+  File "/data/lmdeploy-gemm/benchmark/profile_throughput.py", line 149, in __init__
+    tm_model = TurboMind.from_pretrained(
+        model_path, engine_config=engine_config, trust_remote_code=trust_remote_code
+    )
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 383, in from_pretrained
+    return cls(model_path=pretrained_model_name_or_path,
+               model_name=model_name,
+    ...<2 lines>...
+               trust_remote_code=trust_remote_code,
+               **kwargs)
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 160, in __init__
+    self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
+                                    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                  trust_remote_code=trust_remote_code)
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/turbomind.py", line 228, in _from_hf
+    model, model_path, data_type = get_tm_config(model_path, engine_config,
+                                   ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                 trust_remote_code=trust_remote_code)
+                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/lmdeploy-gemm/lmdeploy/turbomind/converter.py", line 184, in get_tm_config
+    assert engine_config.model_format is None or engine_config.model_format == quant_method, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: mismatched quant method: user input "hf" vs model quant_config "fp8"
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading:   0%|          | 0/40 [00:00<?, ?it/s]Loading:   2%|▎         | 1/40 [00:00<00:11,  3.50it/s]Loading:   5%|▌         | 2/40 [00:00<00:10,  3.60it/s]Loading:   8%|▊         | 3/40 [00:00<00:10,  3.67it/s]Loading:  10%|█         | 4/40 [00:01<00:09,  3.72it/s]Loading:  12%|█▎        | 5/40 [00:01<00:09,  3.72it/s]Loading:  15%|█▌        | 6/40 [00:01<00:09,  3.71it/s]Loading:  18%|█▊        | 7/40 [00:01<00:08,  3.69it/s]Loading:  20%|██        | 8/40 [00:02<00:08,  3.71it/s]Loading:  22%|██▎       | 9/40 [00:02<00:08,  3.71it/s]Loading:  25%|██▌       | 10/40 [00:02<00:08,  3.73it/s]Loading:  28%|██▊       | 11/40 [00:02<00:07,  3.72it/s]Loading:  30%|███       | 12/40 [00:03<00:07,  3.73it/s]Loading:  32%|███▎      | 13/40 [00:03<00:07,  3.71it/s]Loading:  35%|███▌      | 14/40 [00:03<00:07,  3.68it/s]Loading:  38%|███▊      | 15/40 [00:04<00:06,  3.67it/s]Loading:  40%|████      | 16/40 [00:04<00:06,  3.66it/s]Loading:  42%|████▎     | 17/40 [00:04<00:06,  3.64it/s]Loading:  45%|████▌     | 18/40 [00:04<00:06,  3.65it/s]Loading:  48%|████▊     | 19/40 [00:05<00:05,  3.61it/s]Loading:  50%|█████     | 20/40 [00:05<00:05,  3.62it/s]Loading:  52%|█████▎    | 21/40 [00:05<00:05,  3.63it/s]Loading:  55%|█████▌    | 22/40 [00:05<00:04,  3.67it/s]Loading:  57%|█████▊    | 23/40 [00:06<00:04,  3.68it/s]Loading:  60%|██████    | 24/40 [00:06<00:04,  3.68it/s]Loading:  62%|██████▎   | 25/40 [00:06<00:04,  3.68it/s]Loading:  65%|██████▌   | 26/40 [00:07<00:03,  3.68it/s]Loading:  68%|██████▊   | 27/40 [00:07<00:03,  3.59it/s]Loading:  70%|███████   | 28/40 [00:07<00:03,  3.62it/s]Loading:  72%|███████▎  | 29/40 [00:07<00:03,  3.62it/s]Loading:  75%|███████▌  | 30/40 [00:08<00:02,  3.60it/s]Loading:  78%|███████▊  | 31/40 [00:08<00:02,  3.64it/s]Loading:  80%|████████  | 32/40 [00:08<00:02,  3.56it/s]Loading:  82%|████████▎ | 33/40 [00:09<00:02,  3.46it/s]Loading:  85%|████████▌ | 34/40 [00:09<00:01,  3.53it/s]Loading:  88%|████████▊ | 35/40 [00:09<00:01,  3.44it/s]Loading:  90%|█████████ | 36/40 [00:09<00:01,  3.34it/s]Loading:  92%|█████████▎| 37/40 [00:10<00:00,  3.25it/s]Loading:  95%|█████████▌| 38/40 [00:10<00:00,  3.27it/s]Loading:  98%|█████████▊| 39/40 [00:10<00:00,  3.37it/s]Loading: 100%|██████████| 40/40 [00:11<00:00,  3.31it/s]                                                        Loading:   0%|          | 0/27 [00:00<?, ?it/s]Loading:  67%|██████▋   | 18/27 [00:00<00:00, 175.73it/s]                                                         #Input tokens: 8036
+#Output tokens: 16237
+  0%|          | 0/128 [00:00<?, ?it/s]  1%|          | 1/128 [00:00<00:15,  8.09it/s]  2%|▏         | 2/128 [00:00<00:15,  8.21it/s]  2%|▏         | 3/128 [00:00<00:15,  8.23it/s]  3%|▎         | 4/128 [00:00<00:14,  8.27it/s]  8%|▊         | 10/128 [00:00<00:05, 21.62it/s] 10%|█         | 13/128 [00:00<00:05, 20.96it/s] 12%|█▎        | 16/128 [00:00<00:05, 19.13it/s] 15%|█▍        | 19/128 [00:01<00:05, 19.49it/s] 18%|█▊        | 23/128 [00:01<00:05, 18.68it/s] 20%|██        | 26/128 [00:01<00:05, 19.13it/s] 22%|██▏       | 28/128 [00:01<00:06, 16.33it/s] 24%|██▍       | 31/128 [00:01<00:05, 18.35it/s] 27%|██▋       | 34/128 [00:01<00:04, 20.05it/s] 30%|██▉       | 38/128 [00:02<00:04, 20.96it/s] 32%|███▏      | 41/128 [00:02<00:03, 22.65it/s] 34%|███▍      | 44/128 [00:02<00:03, 22.61it/s] 37%|███▋      | 47/128 [00:02<00:03, 22.89it/s] 41%|████▏     | 53/128 [00:02<00:02, 29.16it/s] 44%|████▍     | 56/128 [00:02<00:02, 25.27it/s] 47%|████▋     | 60/128 [00:02<00:02, 25.84it/s] 49%|████▉     | 63/128 [00:03<00:02, 25.16it/s] 53%|█████▎    | 68/128 [00:03<00:02, 23.41it/s] 55%|█████▌    | 71/128 [00:03<00:02, 21.38it/s] 58%|█████▊    | 74/128 [00:03<00:02, 20.44it/s] 60%|██████    | 77/128 [00:03<00:02, 18.41it/s] 62%|██████▎   | 80/128 [00:03<00:02, 19.22it/s] 64%|██████▍   | 82/128 [00:04<00:02, 17.72it/s] 68%|██████▊   | 87/128 [00:04<00:01, 23.47it/s] 70%|███████   | 90/128 [00:04<00:01, 24.32it/s] 73%|███████▎  | 93/128 [00:04<00:01, 21.21it/s] 75%|███████▌  | 96/128 [00:04<00:01, 21.75it/s] 80%|████████  | 103/128 [00:04<00:00, 31.28it/s] 84%|████████▎ | 107/128 [00:04<00:00, 28.81it/s] 87%|████████▋ | 111/128 [00:05<00:00, 22.10it/s] 89%|████████▉ | 114/128 [00:05<00:00, 17.29it/s] 92%|█████████▏| 118/128 [00:05<00:00, 14.73it/s] 95%|█████████▍| 121/128 [00:05<00:00, 16.78it/s] 97%|█████████▋| 124/128 [00:06<00:00, 16.67it/s] 98%|█████████▊| 126/128 [00:06<00:00, 14.28it/s]100%|██████████| 128/128 [00:06<00:00, 12.55it/s]100%|██████████| 128/128 [00:06<00:00, 19.32it/s]
+
+=================================== Profile Throughput ===================================
+Benchmark duration                           6.624
+Total requests                                 128
+Successful requests                            128
+Concurrency                                     32
+Cancel rate                                      0
+Stream output                                 true
+Skip tokenize                                false
+Skip detokenize                              false
+Total input tokens                            8036
+Total generated tokens                       16238
+Input throughput (tok/s)                  1213.221
+Output throughput (tok/s)                 2451.503
+Request throughput (req/s)                  19.325
+------------------------------------------------------------------------------------------
+                                              mean       P50       P75       P95       P99
+End-to-end Latency                           1.355     1.349     1.992     2.465     2.706
+Time to First Token (TTFT)                   0.056     0.035     0.058     0.120     0.121
+Time per Output Token (TPOT)                 0.011     0.011     0.011     0.011     0.012
+Inter-token Latency (ITL)                    0.010     0.010     0.010     0.014     0.015
+Tokens per Tick                              1.000         1         1         1         1
+==========================================================================================

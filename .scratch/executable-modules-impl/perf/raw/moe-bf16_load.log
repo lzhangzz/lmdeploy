@@ -1,0 +1,108 @@
+2026-09-17 12:17:19,007 - lmdeploy - INFO - turbomind.py:271 - turbomind engine config:
+
+dtype=bfloat16, state_dtype=bfloat16, session_len=262144, max_batch_size=128, devices=[0], tp=1, dp=1, cp=1, ep=1, moe_a2a_backend=auto
+[TM][WARN][0917.12:17:19.007242][turbomind.cc:128] `max_context_token_num` is not set, default to 262144.
+Loading:   0%|          | 0/48 [00:00<?, ?it/s]Loading:   2%|▏         | 1/48 [00:00<00:11,  3.93it/s]Loading:   4%|▍         | 2/48 [00:00<00:11,  4.02it/s]Loading:   6%|▋         | 3/48 [00:00<00:10,  4.16it/s]Loading:   8%|▊         | 4/48 [00:00<00:10,  4.23it/s]Loading:  10%|█         | 5/48 [00:01<00:10,  4.20it/s]Loading:  12%|█▎        | 6/48 [00:01<00:10,  3.89it/s]Loading:  15%|█▍        | 7/48 [00:01<00:10,  3.99it/s]Loading:  17%|█▋        | 8/48 [00:01<00:09,  4.12it/s]Loading:  19%|█▉        | 9/48 [00:02<00:09,  4.17it/s]Loading:  21%|██        | 10/48 [00:02<00:09,  3.97it/s]Loading:  23%|██▎       | 11/48 [00:02<00:09,  4.08it/s]Loading:  25%|██▌       | 12/48 [00:02<00:08,  4.12it/s]Loading:  27%|██▋       | 13/48 [00:03<00:08,  3.94it/s]Loading:  29%|██▉       | 14/48 [00:03<00:08,  4.06it/s]Loading:  31%|███▏      | 15/48 [00:03<00:07,  4.13it/s]Loading:  33%|███▎      | 16/48 [00:03<00:08,  3.97it/s]Loading:  35%|███▌      | 17/48 [00:04<00:07,  4.05it/s]Loading:  38%|███▊      | 18/48 [00:04<00:07,  4.16it/s]Loading:  40%|███▉      | 19/48 [00:04<00:07,  3.94it/s]Loading:  42%|████▏     | 20/48 [00:04<00:06,  4.08it/s]Loading:  44%|████▍     | 21/48 [00:05<00:06,  4.18it/s]Loading:  46%|████▌     | 22/48 [00:05<00:06,  3.97it/s]Loading:  48%|████▊     | 23/48 [00:05<00:06,  4.08it/s]Loading:  50%|█████     | 24/48 [00:05<00:05,  4.17it/s]Loading:  52%|█████▏    | 25/48 [00:06<00:05,  4.22it/s]Loading:  54%|█████▍    | 26/48 [00:06<00:05,  4.02it/s]Loading:  56%|█████▋    | 27/48 [00:06<00:05,  4.13it/s]Loading:  58%|█████▊    | 28/48 [00:06<00:04,  4.22it/s]Loading:  60%|██████    | 29/48 [00:07<00:04,  3.97it/s]Loading:  62%|██████▎   | 30/48 [00:07<00:04,  4.09it/s]Loading:  65%|██████▍   | 31/48 [00:07<00:04,  4.17it/s]Loading:  67%|██████▋   | 32/48 [00:07<00:04,  3.93it/s]Loading:  69%|██████▉   | 33/48 [00:08<00:03,  4.07it/s]Loading:  71%|███████   | 34/48 [00:08<00:03,  4.14it/s]Loading:  73%|███████▎  | 35/48 [00:08<00:03,  3.98it/s]Loading:  75%|███████▌  | 36/48 [00:08<00:02,  4.10it/s]Loading:  77%|███████▋  | 37/48 [00:09<00:02,  4.17it/s]Loading:  79%|███████▉  | 38/48 [00:09<00:02,  3.99it/s]Loading:  81%|████████▏ | 39/48 [00:09<00:02,  4.11it/s]Loading:  83%|████████▎ | 40/48 [00:09<00:01,  4.20it/s]Loading:  85%|████████▌ | 41/48 [00:10<00:01,  4.22it/s]Loading:  88%|████████▊ | 42/48 [00:10<00:01,  4.01it/s]Loading:  90%|████████▉ | 43/48 [00:10<00:01,  4.13it/s]Loading:  92%|█████████▏| 44/48 [00:10<00:00,  4.19it/s]Loading:  94%|█████████▍| 45/48 [00:11<00:00,  4.02it/s]Loading:  96%|█████████▌| 46/48 [00:11<00:00,  4.08it/s]Loading:  98%|█████████▊| 47/48 [00:11<00:00,  4.09it/s]Loading: 100%|██████████| 48/48 [00:11<00:00,  3.88it/s]                                                        [TM][INFO][0917.12:17:51.133950][turbomind.cc:324] Object cache budget: 66702.00 MB from free 83377.50 MB and ratio 0.800
+[TM][WARN][0917.12:17:51.331562][slab.h:136] slab_size 134217728, object_size 6291456, object_count 21, ratio 0.984375
+[TM][INFO][0917.12:17:51.331692][gateway.h:41] set threshold 1 -> 1
+[TM][INFO][0917.12:17:51.331705][turbomind.cc:426] Warm-up lengths: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 8320
+[TM][INFO][0917.12:17:51.331774][turbomind.cc:441] 8
+[TM][INFO][0917.12:17:51.332210][scheduler.cc:1488] req 0 (uid 1) resume [0,0) 0 blk ro (0%) source=none | computed [0,8) 8 tok
+[TM][INFO][0917.12:17:51.492009][scheduler.cc:1488] req 0 (uid 2) resume [0,0) 0 blk ro (0%) source=none | computed [0,16) 16 tok
+[TM][INFO][0917.12:17:51.491962][turbomind.cc:441] 16
+[TM][INFO][0917.12:17:51.559628][scheduler.cc:1488] req 0 (uid 3) resume [0,0) 0 blk ro (0%) source=none | computed [0,32) 32 tok
+[TM][INFO][0917.12:17:51.559575][turbomind.cc:441] 32
+[TM][INFO][0917.12:17:51.640275][scheduler.cc:1488] req 0 (uid 4) resume [0,0) 0 blk ro (0%) source=none | computed [0,48) 48 tok
+[TM][INFO][0917.12:17:51.640236][turbomind.cc:441] 48
+[TM][INFO][0917.12:17:51.721822][scheduler.cc:1488] req 0 (uid 5) resume [0,0) 0 blk ro (0%) source=none | computed [0,64) 64 tok
+[TM][INFO][0917.12:17:51.721782][turbomind.cc:441] 64
+[TM][INFO][0917.12:17:51.803612][scheduler.cc:1488] req 0 (uid 6) resume [0,0) 0 blk ro (0%) source=none | computed [0,96) 96 tok
+[TM][INFO][0917.12:17:51.803565][turbomind.cc:441] 96
+[TM][INFO][0917.12:17:51.887271][scheduler.cc:1488] req 0 (uid 7) resume [0,0) 0 blk ro (0%) source=none | computed [0,128) 128 tok
+[TM][INFO][0917.12:17:51.887227][turbomind.cc:441] 128
+[TM][INFO][0917.12:17:51.964516][scheduler.cc:1488] req 0 (uid 8) resume [0,0) 0 blk ro (0%) source=none | computed [0,192) 192 tok
+[TM][INFO][0917.12:17:51.964475][turbomind.cc:441] 192
+[TM][INFO][0917.12:17:52.044455][scheduler.cc:1488] req 0 (uid 9) resume [0,0) 0 blk ro (0%) source=none | computed [0,256) 256 tok
+[TM][INFO][0917.12:17:52.044412][turbomind.cc:441] 256
+[TM][INFO][0917.12:17:52.128919][scheduler.cc:1488] req 0 (uid 10) resume [0,0) 0 blk ro (0%) source=none | computed [0,384) 384 tok
+[TM][INFO][0917.12:17:52.128876][turbomind.cc:441] 384
+[TM][INFO][0917.12:17:52.220674][scheduler.cc:1488] req 0 (uid 11) resume [0,0) 0 blk ro (0%) source=none | computed [0,512) 512 tok
+[TM][INFO][0917.12:17:52.220625][turbomind.cc:441] 512
+[TM][INFO][0917.12:17:52.316837][turbomind.cc:441] 768
+[TM][INFO][0917.12:17:52.316879][scheduler.cc:1488] req 0 (uid 12) resume [0,0) 0 blk ro (0%) source=none | computed [0,768) 768 tok
+[TM][INFO][0917.12:17:52.415725][scheduler.cc:1488] req 0 (uid 13) resume [0,0) 0 blk ro (0%) source=none | computed [0,1024) 1024 tok
+[TM][INFO][0917.12:17:52.415682][turbomind.cc:441] 1024
+[TM][INFO][0917.12:17:52.514982][scheduler.cc:1488] req 0 (uid 14) resume [0,0) 0 blk ro (0%) source=none | computed [0,1536) 1536 tok
+[TM][INFO][0917.12:17:52.514927][turbomind.cc:441] 1536
+[TM][INFO][0917.12:17:52.622895][turbomind.cc:441] 2048
+[TM][INFO][0917.12:17:52.622945][scheduler.cc:1488] req 0 (uid 15) resume [0,0) 0 blk ro (0%) source=none | computed [0,2048) 2048 tok
+[TM][INFO][0917.12:17:52.731519][turbomind.cc:441] 3072
+[TM][INFO][0917.12:17:52.731574][scheduler.cc:1488] req 0 (uid 16) resume [0,0) 0 blk ro (0%) source=none | computed [0,3072) 3072 tok
+[TM][INFO][0917.12:17:52.852838][scheduler.cc:1488] req 0 (uid 17) resume [0,0) 0 blk ro (0%) source=none | computed [0,4096) 4096 tok
+[TM][INFO][0917.12:17:52.852779][turbomind.cc:441] 4096
+[TM][INFO][0917.12:17:52.978886][scheduler.cc:1488] req 0 (uid 18) resume [0,0) 0 blk ro (0%) source=none | computed [0,6144) 6144 tok
+[TM][INFO][0917.12:17:52.978811][turbomind.cc:441] 6144
+[TM][INFO][0917.12:17:53.108476][scheduler.cc:1488] req 0 (uid 19) resume [0,0) 0 blk ro (0%) source=none | computed [0,8192) 8192 tok
+[TM][INFO][0917.12:17:53.108405][turbomind.cc:441] 8192
+[TM][INFO][0917.12:17:53.245844][turbomind.cc:441] 8320
+[TM][INFO][0917.12:17:53.245928][scheduler.cc:1488] req 0 (uid 20) resume [0,0) 0 blk ro (0%) source=none | computed [0,8320) 8320 tok
+[TM][INFO][0917.12:17:53.381493][turbomind.cc:478] Warm-up finished in 2.05 seconds.
+[TM][INFO][0917.12:17:53.381502][gateway.h:41] set threshold 1 -> 1
+LOAD_SECONDS 35.48
+[TM][INFO][0917.12:17:53.510057][turbomind.cc:140] turbomind::TurboMind::Impl::~Impl()
+[TM][INFO][0917.12:17:53.510243][engine.cc:814] stop requested.
+[TM][INFO][0917.12:17:53.510363][engine.cc:196] turbomind::Engine::Impl::~Impl()
+2026-09-17 12:33:32,196 - lmdeploy - INFO - turbomind.py:271 - turbomind engine config:
+
+dtype=bfloat16, state_dtype=bfloat16, session_len=262144, max_batch_size=128, devices=[0], tp=1, dp=1, cp=1, ep=1, moe_a2a_backend=auto
+[TM][WARN][0917.12:33:32.196981][turbomind.cc:128] `max_context_token_num` is not set, default to 262144.
+Loading:   0%|          | 0/48 [00:00<?, ?it/s]Loading:   2%|▏         | 1/48 [00:00<00:11,  4.02it/s]Loading:   4%|▍         | 2/48 [00:00<00:11,  4.14it/s]Loading:   6%|▋         | 3/48 [00:00<00:10,  4.14it/s]Loading:   8%|▊         | 4/48 [00:00<00:10,  4.18it/s]Loading:  10%|█         | 5/48 [00:01<00:10,  4.26it/s]Loading:  12%|█▎        | 6/48 [00:01<00:10,  3.97it/s]Loading:  15%|█▍        | 7/48 [00:01<00:10,  4.08it/s]Loading:  17%|█▋        | 8/48 [00:01<00:09,  4.18it/s]Loading:  19%|█▉        | 9/48 [00:02<00:09,  4.27it/s]Loading:  21%|██        | 10/48 [00:02<00:09,  4.09it/s]Loading:  23%|██▎       | 11/48 [00:02<00:08,  4.20it/s]Loading:  25%|██▌       | 12/48 [00:02<00:08,  4.27it/s]Loading:  27%|██▋       | 13/48 [00:03<00:08,  4.12it/s]Loading:  29%|██▉       | 14/48 [00:03<00:08,  4.21it/s]Loading:  31%|███▏      | 15/48 [00:03<00:07,  4.28it/s]Loading:  33%|███▎      | 16/48 [00:03<00:07,  4.09it/s]Loading:  35%|███▌      | 17/48 [00:04<00:07,  4.13it/s]Loading:  38%|███▊      | 18/48 [00:04<00:07,  4.21it/s]Loading:  40%|███▉      | 19/48 [00:04<00:07,  4.10it/s]Loading:  42%|████▏     | 20/48 [00:04<00:06,  4.22it/s]Loading:  44%|████▍     | 21/48 [00:05<00:06,  4.26it/s]Loading:  46%|████▌     | 22/48 [00:05<00:06,  4.11it/s]Loading:  48%|████▊     | 23/48 [00:05<00:05,  4.18it/s]Loading:  50%|█████     | 24/48 [00:05<00:05,  4.26it/s]Loading:  52%|█████▏    | 25/48 [00:05<00:05,  4.30it/s]Loading:  54%|█████▍    | 26/48 [00:06<00:05,  4.14it/s]Loading:  56%|█████▋    | 27/48 [00:06<00:04,  4.25it/s]Loading:  58%|█████▊    | 28/48 [00:06<00:04,  4.33it/s]Loading:  60%|██████    | 29/48 [00:06<00:04,  4.20it/s]Loading:  62%|██████▎   | 30/48 [00:07<00:04,  4.24it/s]Loading:  65%|██████▍   | 31/48 [00:07<00:03,  4.27it/s]Loading:  67%|██████▋   | 32/48 [00:07<00:03,  4.14it/s]Loading:  69%|██████▉   | 33/48 [00:07<00:03,  4.22it/s]Loading:  71%|███████   | 34/48 [00:08<00:03,  4.23it/s]Loading:  73%|███████▎  | 35/48 [00:08<00:03,  4.07it/s]Loading:  75%|███████▌  | 36/48 [00:08<00:02,  4.11it/s]Loading:  77%|███████▋  | 37/48 [00:08<00:02,  4.19it/s]Loading:  79%|███████▉  | 38/48 [00:09<00:02,  4.09it/s]Loading:  81%|████████▏ | 39/48 [00:09<00:02,  4.19it/s]Loading:  83%|████████▎ | 40/48 [00:09<00:01,  4.22it/s]Loading:  85%|████████▌ | 41/48 [00:09<00:01,  4.29it/s]Loading:  88%|████████▊ | 42/48 [00:10<00:01,  4.14it/s]Loading:  90%|████████▉ | 43/48 [00:10<00:01,  4.20it/s]Loading:  92%|█████████▏| 44/48 [00:10<00:00,  4.26it/s]Loading:  94%|█████████▍| 45/48 [00:10<00:00,  4.14it/s]Loading:  96%|█████████▌| 46/48 [00:10<00:00,  4.23it/s]Loading:  98%|█████████▊| 47/48 [00:11<00:00,  4.23it/s]Loading: 100%|██████████| 48/48 [00:11<00:00,  4.04it/s]                                                        [TM][INFO][0917.12:33:45.074234][turbomind.cc:324] Object cache budget: 66702.00 MB from free 83377.50 MB and ratio 0.800
+[TM][WARN][0917.12:33:45.269579][slab.h:136] slab_size 134217728, object_size 6291456, object_count 21, ratio 0.984375
+[TM][INFO][0917.12:33:45.269712][gateway.h:41] set threshold 1 -> 1
+[TM][INFO][0917.12:33:45.269722][turbomind.cc:426] Warm-up lengths: 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 8320
+[TM][INFO][0917.12:33:45.269791][turbomind.cc:441] 8
+[TM][INFO][0917.12:33:45.270189][scheduler.cc:1488] req 0 (uid 1) resume [0,0) 0 blk ro (0%) source=none | computed [0,8) 8 tok
+[TM][INFO][0917.12:33:45.431189][scheduler.cc:1488] req 0 (uid 2) resume [0,0) 0 blk ro (0%) source=none | computed [0,16) 16 tok
+[TM][INFO][0917.12:33:45.431146][turbomind.cc:441] 16
+[TM][INFO][0917.12:33:45.498626][scheduler.cc:1488] req 0 (uid 3) resume [0,0) 0 blk ro (0%) source=none | computed [0,32) 32 tok
+[TM][INFO][0917.12:33:45.498582][turbomind.cc:441] 32
+[TM][INFO][0917.12:33:45.578812][scheduler.cc:1488] req 0 (uid 4) resume [0,0) 0 blk ro (0%) source=none | computed [0,48) 48 tok
+[TM][INFO][0917.12:33:45.578774][turbomind.cc:441] 48
+[TM][INFO][0917.12:33:45.659756][turbomind.cc:441] 64
+[TM][INFO][0917.12:33:45.659786][scheduler.cc:1488] req 0 (uid 5) resume [0,0) 0 blk ro (0%) source=none | computed [0,64) 64 tok
+[TM][INFO][0917.12:33:45.741337][scheduler.cc:1488] req 0 (uid 6) resume [0,0) 0 blk ro (0%) source=none | computed [0,96) 96 tok
+[TM][INFO][0917.12:33:45.741300][turbomind.cc:441] 96
+[TM][INFO][0917.12:33:45.822195][scheduler.cc:1488] req 0 (uid 7) resume [0,0) 0 blk ro (0%) source=none | computed [0,128) 128 tok
+[TM][INFO][0917.12:33:45.822153][turbomind.cc:441] 128
+[TM][INFO][0917.12:33:45.898081][scheduler.cc:1488] req 0 (uid 8) resume [0,0) 0 blk ro (0%) source=none | computed [0,192) 192 tok
+[TM][INFO][0917.12:33:45.898034][turbomind.cc:441] 192
+[TM][INFO][0917.12:33:45.979479][scheduler.cc:1488] req 0 (uid 9) resume [0,0) 0 blk ro (0%) source=none | computed [0,256) 256 tok
+[TM][INFO][0917.12:33:45.979448][turbomind.cc:441] 256
+[TM][INFO][0917.12:33:46.063625][turbomind.cc:441] 384
+[TM][INFO][0917.12:33:46.063669][scheduler.cc:1488] req 0 (uid 10) resume [0,0) 0 blk ro (0%) source=none | computed [0,384) 384 tok
+[TM][INFO][0917.12:33:46.156220][scheduler.cc:1488] req 0 (uid 11) resume [0,0) 0 blk ro (0%) source=none | computed [0,512) 512 tok
+[TM][INFO][0917.12:33:46.156175][turbomind.cc:441] 512
+[TM][INFO][0917.12:33:46.253591][turbomind.cc:441] 768
+[TM][INFO][0917.12:33:46.253637][scheduler.cc:1488] req 0 (uid 12) resume [0,0) 0 blk ro (0%) source=none | computed [0,768) 768 tok
+[TM][INFO][0917.12:33:46.352699][scheduler.cc:1488] req 0 (uid 13) resume [0,0) 0 blk ro (0%) source=none | computed [0,1024) 1024 tok
+[TM][INFO][0917.12:33:46.352657][turbomind.cc:441] 1024
+[TM][INFO][0917.12:33:46.452474][turbomind.cc:441] 1536
+[TM][INFO][0917.12:33:46.452527][scheduler.cc:1488] req 0 (uid 14) resume [0,0) 0 blk ro (0%) source=none | computed [0,1536) 1536 tok
+[TM][INFO][0917.12:33:46.563029][turbomind.cc:441] 2048
+[TM][INFO][0917.12:33:46.563079][scheduler.cc:1488] req 0 (uid 15) resume [0,0) 0 blk ro (0%) source=none | computed [0,2048) 2048 tok
+[TM][INFO][0917.12:33:46.671524][turbomind.cc:441] 3072
+[TM][INFO][0917.12:33:46.671579][scheduler.cc:1488] req 0 (uid 16) resume [0,0) 0 blk ro (0%) source=none | computed [0,3072) 3072 tok
+[TM][INFO][0917.12:33:46.790942][scheduler.cc:1488] req 0 (uid 17) resume [0,0) 0 blk ro (0%) source=none | computed [0,4096) 4096 tok
+[TM][INFO][0917.12:33:46.790881][turbomind.cc:441] 4096
+[TM][INFO][0917.12:33:46.918923][scheduler.cc:1488] req 0 (uid 18) resume [0,0) 0 blk ro (0%) source=none | computed [0,6144) 6144 tok
+[TM][INFO][0917.12:33:46.918856][turbomind.cc:441] 6144
+[TM][INFO][0917.12:33:47.047236][scheduler.cc:1488] req 0 (uid 19) resume [0,0) 0 blk ro (0%) source=none | computed [0,8192) 8192 tok
+[TM][INFO][0917.12:33:47.047169][turbomind.cc:441] 8192
+[TM][INFO][0917.12:33:47.183415][scheduler.cc:1488] req 0 (uid 20) resume [0,0) 0 blk ro (0%) source=none | computed [0,8320) 8320 tok
+[TM][INFO][0917.12:33:47.183341][turbomind.cc:441] 8320
+[TM][INFO][0917.12:33:47.319432][turbomind.cc:478] Warm-up finished in 2.05 seconds.
+[TM][INFO][0917.12:33:47.319439][gateway.h:41] set threshold 1 -> 1
+LOAD_SECONDS 16.25
+[TM][INFO][0917.12:33:47.444363][engine.cc:814] stop requested.
+[TM][INFO][0917.12:33:47.444339][turbomind.cc:140] turbomind::TurboMind::Impl::~Impl()
+[TM][INFO][0917.12:33:47.444653][engine.cc:196] turbomind::Engine::Impl::~Impl()
