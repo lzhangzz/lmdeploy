@@ -6,4 +6,4 @@ Blocked by: 03
 
 ## Question
 
-Map executable modules onto the engine loop: which module implements or forwards which BatchOp op (`kAdd`/`kSetup`/`kPrepare`/`kForward`/`kUnprep`/`kFetch`/`kUpdate`/`kDel`) with thread placement per `contracts.batchop*`; how `UnifiedDecoder` shrinks mechanically to a loop over per-layer modules; what `LanguageModel` touches. Contract meanings must hold; if the README needs rewording, flag it per `checklist.contract-sync` (same-change doc update).
+Map executable modules onto the engine loop: which module implements or forwards which BatchOp op (`kAdd`/`kSetup`/`kPrepare`/`kForward`/`kUnprep`/`kFetch`/`kUpdate`/`kDel`) with thread placement per `contracts.batchop*`; how `UnifiedDecoder` shrinks mechanically to a loop over per-layer modules; what `LanguageModel` touches; the kSetup fill flow for the pooled per-phase `AttentionBatch` (Merged Attention module design); and the engine pass order prepare → register_cache → finalize → bind → first Run. Contract meanings must hold; if the README needs rewording, flag it per `checklist.contract-sync` (same-change doc update).
