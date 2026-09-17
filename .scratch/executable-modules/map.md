@@ -17,6 +17,7 @@ A reviewed design spec at `.scratch/executable-modules/spec.md` for merging weig
 
 - [Prior-art research: module unification in sibling engines](issues/01-prior-art-module-unification-research.md): 10 patterns from torch/vLLM/SGLang/TRT-LLM/TVM-MLC — adopt module-owns-weights+forward with a per-quant method object (vLLM two-axis) and a staged per-kind migration gate; adapt post-load prepare, platform-dispatch factory, and Context-as-typed-forward-argument (TVM/MLC); avoid duck-typed layer-attribute seams and executor-only weight-less ownership (TRT-LLM C++).
 - [Context shared-state contract](issues/02-context-shared-state-contract.md): `ExecContext` is the per-rank services object (GEMM engine+cache+workspace, comm, per-kind workspace pools shared across layer instances, stream/event factory, symm), injected once via a post-build bind pass; modules never hold raw streams/comms/engines or per-kind workspaces; warm-up rides engine-owned `env.warm_up()`; thread rules per accessor with GEMM executor-thread-only. Draft: `drafts/context-contract.md`.
+- [Merged Linear module interface](issues/03-merged-linear-module-interface.md): validated canonical shape — one `Linear : core::Module` owning params + Forward (weight-is-executor call sites), `gemm::Family` stays the quant axis, `LlamaLinear` retires into `ExecContext`-backed methods (`set_measure`/`Export`/`Import` on the module), registry string frozen `"LinearWeight"`, `linear.py` names unchanged. Asset: `prototype/linear-module-interface.md`.
 
 ## Not yet specified
 
