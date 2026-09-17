@@ -24,7 +24,6 @@ public:
         Tensor           output;
         std::vector<int> local_token_num;
         const MoeWeight* weights;
-        int              layer_id;
         const bool*      token_mask;  // [tokens]; invalid tokens route nowhere
     };
 

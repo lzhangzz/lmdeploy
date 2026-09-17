@@ -54,7 +54,6 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     is_warm_up_{*ctx.is_warm_up}
 {
     std::vector<MoeWeight*>       moe_weights;
-    std::vector<FfnWeight*>       ffn_weights;
     std::vector<DeltaNetWeight*>  gdn_weights;
     std::vector<AttentionWeight*> attn_weights;
 
@@ -68,9 +67,6 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
         }
         if (layer->attention) {
             attn_weights.push_back(layer->attention.get());
-        }
-        if (layer->feed_forward) {
-            ffn_weights.push_back(layer->feed_forward.get());
         }
     }
 
@@ -93,10 +89,6 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
                 ffn_group_[i] = node_group_;
             }
         }
-    }
-
-    if (!ffn_weights.empty()) {
-        ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
     }
 
     if (!attn_weights.empty()) {
@@ -322,19 +314,17 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                      global_hidden_states,
                                      local_token_nums,
                                      weights.at(layer)->moe_ffn.get(),
-                                     (int)layer,
                                      (const bool*)args.at("token_mask").buffer().raw_data()});
         }
 
-        if (ffn_layer_ && weights.at(layer)->feed_forward) {
+        if (weights.at(layer)->feed_forward) {
             // Staging invariant: a layer with both slots means old Python
             // wiring still parks the shared expert in feed_forward while the
             // C++ side already reduced into global_hidden_states — fail
             // loudly instead of running the shared FFN on the combine result.
             TM_CHECK(!weights.at(layer)->moe_ffn) << "layer " << layer << " has both moe_ffn and feed_forward — "
                                                   << "the shared expert belongs in moe.shared";
-            ffn_layer_->forward(
-                {global_hidden_states, global_hidden_states, weights.at(layer)->feed_forward.get(), (int)layer});
+            TM_SCOPE_CALL(weights.at(layer)->feed_forward->Forward(global_hidden_states, global_hidden_states));
         }
 
         TM_DEBUG_TENSOR(global_hidden_states, Concat("ffn_block", layer), 2);

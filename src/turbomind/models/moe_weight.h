@@ -5,7 +5,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/ffn.h"
 
 namespace turbomind {
 
@@ -85,7 +85,7 @@ public:
 #define MOE_WEIGHT_CHILDREN(X)                                                                                         \
     X(Linear, gate)                                                                                                    \
     X(Linear, shared_gate)                                                                                             \
-    X(FfnWeight, shared)                                                                                               \
+    X(Ffn, shared)                                                                                                     \
     X(core::ModuleList, experts)
 
 #define MOE_WEIGHT_PARAMS(X) X(score_correction_bias)
@@ -93,8 +93,8 @@ public:
     TM_MODULE_DECLARE(MoeWeight, MOE_WEIGHT_CHILDREN, MOE_WEIGHT_PARAMS)
 
     // --- Typed accessors ---
-    FfnWeight* expert(int i) const;
-    FfnWeight* block() const
+    Ffn* expert(int i) const;
+    Ffn* block() const
     {
         return block_.get();
     }
@@ -131,7 +131,7 @@ private:
 
     DataType data_type_{};
 
-    std::unique_ptr<FfnWeight> block_;
+    std::unique_ptr<Ffn> block_;
 };
 
 }  // namespace turbomind

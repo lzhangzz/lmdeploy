@@ -31,7 +31,7 @@
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
-#include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/ffn.h"
 #include "src/turbomind/models/internvit/internvit_block_weight.h"
 #include "src/turbomind/models/internvit/internvit_input.h"
 #include "src/turbomind/models/internvit/internvit_weight.h"

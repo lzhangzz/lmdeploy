@@ -19,7 +19,7 @@ namespace turbomind {
 
 class AttentionWeight;
 class DeltaNetWeight;
-class FfnWeight;
+class Ffn;
 class MoeWeight;
 class NormWeight;
 
@@ -42,7 +42,7 @@ public:
 #define DECODER_LAYER_WEIGHT_CHILDREN(X)                                                                               \
     X(AttentionWeight, attention)                                                                                      \
     X(DeltaNetWeight, linear_attn)                                                                                     \
-    X(FfnWeight, feed_forward)                                                                                         \
+    X(Ffn, feed_forward)                                                                                               \
     X(MoeWeight, moe_ffn)                                                                                              \
     X(NormWeight, attention_norm)                                                                                      \
     X(NormWeight, ffn_norm)

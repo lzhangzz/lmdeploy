@@ -2,7 +2,6 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
-#include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
@@ -53,7 +52,6 @@ private:
 
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
     std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
-    std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
     std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,

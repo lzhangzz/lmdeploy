@@ -41,9 +41,9 @@ static std::unique_ptr<Linear> AliasLinear(const Linear& src)
     return dst;
 }
 
-static std::unique_ptr<FfnWeight> AliasFfn(const FfnWeight& src)
+static std::unique_ptr<Ffn> AliasFfn(const Ffn& src)
 {
-    auto dst           = std::make_unique<FfnWeight>();
+    auto dst           = std::make_unique<Ffn>();
     dst->hidden_dim    = src.hidden_dim;
     dst->inter_size    = src.inter_size;
     dst->act_type      = src.act_type;
@@ -132,12 +132,12 @@ void LinkLinearExperts(const std::vector<Linear*>& experts, Linear& destination)
     destination.k_desc.offsets = destination.q_desc.offsets = nullptr;
 }
 
-FfnWeight* MoeWeight::expert(int i) const
+Ffn* MoeWeight::expert(int i) const
 {
     if (!experts) {
         return nullptr;
     }
-    return static_cast<FfnWeight*>(experts->child(std::to_string(local_expert_offset() + i)));
+    return static_cast<Ffn*>(experts->child(std::to_string(local_expert_offset() + i)));
 }
 
 void MoeWeight::prepare()
@@ -173,7 +173,7 @@ void MoeWeight::link_block()
     block_cfg.data_type = data_type_;
     block_cfg.act_type  = static_cast<int>(act_type_);
     block_cfg.fuse_silu = fuse_silu_act_;
-    block_              = std::make_unique<FfnWeight>(block_cfg);
+    block_              = std::make_unique<Ffn>(block_cfg);
 
     // Link each linear in the block to the corresponding expert linears
     auto get_expert_w1w3 = [this](int i) -> Linear* {

@@ -31,29 +31,50 @@ struct FfnConfig: ModuleConfig {
 
 namespace turbomind {
 
-class FfnWeight: public core::Module {
+/// Routing tables shared by the grouped (MoE expert-block) Ffn::Forward.
+struct GroupedRoute {
+    Buffer_<int> indices;           // grouped row -> source token slot
+    Buffer_<int> offsets;           // per-local-expert row offsets [E+1]
+    Buffer_<int> f2E;               // grouped row -> expert id (activation grouping)
+    const int*   num_valid_tokens;  // device pointer: routed token count
+};
+
+/// Executable FFN module: owns the whole feed-forward — fused (w1w3) and
+/// separate (w1/w3) projections, the FP8 fused-activation path, activation,
+/// and the down projection — for dense and grouped inputs, with the branching
+/// internal. The GEMMs ride the Linear children; bind() is the default
+/// recursive walk capturing their engines.
+class Ffn: public core::Module {
 public:
     const char* type() const override
     {
         return "FfnWeight";
     }
 
-    FfnWeight() = default;
+    Ffn() = default;
 
-    FfnWeight(const core::FfnConfig& cfg);
+    Ffn(const core::FfnConfig& cfg);
 
     void prepare() override;
 
+    /// Dense: y = W2·act(W1x, W3x). Activation internal (fused-silu/FP8 and
+    /// w1/w3-separate branches). Output filled when provided.
+    void Forward(const Tensor& input, Ref<Tensor> output);
+
+    /// Grouped (the MoE expert block): routing tables drive expert-grouped
+    /// GEMMs and the grouped activation. Same internal branches.
+    void Forward(const Tensor& input, const GroupedRoute& route, Ref<Tensor> output);
+
     // --- X-macro child members ---
-#define FFN_WEIGHT_CHILDREN(X)                                                                                         \
+#define FFN_CHILDREN(X)                                                                                                \
     X(Linear, w1)                                                                                                      \
     X(Linear, w3)                                                                                                      \
     X(Linear, w2)                                                                                                      \
     X(Linear, w1w3)
 
-#define FFN_WEIGHT_PARAMS(X)
+#define FFN_PARAMS(X)
 
-    TM_MODULE_DECLARE(FfnWeight, FFN_WEIGHT_CHILDREN, FFN_WEIGHT_PARAMS)
+    TM_MODULE_DECLARE(Ffn, FFN_CHILDREN, FFN_PARAMS)
 
     int            hidden_dim{};
     int            inter_size{};

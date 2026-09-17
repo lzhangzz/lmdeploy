@@ -6,7 +6,6 @@
 
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/scope.h"
-#include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
@@ -16,7 +15,6 @@
 #include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
 #endif
 
-#include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/moe_weight.h"
@@ -30,7 +28,7 @@ namespace turbomind {
 
 class MoeFfnLayerImpl {
 public:
-    explicit MoeFfnLayerImpl(const Context& ctx): ffn_(ctx) {}
+    MoeFfnLayerImpl() = default;
 
     virtual ~MoeFfnLayerImpl() = default;
 
@@ -38,8 +36,6 @@ public:
 
 protected:
     Tensor_<float> Gate(const Tensor& input, Linear& gate);
-
-    LlamaFfnLayer ffn_;  // dense executor for the shared expert
 };
 
 Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, Linear& gate)
@@ -80,7 +76,6 @@ private:
 };
 
 MoeFfnDefaultImpl::MoeFfnDefaultImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights):
-    MoeFfnLayerImpl(ctx),
     tp_size_(engine.mlp_tp_size),
     ep_size_(engine.ep_size),
     ep_rank_(engine.ep_rank),
@@ -116,10 +111,9 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
     const int   tokens = p.input.shape(0);
     const auto& moe    = *p.weights;
 
-    const auto& block = *TM_CHECK_NOTNULL(moe.block());
+    auto& block = *TM_CHECK_NOTNULL(moe.block());
 
     const int hidden_dim = block.hidden_dim;
-    const int inter_size = block.inter_size;
 
     const size_t padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
 
@@ -231,37 +225,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
     auto indices = f2n_.slice(0, temp.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
-    if (block.w1w3) {
-        Tensor inter;
-        Tensor inter_scales;
-        Tensor unused_in_scales;
-        if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
-            TM_SCOPE_CALL(block.w1w3->Forward(p.input, unused_in_scales, indices, offsets, inter, inter_scales));
-            TM_SCOPE_CALL(block.w2->Forward(
-                inter.slice({0, 0}, {-1, inter_size}), inter_scales, {}, offsets, temp, unused_in_scales));
-        }
-        else {
-            TM_SCOPE_CALL(block.w1w3->Forward(p.input, indices, offsets, inter));
-
-            if (!block.is_fused_silu) {
-                TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
-            }
-
-            TM_SCOPE_CALL(block.w2->Forward(inter.slice({0, 0}, {-1, inter_size}), {}, offsets, temp));
-        }
-    }
-    else {
-        // Separate w1/w3 path
-        Tensor gating;
-        TM_SCOPE_CALL(block.w1->Forward(p.input, indices, offsets, gating));
-
-        Tensor up;
-        TM_SCOPE_CALL(block.w3->Forward(p.input, indices, offsets, up));
-
-        TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
-
-        TM_SCOPE_CALL(block.w2->Forward(gating, {}, offsets, temp));
-    }
+    block.Forward(p.input, GroupedRoute{indices, offsets, f2E_, num_valid_tokens}, temp);
 
     // Shared expert: dense FFN on a private buffer, folded into the combine.
     Tensor         shared_out;
@@ -279,8 +243,7 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
         shared_begin  = ep_rank_ * per + std::min(ep_rank_, rem);
         shared_end    = shared_begin + num;
         if (num > 0) {
-            ffn_.forward(
-                {p.input.slice(shared_begin, num), shared_out.slice(shared_begin, num), moe.shared.get(), p.layer_id});
+            TM_SCOPE_CALL(moe.shared->Forward(p.input.slice(shared_begin, num), shared_out.slice(shared_begin, num)));
         }
         // No Clear: the fold reads only [shared_begin, shared_end), which the
         // FFN just wrote. num == 0 ranks pass begin == end and own nothing.
@@ -340,7 +303,6 @@ private:
 };
 
 MoeFfnA2AImpl::MoeFfnA2AImpl(const EngineParam& engine, const Context& ctx, const MoeWeight& weights):
-    MoeFfnLayerImpl(ctx),
     ep_size_(engine.ep_size),
     ep_rank_(engine.ep_rank),
     mlp_tp_size_(engine.mlp_tp_size),
@@ -423,10 +385,9 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
     const int max_token_num_per_rank = std::min(CeilPowerOfTwo(partition.max_tokens_per_rank), max_token_per_rank_num_);
 
     const auto& moe               = *p.weights;
-    const auto& block             = *TM_CHECK_NOTNULL(moe.block());
+    auto&       block             = *TM_CHECK_NOTNULL(moe.block());
     const int   token_num         = partition.size;
     const int   hidden_dim        = block.hidden_dim;
-    const int   inter_size        = block.inter_size;
     const int   expert_num        = moe.num_experts();
     const int   local_expert_num  = moe.num_local_experts();
     const int   experts_per_token = moe.experts_per_token;
@@ -504,35 +465,7 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
     auto indices = f2n_.slice(0, temp.shape(0));
     auto offsets = offsets_.slice(0, local_expert_num + 1);
 
-    if (block.w1w3) {
-        Tensor inter;
-        Tensor inter_scales;
-        Tensor unused_in_scales;
-        if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
-            TM_SCOPE_CALL(block.w1w3->Forward(output, unused_in_scales, indices, offsets, inter, inter_scales));
-            TM_SCOPE_CALL(block.w2->Forward(
-                inter.slice({0, 0}, {-1, inter_size}), inter_scales, {}, offsets, temp, unused_in_scales));
-        }
-        else {
-            TM_SCOPE_CALL(block.w1w3->Forward(output, indices, offsets, inter));
-            if (!block.is_fused_silu) {
-                TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
-            }
-            TM_SCOPE_CALL(block.w2->Forward(inter.slice({0, 0}, {-1, inter_size}), {}, offsets, temp));
-        }
-    }
-    else {
-        // Separate w1/w3 path
-        Tensor gating;
-        TM_SCOPE_CALL(block.w1->Forward(output, indices, offsets, gating));
-
-        Tensor up;
-        TM_SCOPE_CALL(block.w3->Forward(output, indices, offsets, up));
-
-        TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
-
-        TM_SCOPE_CALL(block.w2->Forward(gating, {}, offsets, temp));
-    }
+    block.Forward(output, GroupedRoute{indices, offsets, f2E_, num_valid_tokens}, temp);
 
     // Shared expert: dense FFN on a private buffer. Declarations live
     // outside the guard — the tail call below is unconditional.
@@ -543,7 +476,7 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
             shared_logits = Gate(input, *moe.shared_gate);
         }
         shared_out = {{token_num, hidden_dim}, input.dtype(), input.device()};
-        ffn_.forward({input, shared_out, moe.shared.get(), p.layer_id});
+        TM_SCOPE_CALL(moe.shared->Forward(input, shared_out));
     }
 
     stream.Wait(scales_copy_done_event_);

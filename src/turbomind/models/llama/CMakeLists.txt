@@ -10,7 +10,6 @@ add_library(Llama STATIC
         LlamaBatch.cc
         LlamaWeight.cc
         LlamaDecoderLayerWeight.cc
-        LlamaFfnLayer.cc
         moe_ffn_layer.cc
         unified_decoder.cc
         unified_attention_layer.cc
