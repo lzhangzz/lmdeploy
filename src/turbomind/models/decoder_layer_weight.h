@@ -20,7 +20,7 @@ namespace turbomind {
 class AttentionWeight;
 class DeltaNetWeight;
 class Ffn;
-class MoeWeight;
+class Moe;
 class NormWeight;
 
 /// Architecture-independent decoder layer weight composite.
@@ -43,7 +43,7 @@ public:
     X(AttentionWeight, attention)                                                                                      \
     X(DeltaNetWeight, linear_attn)                                                                                     \
     X(Ffn, feed_forward)                                                                                               \
-    X(MoeWeight, moe_ffn)                                                                                              \
+    X(Moe, moe_ffn)                                                                                                    \
     X(NormWeight, attention_norm)                                                                                      \
     X(NormWeight, ffn_norm)
 

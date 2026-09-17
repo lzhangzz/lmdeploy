@@ -15,7 +15,7 @@ ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
 void ModelWeight::prepare()
 {
     // The shared meta-MoE packs must be fully prepared before any layer
-    // weight aliases their routed gate/expert tensors (MoeWeight::prepare).
+    // weight aliases their routed gate/expert tensors (Moe::prepare).
     if (meta_experts) {
         meta_experts->prepare();
     }

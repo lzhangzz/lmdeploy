@@ -4,7 +4,6 @@
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
 namespace turbomind {
@@ -52,7 +51,6 @@ private:
 
     std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
     std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
-    std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
 
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   Tensor&       residual,

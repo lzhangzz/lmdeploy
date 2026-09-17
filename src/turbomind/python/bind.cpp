@@ -39,7 +39,7 @@
 #include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/model_weight.h"
-#include "src/turbomind/models/moe_weight.h"
+#include "src/turbomind/models/moe.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
 #include "src/turbomind/models/qwenvit/qwenvit_input.h"
@@ -919,8 +919,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "set_meta_pack",
             [](ft::core::Module& m, ft::core::Module* pack) {
-                auto& moe = dynamic_cast<ft::MoeWeight&>(m);
-                moe.set_meta_pack(dynamic_cast<ft::MoeWeight*>(pack));
+                auto& moe = dynamic_cast<ft::Moe&>(m);
+                moe.set_meta_pack(dynamic_cast<ft::Moe*>(pack));
             },
             "pack"_a);
 

@@ -16,6 +16,8 @@
 
 namespace turbomind {
 
+struct MoeState;
+
 struct Communicators {
     comm::HostComm h_global;
     comm::HostComm h_comm;
@@ -40,23 +42,22 @@ struct Context {
     cudaDeviceProp              device_prop;
     Communicators               comm;  // initialize later
     std::unique_ptr<int>        is_warm_up;
+    std::unique_ptr<MoeState>   moe_state_;  // per-rank MoE kind state
 
-    Context(int device_id):
-        core_stream{core::Stream::create()},
-        allocator{core::Allocator(core_stream, false)},
-        stream{core_stream.handle()},
-        comm{},  // value initialize
-        is_warm_up{std::make_unique<int>()}
-    {
-        core::ContextGuard guard{core_stream};
-        gemm_engine = std::make_unique<GEMMEngine>();
-        TM_CUDA_CHECK(cudaGetDeviceProperties(&device_prop, device_id));
-    }
+    Context(int device_id);
+    ~Context();
 
     GEMMEngine& linear_engine() noexcept
     {
         return *gemm_engine;
     }
+
+    MoeState* moe_state() const noexcept
+    {
+        return moe_state_.get();
+    }
+    // Defined in context.cc: the kind-state type is incomplete here.
+    void set_moe_state(std::unique_ptr<MoeState> state) noexcept;
 };
 
 inline Allocator GetSymmAllocator(const comm::DeviceComm& comm)

@@ -18,11 +18,13 @@
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
 
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/moe.h"
 #include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
@@ -127,11 +129,43 @@ struct TurboMind::Impl {
         TM_CHECK(weights_[index] != nullptr) << "Bind(" << index << ") must run after RegisterCache";
         TM_CHECK(contexts_[index] != nullptr) << "CreateContext(" << index << ") must run before Bind";
 
+        auto& ctx = *contexts_[index];
+
         auto ctx_guard = weights_[index]->context();
+
+        // The MoE kind state is an engine service owned by the Context:
+        // created once per rank before the walk so every Moe module can
+        // capture it in bind(). Geometry comes from the engine param; the
+        // routed shapes from the first MoE module (all layers share one
+        // routed geometry). Kept across update_params reloads — the
+        // geometry is unchanged and re-creating would re-run the DeepEP
+        // dispatcher JIT warm-up.
+        if (auto* text = weights_[index]->text_model_ptr()) {
+            Moe* moe = nullptr;
+            for (int i = 0; i < text->num_layer; ++i) {
+                if (auto* m = text->layer(i)->moe_ffn.get()) {
+                    moe = m;
+                    break;
+                }
+            }
+            // The bind walk also reaches meta_experts pack modules; cover a
+            // pack-without-layers tree so the scan and the walk agree on
+            // what needs the state.
+            if (!moe && text->meta_experts) {
+                moe = dynamic_cast<Moe*>(text->meta_experts->child(std::to_string(0)));
+            }
+            if (moe && !ctx.moe_state()) {
+                // The guard above binds the weight-loading stream/pool;
+                // runtime scratch belongs to the engine's stream/allocator
+                // (where the retired executor's buffers lived).
+                core::ContextGuard guard{ctx.core_stream, ctx.allocator};
+                ctx.set_moe_state(std::make_unique<MoeState>(engine_params_.at(index), ctx, *moe));
+            }
+        }
 
         // Engine-binding walk: modules capture per-rank services (the GEMM
         // engine for Linear; kind states in later stages) before first Run.
-        weights_[index]->bind(*contexts_[index]);
+        weights_[index]->bind(ctx);
         TM_CUDA_CHECK(cudaGetLastError());
     }
 

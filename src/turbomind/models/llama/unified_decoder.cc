@@ -13,10 +13,10 @@
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
-#include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/moe.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -53,14 +53,14 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
 {
-    std::vector<MoeWeight*>       moe_weights;
     std::vector<DeltaNetWeight*>  gdn_weights;
     std::vector<AttentionWeight*> attn_weights;
+    bool                          has_moe = false;
 
     for (int i = 0; i < model_weight.num_layer; ++i) {
         auto layer = model_weight.layer(i);
         if (layer->moe_ffn) {
-            moe_weights.push_back(layer->moe_ffn.get());
+            has_moe = true;
         }
         if (layer->linear_attn) {
             gdn_weights.push_back(layer->linear_attn.get());
@@ -68,10 +68,6 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
         if (layer->attention) {
             attn_weights.push_back(layer->attention.get());
         }
-    }
-
-    if (!moe_weights.empty()) {
-        moe_ffn_layer_ = std::make_unique<MoeFfnLayer>(engine, ctx, moe_weights.front());
     }
 
     // Per-layer FFN group, used on both sides of the FFN: the pre-FFN gather
@@ -83,7 +79,7 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     // node collectively holds every row it reduces, so they never pay
     // cross-node traffic.
     ffn_group_.assign(model_weight.num_layer, mlp_group_);
-    if (moe_ffn_layer_) {
+    if (has_moe) {
         for (int i = 0; i < model_weight.num_layer; ++i) {
             if (!model_weight.layer(i)->moe_ffn) {
                 ffn_group_[i] = node_group_;
@@ -107,7 +103,7 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
                                                                   phases);
     }
 
-    TM_CHECK(!(moe_weights.empty() && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
+    TM_CHECK(!(!has_moe && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
 }
 
 void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
@@ -310,11 +306,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         /// feed-forward network
 
         if (weights.at(layer)->moe_ffn) {
-            moe_ffn_layer_->Forward({global_hidden_states,
-                                     global_hidden_states,
-                                     local_token_nums,
-                                     weights.at(layer)->moe_ffn.get(),
-                                     (const bool*)args.at("token_mask").buffer().raw_data()});
+            TM_SCOPE_CALL(weights.at(layer)->moe_ffn->Forward(global_hidden_states,
+                                                              global_hidden_states,
+                                                              (const bool*)args.at("token_mask").buffer().raw_data(),
+                                                              local_token_nums));
         }
 
         if (weights.at(layer)->feed_forward) {

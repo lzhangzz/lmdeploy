@@ -9,7 +9,7 @@ add_library(models STATIC
         layer_norm_weight.cc
         attention_weight.cc
         ffn.cc
-        moe_weight.cc
+        moe.cc
         delta_net_weight.cc
         decoder_layer_weight.cc
         model_weight.cc
@@ -24,7 +24,7 @@ add_library(models STATIC
         internvit/internvit_weight.cc
         internvit/internvit.cc
         llama/GEMMEngine.cu
-        llama/moe_ffn_layer.cc
+        llama/context.cc
         llama/unified_decoder.cc
         llama/unified_attention_layer.cc
         llama/llama_kernels.cu
