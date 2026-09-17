@@ -38,7 +38,6 @@ using std::shared_ptr;
 struct LanguageModel::Impl {
     const Communicators& comm_;
     const ModelWeight&   weights_;
-    LlamaLinear&         linear_;
 
     const int  tp_size_;
     const int  tp_rank_;
@@ -137,7 +136,6 @@ LanguageModel::Impl::Impl(
     CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
-    linear_{*ctx.linear},
     tp_size_{comm_.h_tp_group->n_ranks()},
     tp_rank_{comm_.h_tp_group->rank()},
     use_ag2d_{comm_.d_comm && comm_.d_comm->Query(comm::kHasAllGather2D)},
@@ -299,14 +297,14 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
 
     if (tp_size_ == 1) {
         Tensor logits{{bsz, vocab_size}, weights_.data_type, kDEVICE};
-        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, logits));
+        TM_SCOPE_CALL(weights_.output->Forward(features, logits));
         TM_DEBUG_TENSOR(logits, "logits", 1);
         return logits;
     }
     else if (use_ag2d_) {
         Tensor logits{symm_buf.view(weights_.data_type), {bsz, tp_size_, local_vocab_size}};
         Tensor local = logits.slice({0, tp_rank_, 0}, {-1, 1, -1});
-        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(1)));
+        TM_SCOPE_CALL(weights_.output->Forward(features, local.squeeze(1)));
         comm_.d_comm->AllGather2D(local.raw_data(),
                                   logits.raw_data(),
                                   vocab_size,
@@ -323,7 +321,7 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor& features, Buffer symm_bu
     else {
         Tensor logits{symm_buf.view(weights_.data_type), {tp_size_, bsz, local_vocab_size}};
         Tensor local = logits.slice({tp_rank_, 0, 0}, {1, -1, -1});
-        TM_SCOPE_CALL(linear_.Forward(features, *weights_.output, local.squeeze(0)));
+        TM_SCOPE_CALL(weights_.output->Forward(features, local.squeeze(0)));
         comm_.d_comm->AllGather(local.raw_data(), logits.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, st);
         TM_CUDA_CHECK(cudaGetLastError());
         Tensor out{{bsz, vocab_size}, features.dtype(), features.device()};

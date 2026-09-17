@@ -5,7 +5,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/norm_weight.h"
 
 namespace turbomind::core {
@@ -85,12 +85,12 @@ public:
 
     // --- X-macro field lists ---
 #define ATTENTION_WEIGHT_CHILDREN(X)                                                                                   \
-    X(LinearWeight, w_qkv)                                                                                             \
-    X(LinearWeight, wo)                                                                                                \
-    X(LinearWeight, q_proj)                                                                                            \
-    X(LinearWeight, q_a_proj)                                                                                          \
-    X(LinearWeight, q_b_proj)                                                                                          \
-    X(LinearWeight, kv_a_proj)                                                                                         \
+    X(Linear, w_qkv)                                                                                                   \
+    X(Linear, wo)                                                                                                      \
+    X(Linear, q_proj)                                                                                                  \
+    X(Linear, q_a_proj)                                                                                                \
+    X(Linear, q_b_proj)                                                                                                \
+    X(Linear, kv_a_proj)                                                                                               \
     X(NormWeight, q_norm)                                                                                              \
     X(NormWeight, k_norm)                                                                                              \
     X(NormWeight, q_a_layernorm)                                                                                       \

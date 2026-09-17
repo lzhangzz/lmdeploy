@@ -45,7 +45,6 @@ QwenVitWorkspacePlan PlanWorkspace(core::ssize_t available_elements,
 struct QwenVit::Impl {
     const QwenVitWeight&        weights_;
     const core::QwenVitConfig&  config_;
-    LlamaLinear&                linear_;
     const comm::HostComm&       h_tp_group;
     comm::DeviceCommImpl* const d_comm_;
     const int                   tp_group_;
@@ -120,7 +119,6 @@ struct QwenVit::Impl {
     Impl(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases):
         weights_{weights},
         config_{weights.config()},
-        linear_{*ctx.linear},
         h_tp_group{ctx.comm.h_comm},
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
@@ -535,7 +533,7 @@ struct QwenVit::Impl {
         Copy(host_input, input);
 
         Tensor output;
-        TM_SCOPE_CALL(linear_.Forward(input, *weights_.patch_embed, output));
+        TM_SCOPE_CALL(weights_.patch_embed->Forward(input, output));
         return output;
     }
 
@@ -958,7 +956,7 @@ struct QwenVit::Impl {
         auto* attn    = weights_.block(layer_id)->attention.get();
 
         Tensor qkv;
-        TM_SCOPE_CALL(linear_.Forward(input, *attn->w_qkv, qkv));
+        TM_SCOPE_CALL(attn->w_qkv->Forward(input, qkv));
 
         const int local_head_num = attn->head_num / attn->tp_size;
         const int head_dim       = attn->head_dim;                         // may be padded
@@ -984,7 +982,7 @@ struct QwenVit::Impl {
         auto   params = CreateVitAttentionParams<T>(attn_output, qkv, tmp_kv, d, *attn, layer_id);
         dispatchAttention<T>(params);
 
-        TM_SCOPE_CALL(linear_.Forward(attn_output, *attn->wo, output));
+        TM_SCOPE_CALL(attn->wo->Forward(attn_output, output));
     }
 
     void Mlp(Tensor& input, Tensor& output, Data& d, int layer_id)
@@ -996,24 +994,24 @@ struct QwenVit::Impl {
             TM_CHECK(block->mlp_gate);
             Tensor gate;
             Tensor up;
-            TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_gate, gate));
-            TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, up));
+            TM_SCOPE_CALL(block->mlp_gate->Forward(input, gate));
+            TM_SCOPE_CALL(block->mlp_fc1->Forward(input, up));
 
             TM_SCOPE_CALL(ApplyBias(gate, block->mlp_gate->bias, stream));
             TM_SCOPE_CALL(ApplyBias(up, block->mlp_fc1->bias, stream));
             TM_SCOPE_CALL(Activation(gate, up, ActivationType::kSilu, stream));
 
-            TM_SCOPE_CALL(linear_.Forward(gate, *block->mlp_fc2, output));
+            TM_SCOPE_CALL(block->mlp_fc2->Forward(gate, output));
         }
         else {
             Tensor inter;
-            TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
+            TM_SCOPE_CALL(block->mlp_fc1->Forward(input, inter));
 
             // Qwen2-VL/2.5 use the erf GELU; Qwen3.5 uses the tanh approximation.
             const ActivationType act = config_.gelu_tanh ? ActivationType::kGeluPytorchTanh : ActivationType::kGelu;
             TM_SCOPE_CALL(invokeAddBiasActivation(inter, block->mlp_fc1->bias, act, stream));
 
-            TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
+            TM_SCOPE_CALL(block->mlp_fc2->Forward(inter, output));
         }
     }
 
@@ -1026,7 +1024,7 @@ struct QwenVit::Impl {
         Tensor    merged_input = input.view({-1, cfg.hidden_dim * merge_area});
 
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(merged_input, *weights_.merger_fc1, inter));
+        TM_SCOPE_CALL(weights_.merger_fc1->Forward(merged_input, inter));
 
         TM_SCOPE_CALL(invokeAddBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream));
 
@@ -1034,7 +1032,7 @@ struct QwenVit::Impl {
         if (symm_buf) {
             output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.merger_fc2->output_dim}};
         }
-        TM_SCOPE_CALL(linear_.Forward(inter, *weights_.merger_fc2, output));
+        TM_SCOPE_CALL(weights_.merger_fc2->Forward(inter, output));
         AllReduceSum(output, stream);
 
         Tensor result = empty_like(output);

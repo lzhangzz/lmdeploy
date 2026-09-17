@@ -17,7 +17,6 @@
 #endif
 
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/moe_weight.h"
@@ -31,26 +30,25 @@ namespace turbomind {
 
 class MoeFfnLayerImpl {
 public:
-    explicit MoeFfnLayerImpl(const Context& ctx): linear_(*ctx.linear), ffn_(ctx) {}
+    explicit MoeFfnLayerImpl(const Context& ctx): ffn_(ctx) {}
 
     virtual ~MoeFfnLayerImpl() = default;
 
     virtual void Forward(MoeFfnLayer::ForwardParam& p) = 0;
 
 protected:
-    Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
+    Tensor_<float> Gate(const Tensor& input, Linear& gate);
 
-    LlamaLinear&  linear_;
     LlamaFfnLayer ffn_;  // dense executor for the shared expert
 };
 
-Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& gate)
+Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, Linear& gate)
 {
     TM_FUNCTION_SCOPE();
 
     TM_CHECK_EQ(input.shape(1), gate.input_dim);
     Tensor_<float> logits{{input.shape(0), gate.output_dim}, kDEVICE};
-    TM_SCOPE_CALL(linear_.Forward(input, gate, logits));
+    TM_SCOPE_CALL(gate.Forward(input, logits));
     TM_SCOPE_CALL(ApplyBias(logits, gate.bias, core::Context::stream().handle()));
     return logits;
 }
@@ -238,32 +236,31 @@ void MoeFfnDefaultImpl::Forward(MoeFfnLayer::ForwardParam& p)
         Tensor inter_scales;
         Tensor unused_in_scales;
         if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
-            TM_SCOPE_CALL(
-                linear_.Forward(p.input, unused_in_scales, *block.w1w3, indices, offsets, inter, inter_scales));
-            TM_SCOPE_CALL(linear_.Forward(
-                inter.slice({0, 0}, {-1, inter_size}), inter_scales, *block.w2, {}, offsets, temp, unused_in_scales));
+            TM_SCOPE_CALL(block.w1w3->Forward(p.input, unused_in_scales, indices, offsets, inter, inter_scales));
+            TM_SCOPE_CALL(block.w2->Forward(
+                inter.slice({0, 0}, {-1, inter_size}), inter_scales, {}, offsets, temp, unused_in_scales));
         }
         else {
-            TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1w3, indices, offsets, inter));
+            TM_SCOPE_CALL(block.w1w3->Forward(p.input, indices, offsets, inter));
 
             if (!block.is_fused_silu) {
                 TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
             }
 
-            TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp));
+            TM_SCOPE_CALL(block.w2->Forward(inter.slice({0, 0}, {-1, inter_size}), {}, offsets, temp));
         }
     }
     else {
         // Separate w1/w3 path
         Tensor gating;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w1, indices, offsets, gating));
+        TM_SCOPE_CALL(block.w1->Forward(p.input, indices, offsets, gating));
 
         Tensor up;
-        TM_SCOPE_CALL(linear_.Forward(p.input, *block.w3, indices, offsets, up));
+        TM_SCOPE_CALL(block.w3->Forward(p.input, indices, offsets, up));
 
         TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
 
-        TM_SCOPE_CALL(linear_.Forward(gating, *block.w2, {}, offsets, temp));
+        TM_SCOPE_CALL(block.w2->Forward(gating, {}, offsets, temp));
     }
 
     // Shared expert: dense FFN on a private buffer, folded into the combine.
@@ -512,30 +509,29 @@ void MoeFfnA2AImpl::Forward(MoeFfnLayer::ForwardParam& p)
         Tensor inter_scales;
         Tensor unused_in_scales;
         if (block.is_fused_silu && block.w1w3->output_dtype() == kFloat8_e4m3) {
-            TM_SCOPE_CALL(
-                linear_.Forward(output, unused_in_scales, *block.w1w3, indices, offsets, inter, inter_scales));
-            TM_SCOPE_CALL(linear_.Forward(
-                inter.slice({0, 0}, {-1, inter_size}), inter_scales, *block.w2, {}, offsets, temp, unused_in_scales));
+            TM_SCOPE_CALL(block.w1w3->Forward(output, unused_in_scales, indices, offsets, inter, inter_scales));
+            TM_SCOPE_CALL(block.w2->Forward(
+                inter.slice({0, 0}, {-1, inter_size}), inter_scales, {}, offsets, temp, unused_in_scales));
         }
         else {
-            TM_SCOPE_CALL(linear_.Forward(output, *block.w1w3, indices, offsets, inter));
+            TM_SCOPE_CALL(block.w1w3->Forward(output, indices, offsets, inter));
             if (!block.is_fused_silu) {
                 TM_SCOPE_CALL(Activation(inter, block.w1w3->bias, f2E_, block.act_type, num_valid_tokens, st));
             }
-            TM_SCOPE_CALL(linear_.Forward(inter.slice({0, 0}, {-1, inter_size}), *block.w2, {}, offsets, temp));
+            TM_SCOPE_CALL(block.w2->Forward(inter.slice({0, 0}, {-1, inter_size}), {}, offsets, temp));
         }
     }
     else {
         // Separate w1/w3 path
         Tensor gating;
-        TM_SCOPE_CALL(linear_.Forward(output, *block.w1, indices, offsets, gating));
+        TM_SCOPE_CALL(block.w1->Forward(output, indices, offsets, gating));
 
         Tensor up;
-        TM_SCOPE_CALL(linear_.Forward(output, *block.w3, indices, offsets, up));
+        TM_SCOPE_CALL(block.w3->Forward(output, indices, offsets, up));
 
         TM_SCOPE_CALL(Activation(gating, up, block.act_type, num_valid_tokens, st));
 
-        TM_SCOPE_CALL(linear_.Forward(gating, *block.w2, {}, offsets, temp));
+        TM_SCOPE_CALL(block.w2->Forward(gating, {}, offsets, temp));
     }
 
     // Shared expert: dense FFN on a private buffer. Declarations live

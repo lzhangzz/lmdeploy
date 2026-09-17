@@ -6,7 +6,7 @@
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 

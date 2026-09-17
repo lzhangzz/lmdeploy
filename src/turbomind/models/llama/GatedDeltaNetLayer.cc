@@ -59,8 +59,7 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        int                          phases):
     tp_size_{engine.attn_tp_size * engine.attn_cp_size},
     recurrent_state_dtype_{engine.state_dtype},
-    gdr_cp_level_{GetCPLevel()},
-    linear_{*context.linear}
+    gdr_cp_level_{GetCPLevel()}
 {
     TM_CHECK(!weights.empty());
     const auto& first = *TM_CHECK_NOTNULL(weights.front());
@@ -372,7 +371,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam param)
     const int conv_dim  = key_dim * 2 + value_dim;
 
     Tensor all_proj = MakePaddedOutput(token_num, *weights.in_proj_all, device);
-    TM_SCOPE_CALL(linear_.Forward(param.input, *weights.in_proj_all, all_proj));
+    TM_SCOPE_CALL(weights.in_proj_all->Forward(param.input, all_proj));
 
     const int value_heads       = num_v_heads_;
     const int value_gate_offset = conv_dim + value_dim;
@@ -511,7 +510,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam param)
     Tensor hidden_view = attn_out.view({token_num * num_v_heads_, head_dim_});
     invokeRMSNormGated(hidden_view, gate, weights.norm->weight, weights.norm->norm_eps_, stream);
 
-    TM_SCOPE_CALL(linear_.Forward(attn_out, *weights.out_proj, param.output));
+    TM_SCOPE_CALL(weights.out_proj->Forward(attn_out, param.output));
 }
 
 }  // namespace turbomind

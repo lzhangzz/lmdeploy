@@ -3,7 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/norm_weight.h"
 
 namespace turbomind::core {
@@ -48,8 +48,8 @@ public:
 
     // --- X-macro field lists ---
 #define DELTA_NET_WEIGHT_CHILDREN(X)                                                                                   \
-    X(LinearWeight, in_proj_all)                                                                                       \
-    X(LinearWeight, out_proj)                                                                                          \
+    X(Linear, in_proj_all)                                                                                             \
+    X(Linear, out_proj)                                                                                                \
     X(NormWeight, norm)
 
 #define DELTA_NET_WEIGHT_PARAMS(X)                                                                                     \

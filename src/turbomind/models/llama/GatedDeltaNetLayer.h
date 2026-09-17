@@ -10,7 +10,6 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/kernels/linear_attn/delta_rule.h"
 #include "src/turbomind/models/delta_net_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -46,8 +45,6 @@ private:
     const DataType recurrent_state_dtype_;
 
     const linear_attn::delta_rule::ContextParallelLevel gdr_cp_level_;
-
-    LlamaLinear& linear_;
 
     // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
     struct Data {

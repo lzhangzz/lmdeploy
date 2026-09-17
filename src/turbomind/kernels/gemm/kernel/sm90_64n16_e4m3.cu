@@ -6,7 +6,7 @@
 #include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 #if TM_GEMM_HAS_SM90_MIXED
 
@@ -39,7 +39,7 @@ std::optional<WeightBridge> supports(const DataFormat& format, bool)
     return bridge;
 }
 
-void pack(LinearWeight& linear, cudaStream_t stream)
+void pack(Linear& linear, cudaStream_t stream)
 {
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(linear.input_dim % kSm90MixedTileK, 0);

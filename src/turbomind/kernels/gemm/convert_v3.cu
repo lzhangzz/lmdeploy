@@ -7,7 +7,7 @@
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -31,7 +31,7 @@ int WeightPackEnv()
     return v;
 }
 
-void PackWeight(LinearWeight& linear, const LayoutConverter& convert, cudaStream_t stream)
+void PackWeight(Linear& linear, const LayoutConverter& convert, cudaStream_t stream)
 {
     const DataType    source_weight_type = linear.weight_format.dtype;
     const int         bits               = byte_size(source_weight_type, 8);
@@ -77,8 +77,8 @@ void PackWeight(LinearWeight& linear, const LayoutConverter& convert, cudaStream
     linear.k_desc = kd;
 }
 
-void PackWeight(LinearWeight& linear,
-                Pack          pack,
+void PackWeight(Linear& linear,
+                Pack    pack,
                 void (*convert)(uint32_t*, const uint16_t*, int, int, cudaStream_t),
                 cudaStream_t stream)
 {
@@ -104,7 +104,7 @@ void PackWeight(LinearWeight& linear,
         MatrixLayout{source_weight_type, kColMajor, linear.input_dim, linear.output_dim, linear.input_dim, pack};
 }
 
-void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc quant, cudaStream_t stream)
+void PackQParams(Linear& linear, const LayoutConverter& convert, QuantDesc quant, cudaStream_t stream)
 {
     TM_CHECK(linear.scales);
     // The blockwise FP8 bridge pads each K-group row to a whole number of N128
@@ -151,9 +151,9 @@ void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc
     linear.q_desc = is_a ? transpose(qd) : qd;
 }
 
-void PackQParams(LinearWeight& linear,
-                 QuantDesc     quant,
-                 Pack          pack,
+void PackQParams(Linear&   linear,
+                 QuantDesc quant,
+                 Pack      pack,
                  void (*convert)(uint8_t*, const uint8_t*, int, int, int, cudaStream_t),
                  cudaStream_t stream)
 {

@@ -28,7 +28,7 @@ struct QwenVitBlockConfig: ModuleConfig {
 
 namespace turbomind {
 
-class LinearWeight;
+class Linear;
 
 /// One transformer block of the Qwen ViT (covers Qwen2 / Qwen2.5 / Qwen3.5).
 ///
@@ -58,9 +58,9 @@ public:
     X(core::Module, norm1)                                                                                             \
     X(core::Module, norm2)                                                                                             \
     X(AttentionWeight, attention)                                                                                      \
-    X(LinearWeight, mlp_gate)                                                                                          \
-    X(LinearWeight, mlp_fc1)                                                                                           \
-    X(LinearWeight, mlp_fc2)
+    X(Linear, mlp_gate)                                                                                                \
+    X(Linear, mlp_fc1)                                                                                                 \
+    X(Linear, mlp_fc2)
 
 #define QWENVIT_BLOCK_PARAMS(X)
 

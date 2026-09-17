@@ -51,11 +51,11 @@ void LlamaFfnLayer::forward(ForwardParam param)
     if (use_fused) {
         Tensor mix;
         if (mlp.is_fused_silu && fused->output_dtype() == kFloat8_e4m3) {
-            TM_SCOPE_CALL(linear_.Forward(param.input, unused_scales, *fused, mix, inter_scales));
+            TM_SCOPE_CALL(fused->Forward(param.input, unused_scales, mix, inter_scales));
             gating = mix;  // FP8 fused output is already half-N (inter_size)
         }
         else {
-            TM_SCOPE_CALL(linear_.Forward(param.input, *fused, mix));
+            TM_SCOPE_CALL(fused->Forward(param.input, mix));
             gating = mix.slice({0, 0}, {(int)token_num, inter_size});
             if (!mlp.is_fused_silu) {
                 inter = mix.slice({0, inter_size}, {(ssize_t)token_num, inter_size});
@@ -63,10 +63,10 @@ void LlamaFfnLayer::forward(ForwardParam param)
         }
     }
     else {
-        TM_SCOPE_CALL(linear_.Forward(param.input, *mlp.w1, gating));
+        TM_SCOPE_CALL(mlp.w1->Forward(param.input, gating));
         TM_DEBUG_TENSOR(gating, Concat("w1", layer_id), 3);
 
-        TM_SCOPE_CALL(linear_.Forward(param.input, *mlp.w3, inter));
+        TM_SCOPE_CALL(mlp.w3->Forward(param.input, inter));
         TM_DEBUG_TENSOR(inter, Concat("w3", layer_id), 3);
     }
 
@@ -82,10 +82,10 @@ void LlamaFfnLayer::forward(ForwardParam param)
     {  // w2(x)
         NvtxScope scope("w2");
         if (inter_scales) {
-            TM_SCOPE_CALL(linear_.Forward(gating, inter_scales, *mlp.w2, param.output, unused_scales));
+            TM_SCOPE_CALL(mlp.w2->Forward(gating, inter_scales, param.output, unused_scales));
         }
         else {
-            TM_SCOPE_CALL(linear_.Forward(gating, *mlp.w2, param.output));
+            TM_SCOPE_CALL(mlp.w2->Forward(gating, param.output));
         }
     }
 }

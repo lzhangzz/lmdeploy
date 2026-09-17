@@ -52,7 +52,7 @@ namespace turbomind {
 
 class InternVitBlockWeight;
 class LayerNormWeight;
-class LinearWeight;
+class Linear;
 
 class InternVitWeight: public VisionModelWeight {
 public:
@@ -68,11 +68,11 @@ public:
     bool verify(std::vector<std::string>& missing) override;
 
 #define INTERNVIT_WEIGHT_CHILDREN(X)                                                                                   \
-    X(LinearWeight, patch_embed)                                                                                       \
+    X(Linear, patch_embed)                                                                                             \
     X(core::ModuleList, blocks)                                                                                        \
     X(LayerNormWeight, projector_norm)                                                                                 \
-    X(LinearWeight, projector_fc1)                                                                                     \
-    X(LinearWeight, projector_fc2)
+    X(Linear, projector_fc1)                                                                                           \
+    X(Linear, projector_fc2)
 
 #define INTERNVIT_WEIGHT_PARAMS(X)                                                                                     \
     X(cls_token)                                                                                                       \

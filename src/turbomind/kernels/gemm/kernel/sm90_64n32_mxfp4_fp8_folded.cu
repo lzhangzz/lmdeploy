@@ -8,7 +8,7 @@
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -23,7 +23,7 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, cudaStream_t stream)
+void pack(Linear& linear, cudaStream_t stream)
 {
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);
     TM_CHECK_EQ(linear.input_dim % 128, 0);

@@ -30,7 +30,6 @@
 #include "src/turbomind/kernels/attention/cp_utils.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/attention_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/llama_rope.h"
@@ -84,8 +83,7 @@ private:
     const Context&         context_;
     int&                   is_warm_up_;
 
-    LlamaLinear& linear_;
-    const int    arch_{};
+    const int arch_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;

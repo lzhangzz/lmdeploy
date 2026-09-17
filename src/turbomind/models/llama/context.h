@@ -13,7 +13,6 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/llama/GEMMEngine.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 
 namespace turbomind {
 
@@ -34,14 +33,13 @@ struct Communicators {
 
 // Execution context for the model
 struct Context {
-    core::Stream                 core_stream;
-    core::Allocator              allocator;
-    cudaStream_t                 stream;
-    std::unique_ptr<GEMMEngine>  gemm_engine;  // per-rank GEMM engine
-    std::unique_ptr<LlamaLinear> linear;  // thin delegate over gemm_engine
-    cudaDeviceProp               device_prop;
-    Communicators                comm;  // initialize later
-    std::unique_ptr<int>         is_warm_up;
+    core::Stream                core_stream;
+    core::Allocator             allocator;
+    cudaStream_t                stream;
+    std::unique_ptr<GEMMEngine> gemm_engine;  // per-rank GEMM engine
+    cudaDeviceProp              device_prop;
+    Communicators               comm;  // initialize later
+    std::unique_ptr<int>        is_warm_up;
 
     Context(int device_id):
         core_stream{core::Stream::create()},
@@ -52,7 +50,6 @@ struct Context {
     {
         core::ContextGuard guard{core_stream};
         gemm_engine = std::make_unique<GEMMEngine>();
-        linear      = std::make_unique<LlamaLinear>(*gemm_engine);
         TM_CUDA_CHECK(cudaGetDeviceProperties(&device_prop, device_id));
     }
 

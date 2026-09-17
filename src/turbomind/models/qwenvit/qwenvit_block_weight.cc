@@ -5,7 +5,7 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind {
 

@@ -14,8 +14,7 @@
 #include "src/turbomind/models/internvit/internvit_kernels.h"
 #include "src/turbomind/models/internvit/internvit_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
-#include "src/turbomind/models/linear_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/memory_utils.h"
@@ -53,7 +52,6 @@ struct InternVit::Impl {
     const InternVitWeight&       weights_;
     const core::InternVitConfig& config_;
     const comm::HostComm&        h_tp_group;
-    LlamaLinear&                 linear_;
     comm::DeviceCommImpl* const  d_comm_;
     const int                    tp_group_;
     const int                    tp_size_;
@@ -87,7 +85,6 @@ struct InternVit::Impl {
         weights_{weights},
         config_{weights.config()},
         h_tp_group{ctx.comm.h_comm},
-        linear_{*ctx.linear},
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
         tp_size_{ctx.comm.h_tp_group ? ctx.comm.h_tp_group->n_ranks() : 1},
@@ -341,7 +338,7 @@ struct InternVit::Impl {
                                               stream));
 
         Tensor patch_embeds;
-        TM_SCOPE_CALL(linear_.Forward(patches, *weights_.patch_embed, patch_embeds));
+        TM_SCOPE_CALL(weights_.patch_embed->Forward(patches, patch_embeds));
 
         Tensor hidden{{d.token_num, cfg.hidden_dim}, cfg.data_type, kDEVICE};
         TM_SCOPE_CALL(invokeInternVitAddEmbeddings(hidden,
@@ -415,7 +412,7 @@ struct InternVit::Impl {
         auto  stream = core::Context::stream().handle();
 
         Tensor qkv;
-        TM_SCOPE_CALL(linear_.Forward(input, *attn->w_qkv, qkv));
+        TM_SCOPE_CALL(attn->w_qkv->Forward(input, qkv));
 
         const int local_head_num = attn->head_num / attn->tp_size;
         const int head_dim       = attn->head_dim;
@@ -446,7 +443,7 @@ struct InternVit::Impl {
         auto   params = CreateVitAttentionParams<T>(attn_output, qkv, kv, d, *attn, layer_id);
         dispatchAttention<T>(params);
 
-        TM_SCOPE_CALL(linear_.Forward(attn_output, *attn->wo, output));
+        TM_SCOPE_CALL(attn->wo->Forward(attn_output, output));
         if (attn->tp_size > 1) {
             AllReduceSum(output, stream);
         }
@@ -458,11 +455,11 @@ struct InternVit::Impl {
         auto  stream = core::Context::stream().handle();
 
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(input, *block->mlp_fc1, inter));
+        TM_SCOPE_CALL(block->mlp_fc1->Forward(input, inter));
 
         TM_SCOPE_CALL(invokeAddBiasActivation(inter, block->mlp_fc1->bias, ActivationType::kGelu, stream));
 
-        TM_SCOPE_CALL(linear_.Forward(inter, *block->mlp_fc2, output));
+        TM_SCOPE_CALL(block->mlp_fc2->Forward(inter, output));
         AllReduceSum(output, stream);
     }
 
@@ -487,7 +484,7 @@ struct InternVit::Impl {
                                       stream));
 
         Tensor inter;
-        TM_SCOPE_CALL(linear_.Forward(projector_normed, *weights_.projector_fc1, inter));
+        TM_SCOPE_CALL(weights_.projector_fc1->Forward(projector_normed, inter));
 
         TM_SCOPE_CALL(invokeAddBiasActivation(inter, weights_.projector_fc1->bias, ActivationType::kGelu, stream));
 
@@ -495,7 +492,7 @@ struct InternVit::Impl {
         if (tp_size_ > 1) {
             output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.projector_fc2->output_dim}};
         }
-        TM_SCOPE_CALL(linear_.Forward(inter, *weights_.projector_fc2, output));
+        TM_SCOPE_CALL(weights_.projector_fc2->Forward(inter, output));
         AllReduceSum(output, stream);
 
         TM_CHECK(result.shape() == output.shape());

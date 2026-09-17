@@ -28,7 +28,7 @@ struct InternVitBlockConfig: ModuleConfig {
 
 namespace turbomind {
 
-class LinearWeight;
+class Linear;
 
 class InternVitBlockWeight: public core::Module {
 public:
@@ -53,8 +53,8 @@ public:
     X(core::Module, norm1)                                                                                             \
     X(core::Module, norm2)                                                                                             \
     X(AttentionWeight, attention)                                                                                      \
-    X(LinearWeight, mlp_fc1)                                                                                           \
-    X(LinearWeight, mlp_fc2)
+    X(Linear, mlp_fc1)                                                                                                 \
+    X(Linear, mlp_fc2)
 
 #define INTERNVIT_BLOCK_PARAMS(X)                                                                                      \
     X(lambda_1)                                                                                                        \

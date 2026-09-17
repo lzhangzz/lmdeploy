@@ -5,7 +5,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/kernels/quantization.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 
@@ -20,7 +20,7 @@ Family::Family(std::uint32_t id,
                bool          requires_packing,
                bool          grouped,
                std::optional<WeightBridge> (*supports)(const DataFormat&, bool),
-               void (*pack)(LinearWeight&, cudaStream_t),
+               void (*pack)(Linear&, cudaStream_t),
                int        gate_up_block,
                DataFormat fused_output,
                bool       is_graph_compatible,
@@ -94,17 +94,13 @@ Family::supports(const DataFormat& weight_format, DataType data_type, DataType o
     return supports_(weight_format, grouped);
 }
 
-void Family::Pack(LinearWeight& linear, cudaStream_t stream) const
+void Family::Pack(Linear& linear, cudaStream_t stream) const
 {
     pack_(linear, stream);
 }
 
-void Family::ConvertInput(Tensor& A,
-                          Tensor& U,
-                          const LinearWeight&,
-                          const Tensor& input,
-                          const Tensor& input_scales,
-                          cudaStream_t  stream) const
+void Family::ConvertInput(
+    Tensor& A, Tensor& U, const Linear&, const Tensor& input, const Tensor& input_scales, cudaStream_t stream) const
 {
     if (!input_format_.is_quantized()) {
         TM_CHECK_EQ(input.dtype(), input_format_.dtype);

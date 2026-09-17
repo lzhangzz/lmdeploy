@@ -21,7 +21,7 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/moe_weight.h"
 
@@ -118,7 +118,7 @@ void bind_linear(py::module_& m)
         .def("gate_up", &gemm::WeightPlan::gate_up, py::arg("act_type"), py::arg("projection_n"))
         .def(
             "pack",
-            [](const gemm::WeightPlan& plan, LinearWeight& linear) {
+            [](const gemm::WeightPlan& plan, Linear& linear) {
                 plan.pack(linear, core::Context::stream().handle());
             },
             py::arg("linear"),
@@ -152,24 +152,20 @@ void bind_linear(py::module_& m)
         .def("get_weight_plan", &gemm::Gemm::GetWeightPlan, py::arg("query"))
         .def("data_types", &gemm::Gemm::DataTypes, py::arg("weight_format"));
 
-    py::class_<LinearWeight, core::Module>(m, "LinearWeight")
+    py::class_<Linear, core::Module>(m, "LinearWeight")
         .def(py::init<const core::LinearConfig&>())
-        .def("prepare", &LinearWeight::prepare)
-        .def("set_plan", &LinearWeight::set_plan, py::arg("plan"))
-        .def_property_readonly("is_graph_compatible", &LinearWeight::is_graph_compatible)
-        .def_readwrite("input_dim", &LinearWeight::input_dim)
-        .def_readwrite("output_dim", &LinearWeight::output_dim)
-        .def_readwrite("data_type", &LinearWeight::data_type)
-        .def_readwrite("weight_format", &LinearWeight::weight_format)
-        .def_readwrite("input_format", &LinearWeight::input_format)
-        .def_readwrite("output_format", &LinearWeight::output_format)
-        .def_readwrite("epilogue", &LinearWeight::epilogue)
-        .def_readwrite("k_desc", &LinearWeight::k_desc)
-        .def_readwrite("q_desc", &LinearWeight::q_desc);
-
-    py::class_<gemm::Workspace>(m, "GemmWorkspace").def(py::init<>([](std::uintptr_t stream) {
-        return std::make_unique<gemm::Workspace>(reinterpret_cast<cudaStream_t>(stream));
-    }));
+        .def("prepare", &Linear::prepare)
+        .def("set_plan", &Linear::set_plan, py::arg("plan"))
+        .def_property_readonly("is_graph_compatible", &Linear::is_graph_compatible)
+        .def_readwrite("input_dim", &Linear::input_dim)
+        .def_readwrite("output_dim", &Linear::output_dim)
+        .def_readwrite("data_type", &Linear::data_type)
+        .def_readwrite("weight_format", &Linear::weight_format)
+        .def_readwrite("input_format", &Linear::input_format)
+        .def_readwrite("output_format", &Linear::output_format)
+        .def_readwrite("epilogue", &Linear::epilogue)
+        .def_readwrite("k_desc", &Linear::k_desc)
+        .def_readwrite("q_desc", &Linear::q_desc);
 
     py::class_<LlamaLinear, std::shared_ptr<LlamaLinear>>(m, "LlamaLinear")
         .def(py::init<>())
@@ -180,16 +176,13 @@ void bind_linear(py::module_& m)
         .def(
             "get_exec_plan",
             [](LlamaLinear&                  self,
-               gemm::Workspace&              workspace,
-               const LinearWeight&           weight,
+               const Linear&           weight,
                std::shared_ptr<core::Tensor> input,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets) {
-                auto lifetime = self.With(workspace);
                 return self.GetExecPlan(
                     TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices), IntBufferOrEmpty(offsets));
             },
-            py::arg("workspace"),
             py::arg("weight"),
             py::arg("input"),
             py::arg("indices") = py::none(),
@@ -197,7 +190,7 @@ void bind_linear(py::module_& m)
         .def(
             "_get_output_spec",
             [](const LlamaLinear&            self,
-               const LinearWeight&           weight,
+               const Linear&           weight,
                std::shared_ptr<core::Tensor> input,
                std::shared_ptr<core::Tensor> indices) {
                 return self.GetOutputSpec(TensorFromShared(input, "input"), weight, IntBufferOrEmpty(indices));
@@ -208,21 +201,19 @@ void bind_linear(py::module_& m)
         .def(
             "forward_dense",
             [](LlamaLinear&                  self,
-               gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
-               LinearWeight&                 weight,
+               Linear&                 weight,
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in       = TensorFromShared(input, "input");
-                core::Tensor out      = TensorFromShared(output, "output");
-                core::Tensor in_s     = TensorOrEmpty(input_scales);
-                core::Tensor out_s    = TensorOrEmpty(output_scales);
-                auto         lifetime = self.With(workspace);
+                core::Tensor           in    = TensorFromShared(input, "input");
+                core::Tensor           out   = TensorFromShared(output, "output");
+                core::Tensor           in_s  = TensorOrEmpty(input_scales);
+                core::Tensor           out_s = TensorOrEmpty(output_scales);
+                py::gil_scoped_release release;
                 self.Forward(plan, in, in_s, weight, {}, {}, out, out_s);
             },
-            py::arg("workspace"),
             py::arg("plan"),
             py::arg("input"),
             py::arg("weight"),
@@ -232,25 +223,23 @@ void bind_linear(py::module_& m)
         .def(
             "forward_moe",
             [](LlamaLinear&                  self,
-               gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
-               LinearWeight&                 weight,
+               Linear&                 weight,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets,
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in            = TensorFromShared(input, "input");
-                core::Tensor out           = TensorFromShared(output, "output");
-                core::Tensor in_s          = TensorOrEmpty(input_scales);
-                core::Tensor out_s         = TensorOrEmpty(output_scales);
-                Buffer_<int> index_buffer  = IntBufferOrEmpty(indices);
-                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
-                auto         lifetime      = self.With(workspace);
+                core::Tensor           in            = TensorFromShared(input, "input");
+                core::Tensor           out           = TensorFromShared(output, "output");
+                core::Tensor           in_s          = TensorOrEmpty(input_scales);
+                core::Tensor           out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
+                py::gil_scoped_release release;
                 self.Forward(plan, in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
-            py::arg("workspace"),
             py::arg("plan"),
             py::arg("input"),
             py::arg("weight"),
@@ -262,24 +251,22 @@ void bind_linear(py::module_& m)
         .def(
             "tune",
             [](LlamaLinear&                  self,
-               gemm::Workspace&              workspace,
                std::shared_ptr<core::Tensor> input,
-               LinearWeight&                 weight,
+               Linear&                 weight,
                std::shared_ptr<core::Tensor> indices,
                std::shared_ptr<core::Tensor> offsets,
                std::shared_ptr<core::Tensor> output,
                std::shared_ptr<core::Tensor> input_scales,
                std::shared_ptr<core::Tensor> output_scales) {
-                core::Tensor in            = TensorFromShared(input, "input");
-                core::Tensor out           = TensorFromShared(output, "output");
-                core::Tensor in_s          = TensorOrEmpty(input_scales);
-                core::Tensor out_s         = TensorOrEmpty(output_scales);
-                Buffer_<int> index_buffer  = IntBufferOrEmpty(indices);
-                Buffer_<int> offset_buffer = IntBufferOrEmpty(offsets);
-                auto         lifetime      = self.With(workspace);
+                core::Tensor           in            = TensorFromShared(input, "input");
+                core::Tensor           out           = TensorFromShared(output, "output");
+                core::Tensor           in_s          = TensorOrEmpty(input_scales);
+                core::Tensor           out_s         = TensorOrEmpty(output_scales);
+                Buffer_<int>           index_buffer  = IntBufferOrEmpty(indices);
+                Buffer_<int>           offset_buffer = IntBufferOrEmpty(offsets);
+                py::gil_scoped_release release;
                 return self.Tune(in, in_s, weight, index_buffer, offset_buffer, out, out_s);
             },
-            py::arg("workspace"),
             py::arg("input"),
             py::arg("weight"),
             py::arg("indices") = py::none(),
@@ -406,8 +393,8 @@ void bind_linear(py::module_& m)
 
     m.def(
         "LinkLinearExperts",
-        [](const std::vector<LinearWeight*>& experts) {
-            auto destination = std::make_unique<LinearWeight>();
+        [](const std::vector<Linear*>& experts) {
+            auto destination = std::make_unique<Linear>();
             LinkLinearExperts(experts, *destination);
             return destination;
         },

@@ -77,17 +77,17 @@ namespace turbomind {
 
 // Forward decls
 class LayerNormWeight;
-class LinearWeight;
+class Linear;
 class QwenVitBlockWeight;
 
 /// Unified Qwen ViT weight tree (Qwen2-VL / Qwen2.5-VL / Qwen3.5).
 ///
 /// Tree:
-///   patch_embed   LinearWeight (Conv3d-as-Linear; in_dim = C·T·patch²)
+///   patch_embed   Linear (Conv3d-as-Linear; in_dim = C·T·patch²)
 ///   pos_embed     raw tensor   (num_position_embeddings × hidden_dim) — Qwen3.5 only, optional
 ///   blocks        ModuleList   of QwenVitBlockWeight × depth
-///   merger_fc1    LinearWeight (in: hidden·spatial_merge², out: 4·hidden)
-///   merger_fc2    LinearWeight (in: 4·hidden,              out: out_hidden)
+///   merger_fc1    Linear (in: hidden·spatial_merge², out: 4·hidden)
+///   merger_fc2    Linear (in: 4·hidden,              out: out_hidden)
 ///   merger_norm   LayerNormWeight or NormWeight (over hidden_dim)
 ///
 /// We expose ``merger_*`` as direct children rather than a sub-module to
@@ -107,10 +107,10 @@ public:
 
     // --- X-macro field lists ---
 #define QWENVIT_WEIGHT_CHILDREN(X)                                                                                     \
-    X(LinearWeight, patch_embed)                                                                                       \
+    X(Linear, patch_embed)                                                                                             \
     X(core::ModuleList, blocks)                                                                                        \
-    X(LinearWeight, merger_fc1)                                                                                        \
-    X(LinearWeight, merger_fc2)                                                                                        \
+    X(Linear, merger_fc1)                                                                                              \
+    X(Linear, merger_fc2)                                                                                              \
     X(core::Module, merger_norm)
 
 #define QWENVIT_WEIGHT_PARAMS(X) X(pos_embed)

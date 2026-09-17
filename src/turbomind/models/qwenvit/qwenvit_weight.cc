@@ -4,7 +4,7 @@
 
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/models/layer_norm_weight.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
 #include "src/turbomind/utils/memory_utils.h"
 

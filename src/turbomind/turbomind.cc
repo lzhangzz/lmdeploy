@@ -94,10 +94,15 @@ struct TurboMind::Impl {
     {
         CudaDeviceGuard dev_guard(engine_param_.devices[index]);
         TM_CHECK(weights_[index] != nullptr);
+        TM_CHECK(contexts_[index] != nullptr) << "CreateContext(" << index << ") must run before ProcessWeights";
 
         auto ctx_guard = weights_[index]->context();
         weights_[index]->prepare();
         TM_CUDA_CHECK(cudaGetLastError());
+
+        // Engine-binding walk: modules capture per-rank services (the GEMM
+        // engine for Linear; kind states in later stages) before first Run.
+        weights_[index]->bind(*contexts_[index]);
     }
 
     void CreateEngine(int index);

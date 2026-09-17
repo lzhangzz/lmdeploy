@@ -1,23 +1,15 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
-#include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/core/cuda_data_type.h"
-#include "src/turbomind/core/data_type.h"
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
 
-#include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/gemm/types.h"
 
-#include "src/turbomind/kernels/quantization.h"
-
-#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/GEMMEngine.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-
-#include "src/turbomind/utils/cuda_utils.h"
 
 #include <memory>
 #include <optional>
@@ -28,18 +20,12 @@ using namespace gemm;
 
 struct LlamaLinear::Impl {
 
-    // Engine-path construction: delegate over the Context-owned engine.
-    explicit Impl(GEMMEngine& engine): engine_{&engine} {}
-
-    // Standalone construction: the delegate owns a private engine.
     Impl(): owned_engine_{std::make_unique<GEMMEngine>()}, engine_{owned_engine_.get()} {}
 
-    std::unique_ptr<GEMMEngine> owned_engine_;  // standalone path only
-    GEMMEngine*                 engine_;        // engine this delegate runs on
+    std::unique_ptr<GEMMEngine> owned_engine_;
+    GEMMEngine*                 engine_;
 
-    gemm::Workspace* workspace_ = nullptr;  // With() override; falls back to the engine workspace
-
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const LinearWeight& weight)
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandB(const Linear& weight)
     {
         const Tensor& B      = weight.weight;
         const Tensor& V      = weight.scales;
@@ -48,7 +34,7 @@ struct LlamaLinear::Impl {
         return {B, desc_B, V, desc_V};
     }
 
-    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandA(const LinearWeight& weight,
+    std::tuple<Tensor, MatrixLayout, Tensor, MatrixLayout> GetOperandA(const Linear&       weight,
                                                                        const Tensor&       input,
                                                                        const Tensor&       input_scales,
                                                                        Buffer_<int>        indices,
@@ -82,7 +68,7 @@ struct LlamaLinear::Impl {
         return {A, desc_A, U, desc_U};
     }
 
-    Operation GetOperation(const LinearWeight& weight) const
+    Operation GetOperation(const Linear& weight) const
     {
         Operation operation{};
         operation.dispatch  = engine_->dispatch_policy();
@@ -94,7 +80,7 @@ struct LlamaLinear::Impl {
         return operation;
     }
 
-    OutputSpec GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
+    OutputSpec GetOutputSpec(const Tensor& input, const Linear& weight, const Buffer_<int>& indices) const
     {
         const bool grouped = weight.k_desc.ld == 0;
         const bool indexed = static_cast<bool>(indices) && indices.size() > 0;
@@ -116,7 +102,7 @@ struct LlamaLinear::Impl {
                                  const OutputSpec&   output_spec,
                                  const Tensor&       input,
                                  const Tensor&       input_scales,
-                                 const LinearWeight& weight,
+                                 const Linear&       weight,
                                  const Buffer_<int>& indices,
                                  const Buffer_<int>& offsets,
                                  Tensor&             output,
@@ -187,7 +173,7 @@ struct LlamaLinear::Impl {
         args.Ddesc             = desc_D;
         args.W                 = W_ptr;
         args.Wdesc             = desc_W;
-        args.workspace         = workspace_ ? workspace_ : engine_->workspace();
+        args.workspace         = engine_->workspace();
         args.stream            = core::Context::stream().handle();
         return args;
     }
@@ -195,7 +181,7 @@ struct LlamaLinear::Impl {
     void Forward(const ExecPlan&     plan,
                  const Tensor&       input,
                  const Tensor&       input_scales,
-                 const LinearWeight& weight,
+                 const Linear&       weight,
                  const Buffer_<int>& indices,
                  const Buffer_<int>& offsets,
                  Tensor&             output,
@@ -213,107 +199,32 @@ struct LlamaLinear::Impl {
     }
 };
 
-LlamaLinear::LlamaLinear(GEMMEngine& engine): impl_{std::make_shared<Impl>(engine)} {}
-
 LlamaLinear::LlamaLinear(): impl_{std::make_shared<Impl>()} {}
-
-LlamaLinear::WorkspaceScope LlamaLinear::With(gemm::Workspace& workspace)
-{
-    return WorkspaceScope{*this, workspace};
-}
-
-LlamaLinear::WorkspaceScope::WorkspaceScope(LlamaLinear& linear, gemm::Workspace& workspace):
-    linear_(&linear), prev_(linear.impl_->workspace_)
-{
-    linear.impl_->workspace_ = &workspace;
-}
-
-LlamaLinear::WorkspaceScope::~WorkspaceScope()
-{
-    linear_->impl_->workspace_ = prev_;
-}
 
 gemm::Gemm& LlamaLinear::gemm() noexcept
 {
     return impl_->engine_->gemm();
 }
 
-void LlamaLinear::Forward(const Tensor&       input,  //
-                          const LinearWeight& weight,
-                          Ref<Tensor>         output)
-{
-    Tensor input_scales;
-    Tensor output_scales;
-    Forward(input, input_scales, weight, {}, {}, output, output_scales);
-}
-
-void LlamaLinear::Forward(const Tensor&       input,  //
-                          const LinearWeight& weight,
-                          const Buffer_<int>& indices,
-                          const Buffer_<int>& offsets,
-                          Ref<Tensor>         output)
-{
-    Tensor input_scales;
-    Tensor output_scales;
-    Forward(input, input_scales, weight, indices, offsets, output, output_scales);
-}
-
-void LlamaLinear::Forward(const Tensor&       input,
-                          const Tensor&       input_scales,
-                          const LinearWeight& weight,
-                          const Buffer_<int>& indices,
-                          const Buffer_<int>& offsets,
-                          Ref<Tensor>         output,
-                          Ref<Tensor>         output_scales)
-{
-    TM_FUNCTION_SCOPE();
-    OutputSpec      output_spec = impl_->GetOutputSpec(input, weight, indices);
-    Tensor          A;
-    Tensor          U;
-    Gemm::Arguments args = impl_->GetArguments(
-        A, U, output_spec, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
-
-    auto&     gemm      = impl_->engine_->gemm();
-    auto      exec_plan = impl_->engine_->dispatch_policy() & DispatchPolicy::kMeasure ? gemm.Tune(args)
-                                                                                      : gemm.GetExecPlan(args);
-
-    TM_CHECK(exec_plan);
-    exec_plan->output_spec_ = std::move(output_spec);
-    const int ec            = gemm.Run(*exec_plan, args);
-    if (ec) {
-        TM_LOG_ERROR("{}: {}", __PRETTY_FUNCTION__, ec);
-    }
-}
-
-void LlamaLinear::Forward(const Tensor&       input,
-                          const Tensor&       input_scales,
-                          const LinearWeight& weight,
-                          Ref<Tensor>         output,
-                          Ref<Tensor>         output_scales)
-{
-    Forward(input, input_scales, weight, {}, {}, output, output_scales);
-}
-
-void LlamaLinear::Forward(const ExecPlan&     plan,
-                          const Tensor&       input,
-                          const Tensor&       input_scales,
-                          const LinearWeight& weight,
-                          const Buffer_<int>& indices,
-                          const Buffer_<int>& offsets,
-                          Ref<Tensor>         output,
-                          Ref<Tensor>         output_scales)
+void LlamaLinear::Forward(const gemm::ExecPlan& plan,
+                          const Tensor&         input,
+                          const Tensor&         input_scales,
+                          const Linear&         weight,
+                          const Buffer_<int>&   indices,
+                          const Buffer_<int>&   offsets,
+                          Ref<Tensor>           output,
+                          Ref<Tensor>           output_scales)
 {
     impl_->Forward(plan, input, input_scales, weight, indices, offsets, output.get(), output_scales.get());
 }
 
-OutputSpec
-LlamaLinear::GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices) const
+OutputSpec LlamaLinear::GetOutputSpec(const Tensor& input, const Linear& weight, const Buffer_<int>& indices) const
 {
     return impl_->GetOutputSpec(input, weight, indices);
 }
 
 std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
-                                                 const LinearWeight& weight,
+                                                 const Linear&       weight,
                                                  const Buffer_<int>& indices,
                                                  const Buffer_<int>& offsets)
 {
@@ -346,7 +257,7 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
     args.Vdesc     = desc_V;
     args.Cdesc     = desc_D;
     args.Ddesc     = desc_D;
-    args.workspace = impl_->workspace_ ? impl_->workspace_ : impl_->engine_->workspace();
+    args.workspace = impl_->engine_->workspace();
 
     auto& gemm = impl_->engine_->gemm();
     auto  plan = gemm.GetExecPlan(args);
@@ -358,7 +269,7 @@ std::optional<ExecPlan> LlamaLinear::GetExecPlan(const Tensor&       input,
 
 std::optional<ExecPlan> LlamaLinear::Tune(const Tensor&       input,
                                           const Tensor&       input_scales,
-                                          const LinearWeight& weight,
+                                          const Linear&       weight,
                                           const Buffer_<int>& indices,
                                           const Buffer_<int>& offsets,
                                           Ref<Tensor>         output,
@@ -382,24 +293,14 @@ std::optional<ExecPlan> LlamaLinear::Tune(const Tensor&       input,
     return exec_plan;
 }
 
-void LlamaLinear::set_measure(bool measure)
-{
-    impl_->engine_->set_measure(measure);
-}
-
-int LlamaLinear::Export(std::ostream& os)
+[[maybe_unused]] int LlamaLinear::Export(std::ostream& os)
 {
     return impl_->engine_->Export(os);
 }
 
-int LlamaLinear::Import(std::istream& is)
+[[maybe_unused]] int LlamaLinear::Import(std::istream& is)
 {
     return impl_->engine_->Import(is);
-}
-
-std::vector<int> LlamaLinear::GetTuningSeq() const
-{
-    return impl_->engine_->GetTuningSeq();
 }
 
 }  // namespace turbomind

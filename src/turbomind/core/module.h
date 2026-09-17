@@ -16,6 +16,13 @@
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/tensor.h"
 
+namespace turbomind {
+
+struct Context;
+enum class BatchOp;
+
+}  // namespace turbomind
+
 namespace turbomind::core {
 
 // ======================================================================
@@ -54,7 +61,7 @@ struct ModuleListConfig: ModuleConfig {
 // Usage in a derived class header:
 //
 //   #define MY_CHILDREN(X) \
-//       X(LinearWeight, w1) \
+//       X(Linear, w1) \
 //       X(NormWeight,   norm)
 //
 //   #define MY_PARAMS(X) \
@@ -219,7 +226,7 @@ public:
 
     // ----- Type info -----
 
-    /// Returns a static string identifying the module type (e.g., "LinearWeight", "NormWeight").
+    /// Returns a static string identifying the module type (e.g., "Linear", "NormWeight").
     virtual const char* type() const;
 
     // ----- Hierarchy (virtual, overridden by derived classes) -----
@@ -248,6 +255,14 @@ public:
     /// Post-load processing: weight format conversion, fusion.
     /// Default recurses into children via for_each_child.
     virtual void prepare();
+
+    /// Engine-run dispatch (contract-native BatchOp walk). Kinds implement
+    /// their subset of ops and ignore the rest; the default is a no-op.
+    virtual void Run(BatchOp op, int phase, TensorMap& env);
+
+    /// Capture engine services (GEMM engine, kind states) after prepare.
+    /// Default recurses into children via for_each_child.
+    virtual void bind(::turbomind::Context& ctx);
 
     // ----- Registry-driven child creation -----
 

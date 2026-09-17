@@ -10,7 +10,7 @@
 #include "src/turbomind/kernels/gemm/types.h"
 
 namespace turbomind {
-class LinearWeight;
+class Linear;
 }
 
 namespace turbomind::gemm {
@@ -33,11 +33,11 @@ const LayoutConverter& GetImpl();
 // TM_GEMM_WEIGHT_PACK: unset/-1 = auto, 0 = force plain, 1 = force pack
 int WeightPackEnv();
 
-void PackWeight(LinearWeight&, const LayoutConverter&, cudaStream_t);
-void PackWeight(LinearWeight&, Pack, void (*)(uint32_t*, const uint16_t*, int, int, cudaStream_t), cudaStream_t);
-void PackQParams(LinearWeight&, const LayoutConverter&, QuantDesc, cudaStream_t);
+void PackWeight(Linear&, const LayoutConverter&, cudaStream_t);
+void PackWeight(Linear&, Pack, void (*)(uint32_t*, const uint16_t*, int, int, cudaStream_t), cudaStream_t);
+void PackQParams(Linear&, const LayoutConverter&, QuantDesc, cudaStream_t);
 void PackQParams(
-    LinearWeight&, QuantDesc, Pack, void (*)(uint8_t*, const uint8_t*, int, int, int, cudaStream_t), cudaStream_t);
+    Linear&, QuantDesc, Pack, void (*)(uint8_t*, const uint8_t*, int, int, int, cudaStream_t), cudaStream_t);
 
 // Free with `cudaFree`
 void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream_t stream);

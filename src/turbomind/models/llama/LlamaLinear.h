@@ -7,103 +7,48 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/kernels/gemm/gemm.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind {
 
-class GEMMEngine;
-
+/// Standalone executor for the Python torch-linear path (linear.py). Owns a
+/// private GEMMEngine and runs plan query / replay / tuning over data-only
+/// Linear modules. Retires with the stage-1 Python delta, when linear.py
+/// constructs a Context and binds the modules instead.
 class LlamaLinear {
 public:
-    // Opaque, non-copyable, non-movable RAII token. While alive, this linear
-    // runs on the workspace passed to With(); destruction restores the
-    // previously active workspace. Nesting restores in LIFO order.
-    class WorkspaceScope {
-    public:
-        ~WorkspaceScope();
-
-        WorkspaceScope(const WorkspaceScope&) = delete;
-        WorkspaceScope& operator=(const WorkspaceScope&) = delete;
-        WorkspaceScope(WorkspaceScope&&)                 = delete;
-        WorkspaceScope& operator=(WorkspaceScope&&) = delete;
-
-    private:
-        WorkspaceScope(LlamaLinear& linear, gemm::Workspace& workspace);
-        friend class LlamaLinear;
-        LlamaLinear*     linear_;
-        gemm::Workspace* prev_;
-    };
-
-    // Bind this linear to `workspace` for the enclosing scope.
-    [[nodiscard]] WorkspaceScope With(gemm::Workspace& workspace);
-
-    /// Delegate over the Context-owned GEMMEngine (engine path).
-    explicit LlamaLinear(GEMMEngine& engine);
-
-    /// Standalone construction (Python binding): owns a private GEMMEngine.
     LlamaLinear();
 
-    void Forward(const Tensor&       input,  //
-                 const LinearWeight& weight,
-                 Ref<Tensor>         output);
-
-    void Forward(const Tensor&       input,
-                 const LinearWeight& weight,
-                 const Buffer_<int>& indices,
-                 const Buffer_<int>& offsets,
-                 Ref<Tensor>         output);
-
-    /// Forward with optional dynamic act-scale companions.
-    /// ``input_scales``: when ``input`` is already FP8, used as GEMM U (skip QuantizeSymm).
-    /// ``output_scales``: when ``weight.output_dtype()`` is FP8, filled with group-128 scales (W).
-    void Forward(const Tensor&       input,
-                 const Tensor&       input_scales,
-                 const LinearWeight& weight,
-                 const Buffer_<int>& indices,
-                 const Buffer_<int>& offsets,
-                 Ref<Tensor>         output,
-                 Ref<Tensor>         output_scales);
-
-    void Forward(const Tensor&       input,
-                 const Tensor&       input_scales,
-                 const LinearWeight& weight,
-                 Ref<Tensor>         output,
-                 Ref<Tensor>         output_scales);
-
+    /// Plan-replay forward over a data-only module.
     void Forward(const gemm::ExecPlan& plan,
                  const Tensor&         input,
                  const Tensor&         input_scales,
-                 const LinearWeight&   weight,
+                 const Linear&         weight,
                  const Buffer_<int>&   indices,
                  const Buffer_<int>&   offsets,
                  Ref<Tensor>           output,
                  Ref<Tensor>           output_scales);
 
-    gemm::OutputSpec
-    GetOutputSpec(const Tensor& input, const LinearWeight& weight, const Buffer_<int>& indices = {}) const;
+    gemm::OutputSpec GetOutputSpec(const Tensor& input, const Linear& weight, const Buffer_<int>& indices = {}) const;
 
     std::optional<gemm::ExecPlan> GetExecPlan(const Tensor&       input,
-                                              const LinearWeight& weight,
+                                              const Linear&       weight,
                                               const Buffer_<int>& indices = {},
                                               const Buffer_<int>& offsets = {});
 
     std::optional<gemm::ExecPlan> Tune(const Tensor&       input,
                                        const Tensor&       input_scales,
-                                       const LinearWeight& weight,
+                                       const Linear&       weight,
                                        const Buffer_<int>& indices,
                                        const Buffer_<int>& offsets,
                                        Ref<Tensor>         output,
                                        Ref<Tensor>         output_scales);
-
-    void set_measure(bool measure);
 
     gemm::Gemm& gemm() noexcept;
 
     [[maybe_unused]] int Export(std::ostream& os);
 
     [[maybe_unused]] int Import(std::istream& is);
-
-    std::vector<int> GetTuningSeq() const;
 
 private:
     struct Impl;

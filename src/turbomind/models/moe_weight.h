@@ -9,7 +9,7 @@
 
 namespace turbomind {
 
-void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& destination);
+void LinkLinearExperts(const std::vector<Linear*>& experts, Linear& destination);
 
 }  // namespace turbomind
 
@@ -57,7 +57,18 @@ public:
 
     void prepare() override;
     void link_block();
-    int  num_experts() const
+
+    /// The routed-expert block is built inside prepare() and is not an
+    /// X-macro child, so the bind walk must descend into it explicitly.
+    void bind(Context& ctx) override
+    {
+        Module::bind(ctx);
+        if (block_) {
+            block_->bind(ctx);
+        }
+    }
+
+    int num_experts() const
     {
         return expert_num;
     }
@@ -72,8 +83,8 @@ public:
 
     // --- X-macro child members ---
 #define MOE_WEIGHT_CHILDREN(X)                                                                                         \
-    X(LinearWeight, gate)                                                                                              \
-    X(LinearWeight, shared_gate)                                                                                       \
+    X(Linear, gate)                                                                                                    \
+    X(Linear, shared_gate)                                                                                             \
     X(FfnWeight, shared)                                                                                               \
     X(core::ModuleList, experts)
 

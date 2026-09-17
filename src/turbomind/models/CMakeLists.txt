@@ -4,7 +4,7 @@ add_library(models STATIC
         language_model.cc
         input_processor.cc
         output_processor.cc
-        linear_weight.cc
+        linear.cc
         norm_weight.cc
         layer_norm_weight.cc
         attention_weight.cc

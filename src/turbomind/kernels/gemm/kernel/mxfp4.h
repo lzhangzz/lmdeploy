@@ -4,7 +4,7 @@
 
 #include "src/turbomind/kernels/gemm/convert.cuh"
 #include "src/turbomind/kernels/gemm/family.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 
@@ -32,7 +32,7 @@ inline std::optional<WeightBridge> supports_mxfp4(const DataFormat& format, bool
 }
 
 template<class Arch, Order WeightOrder, uint32_t WeightPack, Order QParamOrder, uint32_t QParamPack>
-void pack_mxfp4(LinearWeight& linear, cudaStream_t stream)
+void pack_mxfp4(Linear& linear, cudaStream_t stream)
 {
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint4_t>(), stream);
     PackQParams(

@@ -63,6 +63,19 @@ void Module::prepare()
     });
 }
 
+void Module::Run(BatchOp /*op*/, int /*phase*/, TensorMap& /*env*/)
+{
+    // default: no-op
+}
+
+void Module::bind(::turbomind::Context& ctx)
+{
+    for_each_child([&ctx](const char* /*name*/, Module* child) {
+        if (child)
+            child->bind(ctx);
+    });
+}
+
 // ----- Registry-driven child creation -----
 
 std::unique_ptr<Module> Module::create(const ModuleConfig& config)

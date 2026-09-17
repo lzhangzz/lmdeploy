@@ -1,6 +1,6 @@
 #include "src/turbomind/kernels/gemm/weight_plan.h"
 
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 
@@ -18,7 +18,7 @@ int WeightPlan::gate_up(ActivationType act_type, int projection_n)
     return block;
 }
 
-void WeightPlan::pack(LinearWeight& linear, cudaStream_t stream) const
+void WeightPlan::pack(Linear& linear, cudaStream_t stream) const
 {
     family_->Pack(linear, stream);
     linear.family        = family_;

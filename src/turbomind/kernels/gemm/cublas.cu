@@ -11,7 +11,7 @@
 #include "src/turbomind/kernels/gemm/matrix_ptr.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include <cstdio>
@@ -199,7 +199,7 @@ std::optional<WeightBridge> supports(const DataFormat& format, bool)
 }
 
 template<DataType Dtype>
-void pack(LinearWeight& linear, cudaStream_t)
+void pack(Linear& linear, cudaStream_t)
 {
     TM_CHECK_EQ(linear.weight.dtype(), Dtype);
     linear.k_desc =

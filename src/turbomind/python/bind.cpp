@@ -35,7 +35,7 @@
 #include "src/turbomind/models/internvit/internvit_input.h"
 #include "src/turbomind/models/internvit/internvit_weight.h"
 #include "src/turbomind/models/layer_norm_weight.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
@@ -899,7 +899,7 @@ PYBIND11_MODULE(_turbomind, m)
         py::return_value_policy::reference,
         "config"_a);
 
-    // LinearWeight is fully bound in bind_linear() (after Module is registered).
+    // Linear is fully bound in bind_linear() (after Module is registered).
 
     // transformer model
     using ft::TurboMind;

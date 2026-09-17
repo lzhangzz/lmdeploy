@@ -7,7 +7,6 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/engine/batch.h"
-#include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/vision_model.h"
@@ -25,7 +24,6 @@ struct ModelExecutor::Impl {
 
     LanguageModel& model_;
     VisionModel*   vision_model_;  // nullable: only set for VLM checkpoints
-    LlamaLinear&   linear_;
 
     const int device_id_;
 
@@ -47,12 +45,6 @@ struct ModelExecutor::Impl {
 
         core::ContextGuard ctx{stream, h_alloc, d_alloc};
 
-        // Default GEMM workspace for everything dispatched on this stream;
-        // bound for the whole work loop, which is the outer-most scope that
-        // drives `linear_`.
-        gemm::Workspace workspace{stream.handle()};
-        auto            ws_lifetime = linear_.With(workspace);
-
         unique_ptr<BatchData> d;
 
         while (inbound_.pop(d)) {
@@ -62,9 +54,6 @@ struct ModelExecutor::Impl {
             d->done.Record(core::Context::stream());
             outbound_.push(std::move(d));
         }
-
-        // Stream-ordered teardown: the frees run after the last batch's kernels.
-        workspace.Release(stream.handle());
     }
 
     static void RunCopies(std::vector<ResolvedCopy>& copies)
@@ -117,12 +106,7 @@ struct ModelExecutor::Impl {
          int                           device_id,
          Queue<unique_ptr<BatchData>>& inbound,
          Queue<unique_ptr<BatchData>>& outbound):
-        model_{model},
-        vision_model_{vision_model},
-        linear_{*context.linear},
-        device_id_{device_id},
-        inbound_{inbound},
-        outbound_{outbound}
+        model_{model}, vision_model_{vision_model}, device_id_{device_id}, inbound_{inbound}, outbound_{outbound}
     {
     }
 

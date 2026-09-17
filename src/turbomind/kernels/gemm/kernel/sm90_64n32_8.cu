@@ -12,7 +12,7 @@
 
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 
@@ -20,7 +20,7 @@ namespace {
 using config::Shape;
 using namespace config::geometry;
 
-void pack(LinearWeight& linear, cudaStream_t stream)
+void pack(Linear& linear, cudaStream_t stream)
 {
     TM_CHECK_EQ(linear.weight.dtype(), kFloat8_e4m3);
     TM_CHECK_EQ(linear.scales.dtype(), kFloat);

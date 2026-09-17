@@ -4,7 +4,7 @@
 
 #include "src/turbomind/kernels/gemm/convert.cuh"
 #include "src/turbomind/kernels/gemm/family.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::gemm {
 
@@ -76,7 +76,7 @@ template<class Arch,
          Order    QParamOrder,
          uint32_t QParamPack,
          DataType ScaleDtype>
-void pack_e4m3(LinearWeight& linear, cudaStream_t stream)
+void pack_e4m3(Linear& linear, cudaStream_t stream)
 {
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint8_t>(), stream);
     PackQParams(

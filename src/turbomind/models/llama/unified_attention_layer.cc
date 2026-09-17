@@ -140,7 +140,6 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
     cp_fn_ctx_{context.comm.d_comm, context.comm.d_cp_group, engine.attn_cp_size},
     is_warm_up_{*context.is_warm_up},
     context_{context},
-    linear_(*context.linear),
     arch_{getSMVersion()}
 {
     TM_CHECK_GE(weights.size(), 1);
@@ -390,7 +389,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     if (weights.w_qkv && weights.w_qkv->output_dim) {
         // [token_num, hidden_dim] -> [token_num, local_q_kv_head_num, head_dim]
-        TM_SCOPE_CALL(linear_.Forward(p.input, *weights.w_qkv, qkv));
+        TM_SCOPE_CALL(weights.w_qkv->Forward(p.input, qkv));
 
         qk_norm(qkv, weights);
     }
@@ -437,7 +436,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 
     //////////////////////////////////////////////
     /// output gemm <Bs,HD> -> <Bs,HD>
-    TM_SCOPE_CALL(linear_.Forward(attn, *weights.wo, p.output));
+    TM_SCOPE_CALL(weights.wo->Forward(attn, p.output));
 }
 
 template<class T>
@@ -679,21 +678,21 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     const auto stream = core::Context::stream().handle();
 
     if (w.q_proj && w.q_proj->weight) {
-        TM_SCOPE_CALL(linear_.Forward(hidden_state, *w.q_proj, q));
+        TM_SCOPE_CALL(w.q_proj->Forward(hidden_state, q));
     }
     else {
         Tensor q_a;
-        TM_SCOPE_CALL(linear_.Forward(hidden_state, *w.q_a_proj, q_a));
+        TM_SCOPE_CALL(w.q_a_proj->Forward(hidden_state, q_a));
 
         invokeRMSNorm(
             q_a, q_a, w.q_a_layernorm->weight, w.q_a_layernorm->norm_eps_, w.q_a_layernorm->zero_centered_, stream);
         TM_CUDA_CHECK(cudaGetLastError());
 
-        TM_SCOPE_CALL(linear_.Forward(q_a, *w.q_b_proj, q));
+        TM_SCOPE_CALL(w.q_b_proj->Forward(q_a, q));
     }
 
     Tensor kv_a_k_pe;
-    TM_SCOPE_CALL(linear_.Forward(hidden_state, *w.kv_a_proj, kv_a_k_pe));
+    TM_SCOPE_CALL(w.kv_a_proj->Forward(hidden_state, kv_a_k_pe));
 
     auto kv_a = kv_a_k_pe.slice({0, 0}, {-1, kv_lora_rank});
     invokeRMSNorm(

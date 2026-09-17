@@ -3,7 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/utils/memory_utils.h"
 
@@ -49,7 +49,7 @@ public:
 
     // --- X-macro field lists ---
 #define MODEL_WEIGHT_CHILDREN(X)                                                                                       \
-    X(LinearWeight, output)                                                                                            \
+    X(Linear, output)                                                                                                  \
     X(NormWeight, norm)                                                                                                \
     X(core::ModuleList, layers)                                                                                        \
     X(core::ModuleList, meta_experts)

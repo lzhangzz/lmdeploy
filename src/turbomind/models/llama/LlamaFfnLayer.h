@@ -21,14 +21,13 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/ffn_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/llama/context.h"
 
 namespace turbomind {
 
 class LlamaFfnLayer {
 public:
-    LlamaFfnLayer(const Context& ctx): linear_(*ctx.linear) {}
+    LlamaFfnLayer(const Context& ctx) {}
 
     struct ForwardParam {
         Tensor           input;
@@ -38,9 +37,6 @@ public:
     };
 
     void forward(ForwardParam param);
-
-private:
-    LlamaLinear& linear_;
 };
 
 }  // namespace turbomind

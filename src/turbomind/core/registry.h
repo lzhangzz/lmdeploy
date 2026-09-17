@@ -55,3 +55,13 @@ private:
         return true;                                                                                                   \
     }();                                                                                                               \
     }
+
+/// Registers under an explicit registry name, for classes whose C++ name
+/// differs from the frozen binding-surface string (e.g. Linear -> "LinearWeight").
+#define TM_MODULE_REGISTER_AS(Name, ModuleClass, ConfigType)                                                           \
+    namespace {                                                                                                        \
+    static const bool _tm_module_registered_ = [] {                                                                    \
+        ::turbomind::core::ModuleRegistry::instance().register_type<ModuleClass, ConfigType>(Name);                    \
+        return true;                                                                                                   \
+    }();                                                                                                               \
+    }

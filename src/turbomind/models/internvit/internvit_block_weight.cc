@@ -3,7 +3,7 @@
 #include "src/turbomind/models/internvit/internvit_block_weight.h"
 
 #include "src/turbomind/core/registry.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind {

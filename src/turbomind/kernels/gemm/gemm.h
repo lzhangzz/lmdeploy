@@ -62,6 +62,7 @@ public:
 
 private:
     friend class ::turbomind::LlamaLinear;
+    friend class ::turbomind::Linear;
 
     std::optional<ExecPlan> GetExecPlan(const Arguments& args);
     std::optional<ExecPlan> Tune(const Arguments& args);

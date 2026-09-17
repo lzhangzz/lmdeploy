@@ -4,7 +4,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/kernels/activation.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind::core {
 
@@ -46,10 +46,10 @@ public:
 
     // --- X-macro child members ---
 #define FFN_WEIGHT_CHILDREN(X)                                                                                         \
-    X(LinearWeight, w1)                                                                                                \
-    X(LinearWeight, w3)                                                                                                \
-    X(LinearWeight, w2)                                                                                                \
-    X(LinearWeight, w1w3)
+    X(Linear, w1)                                                                                                      \
+    X(Linear, w3)                                                                                                      \
+    X(Linear, w2)                                                                                                      \
+    X(Linear, w1w3)
 
 #define FFN_WEIGHT_PARAMS(X)
 

@@ -8,7 +8,7 @@
 #include "src/turbomind/kernels/gemm/kernel/u4.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include <type_traits>
 
 namespace turbomind::gemm {
@@ -22,7 +22,7 @@ namespace {
 using namespace config::geometry;
 
 template<int GroupSize, bool Grouped>
-void pack_u4(LinearWeight& linear, cudaStream_t stream)
+void pack_u4(Linear& linear, cudaStream_t stream)
 {
     if constexpr (Grouped) {
         PackWeight(linear, GetImpl<Arch<80>, kRowMajor, HMMA_16816 | OPERAND_B | 2, uint16_t, uint4_t>(), stream);

@@ -7,7 +7,7 @@
 #include "src/turbomind/kernels/gemm/kernel/u4.h"
 #include "src/turbomind/kernels/gemm/sm90_mixed_pack.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/memory_utils.h"
 
 #if TM_GEMM_HAS_SM90_MIXED
@@ -20,7 +20,7 @@ using config::Shape;
 using namespace config::geometry;
 
 template<int GroupSize, DataType Dtype>
-void pack(LinearWeight& linear, cudaStream_t stream)
+void pack(Linear& linear, cudaStream_t stream)
 {
     TM_CHECK_EQ(linear.weight_format.block_sizes.size(), 2);
     TM_CHECK_EQ(linear.output_dim % kSm90MixedFragmentN, 0);

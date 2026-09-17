@@ -30,9 +30,9 @@ MoeWeight::MoeWeight(const core::MoeConfig& cfg)
 // Shallow alias of an already-prepared linear: shares its tensors and
 // copies its metadata. The alias is never prepared itself (MoeWeight::prepare
 // aliases only after its own Module::prepare() pass).
-static std::unique_ptr<LinearWeight> AliasLinear(const LinearWeight& src)
+static std::unique_ptr<Linear> AliasLinear(const Linear& src)
 {
-    auto dst    = std::make_unique<LinearWeight>();
+    auto dst    = std::make_unique<Linear>();
     dst->weight = src.weight;
     dst->bias   = src.bias;
     dst->scales = src.scales;
@@ -82,7 +82,7 @@ void MoeWeight::AliasRouted(const MoeWeight& meta_pack)
     // never touch shared_gate
 }
 
-void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& destination)
+void LinkLinearExperts(const std::vector<Linear*>& experts, Linear& destination)
 {
     const auto& e0 = *experts.front();
 
@@ -176,25 +176,25 @@ void MoeWeight::link_block()
     block_              = std::make_unique<FfnWeight>(block_cfg);
 
     // Link each linear in the block to the corresponding expert linears
-    auto get_expert_w1w3 = [this](int i) -> LinearWeight* {
+    auto get_expert_w1w3 = [this](int i) -> Linear* {
         auto* exp = expert(i);
         return exp ? exp->w1w3.get() : nullptr;
     };
-    auto get_expert_w1 = [this](int i) -> LinearWeight* {
+    auto get_expert_w1 = [this](int i) -> Linear* {
         auto* exp = expert(i);
         return exp ? exp->w1.get() : nullptr;
     };
-    auto get_expert_w3 = [this](int i) -> LinearWeight* {
+    auto get_expert_w3 = [this](int i) -> Linear* {
         auto* exp = expert(i);
         return exp ? exp->w3.get() : nullptr;
     };
-    auto get_expert_w2 = [this](int i) -> LinearWeight* {
+    auto get_expert_w2 = [this](int i) -> Linear* {
         auto* exp = expert(i);
         return exp ? exp->w2.get() : nullptr;
     };
 
-    auto link = [local_expert_num](const auto& get_expert, LinearWeight& destination) {
-        std::vector<LinearWeight*> linears;
+    auto link = [local_expert_num](const auto& get_expert, Linear& destination) {
+        std::vector<Linear*> linears;
         linears.reserve(local_expert_num);
         for (int i = 0; i < local_expert_num; ++i) {
             linears.push_back(get_expert(i));
@@ -204,13 +204,13 @@ void MoeWeight::link_block()
 
     if (get_expert_w1w3(0)) {
         // Fused w1w3 path: experts have a single fused gate+up projection
-        block_->add_child("w1w3", std::make_unique<LinearWeight>());
+        block_->add_child("w1w3", std::make_unique<Linear>());
         link(get_expert_w1w3, *block_->w1w3);
     }
     else {
         // Separate w1/w3 path: link individually
-        block_->add_child("w1", std::make_unique<LinearWeight>());
-        block_->add_child("w3", std::make_unique<LinearWeight>());
+        block_->add_child("w1", std::make_unique<Linear>());
+        block_->add_child("w3", std::make_unique<Linear>());
         if (get_expert_w1(0)) {
             link(get_expert_w1, *block_->w1);
         }
@@ -219,7 +219,7 @@ void MoeWeight::link_block()
         }
     }
 
-    block_->add_child("w2", std::make_unique<LinearWeight>());
+    block_->add_child("w2", std::make_unique<Linear>());
     if (get_expert_w2(0)) {
         link(get_expert_w2, *block_->w2);
     }

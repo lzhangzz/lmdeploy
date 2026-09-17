@@ -11,7 +11,7 @@
 #include "src/turbomind/kernels/gemm/tuner/params.h"
 #include "src/turbomind/kernels/gemm/tuner/sampler.h"
 #include "src/turbomind/kernels/gemm/types.h"
-#include "src/turbomind/models/linear_weight.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include <algorithm>
 #include <cstdlib>

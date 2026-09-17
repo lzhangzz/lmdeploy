@@ -5,7 +5,7 @@
 #include "src/turbomind/kernels/gemm/family.h"
 
 namespace turbomind {
-class LinearWeight;
+class Linear;
 }
 
 namespace turbomind::gemm {
@@ -36,7 +36,7 @@ public:
     }
 
     int  gate_up(ActivationType act_type, int projection_n);
-    void pack(LinearWeight& linear, cudaStream_t stream) const;
+    void pack(Linear& linear, cudaStream_t stream) const;
 
 private:
     friend class Gemm;
