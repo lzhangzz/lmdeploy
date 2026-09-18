@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/ffn.h"
 #include "src/turbomind/models/moe.h"

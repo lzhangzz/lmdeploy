@@ -17,7 +17,7 @@ struct DecoderLayerConfig: ModuleConfig {
 
 namespace turbomind {
 
-class AttentionWeight;
+class Attention;
 class DeltaNetWeight;
 class Ffn;
 class Moe;
@@ -40,7 +40,7 @@ public:
 
     // --- X-macro field lists ---
 #define DECODER_LAYER_WEIGHT_CHILDREN(X)                                                                               \
-    X(AttentionWeight, attention)                                                                                      \
+    X(Attention, attention)                                                                                            \
     X(DeltaNetWeight, linear_attn)                                                                                     \
     X(Ffn, feed_forward)                                                                                               \
     X(Moe, moe_ffn)                                                                                                    \

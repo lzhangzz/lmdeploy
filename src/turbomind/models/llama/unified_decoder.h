@@ -4,7 +4,6 @@
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
-#include "src/turbomind/models/llama/unified_attention_layer.h"
 
 namespace turbomind {
 
@@ -49,8 +48,12 @@ private:
 
     int& is_warm_up_;
 
-    std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
-    std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
+    // Python-built layer composites; the op walk dispatches to their
+    // module children (kForward keeps the orchestrated loop below).
+    std::vector<DecoderLayerWeight*> layers_;
+
+    // GDN executor remains a layer class until its stage-3 successor.
+    std::unique_ptr<GatedDeltaNetLayer> linear_attn_layer_;
 
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   Tensor&       residual,

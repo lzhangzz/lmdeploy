@@ -18,6 +18,7 @@
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
 
+#include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
@@ -113,12 +114,13 @@ struct TurboMind::Impl {
         // per-layer cache byte requirements with the rank's registry and
         // keeps only the returned offsets. The registry lives here until
         // CreateEngine finalizes categories into object ids — registration
-        // must complete before that. Attention and DeltaNet modules begin
-        // registering here in stage 3; the engine-side layer classes keep
-        // their construction-time registrations until they retire.
+        // must complete before that. Attention modules register here;
+        // the GDN layer class keeps its construction-time registration
+        // until its stage-3 successor lands.
         // Idempotent: update_params reloads run the pass again, after the
         // previous registry moved into the live engine.
         cache_registries_[index] = std::make_unique<CacheRegistry>();
+        cache_registries_[index]->set_layout(engine_param_.cache_block_seq_len, engine_param_.quant_policy);
         cache_registries_[index]->set_checkpoint_min_interval(engine_param_.cache_checkpoint_interval);
         weights_[index]->register_cache(*cache_registries_[index]);
     }
@@ -133,19 +135,23 @@ struct TurboMind::Impl {
 
         auto ctx_guard = weights_[index]->context();
 
-        // The MoE kind state is an engine service owned by the Context:
-        // created once per rank before the walk so every Moe module can
+        // The kind states are engine services owned by the Context:
+        // created once per rank before the walk so every module can
         // capture it in bind(). Geometry comes from the engine param; the
-        // routed shapes from the first MoE module (all layers share one
-        // routed geometry). Kept across update_params reloads — the
-        // geometry is unchanged and re-creating would re-run the DeepEP
-        // dispatcher JIT warm-up.
+        // routed shapes from the first module of the kind (all layers
+        // share one geometry). Kept across update_params reloads — the
+        // geometry is unchanged and re-creating would re-run warm-up
+        // side effects (the DeepEP dispatcher JIT for MoE).
         if (auto* text = weights_[index]->text_model_ptr()) {
-            Moe* moe = nullptr;
+            Moe*       moe  = nullptr;
+            Attention* attn = nullptr;
             for (int i = 0; i < text->num_layer; ++i) {
-                if (auto* m = text->layer(i)->moe_ffn.get()) {
-                    moe = m;
-                    break;
+                auto* layer = text->layer(i);
+                if (!moe && layer->moe_ffn) {
+                    moe = layer->moe_ffn.get();
+                }
+                if (!attn && layer->attention) {
+                    attn = layer->attention.get();
                 }
             }
             // The bind walk also reaches meta_experts pack modules; cover a
@@ -154,12 +160,17 @@ struct TurboMind::Impl {
             if (!moe && text->meta_experts) {
                 moe = dynamic_cast<Moe*>(text->meta_experts->child(std::to_string(0)));
             }
+            // The guard above binds the weight-loading stream/pool;
+            // runtime scratch belongs to the engine's stream/allocator
+            // (where the retired executors' buffers lived, pinned staging
+            // included — CreateEngine's guard shape).
+            core::ContextGuard guard{ctx.core_stream, ctx.allocator, Allocator{kCPUpinned}};
             if (moe && !ctx.moe_state()) {
-                // The guard above binds the weight-loading stream/pool;
-                // runtime scratch belongs to the engine's stream/allocator
-                // (where the retired executor's buffers lived).
-                core::ContextGuard guard{ctx.core_stream, ctx.allocator};
                 ctx.set_moe_state(std::make_unique<MoeState>(engine_params_.at(index), ctx, *moe));
+            }
+            if (attn && !ctx.attention_state()) {
+                ctx.set_attention_state(
+                    std::make_unique<AttentionState>(engine_params_.at(index), ctx, phases_, *attn));
             }
         }
 

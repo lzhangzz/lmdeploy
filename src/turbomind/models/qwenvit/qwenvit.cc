@@ -89,7 +89,7 @@ struct QwenVit::Impl {
         Buffer_<int> mrope_delta_host;
         Buffer_<int> mrope_offsets_host;
 
-        // mrope outputs - owned here so UnifiedAttentionLayer can safely borrow() across env clears.
+        // mrope outputs - owned here so the attention setup can safely borrow() across env clears.
         Buffer_<int> mrope_segs_dev;          // device-side segment scratch, grown alongside host
         Tensor_<int> mrope_position_ids;      // (max_forward_token_num, 3), flat current-forward table
         Tensor_<int> mrope_length;            // (bsz,)
@@ -582,7 +582,7 @@ struct QwenVit::Impl {
         }
     }
 
-    // Build the mrope tensors consumed by `UnifiedAttentionLayer` and publish them to env.
+    // Build the mrope tensors consumed by the attention setup and publish them to env.
     //
     // Per-forward layout: one flat row in `(max_forward_token_num, 3)` for each current token.
     // Prefill slots with multimodal_inputs get their active range written by
@@ -888,7 +888,7 @@ struct QwenVit::Impl {
 
     template<typename T>
     AttentionParams<T> CreateVitAttentionParams(
-        Tensor& attn_context, Tensor& qkv, Tensor& kv, Data& d, const AttentionWeight& attn, int layer_id)
+        Tensor& attn_context, Tensor& qkv, Tensor& kv, Data& d, const Attention& attn, int layer_id)
     {
         const bool use_full_attn  = IsFullAttentionLayer(layer_id);
         const int  local_head_num = attn.head_num / attn.tp_size;

@@ -3,7 +3,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/attention.h"
 
 namespace turbomind::core {
 
@@ -34,7 +34,7 @@ class Linear;
 ///
 /// Children:
 ///   - norm1, norm2      LayerNorm or RMSNorm (held as core::Module)
-///   - attention         AttentionWeight (packed Q/K/V + output projection)
+///   - attention         Attention (packed Q/K/V + output projection)
 ///   - mlp_gate          Optional gated SiLU gate projection (Qwen2.5 only)
 ///   - mlp_fc1, mlp_fc2  Linear (in: hidden ↔ intermediate)
 class QwenVitBlockWeight: public core::Module {
@@ -57,7 +57,7 @@ public:
 #define QWENVIT_BLOCK_CHILDREN(X)                                                                                      \
     X(core::Module, norm1)                                                                                             \
     X(core::Module, norm2)                                                                                             \
-    X(AttentionWeight, attention)                                                                                      \
+    X(Attention, attention)                                                                                            \
     X(Linear, mlp_gate)                                                                                                \
     X(Linear, mlp_fc1)                                                                                                 \
     X(Linear, mlp_fc2)

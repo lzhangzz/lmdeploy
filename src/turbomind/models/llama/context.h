@@ -17,6 +17,7 @@
 namespace turbomind {
 
 struct MoeState;
+struct AttentionState;
 
 struct Communicators {
     comm::HostComm h_global;
@@ -35,14 +36,15 @@ struct Communicators {
 
 // Execution context for the model
 struct Context {
-    core::Stream                core_stream;
-    core::Allocator             allocator;
-    cudaStream_t                stream;
-    std::unique_ptr<GEMMEngine> gemm_engine;  // per-rank GEMM engine
-    cudaDeviceProp              device_prop;
-    Communicators               comm;  // initialize later
-    std::unique_ptr<int>        is_warm_up;
-    std::unique_ptr<MoeState>   moe_state_;  // per-rank MoE kind state
+    core::Stream                    core_stream;
+    core::Allocator                 allocator;
+    cudaStream_t                    stream;
+    std::unique_ptr<GEMMEngine>     gemm_engine;  // per-rank GEMM engine
+    cudaDeviceProp                  device_prop;
+    Communicators                   comm;  // initialize later
+    std::unique_ptr<int>            is_warm_up;
+    std::unique_ptr<MoeState>       moe_state_;        // per-rank MoE kind state
+    std::unique_ptr<AttentionState> attention_state_;  // per-rank attention kind state
 
     Context(int device_id);
     ~Context();
@@ -58,6 +60,12 @@ struct Context {
     }
     // Defined in context.cc: the kind-state type is incomplete here.
     void set_moe_state(std::unique_ptr<MoeState> state) noexcept;
+
+    AttentionState* attention_state() const noexcept
+    {
+        return attention_state_.get();
+    }
+    void set_attention_state(std::unique_ptr<AttentionState> state) noexcept;
 };
 
 inline Allocator GetSymmAllocator(const comm::DeviceComm& comm)

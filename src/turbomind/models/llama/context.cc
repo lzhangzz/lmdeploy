@@ -2,6 +2,7 @@
 
 #include "src/turbomind/models/llama/context.h"
 
+#include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/moe.h"
 
 namespace turbomind {
@@ -25,6 +26,11 @@ Context::~Context() = default;
 void Context::set_moe_state(std::unique_ptr<MoeState> state) noexcept
 {
     moe_state_ = std::move(state);
+}
+
+void Context::set_attention_state(std::unique_ptr<AttentionState> state) noexcept
+{
+    attention_state_ = std::move(state);
 }
 
 }  // namespace turbomind

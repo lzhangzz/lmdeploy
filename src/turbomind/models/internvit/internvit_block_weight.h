@@ -4,7 +4,7 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
-#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/attention.h"
 
 namespace turbomind::core {
 
@@ -52,7 +52,7 @@ public:
 #define INTERNVIT_BLOCK_CHILDREN(X)                                                                                    \
     X(core::Module, norm1)                                                                                             \
     X(core::Module, norm2)                                                                                             \
-    X(AttentionWeight, attention)                                                                                      \
+    X(Attention, attention)                                                                                            \
     X(Linear, mlp_fc1)                                                                                                 \
     X(Linear, mlp_fc2)
 

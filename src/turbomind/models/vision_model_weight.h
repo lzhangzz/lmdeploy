@@ -17,6 +17,11 @@ public:
 
     VisionModelWeight()           = default;
     ~VisionModelWeight() override = default;
+
+    /// The vision sub-graph registers no engine cache bytes: stop the
+    /// registration walk so vision-side modules (e.g. Attention children)
+    /// never register into the text engine's categories.
+    void register_cache(::turbomind::CacheRegistry&) override {}
 };
 
 }  // namespace turbomind

@@ -3,7 +3,7 @@
 #include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
 
 #include "src/turbomind/core/registry.h"
-#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/layer_norm_weight.h"
 #include "src/turbomind/models/linear.h"
 

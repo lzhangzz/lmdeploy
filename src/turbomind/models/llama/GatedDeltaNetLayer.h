@@ -46,7 +46,7 @@ private:
 
     const linear_attn::delta_rule::ContextParallelLevel gdr_cp_level_;
 
-    // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
+    // Per-phase batch data
     struct Data {
         std::vector<int>                             input_lens;
         int                                          batch_size{};

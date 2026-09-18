@@ -355,7 +355,7 @@ struct InternVit::Impl {
 
     template<typename T>
     AttentionParams<T> CreateVitAttentionParams(
-        Tensor& attn_output, Tensor& qkv, Tensor& kv, const Data& d, const AttentionWeight& attn, int layer_id)
+        Tensor& attn_output, Tensor& qkv, Tensor& kv, const Data& d, const Attention& attn, int layer_id)
     {
         const int local_head_num = attn.head_num / attn.tp_size;
         const int head_dim       = attn.head_dim;

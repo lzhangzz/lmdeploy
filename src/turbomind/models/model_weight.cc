@@ -2,7 +2,7 @@
 
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/core/registry.h"
-#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 
 namespace turbomind {

@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.25)
-
 add_library(models STATIC
         language_model.cc
         input_processor.cc
@@ -7,7 +6,7 @@ add_library(models STATIC
         linear.cc
         norm_weight.cc
         layer_norm_weight.cc
-        attention_weight.cc
+        attention.cc
         ffn.cc
         moe.cc
         delta_net_weight.cc
@@ -26,7 +25,6 @@ add_library(models STATIC
         llama/GEMMEngine.cu
         llama/context.cc
         llama/unified_decoder.cc
-        llama/unified_attention_layer.cc
         llama/llama_kernels.cu
         llama/llama_utils.cu
         llama/mla_utils.cu
@@ -58,14 +56,12 @@ target_link_libraries(models PUBLIC
         anomaly_handler)
 target_compile_options(models PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads=${NVCC_THREADS}>)
-
 if(BUILD_TEST)
     add_executable(bench_conv1d_silu
             llama/bench_conv1d_silu.cc)
     target_link_libraries(bench_conv1d_silu PRIVATE
             models
             CUDA::cudart)
-
     add_executable(test_mrope_position_ids
             qwenvit/test_mrope_position_ids.cu)
     set_property(TARGET test_mrope_position_ids PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

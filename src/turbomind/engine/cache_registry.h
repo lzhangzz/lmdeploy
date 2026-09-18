@@ -127,6 +127,27 @@ public:
         return checkpoint_;
     }
 
+    /// Engine layout parameters modules need when registering cache bytes
+    /// (KV block geometry, KV quantization policy in bits; 0 = dtype
+    /// size). Set once by the engine before the register_cache pass.
+    void set_layout(int cache_block_seq_len, int quant_policy)
+    {
+        TM_CHECK_GT(cache_block_seq_len, 0);
+        TM_CHECK_GE(quant_policy, 0);
+        cache_block_seq_len_ = cache_block_seq_len;
+        quant_policy_        = quant_policy;
+    }
+
+    int cache_block_seq_len() const noexcept
+    {
+        return cache_block_seq_len_;
+    }
+
+    int quant_policy() const noexcept
+    {
+        return quant_policy_;
+    }
+
     // True once a module registered checkpoint bytes and the object id exists.
     bool has_checkpoint() const noexcept
     {
@@ -149,6 +170,9 @@ public:
 private:
     CacheCategory prefix_;
     CacheCategory checkpoint_;
+
+    int cache_block_seq_len_{};
+    int quant_policy_{};
 
     int checkpoint_min_interval_{1};
 };
