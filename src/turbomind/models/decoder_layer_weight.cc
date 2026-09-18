@@ -2,7 +2,7 @@
 
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/attention.h"
-#include "src/turbomind/models/delta_net_weight.h"
+#include "src/turbomind/models/delta_net.h"
 #include "src/turbomind/models/ffn.h"
 #include "src/turbomind/models/moe.h"
 #include "src/turbomind/models/norm_weight.h"

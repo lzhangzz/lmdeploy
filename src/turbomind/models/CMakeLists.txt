@@ -9,7 +9,7 @@ add_library(models STATIC
         attention.cc
         ffn.cc
         moe.cc
-        delta_net_weight.cc
+        delta_net.cc
         decoder_layer_weight.cc
         model_weight.cc
         model_root.cc
@@ -28,7 +28,6 @@ add_library(models STATIC
         llama/llama_kernels.cu
         llama/llama_utils.cu
         llama/mla_utils.cu
-        llama/GatedDeltaNetLayer.cc
         llama/gated_delta_net_kernels.cu)
 set_property(TARGET models PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET models PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

@@ -18,6 +18,7 @@ namespace turbomind {
 
 struct MoeState;
 struct AttentionState;
+struct DeltaNetState;
 
 struct Communicators {
     comm::HostComm h_global;
@@ -45,6 +46,7 @@ struct Context {
     std::unique_ptr<int>            is_warm_up;
     std::unique_ptr<MoeState>       moe_state_;        // per-rank MoE kind state
     std::unique_ptr<AttentionState> attention_state_;  // per-rank attention kind state
+    std::unique_ptr<DeltaNetState>  deltanet_state_;   // per-rank GDN kind state
 
     Context(int device_id);
     ~Context();
@@ -66,6 +68,12 @@ struct Context {
         return attention_state_.get();
     }
     void set_attention_state(std::unique_ptr<AttentionState> state) noexcept;
+
+    DeltaNetState* deltanet_state() const noexcept
+    {
+        return deltanet_state_.get();
+    }
+    void set_deltanet_state(std::unique_ptr<DeltaNetState> state) noexcept;
 };
 
 inline Allocator GetSymmAllocator(const comm::DeviceComm& comm)

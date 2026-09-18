@@ -13,7 +13,6 @@
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/core/state.h"
 #include "src/turbomind/engine/batch.h"
-#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
@@ -116,8 +115,7 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(
-        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
+    Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -132,8 +130,7 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(
-    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
+LanguageModel::Impl::Impl(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     tp_size_{comm_.h_tp_group->n_ranks()},
@@ -169,7 +166,7 @@ LanguageModel::Impl::Impl(
 
     input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, engine, ctx, phases, weights_);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(engine, ctx, phases, weights_);
 
     const int vocab_size = weights_.output->output_dim * tp_size_;
 
@@ -572,10 +569,9 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(
-    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
+LanguageModel::LanguageModel(const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
-    impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)

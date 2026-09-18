@@ -20,6 +20,7 @@
 
 #include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/delta_net.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
@@ -114,9 +115,10 @@ struct TurboMind::Impl {
         // per-layer cache byte requirements with the rank's registry and
         // keeps only the returned offsets. The registry lives here until
         // CreateEngine finalizes categories into object ids — registration
-        // must complete before that. Attention modules register here;
-        // the GDN layer class keeps its construction-time registration
-        // until its stage-3 successor lands.
+        // must complete before that. Attention and DeltaNet modules
+        // register here (DeltaNet's recurrent block grid is registered
+        // once per rank by its kind state during Bind, still before
+        // finalization).
         // Idempotent: update_params reloads run the pass again, after the
         // previous registry moved into the live engine.
         cache_registries_[index] = std::make_unique<CacheRegistry>();
@@ -143,8 +145,9 @@ struct TurboMind::Impl {
         // geometry is unchanged and re-creating would re-run warm-up
         // side effects (the DeepEP dispatcher JIT for MoE).
         if (auto* text = weights_[index]->text_model_ptr()) {
-            Moe*       moe  = nullptr;
-            Attention* attn = nullptr;
+            Moe*                   moe  = nullptr;
+            Attention*             attn = nullptr;
+            std::vector<DeltaNet*> gdns;
             for (int i = 0; i < text->num_layer; ++i) {
                 auto* layer = text->layer(i);
                 if (!moe && layer->moe_ffn) {
@@ -152,6 +155,9 @@ struct TurboMind::Impl {
                 }
                 if (!attn && layer->attention) {
                     attn = layer->attention.get();
+                }
+                if (layer->linear_attn) {
+                    gdns.push_back(layer->linear_attn.get());
                 }
             }
             // The bind walk also reaches meta_experts pack modules; cover a
@@ -171,6 +177,14 @@ struct TurboMind::Impl {
             if (attn && !ctx.attention_state()) {
                 ctx.set_attention_state(
                     std::make_unique<AttentionState>(engine_params_.at(index), ctx, phases_, *attn));
+            }
+            if (!gdns.empty() && !ctx.deltanet_state()) {
+                // The recurrent block grid spans all layers and must be
+                // registered with the (still-open) checkpoint category —
+                // the registry lives here until CreateEngine finalizes it.
+                auto& registry = *TM_CHECK_NOTNULL(cache_registries_[index]);
+                ctx.set_deltanet_state(
+                    std::make_unique<DeltaNetState>(engine_params_.at(index), registry, phases_, std::move(gdns)));
             }
         }
 
@@ -423,14 +437,15 @@ void TurboMind::Impl::CreateEngine(int index)
 
     Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
     ObjectAllocator alloc{std::move(cache_region)};
-    // The registry was created and populated by the RegisterCache pass; the
-    // engine-side layer classes still add their construction-time
-    // registrations into it below. Category finalization must run only
-    // after all registrations — enforced by the CacheCategory checks.
+    // The registry was created and populated by the RegisterCache pass, and
+    // the kind states' bind-time registrations (the DeltaNet recurrent
+    // block grid) have run as well — Bind precedes CreateEngine. Category
+    // finalization must run only after all registrations — enforced by the
+    // CacheCategory checks.
     auto& cache_registry = *TM_CHECK_NOTNULL(cache_registries_[index]);  // RegisterCache must run first
 
     // create model
-    LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
+    LanguageModel model{param, ctx, *weights_[index]->text_model_ptr(), phases_};
 
     // create vision model for VLM checkpoints; null for text-only (no vision sub-tree attached)
     std::unique_ptr<VisionModel> vision_model;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
-#include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 
@@ -9,17 +8,12 @@ namespace turbomind {
 
 class ModelWeight;
 class DecoderLayerWeight;
-class CacheRegistry;
 
 class UnifiedDecoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(CacheRegistry&     registry,
-                   const EngineParam& engine,
-                   const Context&     ctx,
-                   int                phases,
-                   const ModelWeight& model_weight);
+    UnifiedDecoder(const EngineParam& engine, const Context& ctx, int phases, const ModelWeight& model_weight);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -51,9 +45,6 @@ private:
     // Python-built layer composites; the op walk dispatches to their
     // module children (kForward keeps the orchestrated loop below).
     std::vector<DecoderLayerWeight*> layers_;
-
-    // GDN executor remains a layer class until its stage-3 successor.
-    std::unique_ptr<GatedDeltaNetLayer> linear_attn_layer_;
 
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   Tensor&       residual,

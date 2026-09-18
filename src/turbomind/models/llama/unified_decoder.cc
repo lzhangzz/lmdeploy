@@ -6,11 +6,12 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/scope.h"
+#include "src/turbomind/engine/batch.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/attention.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/models/delta_net_weight.h"
+#include "src/turbomind/models/delta_net.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
@@ -28,8 +29,8 @@ namespace turbomind {
 void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
 {
     // Generic module dispatch: every layer child sees the op; kinds
-    // implement their subset (Attention: kAdd/kSetup/kPrepare) and the
-    // rest ignore it (default no-op Run).
+    // implement their subset (Attention/DeltaNet: kAdd/kSetup/kPrepare)
+    // and the rest ignore it (default no-op Run).
     for (auto* layer : layers_) {
         layer->for_each_child([&](const char*, core::Module* child) {
             if (child) {
@@ -37,13 +38,9 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
             }
         });
     }
-    if (linear_attn_layer_) {
-        linear_attn_layer_->Run(op, phase, env);
-    }
 }
 
-UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
-                               const EngineParam& engine,
+UnifiedDecoder::UnifiedDecoder(const EngineParam& engine,
                                const Context&     ctx,
                                int                phases,
                                const ModelWeight& model_weight):
@@ -61,17 +58,13 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     tune_layer_num_(engine.tune_layer_num),
     is_warm_up_{*ctx.is_warm_up}
 {
-    std::vector<DeltaNetWeight*> gdn_weights;
-    bool                         has_moe = false;
+    bool has_moe = false;
 
     layers_ = model_weight.layers_list();
 
     for (auto* layer : layers_) {
         if (layer->moe_ffn) {
             has_moe = true;
-        }
-        if (layer->linear_attn) {
-            gdn_weights.push_back(layer->linear_attn.get());
         }
     }
 
@@ -90,14 +83,6 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
                 ffn_group_[i] = node_group_;
             }
         }
-    }
-
-    if (!gdn_weights.empty()) {
-        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(gdn_weights,  //
-                                                                  registry,
-                                                                  engine,
-                                                                  ctx,
-                                                                  phases);
     }
 
     TM_CHECK(!(!has_moe && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
@@ -260,8 +245,7 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         /////////////////////////////////////////////
         /// self-attention or linear-attention
         if (weights.at(layer)->linear_attn) {
-            linear_attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn.get()});
+            TM_SCOPE_CALL(weights.at(layer)->linear_attn->Forward(phase, local_hidden_states, local_hidden_states));
         }
         else {
             TM_SCOPE_CALL(weights.at(layer)->attention->Forward(phase, local_hidden_states, local_hidden_states));

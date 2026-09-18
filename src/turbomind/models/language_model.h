@@ -11,7 +11,6 @@ namespace turbomind {
 
 class ModelWeight;
 struct Sequence;
-class CacheRegistry;
 
 class LanguageModel {
 public:
@@ -26,11 +25,7 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    LanguageModel(CacheRegistry&     registry,
-                  const EngineParam& engine,
-                  const Context&     context,
-                  const ModelWeight& weights,
-                  int                phases);
+    LanguageModel(const EngineParam& engine, const Context& context, const ModelWeight& weights, int phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
