@@ -36,7 +36,12 @@ all layers without `Context` becoming a god object.
   reloads — the original concern here — are no longer supported).
 - `MoeState`, the Context kind-state slots, and `Impl::Bind`'s kind-module scan are
   deleted; Attention/DeltaNet states move to the same map rendezvous.
-- Gate is compile + default-path run; the DeepEP path remains unexecuted by gates
-  (as in ticket 06) — recorded, not hidden.
+- Gate is compile + default-path run; the normative gate matrix still does
+  not include DeepEP (`scripts/test_turbomind_model.py` cannot express
+  `moe_a2a_backend="deepep"` on a single node). A one-off verification run
+  after landing (ep=2/tp=2, bf16, 2 GPUs, one node) did execute the DeepEP
+  implementation end-to-end — dispatcher init with NCCL symmetric memory,
+  bind-time a2a JIT, dispatch/combine in forward — with a meaningful
+  256-token response.
 - Python surface unchanged (`create_module(cfg)`; the standalone `Module.bind(context)`
   pybind shim assembles a degenerate `BindEnv` internally).

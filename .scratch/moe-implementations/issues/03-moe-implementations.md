@@ -74,3 +74,19 @@ Implemented as specced (2026-09-18), landed in commit d0d5f6213.
   `scripts/test_turbomind_model.py` AS IS answers 256 meaningful tokens,
   output indistinguishable from the pre-split run. DeepEP remains
   compiled-but-unexecuted by gates (per ADR 0001).
+
+### DeepEP verification addendum (2026-09-18, post-landing)
+
+On request, the DeepEP implementation was executed for the first time:
+`Qwen/Qwen3.5-35B-A3B`, bf16, tp=2/ep=2 on one node (2 GPUs, nccl), driven
+by a throwaway script outside the repo mirroring the normative smoke flow
+(the normative script cannot express `moe_a2a_backend='deepep'` on a single
+node — `auto` resolves to `default`). The factory selected
+`MoeDeepEPImpl` from the ambient EngineParam; `MoeDeepEPState` initialized
+the token dispatcher over NCCL symmetric memory (per-rank `symm_ctx`
+warnings are its footprint) and ran the bind-time a2a JIT; forward
+dispatch/combine produced a meaningful 256-token response (load 22.6 s,
+inference 2.8 s). Two driver corrections along the way are environment
+facts, not code: the ep spelling is `tp=N, ep=N` (enforced by
+`derive_parallel_config`), and the one-off driver must not live in `/tmp`
+directly (an unrelated `/tmp/h2.py` shadows the `h2` package).
