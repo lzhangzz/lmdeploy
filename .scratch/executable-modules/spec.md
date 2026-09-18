@@ -9,21 +9,22 @@ Today the weight side (data-only `core::Module` classes in `src/turbomind/models
 ## Concepts
 
 - **Module** (canonical): the unit owning both a module's weights and its Forward; the single thing Python constructs by name. **Layer** is the legacy executor name and retires. (Glossary: `CONTEXT.md`.)
-- **Context** (`turbomind::Context`, surviving): the engine-side composition root — per-rank GEMM engine, build-time stream/allocator, device props, comm. `core::Context` (thread-local scope) is unchanged and keeps its name.
-- **Kind state**: the single shared state object for a kind with cross-layer state (`AttentionState`, `MoeState`, `DeltaNetState`), held once per rank and bound to every module of the kind. There is no `LinearState`; Linear captures the GEMM engine.
+- **Context** (`turbomind::Context`, surviving): the per-rank infrastructure holder — GEMM engine, build-time stream/allocator, device props, comm, the warm-up flag. It holds no module state. `core::Context` (thread-local scope) is unchanged and keeps its name. *(Amended: the kind-state slots moved to the bind-pass map — ADR 0001.)*
+- **Kind state**: the per-rank shared state of a kind (`AttentionState`, `DeltaNetState`) or of one Implementation (`MoeDefaultState`, `MoeDeepEPState`); created by the first module of the kind during the bind pass and shared through the BindEnv map. There is no `LinearState`; Linear captures the GEMM engine.
+- **Implementation**: a concrete executable Module subclass of a kind, holding the kind's weights and whole Forward, selected at construction from the engine configuration (Moe: `MoeDefaultImpl`, `MoeDeepEPImpl`).
 - **Binding surface**: the Python-visible construction surface (type strings, child/param names); frozen while internals change.
 
 Hard constraints (user-set): existing checkpoints load as-is; `src/turbomind/engine/README.md` BatchOp/cache contract meanings hold; no perf regression (≥98% gate); the Python binding surface stays stable.
 
 ## Architecture
 
-One executable class per module type — `Linear`, `Ffn`, `Moe`, `Attention`, `DeltaNet` — each keeping its frozen registry string (`"LinearWeight"`, …) so Python's `create_module` is untouched. `gemm::Family` remains the per-quant method axis (vLLM-style two-axis composition already in-tree); no new method-object layer. Per-kind executor classes retire; their state survives as kind states or the Context-held GEMM engine. The decoder keeps the between-module glue (fused norms, allreduce, staging) and shrinks mechanically to module calls.
+One executable base per module type — `Linear`, `Ffn`, `Moe`, `Attention`, `DeltaNet` — each keeping its frozen registry string (`"LinearWeight"`, …) so Python's `create_module` is untouched; where a kind has multiple implementations, they are Module subclasses under the single frozen string, selected at construction by the registry factory from the ambient per-rank `EngineParam` (Moe: `MoeDefaultImpl`/`MoeDeepEPImpl`). *(Amended: implementations are module subclasses, not internal branches — ADR 0001.)* `gemm::Family` remains the per-quant method axis (vLLM-style two-axis composition already in-tree); no method-object layer — an Implementation is a Module. Per-kind executor classes retire; their state survives as kind states on the bind-pass map or the Context-held GEMM engine. The decoder keeps the between-module glue (fused norms, allreduce, staging) and shrinks mechanically to module calls.
 
 Lifecycle (normative pass order):
 
 ```text
 Python builds tree -> prepare() walk -> register_cache(CacheRegistry&) walk
-  -> bind(Context&) walk -> category finalization -> first Run
+  -> bind(BindEnv&) walk -> category finalization -> first Run
 ```
 
 (Amended post-landing: bind precedes category finalization — the kind states
@@ -75,8 +76,8 @@ private:
 ## 2. Ffn and Moe (`drafts/ffn-moe-design.md`)
 
 - `Ffn::Forward(input, output)` = w1w3 → activation → w2 with the FP8-fused-SiLU and w1/w3-separate branches internal; grouped overload takes a `GroupedRoute` (indices/offsets/f2E/num_valid_tokens). The three verbatim orchestration copies collapse into this one body. `LlamaFfnLayer` retires.
-- `Moe::Forward(input, output, token_mask)` = gate → route (`invokeMoeGate_V2`/`NoAuxTC`; `SampleUniform` under warm-up, driven by the engine-owned `is_warm_up` flag) → gather → `block_->Forward(route)` → combine → shared fold (`shared->Forward`, `shared_gate->Forward`). `MoeFfnLayer` and both impls retire; default-vs-DeepEP is an internal branch.
-- `MoeState` (shared per rank, bound via `bind`): `TokenDispatcher`, routing buffers, scales-copy stream. *(The earlier per-module decision was reversed by Rework the ExecContext design.)*
+- `Moe` is the executable base: gate → route (`invokeMoeGate_V2`/`NoAuxTC`; `SampleUniform` under warm-up, driven by the engine-owned `is_warm_up` flag) → gather → `block_->Forward(route)` → combine → shared fold (`shared->Forward`, `shared_gate->Forward`), with a pure-virtual `Forward`. `MoeDefaultImpl` and `MoeDeepEPImpl` are Module subclasses — each the executable module holding its layer's weights, bodies verbatim from the retired executor paths (`ForwardDefault`/`ForwardA2A`; the A2A in-place contract documented). Selected at construction by the `"MoeWeight"` factory from the ambient `EngineParam` (`moe_a2a_backend` string only; unknown → fatal; bf16 invariant on the DeepEP side). *(Amended: reverses the earlier "internal branch" decision — ADR 0001.)*
+- Per-implementation kind state: `MoeDefaultState` (routing buffers) and `MoeDeepEPState` (`TokenDispatcher`, topk buffers, scales-copy stream/events), created once per rank by the first module during the bind pass and shared via the BindEnv map (keys `"moe.default"`/`"moe.deepep"`); `update_params` reloads re-create them (DeepEP re-JIT accepted). The merged `MoeState` struct and its Context slot are deleted.
 - `experts` ModuleList stays the Python surface; `prepare()` keeps building the internal `block_` via `LinkLinearExperts`; `AliasRouted`/`meta_pack_` aliasing unchanged. Classes `Ffn`/`Moe` with frozen `"FfnWeight"`/`"MoeWeight"` strings.
 
 ## 3. Attention and DeltaNet (`drafts/attention-design.md`)
@@ -88,10 +89,10 @@ private:
 
 ## 4. Engine services (`drafts/context-contract.md`)
 
-- `turbomind::Context` survives as the composition root: per-rank **GEMM engine** (`gemm::Gemm` + dispatch cache + workspace + measure policy), build-time stream/allocator, device props, comm. `is_warm_up` stays the engine-owned flag on `turbomind::Context`, captured by reference at bind and read per run (post-landing amendment: the `env.warm_up()` accessor was never introduced).
-- `bind(Context&)` after initialization; modules capture typed references (Linear the engine; Attention/Moe/DeltaNet their kind states). Modules never hold per-module engine copies or per-kind workspace duplicates.
+- `turbomind::Context` survives as the per-rank infrastructure holder: **GEMM engine** (`gemm::Gemm` + dispatch cache + workspace + measure policy), build-time stream/allocator, device props, comm. `is_warm_up` stays the engine-owned flag on `turbomind::Context`, exposed by reference through BindEnv and read per run (post-landing amendment: the `env.warm_up()` accessor was never introduced).
+- `bind(BindEnv&)` after initialization; BindEnv (defined beside `Context` in `models/llama/context.h`, forward-declared from core like `Context`) carries `const EngineParam& engine`, `turbomind::Context& context`, `CacheRegistry& registry`, `int& is_warm_up`, the shared-state map (`std::unordered_map<std::string, std::shared_ptr<void>>`, alive only during the walk), and `int& phases`. The first module of a kind creates its kind state on the map; the rest fetch. `Impl::Bind` builds the env and walks — no kind-module scan, no pre-walk state creation, no Context state slots. Modules never hold per-module engine copies or per-kind workspace duplicates.
 - Tuning ops on the engine object; `Linear::Tune` the thin module method for the `linear.py` pin. Dispatch-cache mutation executor-thread-only; measure mode only during warm-up; engine-thread ops metadata-only (`contracts.executor-only`, `contracts.object-address`).
-- Standalone: `linear.py` constructs a `turbomind::Context` and calls `mod.bind(ctx)` after `prepare` — same story as the engine path.
+- Standalone: `linear.py` constructs a `turbomind::Context` and calls `mod.bind(ctx)` after `prepare`; the pybind shim keeps that Python surface and assembles a degenerate BindEnv (default `EngineParam`, empty registry, local flags, fresh map) internally.
 
 ## 5. BatchOp and decoder mapping (`drafts/batchop-decoder-mapping.md`)
 
@@ -129,4 +130,4 @@ Every gate: clean `ninja` build; frozen-list grep + builder import smoke; four c
 
 ## Decision log
 
-Route and rationale live in the tickets, indexed by the [map](map.md): prior-art research → context contract (later reworked) → Linear interface → FFN/MoE → Attention → BatchOp/decoder → ExecContext rework (amending context contract and MoE transport) → Python rules → migration gates. Superseded decisions (ExecContext v1, per-module MoE transport) are preserved in-place in their assets for the record.
+Route and rationale live in the tickets, indexed by the [map](map.md): prior-art research → context contract (later reworked) → Linear interface → FFN/MoE → Attention → BatchOp/decoder → ExecContext rework (amending context contract and MoE transport) → Python rules → migration gates. Superseded decisions (ExecContext v1, per-module MoE transport) are preserved in-place in their assets for the record. A later redesign (ADR 0001) supersedes the internal-branch MoE merge and the Context kind-state slots: implementations are Module subclasses selected at construction, and kind states rendezvous on the bind-pass map.
