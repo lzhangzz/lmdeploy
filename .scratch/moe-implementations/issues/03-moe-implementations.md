@@ -9,7 +9,7 @@ but unexecuted.
 
 **Blocked by:** 01 (bind pass redesign), 02 (ambient EngineParam).
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The MoE base keeps the frozen type string, children/params surface,
       config-field ctor, `prepare`/`link_block`, shared `Gate`, and declares a
@@ -31,3 +31,46 @@ but unexecuted.
 - [ ] `ninja` clean (the DeepEP path compiles); `Qwen/Qwen3.5-35B-A3B`
       default-path run via `scripts/test_turbomind_model.py` answers with a
       meaningful ≥128-token response; the DeepEP-unexecuted caveat holds
+
+## Answer
+
+Implemented as specced (2026-09-18), landed in commit d0d5f6213.
+
+- `Moe` base (`models/moe.{h,cc}`): frozen `type() == "MoeWeight"`, the
+  X-macro children/params surface, the config-field ctor, `prepare` /
+  `link_block`, the shared static `Gate`, and a pure-virtual `Forward`
+  with today's four arguments; the base bind descends into the linked
+  block. `MoeDefaultImpl` and `MoeDeepEPImpl` subclass it, each in its own
+  file pair together with its state. Move-verification was mechanical: the
+  five moved bodies (`ForwardDefault`, `ForwardA2A`, `InitDefault`,
+  `InitA2A`, `CompileKernels`) diff against the pre-split file with zero
+  changed lines except the added `TM_CHECK_NOTNULL(state_)` in the two
+  forwards. The DeepEP in-place output contract is documented on the
+  subclass declaration.
+- One custom factory under the frozen `"MoeWeight"` string
+  (`ModuleRegistry::register_type(name, callable)`) selects from
+  `EngineParamGuard::current()`: `"default"` → default subclass,
+  `"deepep"` → DeepEP subclass (USE_NCCL builds), anything else
+  `TM_LOG_FATAL`; null ambient params fatal with a clear message. The
+  bfloat16 invariant lives in `MoeDeepEPState`'s constructor. No
+  expert-parallel-size conditioning anywhere in selection.
+- `MoeDefaultState` (routing scratch) and `MoeDeepEPState` (dispatcher,
+  top-k buffers, scales-copy stream/events) rendezvous on the bind-pass
+  map under `"moe.default"` / `"moe.deepep"`; buffers allocate on the
+  engine build stream/allocator (the walk runs under the engine guard).
+  The merged `MoeState` struct, its Context slot, and its accessors are
+  gone.
+- `moe_a2a_backend = "auto"` never reaches the factory: the resolution
+  moved to Python config normalization (`update_parallel_config`), now
+  unconditional (`deepep` only when `ep > 1 and nnodes > 1`, else
+  `default`) — user decision after rejecting an engine-side resolution in
+  `CreateContext`. Same selection table as the old merged code for every
+  previously working config.
+- The MoE config class and the Python surface are untouched; the decoder
+  calls the same `Forward(input, output, token_mask, local_token_nums)`
+  through the base pointer.
+- Gate: `ninja` clean (DeepEP compiles under USE_NCCL);
+  `Qwen/Qwen3.5-35B-A3B` default-path run via
+  `scripts/test_turbomind_model.py` AS IS answers 256 meaningful tokens,
+  output indistinguishable from the pre-split run. DeepEP remains
+  compiled-but-unexecuted by gates (per ADR 0001).

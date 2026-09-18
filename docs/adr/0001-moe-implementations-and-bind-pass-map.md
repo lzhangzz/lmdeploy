@@ -32,8 +32,8 @@ all layers without `Context` becoming a god object.
 
 ## Consequences
 
-- `update_params` reloads re-create kind states (fresh map per binding); the DeepEP
-  dispatcher re-runs its JIT — accepted.
+- Each bind pass creates the kind states against a fresh map (`update_params`
+  reloads — the original concern here — are no longer supported).
 - `MoeState`, the Context kind-state slots, and `Impl::Bind`'s kind-module scan are
   deleted; Attention/DeltaNet states move to the same map rendezvous.
 - Gate is compile + default-path run; the DeepEP path remains unexecuted by gates

@@ -137,8 +137,9 @@ untouched, and the pattern is recorded (ADR 0001, glossary) for future kinds.
   implementation each; MLA remains an internal branch of Attention's forward).
   DeltaNet's per-layer registration and layer-order enforcement are unchanged;
   the recurrent grid still registers while the cache category is open.
-- **Reload semantics.** `update_params` re-binds against a fresh map: states are
-  re-created and the DeepEP dispatcher re-runs its JIT. Accepted.
+- **Reload semantics.** A re-bind runs against a fresh map: states are
+  re-created and the DeepEP dispatcher re-runs its JIT. Accepted. (`update_params`,
+  the reload path at design time, has since been dropped as unsupported.)
 - **Standalone path.** The pybind shim keeps the Python-visible
   `Module.bind(context)` signature and internally assembles a degenerate BindEnv
   (default engine params, empty registry, local flags, fresh map).
