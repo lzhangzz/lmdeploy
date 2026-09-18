@@ -114,13 +114,6 @@ public:
                                        Ref<Tensor>         output,
                                        Ref<Tensor>         output_scales);
 
-    // ----- per-rank run-mode ops, delegating to the captured engine -----
-
-    void             set_measure(bool measure);
-    int              Export(std::ostream& os);
-    int              Import(std::istream& is);
-    std::vector<int> GetTuningSeq() const;
-
     // ----- weight-side metadata (frozen shape) ---
 
     explicit operator bool() const noexcept

@@ -23,8 +23,13 @@ Lifecycle (normative pass order):
 
 ```text
 Python builds tree -> prepare() walk -> register_cache(CacheRegistry&) walk
-  -> category finalization -> bind(Context&) walk -> first Run
+  -> bind(Context&) walk -> category finalization -> first Run
 ```
+
+(Amended post-landing: bind precedes category finalization — the kind states
+created during bind register their bind-time ranges, e.g. the DeltaNet
+recurrent grid, while the registry is still open. The normative invariant is
+finalization after *all* registrations, which holds.)
 
 ## 1. Linear (`prototype/linear-module-interface.md` + amendment)
 
@@ -56,12 +61,6 @@ public:
                                        const Buffer_<int>& indices, const Buffer_<int>& offsets,
                                        Ref<Tensor> output, Ref<Tensor> output_scales);
 
-    // per-rank run-mode ops, delegating to the captured engine
-    void set_measure(bool measure);
-    int  Export(std::ostream& os);
-    int  Import(std::istream& is);
-    std::vector<int> GetTuningSeq() const;
-
     // params (frozen X-macro): weight, bias, scales, global_scale, zeros
     // metadata: family, three DataFormats, epilogue, k_desc/q_desc, dims — as today
 
@@ -76,7 +75,7 @@ private:
 ## 2. Ffn and Moe (`drafts/ffn-moe-design.md`)
 
 - `Ffn::Forward(input, output)` = w1w3 → activation → w2 with the FP8-fused-SiLU and w1/w3-separate branches internal; grouped overload takes a `GroupedRoute` (indices/offsets/f2E/num_valid_tokens). The three verbatim orchestration copies collapse into this one body. `LlamaFfnLayer` retires.
-- `Moe::Forward(input, output, token_mask)` = gate → route (`invokeMoeGate_V2`/`NoAuxTC`; `SampleUniform` under `env.warm_up()`) → gather → `block_->Forward(route)` → combine → shared fold (`shared->Forward`, `shared_gate->Forward`). `MoeFfnLayer` and both impls retire; default-vs-DeepEP is an internal branch.
+- `Moe::Forward(input, output, token_mask)` = gate → route (`invokeMoeGate_V2`/`NoAuxTC`; `SampleUniform` under warm-up, driven by the engine-owned `is_warm_up` flag) → gather → `block_->Forward(route)` → combine → shared fold (`shared->Forward`, `shared_gate->Forward`). `MoeFfnLayer` and both impls retire; default-vs-DeepEP is an internal branch.
 - `MoeState` (shared per rank, bound via `bind`): `TokenDispatcher`, routing buffers, scales-copy stream. *(The earlier per-module decision was reversed by Rework the ExecContext design.)*
 - `experts` ModuleList stays the Python surface; `prepare()` keeps building the internal `block_` via `LinkLinearExperts`; `AliasRouted`/`meta_pack_` aliasing unchanged. Classes `Ffn`/`Moe` with frozen `"FfnWeight"`/`"MoeWeight"` strings.
 
@@ -85,11 +84,11 @@ private:
 - Per-layer `Attention` modules. Per-layer state = weights + registered KV byte offset + rope params (`RopeKernelParam` computed in the ctor). The per-phase `AttentionData` is *batch* state — block ptrs are per-request bases shared across layers; layers apply their own `prefix_offset_` (addressing identical to today).
 - `register_cache(CacheRegistry&)` is a dedicated pass (see lifecycle): each module registers its own per-layer bytes (prefix category); layout equals today's single L-sized registration, so cache layout and checkpoints are unchanged.
 - `AttentionState` (kind state): per-phase `AttentionBatch` slots (batch-version stamp; `Attention::kSetup` fills only when stale — order-independent), fp32 workspace, pinned staging, CP context, aux stream + events.
-- `DeltaNet` is its own module on the same pattern: conv/recurrent registration in `register_cache` (checkpoint category), `contracts.gated-deltanet` semantics preserved (per-layer conv offsets, recurrent composite parts, TP×CP folding). MLA is an internal branch of `Attention::Forward`. Classes `Attention`/`DeltaNet`, frozen `"AttentionWeight"`/`"DeltaNetWeight"`.
+- `DeltaNet` is its own module on the same pattern: per-layer conv registration in `register_cache` (checkpoint category), the recurrent block grid registered once per rank by `DeltaNetState` during `bind` — before finalization, because block-rows are shared across layers when `L_b > 1` (post-landing amendment) — `contracts.gated-deltanet` semantics preserved (per-layer conv offsets, recurrent composite parts, TP×CP folding). MLA is an internal branch of `Attention::Forward`. Classes `Attention`/`DeltaNet`, frozen `"AttentionWeight"`/`"DeltaNetWeight"`.
 
 ## 4. Engine services (`drafts/context-contract.md`)
 
-- `turbomind::Context` survives as the composition root: per-rank **GEMM engine** (`gemm::Gemm` + dispatch cache + workspace + measure policy), build-time stream/allocator, device props, comm. `is_warm_up` becomes engine-owned, read per run as `env.warm_up()`.
+- `turbomind::Context` survives as the composition root: per-rank **GEMM engine** (`gemm::Gemm` + dispatch cache + workspace + measure policy), build-time stream/allocator, device props, comm. `is_warm_up` stays the engine-owned flag on `turbomind::Context`, captured by reference at bind and read per run (post-landing amendment: the `env.warm_up()` accessor was never introduced).
 - `bind(Context&)` after initialization; modules capture typed references (Linear the engine; Attention/Moe/DeltaNet their kind states). Modules never hold per-module engine copies or per-kind workspace duplicates.
 - Tuning ops on the engine object; `Linear::Tune` the thin module method for the `linear.py` pin. Dispatch-cache mutation executor-thread-only; measure mode only during warm-up; engine-thread ops metadata-only (`contracts.executor-only`, `contracts.object-address`).
 - Standalone: `linear.py` constructs a `turbomind::Context` and calls `mod.bind(ctx)` after `prepare` — same story as the engine path.
@@ -97,14 +96,14 @@ private:
 ## 5. BatchOp and decoder mapping (`drafts/batchop-decoder-mapping.md`)
 
 - Glue stays in the decoder: fused `AllreduceResidualRMSnorm`, per-layer `ffn_group` mapping, hidden-state plumbing, next-layer norm staging. `DecoderLayerWeight` stays the Python-built data composite. Zero behavior change.
-- `core::Module` grows default no-op `Run(BatchOp op, int phase, TensorMap& env)`; the generic walk hits every layer child per op; kinds implement subsets (Attention: kSetup fill + kForward + kUnprep; DeltaNet adds kPrepare clears and frontier ops; Linear/Ffn/Moe: kForward only). `kForward` keeps the decoder's orchestrated loop.
+- `core::Module` grows default no-op `Run(BatchOp op, int phase, TensorMap& env)`; the generic walk hits every layer child per op; kinds implement subsets (post-landing amendment: Attention — kAdd rope init + kSetup fill + kPrepare borrows; DeltaNet — kSetup fill + kPrepare state prepare/clears; kUnprep reaches every layer child through the decoder's walk but no kind implements kUnprep-specific behavior — only the shared wave stamp advances; Linear/Ffn/Moe implement no Run ops). `kForward` keeps the decoder's orchestrated loop.
 - `LanguageModel::Run` dispatch unchanged (single BatchOp entry per `concepts.module`); its embedding/output GEMMs become owned `Linear` modules.
 - README amendments land same-change in stage 3: class renames (`contracts.cache-content`, `unified-attention`, `gated-deltanet`), registration timing (`ownership.module-cache`, `contracts.category-registration`: "during construction" → "during the register_cache pass"), new lifecycle paragraph. `concepts.module` needs no change.
 
 ## 6. Python binding surface (`drafts/python-binding-rules.md`)
 
 - **Frozen**: registry strings, config classes/fields, `add_child_raw` child names, param names + `PackedTensor` semantics, module methods (`set_plan`/`param`/`prepare`/`set_meta_pack`/`LinkLinearExperts`), `_tm.create_module`/`WeightQuery`, `WeightPlan` fields, `linear.py` public names, driver names (`create_root`/`export`/`process_weight`/`gemm`).
-- **The effort's entire Python delta**: `linear.py`'s construction block (`_tm.LlamaLinear()` → `_tm.Context()` + `mod.bind(ctx)`) and `turbomind.py` gaining `register_cache()`/`bind()` calls. `TurboMind.gemm` keeps its name, returning the engine object. Builders: zero changes, byte-identical across all stages (gate-checked). `weight_format.py` untouched.
+- **The effort's entire Python delta**: `linear.py`'s construction block (`_tm.LlamaLinear()` → `_tm.Context()` + `mod.bind(ctx)`) and `turbomind.py` gaining `register_cache()`/`bind()` calls; a review follow-up also re-qualified `interns2_mobius.py` docstrings to the `Moe` class (mechanical, no code). `TurboMind.gemm` keeps its name, returning the engine object. Builders: zero changes, byte-identical across all stages (gate-checked). `weight_format.py` untouched.
 
 ## 7. Migration and verification (`drafts/migration-gates.md`)
 
@@ -116,7 +115,7 @@ Sequential stages on `modules`, bounded coexistence inside a stage, retired clas
 | 2 FFN/MoE | `Ffn`/`Moe`, impl classes retire, `MoeState` | footprint + startup check |
 | 3 Attention/GDN | `Attention`/`DeltaNet`, real `register_cache`, `AttentionState`, README contract-sync | prefix-cache + checkpoint variants |
 
-Every gate: clean `ninja` build; frozen-list grep + builder import smoke; four core models via `scripts/test_turbomind_model.py` (`Qwen/Qwen3-8B`, `Qwen/Qwen3-8B-AWQ`, `Qwen/Qwen3-30B-A3B-Thinking-2507`, `Qwen/Qwen3.5-35B-A3B-FP8`; cache dir `/mnt_cfs/huggingface_hub/hub/`; ≥128 meaningful tokens, never batched); perf = `benchmark_decode.py` ≥98% of the pre-stage-1 baseline plus load time within noise. Final gate adds `meta-Llama/Llama-3.1-70B-Instruct` at TP≥2. Baselines recorded in `perf/baseline.md` before stage 1. Checkpoints load unmodified at every gate.
+Every gate: clean `ninja` build; frozen-list grep + builder import smoke; four core models via `scripts/test_turbomind_model.py` (`Qwen/Qwen3-8B`, `Qwen/Qwen3-8B-AWQ`, `Qwen/Qwen3-30B-A3B-Thinking-2507`, `Qwen/Qwen3.5-35B-A3B-FP8`; cache dir `/mnt_cfs/huggingface_hub/hub/`; ≥128 meaningful tokens, never batched); perf = `benchmark/profile_throughput.py --backend turbomind` (ticket 01's recorded substitution: `benchmark_decode.py` drives the pytorch backend) ≥98% of the recorded pre-stage-1 baseline — or, where a recorded number is proven environmentally stale by re-measuring the unmodified baseline commit, of same-session fresh references — plus load time within noise (post-landing amendment). Final gate adds `meta-Llama/Llama-3.1-70B-Instruct` at TP≥2. Baselines recorded in `perf/baseline.md` before stage 1. Checkpoints load unmodified at every gate.
 
 ## Risk register
 

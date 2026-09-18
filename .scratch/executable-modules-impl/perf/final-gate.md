@@ -75,3 +75,14 @@ bands (7.13–7.17 / 5.87–5.98 / 17.30–17.64 / 20.80–21.09 across stages
 **Gate: pass** — on recorded baselines where they are valid, and on the
 documented fresh/same-day references where the recorded numbers are
 stale (the standard set in ticket 04 and applied in every gate since).
+
+## Evidence locations
+
+Raw perf CSVs and full runner logs: `perf/raw/` (baselines) and
+`perf/final/` (this gate); stage re-measurements in `perf/stage{1..4}/`.
+Smoke-matrix and TP≥2 terminal transcripts are not copied into the repo —
+those runs were driven interactively (never batched) and their full outputs
+live in the development session log (kimi-code `wire.jsonl` for this
+workspace, 2026-09-17/18). `perf/raw/gpu_usage.log`, promised by ticket 01's
+tee, was never created: no later baseline sweep ran; the rerun GPU snapshots
+are in `raw/runner_rerun_stdout.log`.

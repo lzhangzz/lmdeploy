@@ -189,7 +189,7 @@ struct TurboMind::Impl {
         }
 
         // Engine-binding walk: modules capture per-rank services (the GEMM
-        // engine for Linear; kind states in later stages) before first Run.
+        // engine for Linear; the kind states created above) before first Run.
         weights_[index]->bind(ctx);
         TM_CUDA_CHECK(cudaGetLastError());
     }

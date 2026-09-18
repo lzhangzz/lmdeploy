@@ -22,11 +22,6 @@ Ffn::Ffn(const core::FfnConfig& cfg):
 {
 }
 
-void Ffn::prepare()
-{
-    Module::prepare();
-}
-
 void Ffn::Forward(const Tensor& input, Ref<Tensor> output)
 {
     TM_FUNCTION_SCOPE();

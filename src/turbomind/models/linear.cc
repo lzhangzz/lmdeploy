@@ -367,28 +367,6 @@ std::optional<gemm::ExecPlan> Linear::Tune(const Tensor&       input,
     return exec_plan;
 }
 
-// ----- per-rank run-mode ops -----
-
-void Linear::set_measure(bool measure)
-{
-    engine().set_measure(measure);
-}
-
-int Linear::Export(std::ostream& os)
-{
-    return engine().Export(os);
-}
-
-int Linear::Import(std::istream& is)
-{
-    return engine().Import(is);
-}
-
-std::vector<int> Linear::GetTuningSeq() const
-{
-    return engine().GetTuningSeq();
-}
-
 TM_MODULE_REGISTER_AS("LinearWeight", Linear, core::LinearConfig);
 
 TM_MODULE_METHODS(Linear, LINEAR_CHILDREN, LINEAR_PARAMS)

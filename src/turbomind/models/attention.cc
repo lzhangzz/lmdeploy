@@ -88,11 +88,6 @@ Attention::Attention(const core::AttentionConfig& cfg):
     init_rope_kernel_param(rope, rope_param_);
 }
 
-void Attention::prepare()
-{
-    Module::prepare();
-}
-
 void Attention::register_cache(CacheRegistry& registry)
 {
     Module::register_cache(registry);
@@ -268,7 +263,6 @@ void Attention::Setup(int phase, TensorMap& env)
         return;
     }
 
-    // const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;  // active requests
     Buffer_<Sequence*> rc = env.at("requests").buffer();
 
     const int bsz = rc.size();

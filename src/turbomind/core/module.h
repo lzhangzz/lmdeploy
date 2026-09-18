@@ -227,7 +227,7 @@ public:
 
     // ----- Type info -----
 
-    /// Returns a static string identifying the module type (e.g., "Linear", "NormWeight").
+    /// Returns a static string identifying the module type (e.g., "LinearWeight", "NormWeight").
     virtual const char* type() const;
 
     // ----- Hierarchy (virtual, overridden by derived classes) -----

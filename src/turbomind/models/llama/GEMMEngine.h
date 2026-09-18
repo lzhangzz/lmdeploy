@@ -41,9 +41,9 @@ public:
     // measure mode is only used during warm-up.
     void set_measure(bool measure);
 
-    [[maybe_unused]] int Export(std::ostream& os);
+    int Export(std::ostream& os);
 
-    [[maybe_unused]] int Import(std::istream& is);
+    int Import(std::istream& is);
 
     [[nodiscard]] std::vector<int> GetTuningSeq() const;
 

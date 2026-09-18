@@ -55,8 +55,6 @@ public:
 
     Ffn(const core::FfnConfig& cfg);
 
-    void prepare() override;
-
     /// Dense: y = W2·act(W1x, W3x). Activation internal (fused-silu/FP8 and
     /// w1/w3-separate branches). Output filled when provided.
     void Forward(const Tensor& input, Ref<Tensor> output);

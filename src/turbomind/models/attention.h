@@ -207,8 +207,6 @@ public:
 
     Attention(const core::AttentionConfig& cfg);
 
-    void prepare() override;
-
     /// Prefix category: this layer's KV bytes. Each layer registers its
     /// own layout; the accumulated prefix layout is byte-identical to the
     /// former single L-sized registration, so cache objects and
