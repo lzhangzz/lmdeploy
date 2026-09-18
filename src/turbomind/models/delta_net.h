@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 
 #include <atomic>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -65,8 +66,9 @@ struct DeltaNetBatch {
     uint64_t wave{};  // setup wave that last filled this slot (order-independent guard)
 };
 
-/// Shared per-rank GDN state — the retired executor's state, held once by
-/// the Context (kind state) and bound to every DeltaNet module via bind().
+/// Shared per-rank GDN state — the retired executor's state, created by
+/// the first DeltaNet module in the bind walk and rendezvoused through the
+/// BindEnv shared map; every DeltaNet module of the rank co-owns it.
 /// Registers the per-rank recurrent block grid (one composite part per
 /// (layer-group, head-group) block) with the checkpoint category at
 /// creation — during bind, before category finalization; conv bytes are
@@ -141,8 +143,8 @@ struct DeltaNetState {
     std::atomic<uint64_t> wave_{1};
 
 private:
-    // Layer order, as collected at creation; RegisterLayer checks the bind
-    // walk against it and stays idempotent across update_params re-binds.
+    // Layer order, as collected at state creation; RegisterLayer checks
+    // the bind walk against it.
     std::vector<DeltaNet*> modules_;
     int                    next_layer_index_{};
 };
@@ -171,10 +173,10 @@ public:
     /// registered once per rank by DeltaNetState.
     void register_cache(CacheRegistry& registry) override;
 
-    /// Captures the shared per-rank DeltaNetState and takes this layer's
-    /// index in the block grid. Defined in delta_net.cc (Context is
-    /// incomplete here).
-    void bind(Context& ctx) override;
+    /// Captures the shared per-rank DeltaNetState — created by the first
+    /// DeltaNet module of the bind walk — and takes this layer's index in
+    /// the block grid. Defined in delta_net.cc (types incomplete here).
+    void bind(BindEnv& env) override;
 
     /// Contract-native BatchOp subset: kSetup (version-guarded batch fill
     /// — plans, pointer tables, reset list), kPrepare (batch borrows,
@@ -218,7 +220,7 @@ private:
     int     layer_index_{};          // GDN-local layer index, assigned at bind
     int64_t linear_state_offset_{};  // in-block element offset in the shared block
 
-    DeltaNetState* state_{};  // shared per-rank kind state, captured in bind
+    std::shared_ptr<DeltaNetState> state_;  // shared per-rank kind state, captured in bind
 };
 
 }  // namespace turbomind

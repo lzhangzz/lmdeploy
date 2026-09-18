@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <limits>
+#include <memory>
 #include <vector>
 
 #include "src/turbomind/core/core.h"
@@ -116,11 +117,12 @@ struct AttentionBatch {
     uint64_t wave{};  // setup wave that last filled this slot (order-independent guard)
 };
 
-/// Shared per-rank attention state — the retired executor's state, held
-/// once by the Context (kind state) and bound to every Attention module
-/// via bind(). Owns the per-phase batch slots, the fp32 split-KV
-/// workspace, pinned staging, the CP post-context, and the aux
-/// stream/events used to overlap prefill with decode.
+/// Shared per-rank attention state — the retired executor's state, created
+/// by the first Attention module in the bind walk and rendezvoused through
+/// the BindEnv shared map; every Attention module of the rank co-owns it.
+/// Owns the per-phase batch slots, the fp32 split-KV workspace, pinned
+/// staging, the CP post-context, and the aux stream/events used to overlap
+/// prefill with decode.
 struct AttentionState {
     static constexpr int kMaxKVSplits        = 128;
     static constexpr int kMaxWorkspaceTokens = 4096;
@@ -213,9 +215,10 @@ public:
     /// checkpoints are unchanged.
     void register_cache(CacheRegistry& registry) override;
 
-    /// Captures the shared per-rank AttentionState. Defined in
-    /// attention.cc (Context is incomplete here).
-    void bind(Context& ctx) override;
+    /// Captures the shared per-rank AttentionState — created by the first
+    /// Attention module of the bind walk. Defined in attention.cc (types
+    /// incomplete here).
+    void bind(BindEnv& env) override;
 
     /// Contract-native BatchOp subset: kAdd (dynamic-NTK init), kSetup
     /// (version-guarded batch fill), kPrepare (batch borrows).
@@ -286,7 +289,7 @@ private:
 
     RopeKernelParam rope_param_{};  // computed in ctor
 
-    AttentionState* state_{};  // shared per-rank kind state, captured in bind
+    std::shared_ptr<AttentionState> state_;  // shared per-rank kind state, captured in bind
 };
 
 }  // namespace turbomind

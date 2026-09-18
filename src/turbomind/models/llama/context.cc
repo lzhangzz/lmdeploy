@@ -2,14 +2,33 @@
 
 #include "src/turbomind/models/llama/context.h"
 
-#include "src/turbomind/models/attention.h"
-#include "src/turbomind/models/delta_net.h"
-#include "src/turbomind/models/moe.h"
+#include <utility>
+
+#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 
-// Out-of-line: the kind-state members are incomplete in context.h, so both
-// the constructor's exception-cleanup path and destruction need this TU.
+namespace {
+// Ambient EngineParam of the module-build thread; parked/unparked by
+// EngineParamGuard (entered by the Python weight-context guard).
+thread_local const EngineParam* g_ambient_engine_param = nullptr;
+}  // namespace
+
+EngineParamGuard::EngineParamGuard(const EngineParam& engine_param):
+    prev_{std::exchange(g_ambient_engine_param, &engine_param)}
+{
+}
+
+EngineParamGuard::~EngineParamGuard()
+{
+    g_ambient_engine_param = prev_;
+}
+
+const EngineParam* EngineParamGuard::current()
+{
+    return g_ambient_engine_param;
+}
+
 Context::Context(int device_id):
     core_stream{core::Stream::create()},
     allocator{core::Allocator(core_stream, false)},
@@ -23,20 +42,5 @@ Context::Context(int device_id):
 }
 
 Context::~Context() = default;
-
-void Context::set_moe_state(std::unique_ptr<MoeState> state) noexcept
-{
-    moe_state_ = std::move(state);
-}
-
-void Context::set_attention_state(std::unique_ptr<AttentionState> state) noexcept
-{
-    attention_state_ = std::move(state);
-}
-
-void Context::set_deltanet_state(std::unique_ptr<DeltaNetState> state) noexcept
-{
-    deltanet_state_ = std::move(state);
-}
 
 }  // namespace turbomind

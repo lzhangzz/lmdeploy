@@ -20,6 +20,7 @@
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/core/tensor.h"
+#include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/engine_config.h"
 #include "src/turbomind/engine/fingerprint.h"
 #include "src/turbomind/engine/model_request.h"
@@ -771,11 +772,21 @@ PYBIND11_MODULE(_turbomind, m)
         ft::core::Allocator                     host;
         ft::core::Allocator                     device;
         bool                                    has_device{false};
+        // Per-rank engine params; parked ambiently on __enter__ (null on
+        // the standalone create_device_context path).
+        const ft::EngineParam*                  engine_param{};
         std::unique_ptr<ft::core::ContextGuard> guard;
+        std::unique_ptr<ft::EngineParamGuard>   engine_param_guard;
 
         // existing TurboMind path: stream + single allocator
         PyContextGuard(ft::core::Stream s, ft::core::Allocator a):
             stream(std::move(s)), host(std::move(a)), device{}, has_device(false)
+        {
+        }
+
+        // TurboMind weight-context path with the rank's engine params.
+        PyContextGuard(ft::core::Stream s, ft::core::Allocator a, const ft::EngineParam* engine_param):
+            stream(std::move(s)), host(std::move(a)), device{}, has_device(false), engine_param(engine_param)
         {
         }
 
@@ -793,9 +804,13 @@ PYBIND11_MODULE(_turbomind, m)
             else {
                 guard = std::make_unique<ft::core::ContextGuard>(stream, host);
             }
+            if (engine_param) {
+                engine_param_guard = std::make_unique<ft::EngineParamGuard>(*engine_param);
+            }
         }
         void exit()
         {
+            engine_param_guard.reset();
             guard.reset();
         }
     };
@@ -878,7 +893,18 @@ PYBIND11_MODULE(_turbomind, m)
         .def("prepare", [](ft::core::Module& m) { m.prepare(); })
         .def(
             "bind",
-            [](ft::core::Module& m, ft::Context& ctx) { m.bind(ctx); },
+            [](ft::core::Module& m, ft::Context& ctx) {
+                // Standalone path: assemble a degenerate BindEnv — default
+                // engine params, an empty cache registry, local flags and a
+                // fresh kind-state map (see BindEnv).
+                ft::EngineParam engine{};
+                ft::CacheRegistry registry;
+                std::unordered_map<std::string, std::shared_ptr<void>> shared;
+                int is_warm_up = 0;
+                int phases     = 1;
+                ft::BindEnv    env{engine, ctx, registry, is_warm_up, shared, phases};
+                m.bind(env);
+            },
             "ctx"_a,
             "Engine-binding walk: the module (and its children) capture per-rank services from the engine root.")
         .def(
@@ -976,8 +1002,8 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "context",
             [](ft::TurboMind* model, int index) -> std::unique_ptr<PyContextGuard> {
-                auto [stream, alloc] = model->weight_context(index);
-                return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
+                auto [stream, alloc, engine_param] = model->weight_context(index);
+                return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc), engine_param);
             },
             "index"_a)
         .def("gemm", &TurboMind::gemm, py::return_value_policy::reference, "index"_a)

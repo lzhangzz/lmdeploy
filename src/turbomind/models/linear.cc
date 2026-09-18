@@ -78,13 +78,13 @@ void Linear::prepare()
 
 GEMMEngine& Linear::engine() const
 {
-    TM_CHECK(engine_ != nullptr) << "Linear '" << full_path() << "' used before bind(Context&)";
+    TM_CHECK(engine_ != nullptr) << "Linear '" << full_path() << "' used before bind(BindEnv&)";
     return *engine_;
 }
 
-void Linear::bind(Context& ctx)
+void Linear::bind(BindEnv& env)
 {
-    engine_ = &ctx.linear_engine();
+    engine_ = &env.context.linear_engine();
 }
 
 // ----- execution (absorbed from the retired executor) -----

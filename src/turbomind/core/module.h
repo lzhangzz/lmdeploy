@@ -19,6 +19,7 @@
 namespace turbomind {
 
 struct Context;
+struct BindEnv;
 enum class BatchOp;
 class CacheRegistry;
 
@@ -268,8 +269,10 @@ public:
     virtual void Run(BatchOp op, int phase, TensorMap& env);
 
     /// Capture engine services (GEMM engine, kind states) after prepare.
-    /// Default recurses into children via for_each_child.
-    virtual void bind(::turbomind::Context& ctx);
+    /// Kind states are created by the first module of a kind and
+    /// rendezvoused through env.shared. Default recurses into children via
+    /// for_each_child.
+    virtual void bind(::turbomind::BindEnv& env);
 
     // ----- Registry-driven child creation -----
 

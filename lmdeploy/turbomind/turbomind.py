@@ -88,9 +88,11 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.attn_cp_size = parallel.attn_cp_size
         cfg.mlp_dp_size = parallel.mlp_dp_size
         cfg.mlp_tp_size = parallel.mlp_tp_size
+    # Resolve the transport policy here so the engine (and the MoE factory)
+    # only ever sees a concrete backend string.
+    if cfg.moe_a2a_backend == 'auto':
+        cfg.moe_a2a_backend = 'deepep' if cfg.ep > 1 and cfg.nnodes > 1 else 'default'
     if cfg.ep > 1:
-        if cfg.moe_a2a_backend == 'auto':
-            cfg.moe_a2a_backend = 'deepep' if cfg.nnodes > 1 else 'default'
         if cfg.moe_a2a_backend == 'deepep':
             assert cfg.communicator == 'nccl', 'deepep backend only supports nccl communicator'
             # Reduce the number of QPs used in multithreaded scenarios.

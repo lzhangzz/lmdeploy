@@ -3,6 +3,8 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 #include <cuda_runtime.h>
 
@@ -16,9 +18,8 @@
 
 namespace turbomind {
 
-struct MoeState;
-struct AttentionState;
-struct DeltaNetState;
+struct EngineParam;
+class CacheRegistry;
 
 struct Communicators {
     comm::HostComm h_global;
@@ -37,16 +38,13 @@ struct Communicators {
 
 // Execution context for the model
 struct Context {
-    core::Stream                    core_stream;
-    core::Allocator                 allocator;
-    cudaStream_t                    stream;
-    std::unique_ptr<GEMMEngine>     gemm_engine;  // per-rank GEMM engine
-    cudaDeviceProp                  device_prop;
-    Communicators                   comm;  // initialize later
-    std::unique_ptr<int>            is_warm_up;
-    std::unique_ptr<MoeState>       moe_state_;        // per-rank MoE kind state
-    std::unique_ptr<AttentionState> attention_state_;  // per-rank attention kind state
-    std::unique_ptr<DeltaNetState>  deltanet_state_;   // per-rank GDN kind state
+    core::Stream                core_stream;
+    core::Allocator             allocator;
+    cudaStream_t                stream;
+    std::unique_ptr<GEMMEngine> gemm_engine;  // per-rank GEMM engine
+    cudaDeviceProp              device_prop;
+    Communicators               comm;  // initialize later
+    std::unique_ptr<int>        is_warm_up;
 
     Context(int device_id);
     ~Context();
@@ -55,25 +53,42 @@ struct Context {
     {
         return *gemm_engine;
     }
+};
 
-    MoeState* moe_state() const noexcept
-    {
-        return moe_state_.get();
-    }
-    // Defined in context.cc: the kind-state type is incomplete here.
-    void set_moe_state(std::unique_ptr<MoeState> state) noexcept;
+/// Everything a binding module needs, carried through the bind walk.
+/// `shared` is the transient kind-state rendezvous: the first module of a
+/// kind creates the kind's per-rank state and parks it under the kind's
+/// key; the rest fetch and cast. The map lives only for the walk (owned by
+/// the engine's bind step); modules co-own their state via shared_ptr
+/// afterwards.
+struct BindEnv {
+    const EngineParam&                                      engine;
+    Context&                                                context;
+    CacheRegistry&                                          registry;
+    int&                                                    is_warm_up;
+    std::unordered_map<std::string, std::shared_ptr<void>>& shared;
+    int&                                                    phases;
+};
 
-    AttentionState* attention_state() const noexcept
-    {
-        return attention_state_.get();
-    }
-    void set_attention_state(std::unique_ptr<AttentionState> state) noexcept;
+/// Parks the rank's EngineParam ambiently on the module-build thread for
+/// the guard's lifetime — entered by the weight-context guard beside the
+/// stream/allocator it pushes, so registry factories can read engine
+/// policy and sizing at module construction. Nullptr outside a guard
+/// (standalone paths).
+class EngineParamGuard {
+public:
+    explicit EngineParamGuard(const EngineParam& engine_param);
+    ~EngineParamGuard();
 
-    DeltaNetState* deltanet_state() const noexcept
-    {
-        return deltanet_state_.get();
-    }
-    void set_deltanet_state(std::unique_ptr<DeltaNetState> state) noexcept;
+    EngineParamGuard(const EngineParamGuard&)            = delete;
+    EngineParamGuard& operator=(const EngineParamGuard&) = delete;
+
+    /// The ambient EngineParam of the current thread; nullptr when no
+    /// engine-backed guard is active.
+    static const EngineParam* current();
+
+private:
+    const EngineParam* prev_;
 };
 
 inline Allocator GetSymmAllocator(const comm::DeviceComm& comm)

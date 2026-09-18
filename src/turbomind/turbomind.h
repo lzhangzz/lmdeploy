@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "src/turbomind/core/core.h"
@@ -18,6 +19,8 @@ namespace turbomind {
 namespace gemm {
 class Gemm;
 }
+
+struct EngineParam;
 
 class TurboMind {
 public:
@@ -33,8 +36,11 @@ public:
     /// Returns the root `Module` for GPU `index`'s weight tree.
     core::Module* root(int index);
 
-    /// Returns the Stream and Allocator for GPU `index`'s weight tree.
-    std::pair<core::Stream, core::Allocator> weight_context(int index);
+    /// Returns the Stream, Allocator, and per-rank EngineParam for GPU
+    /// `index`'s weight tree. The EngineParam outlives the weight tree —
+    /// the weight-context guard parks it ambiently on the building thread
+    /// so module factories can read engine policy at construction.
+    std::tuple<core::Stream, core::Allocator, const EngineParam*> weight_context(int index);
 
     gemm::Gemm& gemm(int index);
 

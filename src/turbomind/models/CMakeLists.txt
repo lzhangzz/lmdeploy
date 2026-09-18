@@ -9,6 +9,8 @@ add_library(models STATIC
         attention.cc
         ffn.cc
         moe.cc
+        moe_default.cc
+        moe_deepep.cc
         delta_net.cc
         decoder_layer_weight.cc
         model_weight.cc

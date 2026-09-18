@@ -19,6 +19,7 @@
 #include "src/turbomind/engine/block.h"
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/request.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -98,10 +99,32 @@ void DeltaNet::register_cache(CacheRegistry& registry)
     conv_state_offset_ = static_cast<int>(bytes / elem);
 }
 
-void DeltaNet::bind(Context& ctx)
+void DeltaNet::bind(BindEnv& env)
 {
-    Module::bind(ctx);
-    state_               = TM_CHECK_NOTNULL(ctx.deltanet_state());
+    Module::bind(env);
+    if (auto it = env.shared.find("deltanet"); it != env.shared.end()) {
+        state_ = std::static_pointer_cast<DeltaNetState>(it->second);
+    }
+    else {
+        // First DeltaNet module of the walk: create the per-rank state.
+        // The state spans all layers — collect this rank's DeltaNet
+        // modules from the decoder-layer list this module lives in; the
+        // collection order (layer order) is what RegisterLayer checks the
+        // bind walk against.
+        auto* layers = TM_CHECK_NOTNULL(TM_CHECK_NOTNULL(parent())->parent());
+        TM_CHECK(std::string_view{layers->type()} == "ModuleList")
+            << "DeltaNet parent chain is not a decoder-layer list: " << layers->full_path();
+        std::vector<DeltaNet*> modules;
+        for (int i = 0; i < static_cast<core::ModuleList*>(layers)->size(); ++i) {
+            auto* layer = static_cast<DecoderLayerWeight*>(layers->child(std::to_string(i)));
+            if (auto* gdn = layer->linear_attn.get()) {
+                modules.push_back(gdn);
+            }
+        }
+        TM_CHECK(!modules.empty());
+        state_ = std::make_shared<DeltaNetState>(env.engine, env.registry, env.phases, std::move(modules));
+        env.shared.emplace("deltanet", state_);
+    }
     layer_index_         = state_->RegisterLayer(*this);
     linear_state_offset_ = state_->layer_state_offset(layer_index_);
 }
@@ -259,8 +282,8 @@ DeltaNetState::~DeltaNetState()
 int DeltaNetState::RegisterLayer(const DeltaNet& module)
 {
     TM_CHECK_EQ(module.tp_size, tp_size) << "DeltaNet module tp_size must equal attn_tp_size * attn_cp_size";
-    // Idempotent across re-binds: update_params reloads re-run the bind walk
-    // on the kept state, and a re-binding module keeps its existing index.
+    // Idempotent across re-binds: a re-binding module keeps its existing
+    // index instead of taking the next one.
     for (int index = 0; index < next_layer_index_; ++index) {
         if (modules_[index] == &module) {
             return index;

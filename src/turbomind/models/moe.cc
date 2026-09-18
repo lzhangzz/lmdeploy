@@ -6,23 +6,20 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/registry.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
-
-#ifdef USE_NCCL
-#include "src/turbomind/comm/nccl/deepep/moe_a2a_utils.h"
-#include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
-#endif
 
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 
-#include "src/turbomind/utils/anomaly_handler.h"
+#include "src/turbomind/models/moe_default.h"
+#include "src/turbomind/models/moe_deepep.h"
+
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -249,126 +246,6 @@ void Moe::link_block()
     block_->is_fused_silu = e0->is_fused_silu;
 }
 
-void Moe::bind(Context& ctx)
-{
-    Module::bind(ctx);
-    if (block_) {
-        block_->bind(ctx);
-    }
-    state_ = TM_CHECK_NOTNULL(ctx.moe_state());
-}
-
-// ---------------------------------------------------------------------------
-// MoeState
-// ---------------------------------------------------------------------------
-
-MoeState::MoeState(const EngineParam& engine, const Context& ctx, const Moe& weights):
-    mlp_tp_size(engine.mlp_tp_size),
-    ep_size(engine.ep_size),
-    ep_rank(engine.ep_rank),
-    max_token_num(engine.max_forward_token_num * engine.attn_dp_size),
-    max_token_per_rank_num(engine.mlp_tp_size
-                           * cdiv(engine.max_forward_token_num, engine.attn_tp_size * engine.attn_cp_size)),
-    is_warm_up(*ctx.is_warm_up)
-{
-#ifdef BUILD_MULTI_GPU
-    if (ep_size > 1 && engine.moe_a2a_backend == "deepep") {
-        TM_CHECK(engine.data_type == kBfloat16)
-            << "engine.data_type only support bfloat16 for now, got " << engine.data_type;
-        use_a2a = true;
-        InitA2A(ctx, weights);
-        return;
-    }
-#endif
-    if (ep_size == 1 || engine.moe_a2a_backend == "default") {
-        use_a2a = false;
-        InitDefault(weights);
-        return;
-    }
-
-    TM_LOG_FATAL(
-        "Unsupported MoE transport config: ep_size = {}, moe_a2a_backend = {}", ep_size, engine.moe_a2a_backend);
-}
-
-MoeState::~MoeState() = default;
-
-void MoeState::InitDefault(const Moe& weights)
-{
-    const int expert_num        = weights.num_experts();
-    const int local_expert_num  = weights.num_local_experts();
-    const int experts_per_token = weights.experts_per_token;
-
-    h_offsets_ = {local_expert_num + 1, kCPU};
-
-    const int pad_token_num = (max_token_num + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
-
-    masks_   = {expert_num * pad_token_num, kDEVICE};
-    f2n_     = {experts_per_token * max_token_num, kDEVICE};
-    f2E_     = {experts_per_token * max_token_num, kDEVICE};
-    en2f_    = {experts_per_token * max_token_num, kDEVICE};
-    scales_  = {experts_per_token * max_token_num, kDEVICE};
-    offsets_ = {local_expert_num + 1, kDEVICE};
-    accum_   = {expert_num * kMoeGateMaxTiles, kDEVICE};
-}
-
-#ifdef USE_NCCL
-
-void MoeState::InitA2A(const Context& ctx, const Moe& weights)
-{
-    const int experts_per_token = weights.experts_per_token;
-
-    topk_weights_ = {max_token_per_rank_num * experts_per_token, kDEVICE};
-    topk_indices_ = {max_token_per_rank_num * experts_per_token, kDEVICE};
-
-    f2n_    = {experts_per_token * max_token_num, kDEVICE};
-    f2E_    = {experts_per_token * max_token_num, kDEVICE};
-    en2f_   = {experts_per_token * max_token_num, kDEVICE};
-    scales_ = {experts_per_token * max_token_num, kDEVICE};
-
-    dispatcher_ = std::make_unique<comm::TokenDispatcher>(ctx.comm.h_ep_group);
-
-    scales_copy_stream_      = Stream::create();
-    scales_copy_ready_event_ = Event::create();
-    scales_copy_done_event_  = Event::create();
-
-    dispatcher_->Init(max_token_per_rank_num,
-                      TM_CHECK_NOTNULL(weights.block())->hidden_dim,
-                      experts_per_token,
-                      weights.num_local_experts(),
-                      false /* use_fp8_dispatch */);
-
-    CompileKernels(weights);
-}
-
-void MoeState::CompileKernels(const Moe& weights)
-{
-    TM_CUDA_CHECK(cudaMemsetAsync(
-        topk_indices_.data(), -1, sizeof(int) * topk_indices_.size(), core::Context::stream().handle()));
-
-    std::vector<int> tokens;
-    for (int i = 1; i < max_token_per_rank_num; i *= 2) {
-        tokens.push_back(i);
-    }
-    tokens.push_back(max_token_per_rank_num);
-
-    for (const auto& token_num : tokens) {
-        TM_LOG_INFO("Compiling a2a kernels for token_num = {}", token_num);
-        Tensor input        = {{token_num, weights.block()->hidden_dim}, kBfloat16, kDEVICE};
-        Tensor topk_indices = {topk_indices_, {token_num, weights.experts_per_token}};
-        Tensor topk_weights = {topk_weights_, {token_num, weights.experts_per_token}};
-        Tensor scales_t, output, out_moe;
-        TM_SCOPE_CALL(dispatcher_->Dispatch(
-            input, topk_indices, topk_weights, token_num, output, scales_t, f2n_, f2E_, en2f_, offsets_));
-        TM_SCOPE_CALL(dispatcher_->Combine(output, out_moe));
-    }
-}
-
-#endif  // USE_NCCL
-
-// ---------------------------------------------------------------------------
-// Forward
-// ---------------------------------------------------------------------------
-
 Tensor_<float> Moe::Gate(const Tensor& input, Linear& gate)
 {
     TM_FUNCTION_SCOPE();
@@ -380,345 +257,37 @@ Tensor_<float> Moe::Gate(const Tensor& input, Linear& gate)
     return logits;
 }
 
-void Moe::Forward(const Tensor&           input,
-                  Ref<Tensor>             output,
-                  const bool*             token_mask,
-                  const std::vector<int>& local_token_nums)
+// ---------------------------------------------------------------------------
+// Registry factory — Implementation selection at construction (ADR 0001)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::unique_ptr<core::Module> CreateMoe(const core::ModuleConfig& config)
 {
-    TM_FUNCTION_SCOPE();
+    const auto& cfg = static_cast<const core::MoeConfig&>(config);
 
-    TM_CHECK_NOTNULL(state_);
+    const EngineParam* engine = EngineParamGuard::current();
+    TM_CHECK(engine != nullptr)
+        << "MoE module construction requires ambient engine params: no engine-backed weight-context guard is active";
 
+    if (engine->moe_a2a_backend == "default") {
+        return std::make_unique<MoeDefaultImpl>(cfg);
+    }
 #ifdef USE_NCCL
-    if (state_->use_a2a) {
-        ForwardA2A(input, output, token_mask, local_token_nums);
-        return;
+    if (engine->moe_a2a_backend == "deepep") {
+        return std::make_unique<MoeDeepEPImpl>(cfg);
     }
 #endif
-    ForwardDefault(input, output, token_mask);
+    TM_LOG_FATAL("Unsupported MoE transport config: moe_a2a_backend = {}", engine->moe_a2a_backend);
 }
 
-void Moe::ForwardDefault(const Tensor& input, Ref<Tensor> output, const bool* token_mask)
-{
-    TM_FUNCTION_SCOPE();
+const bool _tm_moe_factory_registered = [] {
+    core::ModuleRegistry::instance().register_type("MoeWeight", CreateMoe);
+    return true;
+}();
 
-    const int tokens = input.shape(0);
-    auto&     st_    = *state_;
-
-    auto& block = *TM_CHECK_NOTNULL(block_);
-
-    const int hidden_dim = block.hidden_dim;
-
-    const size_t padded = (tokens + kMoeGateVecSize - 1) / kMoeGateVecSize * kMoeGateVecSize;
-
-    const int expert_num        = num_experts();
-    const int local_expert_num  = num_local_experts();
-    const int expert_offset     = local_expert_offset();
-    const int experts_per_token = this->experts_per_token;
-
-    TM_CHECK(expert_num);
-
-    auto logits = Gate(input, *gate.get());
-
-    TM_DEBUG_TENSOR(logits, "logits", 2);
-
-    const auto st = core::Context::stream().handle();
-
-    // en2f is the skip sentinel for combine: entries not written by routing (invalid
-    // tokens, or shrunk batches with stale values) must read as -1 regardless of EP.
-    TM_CUDA_CHECK(cudaMemsetAsync(st_.en2f_.data(), -1, sizeof(int) * tokens * experts_per_token, st));
-
-    if (topk_method == "noaux_tc") {
-        TM_CHECK_EQ(n_group, 1);
-        TM_CHECK_EQ(topk_group, 1);
-        const float* correction_bias = nullptr;
-        if (score_correction_bias) {
-            correction_bias = score_correction_bias.size() > 0 ? score_correction_bias.data<float>() : nullptr;
-        }
-        TM_SCOPE_CALL(invokeMoeGate_NoAuxTC(st_.f2n_.data(),
-                                            st_.f2E_.data(),
-                                            st_.en2f_.data(),
-                                            st_.offsets_.data(),
-                                            st_.scales_.data(),
-                                            st_.masks_.data(),
-                                            st_.accum_.data(),
-                                            logits.data(),
-                                            token_mask,
-                                            correction_bias,
-                                            tokens,
-                                            padded,
-                                            expert_num,
-                                            experts_per_token,
-                                            expert_offset,
-                                            local_expert_num,
-                                            norm_topk_prob,
-                                            routed_scale,
-                                            scoring_func == "sigmoid",
-                                            st));
-    }
-    else {
-        // V2: accum must be cleared by caller; masks cleared internally
-        TM_CUDA_CHECK(cudaMemsetAsync(st_.accum_.data(), 0, sizeof(int) * expert_num * kMoeGateMaxTiles, st));
-
-        bool softmax = true;
-        if (topk_method == "group_limited_greedy") {
-            TM_SCOPE_CALL(invokeMoeSoftmaxMaskTopKGroups(
-                logits.data(), tokens, expert_num, expert_num / n_group, topk_group, st));
-            softmax = false;
-        }
-
-        TM_SCOPE_CALL(invokeMoeGate_V2(st_.f2n_.data(),
-                                       st_.f2E_.data(),
-                                       st_.en2f_.data(),
-                                       st_.offsets_.data(),
-                                       st_.scales_.data(),
-                                       st_.masks_.data(),
-                                       st_.accum_.data(),
-                                       logits.data(),
-                                       token_mask,
-                                       tokens,
-                                       padded,
-                                       expert_num,
-                                       experts_per_token,
-                                       expert_offset,
-                                       local_expert_num,
-                                       softmax,
-                                       norm_topk_prob,
-                                       routed_scale,
-                                       st));
-    }
-
-    if (st_.is_warm_up) {
-        std::mt19937     g;
-        const auto       expert_ids = SampleUniform(tokens, local_expert_num, experts_per_token, g);
-        std::vector<int> cnt(local_expert_num);
-        for (const auto& x : expert_ids) {
-            ++cnt[x];
-        }
-        st_.h_offsets_[0] = 0;
-        for (int i = 0; i < local_expert_num; ++i) {
-            st_.h_offsets_[i + 1] = st_.h_offsets_[i] + cnt[i];
-        }
-        TM_CUDA_CHECK(cudaMemcpyAsync(
-            st_.offsets_.data(), st_.h_offsets_.data(), sizeof(int) * (local_expert_num + 1), cudaMemcpyDefault, st));
-
-        if (st_.ep_size > 1) {
-            const auto entries = static_cast<size_t>(tokens) * experts_per_token;
-            TM_CUDA_CHECK(cudaMemsetAsync(st_.f2n_.data(), 0, sizeof(int) * entries, st));
-            TM_CUDA_CHECK(cudaMemsetAsync(st_.f2E_.data(), 0, sizeof(int) * entries, st));
-            TM_CUDA_CHECK(cudaMemsetAsync(st_.en2f_.data(), -1, sizeof(int) * entries, st));
-        }
-    }
-
-    Tensor temp{{tokens * experts_per_token, hidden_dim}, input.dtype(), input.device()};
-
-    // Masked-out tokens compact the routing tables even for ep_size == 1, so the
-    // routed count is device-side offsets_[local_expert_num] in all cases.
-    const int* num_valid_tokens = st_.offsets_.data() + local_expert_num;
-
-    auto indices = st_.f2n_.slice(0, temp.shape(0));
-    auto offsets = st_.offsets_.slice(0, local_expert_num + 1);
-
-    block.Forward(input, GroupedRoute{indices, offsets, st_.f2E_, num_valid_tokens}, temp);
-
-    // Shared expert: dense FFN on a private buffer, folded into the combine.
-    Tensor         shared_out;
-    Tensor_<float> shared_logits;
-    int            shared_begin = 0, shared_end = 0;
-    if (shared) {
-        if (shared_gate) {
-            shared_logits = Gate(input, *shared_gate);
-        }
-        shared_out = {{tokens, hidden_dim}, input.dtype(), input.device()};
-        // Sequence parallel under EP (geometry identical to the retired
-        // GetShardFfnInput); degenerates to the full batch when st_.ep_size == 1.
-        const int per = tokens / st_.ep_size, rem = tokens % st_.ep_size;
-        const int num = per + (st_.ep_rank < rem);
-        shared_begin  = st_.ep_rank * per + std::min(st_.ep_rank, rem);
-        shared_end    = shared_begin + num;
-        if (num > 0) {
-            TM_SCOPE_CALL(this->shared->Forward(input.slice(shared_begin, num), shared_out.slice(shared_begin, num)));
-        }
-        // No Clear: the fold reads only [shared_begin, shared_end), which the
-        // FFN just wrote. num == 0 ranks pass begin == end and own nothing.
-    }
-
-    TM_SCOPE_CALL(invokeMoeCombine(output,
-                                   temp,
-                                   block.w2->bias,
-                                   st_.scales_.data(),
-                                   st_.en2f_.data(),
-                                   st_.f2E_.data(),
-                                   shared_logits.data_or((float*)nullptr),
-                                   experts_per_token,
-                                   1.f / st_.mlp_tp_size,
-                                   shared_out,
-                                   shared_begin,
-                                   shared_end,
-                                   core::Context::stream().handle()));
-}
-
-#ifdef USE_NCCL
-
-void Moe::ForwardA2A(const Tensor&           input,
-                     Ref<Tensor>             output,
-                     const bool*             token_mask,
-                     const std::vector<int>& local_token_nums)
-{
-    TM_FUNCTION_SCOPE();
-
-    auto& st_ = *state_;
-
-    const MoeA2AInputPartition partition =
-        GetMoeA2AInputPartition(local_token_nums, st_.ep_size, st_.ep_rank, st_.mlp_tp_size);
-    TM_CHECK_LE(partition.max_tokens_per_rank, st_.max_token_per_rank_num);
-    Tensor in = input.slice(partition.begin, partition.size);
-    // slice token mask for current rank
-    const bool* mask = TM_CHECK_NOTNULL(token_mask) + partition.begin;
-    // deepep jit treat the max_tokens_per_rank parameter as template parameter, round it to the nearest power of two to
-    // reduce the number of functions that need to be compiled.
-    const int max_token_num_per_rank =
-        std::min(CeilPowerOfTwo(partition.max_tokens_per_rank), st_.max_token_per_rank_num);
-
-    auto&      block             = *TM_CHECK_NOTNULL(block_);
-    const int  token_num         = partition.size;
-    const int  hidden_dim        = block.hidden_dim;
-    const int  expert_num        = num_experts();
-    const int  local_expert_num  = num_local_experts();
-    const int  experts_per_token = this->experts_per_token;
-    const auto st                = core::Context::stream().handle();
-
-    Tensor_<float> logits = token_num ? Gate(in, *gate.get()) : Tensor_<float>{{0, expert_num}, kDEVICE};
-
-    if (topk_method == "noaux_tc") {
-        TM_CHECK_EQ(n_group, 1);
-        TM_CHECK_EQ(topk_group, 1);
-        TM_CHECK(scoring_func == "sigmoid" || scoring_func == "softmax")
-            << "unsupported noaux_tc scoring function: " << scoring_func;
-
-        const float* correction_bias = nullptr;
-        if (score_correction_bias && score_correction_bias.size() > 0) {
-            TM_CHECK_EQ(score_correction_bias.size(), expert_num);
-            correction_bias = score_correction_bias.data<float>();
-        }
-
-        TM_SCOPE_CALL(invokeMoeGate_NoAuxTC(st_.topk_weights_.data(),
-                                            st_.topk_indices_.data(),
-                                            logits.data_or((float*)nullptr),
-                                            mask,
-                                            correction_bias,
-                                            token_num,
-                                            expert_num,
-                                            experts_per_token,
-                                            norm_topk_prob,
-                                            routed_scale,
-                                            scoring_func == "sigmoid",
-                                            st));
-    }
-    else {
-        bool softmax = true;
-        if (topk_method == "group_limited_greedy") {
-            if (token_num) {
-                TM_SCOPE_CALL(invokeMoeSoftmaxMaskTopKGroups(
-                    logits.data(), token_num, expert_num, expert_num / n_group, topk_group, st));
-            }
-            softmax = false;
-        }
-
-        TM_SCOPE_CALL(invokeMoeGate_V2(st_.topk_weights_.data(),
-                                       st_.topk_indices_.data(),
-                                       logits.data_or((float*)nullptr),
-                                       mask,
-                                       token_num,
-                                       expert_num,
-                                       experts_per_token,
-                                       softmax,
-                                       norm_topk_prob,
-                                       routed_scale,
-                                       st));
-    }
-
-    Tensor topk_indices = {st_.topk_indices_, {token_num, experts_per_token}};
-    Tensor topk_weights = {st_.topk_weights_, {token_num, experts_per_token}};
-    Tensor scales_t;
-    Tensor dispatched;  // dispatcher-owned view; not an allocation of ours
-    TM_SCOPE_CALL(st_.dispatcher_->Dispatch(in,
-                                            topk_indices,
-                                            topk_weights,
-                                            max_token_num_per_rank,
-                                            dispatched,
-                                            scales_t,
-                                            st_.f2n_,
-                                            st_.f2E_,
-                                            st_.en2f_,
-                                            st_.offsets_));
-
-    // transpose scales to [experts_per_token, token_num] for later combine
-    Tensor scales_src = scales_t.t();
-    Tensor scales_dst = {st_.scales_, {experts_per_token, dispatched.shape(0)}};
-    auto&  stream     = core::Context::stream();
-    st_.scales_copy_ready_event_.Record(stream);
-    st_.scales_copy_stream_.Wait(st_.scales_copy_ready_event_);
-    core::GenericCopy(scales_src, scales_dst, st_.scales_copy_stream_.handle());
-    st_.scales_copy_done_event_.Record(st_.scales_copy_stream_);
-
-    Tensor     temp{{dispatched.shape(0) * experts_per_token, hidden_dim}, dispatched.dtype(), dispatched.device()};
-    const int* num_valid_tokens = st_.offsets_.data() + local_expert_num;
-
-    auto indices = st_.f2n_.slice(0, temp.shape(0));
-    auto offsets = st_.offsets_.slice(0, local_expert_num + 1);
-
-    block.Forward(dispatched, GroupedRoute{indices, offsets, st_.f2E_, num_valid_tokens}, temp);
-
-    // Shared expert: dense FFN on a private buffer. Declarations live
-    // outside the guard — the tail call below is unconditional.
-    Tensor_<float> shared_logits;
-    Tensor         shared_out;
-    if (shared && token_num > 0) {
-        if (shared_gate) {
-            shared_logits = Gate(in, *shared_gate);
-        }
-        shared_out = {{token_num, hidden_dim}, in.dtype(), in.device()};
-        TM_SCOPE_CALL(this->shared->Forward(in, shared_out));
-    }
-
-    stream.Wait(st_.scales_copy_done_event_);
-    // The A2A path never folds via the reduce — its shared fold happens in
-    // invokeMoeA2ASharedCombine below — so the shared args are null/zero.
-    TM_SCOPE_CALL(invokeMoeCombine(dispatched,
-                                   temp,
-                                   block.w2->bias,
-                                   st_.scales_.data(),
-                                   st_.en2f_.data(),
-                                   st_.f2E_.data(),
-                                   nullptr,
-                                   experts_per_token,
-                                   1.f / st_.mlp_tp_size,
-                                   Tensor{},
-                                   0,
-                                   0,
-                                   stream.handle()));
-
-    Tensor out_moe;
-    TM_SCOPE_CALL(st_.dispatcher_->Combine(dispatched, out_moe));
-
-    // Unconditional: with no shared expert this degrades to in = out_moe,
-    // which is the only place the MoE output lands in the residual stream
-    // (in aliases the caller's output tensor).
-    TM_SCOPE_CALL(
-        invokeMoeA2ASharedCombine(in, out_moe, shared_out, shared_logits.data_or((float*)nullptr), stream.handle()));
-}
-
-#else
-
-void Moe::ForwardA2A(const Tensor&, Ref<Tensor>, const bool*, const std::vector<int>&)
-{
-    TM_LOG_FATAL("DeepEP transport requires USE_NCCL");
-}
-
-#endif
-
-TM_MODULE_REGISTER_AS("MoeWeight", Moe, core::MoeConfig);
+}  // namespace
 
 TM_MODULE_METHODS(Moe, MOE_CHILDREN, MOE_PARAMS);
 

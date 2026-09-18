@@ -76,11 +76,11 @@ void Module::Run(BatchOp /*op*/, int /*phase*/, TensorMap& /*env*/)
     // default: no-op
 }
 
-void Module::bind(::turbomind::Context& ctx)
+void Module::bind(::turbomind::BindEnv& env)
 {
-    for_each_child([&ctx](const char* /*name*/, Module* child) {
+    for_each_child([&env](const char* /*name*/, Module* child) {
         if (child)
-            child->bind(ctx);
+            child->bind(env);
     });
 }
 

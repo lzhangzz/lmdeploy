@@ -3,6 +3,7 @@
 #include <future>
 #include <limits>
 #include <random>
+#include <unordered_map>
 
 #include "src/turbomind/turbomind.h"
 
@@ -18,15 +19,10 @@
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
 
-#include "src/turbomind/models/attention.h"
-#include "src/turbomind/models/decoder_layer_weight.h"
-#include "src/turbomind/models/delta_net.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
-#include "src/turbomind/models/model_weight.h"
-#include "src/turbomind/models/moe.h"
 #include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
@@ -135,62 +131,28 @@ struct TurboMind::Impl {
 
         auto& ctx = *contexts_[index];
 
-        auto ctx_guard = weights_[index]->context();
-
-        // The kind states are engine services owned by the Context:
-        // created once per rank before the walk so every module can
-        // capture it in bind(). Geometry comes from the engine param; the
-        // routed shapes from the first module of the kind (all layers
-        // share one geometry). Kept across update_params reloads — the
-        // geometry is unchanged and re-creating would re-run warm-up
-        // side effects (the DeepEP dispatcher JIT for MoE).
-        if (auto* text = weights_[index]->text_model_ptr()) {
-            Moe*                   moe  = nullptr;
-            Attention*             attn = nullptr;
-            std::vector<DeltaNet*> gdns;
-            for (int i = 0; i < text->num_layer; ++i) {
-                auto* layer = text->layer(i);
-                if (!moe && layer->moe_ffn) {
-                    moe = layer->moe_ffn.get();
-                }
-                if (!attn && layer->attention) {
-                    attn = layer->attention.get();
-                }
-                if (layer->linear_attn) {
-                    gdns.push_back(layer->linear_attn.get());
-                }
-            }
-            // The bind walk also reaches meta_experts pack modules; cover a
-            // pack-without-layers tree so the scan and the walk agree on
-            // what needs the state.
-            if (!moe && text->meta_experts) {
-                moe = dynamic_cast<Moe*>(text->meta_experts->child(std::to_string(0)));
-            }
-            // The guard above binds the weight-loading stream/pool;
-            // runtime scratch belongs to the engine's stream/allocator
-            // (where the retired executors' buffers lived, pinned staging
-            // included — CreateEngine's guard shape).
-            core::ContextGuard guard{ctx.core_stream, ctx.allocator, Allocator{kCPUpinned}};
-            if (moe && !ctx.moe_state()) {
-                ctx.set_moe_state(std::make_unique<MoeState>(engine_params_.at(index), ctx, *moe));
-            }
-            if (attn && !ctx.attention_state()) {
-                ctx.set_attention_state(
-                    std::make_unique<AttentionState>(engine_params_.at(index), ctx, phases_, *attn));
-            }
-            if (!gdns.empty() && !ctx.deltanet_state()) {
-                // The recurrent block grid spans all layers and must be
-                // registered with the (still-open) checkpoint category —
-                // the registry lives here until CreateEngine finalizes it.
-                auto& registry = *TM_CHECK_NOTNULL(cache_registries_[index]);
-                ctx.set_deltanet_state(
-                    std::make_unique<DeltaNetState>(engine_params_.at(index), registry, phases_, std::move(gdns)));
-            }
-        }
-
         // Engine-binding walk: modules capture per-rank services (the GEMM
-        // engine for Linear; the kind states created above) before first Run.
-        weights_[index]->bind(ctx);
+        // engine for Linear) before first Run, and the first module of each
+        // kind creates the kind's per-rank state, rendezvousing it through
+        // the env's shared map. Runtime scratch allocates on the engine's
+        // stream/allocator — where the retired executors' buffers lived,
+        // pinned staging included — not the weight-loading pool.
+        core::ContextGuard guard{ctx.core_stream, ctx.allocator, Allocator{kCPUpinned}};
+
+        // Kind-state rendezvous: alive only for the walk; afterwards the
+        // modules co-own the states via shared_ptr.
+        std::unordered_map<std::string, std::shared_ptr<void>> shared;
+
+        BindEnv env{
+            engine_params_.at(index),
+            ctx,
+            *TM_CHECK_NOTNULL(cache_registries_[index]),
+            *ctx.is_warm_up,
+            shared,
+            phases_,
+        };
+
+        weights_[index]->bind(env);
         TM_CUDA_CHECK(cudaGetLastError());
     }
 
@@ -376,9 +338,6 @@ void TurboMind::Impl::CreateContext(int index)
         // Layout: (outer, ep, mlp_tp)
         c.d_mlp_group = 0;
         if (p.ep_size > 1) {
-            if (p.moe_a2a_backend == "auto") {
-                p.moe_a2a_backend = (p.nnodes > 1) ? "deepep" : "default";
-            }
             c.h_ep_group = c.h_comm->Split(p.mlp_tp_rank, 0);
             // For moe-args, we actually use `AllreduceResidualRMSnorm` to do the dispatch / combine
             // For moe-a2a, we omit the all-gather before dispatch and omit the all-reduce after combine.
@@ -635,11 +594,11 @@ core::Module* TurboMind::root(int index)
     return impl_->weights_[index].get();
 }
 
-std::pair<core::Stream, core::Allocator> TurboMind::weight_context(int index)
+std::tuple<core::Stream, core::Allocator, const EngineParam*> TurboMind::weight_context(int index)
 {
     auto& root = impl_->weights_.at(index);
     TM_CHECK(root != nullptr);
-    return {root->stream(), root->allocator()};
+    return {root->stream(), root->allocator(), &impl_->engine_params_.at(index)};
 }
 
 gemm::Gemm& TurboMind::gemm(int index)

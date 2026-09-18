@@ -107,10 +107,17 @@ void Attention::register_cache(CacheRegistry& registry)
     prefix_registered_ = true;
 }
 
-void Attention::bind(Context& ctx)
+void Attention::bind(BindEnv& env)
 {
-    Module::bind(ctx);
-    state_ = TM_CHECK_NOTNULL(ctx.attention_state());
+    Module::bind(env);
+    if (auto it = env.shared.find("attention"); it != env.shared.end()) {
+        state_ = std::static_pointer_cast<AttentionState>(it->second);
+    }
+    else {
+        // First Attention module of the walk: create the per-rank state.
+        state_ = std::make_shared<AttentionState>(env.engine, env.context, env.phases, *this);
+        env.shared.emplace("attention", state_);
+    }
     if (prefix_registered_) {
         state_->prefix_base = std::min(state_->prefix_base, prefix_offset_);
     }

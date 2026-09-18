@@ -70,7 +70,7 @@ public:
     bool is_graph_compatible() const;
 
     /// Capture the per-rank GEMM engine from the engine root.
-    void bind(Context& ctx) override;
+    void bind(BindEnv& env) override;
 
     // ----- execution (weight argument dropped: it is *this) -----
 
@@ -177,7 +177,7 @@ private:
                                                                         Tensor&                 output,
                                                                         Tensor&                 output_scales) const;
 
-    /// The captured engine; never owned. Null until bind(Context&).
+    /// The captured engine; never owned. Null until bind(BindEnv&).
     GEMMEngine* engine_{};
 
     bool                            has_bias_ = false;
