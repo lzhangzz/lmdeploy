@@ -191,9 +191,9 @@ untouched, and the pattern is recorded (ADR 0001, glossary) for future kinds.
   executable-modules spec carries the amendment notes.
 - The landed stage-2 gate ran all four models at tp=1/ep=1 — the DeepEP path has
   never been part of the standing gate matrix in this repo (the normative script
-  cannot express a `deepep` config on a single node). After this effort landed, a
-  one-off ep=2/tp=2 run verified the DeepEP implementation end-to-end (dispatcher
-  init, bind-time a2a JIT, forward dispatch/combine) with a meaningful 256-token
-  response.
+  cannot express a `deepep` config on a single node). After this effort landed,
+  one-off runs at ep=2/4/8 (tp matching ep) verified the DeepEP implementation
+  end-to-end at every size (dispatcher init, bind-time a2a JIT, forward
+  dispatch/combine), each with a meaningful 256-token response.
 - All Qwen3.5 models are GDN models, so Qwen3.5-35B-A3B provides MoE + GDN
   coverage in a single default-path run.

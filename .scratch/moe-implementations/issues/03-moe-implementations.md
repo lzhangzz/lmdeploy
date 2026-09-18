@@ -90,3 +90,11 @@ inference 2.8 s). Two driver corrections along the way are environment
 facts, not code: the ep spelling is `tp=N, ep=N` (enforced by
 `derive_parallel_config`), and the one-off driver must not live in `/tmp`
 directly (an unrelated `/tmp/h2.py` shadows the `h2` package).
+
+### DeepEP verification: ep=4 and ep=8 (2026-09-18, same day)
+
+Same driver and model, `tp=4/ep=4` on 4 GPUs and `tp=8/ep=8` on 8 GPUs:
+every rank initialized the dispatcher's NCCL symmetric memory, and forward
+dispatch/combine produced a meaningful 256-token response at both sizes
+(load 70.3 s / 67.7 s — the bind-time a2a JIT dominates — inference 2.7 s /
+4.5 s). DeepEP is now verified end-to-end at ep=2, 4, and 8.

@@ -38,10 +38,10 @@ all layers without `Context` becoming a god object.
   deleted; Attention/DeltaNet states move to the same map rendezvous.
 - Gate is compile + default-path run; the normative gate matrix still does
   not include DeepEP (`scripts/test_turbomind_model.py` cannot express
-  `moe_a2a_backend="deepep"` on a single node). A one-off verification run
-  after landing (ep=2/tp=2, bf16, 2 GPUs, one node) did execute the DeepEP
-  implementation end-to-end — dispatcher init with NCCL symmetric memory,
-  bind-time a2a JIT, dispatch/combine in forward — with a meaningful
-  256-token response.
+  `moe_a2a_backend="deepep"` on a single node). One-off verification runs
+  after landing (bf16, one node, ep=2/4/8 — tp matching ep, 2/4/8 GPUs) did
+  execute the DeepEP implementation end-to-end at every size — dispatcher
+  init with NCCL symmetric memory on each rank, bind-time a2a JIT,
+  dispatch/combine in forward — each with a meaningful 256-token response.
 - Python surface unchanged (`create_module(cfg)`; the standalone `Module.bind(context)`
   pybind shim assembles a degenerate `BindEnv` internally).
