@@ -12,7 +12,7 @@ The names are translated onto the canonical meta-MoE layout
 loading helpers below. Each pack is loaded exactly once, as a model-level
 ``meta_experts`` child of ``ModelWeight``. Per-layer MoE weights carry only
 their own ``shared_gate``/``shared_expert`` and are wired to their pack via
-``MoeWeight::set_meta_pack``; ``MoeWeight::prepare()`` aliases the pack's
+``Moe::set_meta_pack``; ``Moe::prepare()`` aliases the pack's
 routed gate/expert tensors through that pointer. Groups are strided
 (``layer_id % n_groups``) so each pack aligns with the repeating layer-type
 cycle (3×DeltaNet + 1×Attn).
@@ -76,7 +76,7 @@ def build_meta_experts(text_model):
 
     Pack ``g`` holds the routed gate (``meta_experts_gate.{g}``) and the
     EP-sharded packed experts (``meta_experts.{g}``); it is a full routed
-    ``MoeWeight`` prepared exactly once by the default recursion. The
+    ``Moe`` module prepared exactly once by the default recursion. The
     per-group BuiltModules are stashed on the text model so
     ``build_meta_moe_layer`` can wire each layer weight to its pack.
     """
@@ -106,7 +106,7 @@ def build_meta_experts(text_model):
 def build_meta_moe_layer(text_model, pfx, layer_id: int):
     """Per-layer MoE weight: the layer's own shared gate/expert, wired to
     its shared meta pack. Routed gate/experts are not loaded here — the
-    C++ ``MoeWeight::prepare()`` aliases them through the wired pointer.
+    C++ ``Moe::prepare()`` aliases them through the wired pointer.
 
     Groups stride by n_groups so each meta pack aligns with the repeating
     layer-type cycle (3×DeltaNet MoE + 1×Attn MoE). Contiguous
@@ -119,7 +119,7 @@ def build_meta_moe_layer(text_model, pfx, layer_id: int):
     m = MoeBuilder(cfg, text_model._ctx, ep=text_model._ep)
     m.add_gate('shared_gate', text_model._linear(pfx + 'shared_expert_gate'))
     # Attach the shared expert before build(): post-build child assignment
-    # raises, and the C++ MoeWeight owns it as the `shared` child.
+    # raises, and the C++ Moe module owns it as the `shared` child.
     m.shared = text_model.ffn(
         pfx + 'shared_expert',
         text_model.cfg.shared_expert_intermediate_size,
