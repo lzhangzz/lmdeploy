@@ -66,9 +66,9 @@ struct DeltaNetBatch {
     uint64_t wave{};  // setup wave that last filled this slot (order-independent guard)
 };
 
-/// Shared per-rank GDN state — the retired executor's state, created by
-/// the first DeltaNet module in the bind walk and rendezvoused through the
-/// BindEnv shared map; every DeltaNet module of the rank co-owns it.
+/// Shared per-rank GDN state — created by the first DeltaNet module in
+/// the bind walk and rendezvoused through the BindEnv shared map; every
+/// DeltaNet module of the rank co-owns it.
 /// Registers the per-rank recurrent block grid (one composite part per
 /// (layer-group, head-group) block) with the checkpoint category at
 /// creation — during bind, before category finalization; conv bytes are

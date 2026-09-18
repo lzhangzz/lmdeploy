@@ -117,9 +117,9 @@ struct AttentionBatch {
     uint64_t wave{};  // setup wave that last filled this slot (order-independent guard)
 };
 
-/// Shared per-rank attention state — the retired executor's state, created
-/// by the first Attention module in the bind walk and rendezvoused through
-/// the BindEnv shared map; every Attention module of the rank co-owns it.
+/// Shared per-rank attention state — created by the first Attention
+/// module in the bind walk and rendezvoused through the BindEnv shared
+/// map; every Attention module of the rank co-owns it.
 /// Owns the per-phase batch slots, the fp32 split-KV workspace, pinned
 /// staging, the CP post-context, and the aux stream/events used to overlap
 /// prefill with decode.

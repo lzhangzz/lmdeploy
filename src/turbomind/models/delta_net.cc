@@ -116,8 +116,10 @@ void DeltaNet::bind(BindEnv& env)
             << "DeltaNet parent chain is not a decoder-layer list: " << layers->full_path();
         std::vector<DeltaNet*> modules;
         for (int i = 0; i < static_cast<core::ModuleList*>(layers)->size(); ++i) {
-            auto* layer = static_cast<DecoderLayerWeight*>(layers->child(std::to_string(i)));
-            if (auto* gdn = layer->linear_attn.get()) {
+            auto* layer = layers->child(std::to_string(i));
+            TM_CHECK(std::string_view{layer->type()} == "DecoderLayerWeight")
+                << "unexpected child in decoder-layer list: " << layer->full_path();
+            if (auto* gdn = static_cast<DecoderLayerWeight*>(layer)->linear_attn.get()) {
                 modules.push_back(gdn);
             }
         }

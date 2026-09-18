@@ -53,3 +53,20 @@ All seams green on the landed code (commit d0d5f6213, 2026-09-18):
   creation; ADR 0001, the spec, and the executable-modules spec amendment
   no longer describe `update_params` reloads (unsupported per user,
   2026-09-18).
+
+### Review follow-up (same day)
+
+Two-axis review (standards + spec) vs `ef0fe14c5` landed four small fixes on
+top of d0d5f6213: two glossary naming breaches in comments (attention/delta
+net "executor" phrasing, a "backend" noun in the Python normalization
+comment), a type check on the DecoderLayerWeight cast in DeltaNet's sibling
+climb, and a loud `TM_CHECK(engine.ep_size > 1)` in `MoeDeepEPState` — the
+string-only factory selects DeepEP for `moe_a2a_backend="deepep"` +
+`ep_size == 1` (a misconfiguration the old code silently degraded to the
+default transport), and the DeepEP side now rejects it precisely instead of
+building a dispatcher on the never-split expert-parallel comm. The spec's
+ambient-parking wording was amended to the landed guard mechanism. Post-fix
+gate: `ninja` clean; `Qwen/Qwen3.5-35B-A3B` answers 256 meaningful tokens.
+Review findings intentionally not acted on (settled design): the inline
+find-or-create rendezvous (no helper indirection), the type-erased map with
+string keys, and the per-implementation state structs without a shared base.

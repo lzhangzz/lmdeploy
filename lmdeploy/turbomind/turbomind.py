@@ -89,7 +89,7 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = parallel.mlp_dp_size
         cfg.mlp_tp_size = parallel.mlp_tp_size
     # Resolve the transport policy here so the engine (and the MoE factory)
-    # only ever sees a concrete backend string.
+    # only ever sees a concrete moe_a2a_backend string.
     if cfg.moe_a2a_backend == 'auto':
         cfg.moe_a2a_backend = 'deepep' if cfg.ep > 1 and cfg.nnodes > 1 else 'default'
     if cfg.ep > 1:

@@ -110,10 +110,11 @@ untouched, and the pattern is recorded (ADR 0001, glossary) for future kinds.
 - **Registry factory.** One custom factory callable registered under the frozen
   `"MoeWeight"` string (the registry already supports arbitrary factories)
   constructs the selected subclass.
-- **Selection input.** The ambient per-rank EngineParam, stored into the
-  thread-local build context during context creation and read at module
-  construction. String-only semantics: `"default"` → default subclass,
-  `"deepep"` → DeepEP subclass, anything else fatal; the bfloat16 check lives on
+- **Selection input.** The ambient per-rank EngineParam, parked on the
+  module-build thread by the per-rank weight-context guard (beside the
+  stream/allocator it pushes) and read at module construction. String-only
+  semantics: `"default"` → default subclass, `"deepep"` → DeepEP subclass,
+  anything else fatal; the bfloat16 check lives on
   the DeepEP side; no expert-parallel-size conditioning.
 - **Config purity.** The MoE config class is untouched — a constant model
   declaration.

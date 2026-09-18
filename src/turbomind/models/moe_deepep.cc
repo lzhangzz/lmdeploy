@@ -37,6 +37,8 @@ MoeDeepEPState::MoeDeepEPState(const EngineParam& engine, const Context& ctx, co
 {
     TM_CHECK(engine.data_type == kBfloat16)
         << "engine.data_type only support bfloat16 for now, got " << engine.data_type;
+    TM_CHECK(engine.ep_size > 1) << "DeepEP transport requires expert parallelism (ep_size > 1), got ep_size = "
+                                 << engine.ep_size;
 #ifdef USE_NCCL
     InitA2A(ctx, weights);
 #else
