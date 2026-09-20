@@ -53,11 +53,11 @@ checks.
 - No public interface changes; no kernel changes
 
 **Acceptance criteria:**
-- [ ] `layer_state_offset` uses the shared cell-elements product, not
+- [x] `layer_state_offset` uses the shared cell-elements product, not
       `head_dim_` squared
-- [ ] The 128/128 construction checks still stand (kernels hard-code 128
+- [x] The 128/128 construction checks still stand (kernels hard-code 128
       layouts)
-- [ ] Build green; GDN model via `scripts/test_turbomind_model.py` produces
+- [x] Build green; GDN model via `scripts/test_turbomind_model.py` produces
       at least 128 meaningful tokens
 
 **Out of scope:**
@@ -69,11 +69,14 @@ checks.
 Implemented as briefed (2026-09-20, `37c9cff3f`): the local
 `cell_elements` product in the `DeltaNetState` ctor was promoted to the
 member `cell_elements_` (`key_head_dim * value_head_dim`, computed once
-from the first module) and now feeds every sizing and offset site — the
+from the first module) and now feeds every cell-size site — the
 linear-state validation, `block_bytes_`, and `layer_state_offset`.
 `head_dim_` remains for planning (it is the key head dim the GDR kernels
 plan against); only the cell-size arithmetic unified. The 128/128
-construction checks stand unchanged.
+construction checks stand unchanged. Review note: other sizing still
+leans on key==value equality (`head_dim_` used as the value dim in the
+recurrent-layout arithmetic, literal 128s in kernel layouts) —
+asymmetric dims remain out of scope, per the brief.
 
 Gate: `ninja` clean; `Qwen/Qwen3.5-35B-A3B-FP8` tp=1 via
 `scripts/test_turbomind_model.py` — 256/256 meaningful tokens, exit 0.

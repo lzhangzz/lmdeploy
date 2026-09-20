@@ -55,10 +55,10 @@ fails loudly on overrun.
 - No kernel behavior or family-selection changes
 
 **Acceptance criteria:**
-- [ ] `tensormaps_size = 16384 * 128` with a correct comment; allocation
+- [x] `tensormaps_size = 16384 * 128` with a correct comment; allocation
       equals it (2 MiB, ~30 MiB/rank recovered)
-- [ ] Every tensormaps consumer is grep-verifiably bound-checked
-- [ ] Build green; GEMM warm-up plus a model gate (at least 128 meaningful
+- [x] Every tensormaps consumer is grep-verifiably bound-checked
+- [x] Build green; GEMM warm-up plus a model gate (at least 128 meaningful
       tokens)
 
 **Out of scope:** barriers/partials sizing; family selection.
@@ -66,10 +66,11 @@ fails loudly on overrun.
 ## Answer
 
 Implemented as briefed with the maintainer amendment (2026-09-20):
-`tensormaps_size` is now `16384 * 128` (2 MiB) with a corrected slot
-comment (a `CUtensorMap` is 128 B, so the buffer holds up to 16k maps —
-the old comment's "4096" undercounted the 8192-slot contract), and the
-engine allocates exactly `tensormaps_size` instead of `partials_size`
+`tensormaps_size` is now `Gemm::kTensorMapsSize` = `16384 * 128` (2 MiB,
+named beside `kBarriersSize`/`kPartialsSize` per review) and holds up to
+16k maps — the old comment's "4096" undercounted the 8192-slot contract;
+the engine allocates exactly `tensormaps_size` instead of
+`partials_size`
 (~30 MiB recovered per rank). The plain-SM90 grouped path gained the
 bound check its sibling families already had: before
 `Gemm::PrepareTmaDescs`, `num_groups * Gemm::kTmaDescNum *
