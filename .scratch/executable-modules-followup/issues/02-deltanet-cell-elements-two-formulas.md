@@ -12,7 +12,7 @@ compute wrong in-block recurrent offsets with no check failing.
 (cheapest), or store both dims and use key×value in the offset math.
 
 **Category:** bug
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 ## Comments
 
@@ -25,3 +25,41 @@ state-size check and `block_bytes_`); `layer_state_offset` separately uses
 so the two formulas agree by construction today — the fix is consistency
 (promote `cell_elements` to a member and use it in `layer_state_offset`),
 not a new invariant. Kept needs-triage per maintainer.
+
+2026-09-20: moved to ready-for-agent per maintainer after review; brief below.
+
+## Agent Brief
+
+**Category:** bug
+**Summary:** DeltaNet computes its recurrent cell size two ways; unify on one formula
+
+**Current behavior:** `DeltaNetState` derives `head_dim_` from the first
+module's key head dim and computes per-layer in-block recurrent offsets as
+`head_dim_ * head_dim_`, while every other state-sizing site (the
+linear-state validation and the recurrent block bytes) uses
+`key_head_dim * value_head_dim` from the same first module. The two agree
+only because both dims are hard-checked to 128 at construction; the offset
+path itself enforces nothing.
+
+**Desired behavior:** one `cell_elements` value (`key_head_dim *
+value_head_dim`, computed once from the first module) feeds every sizing and
+offset computation, including `layer_state_offset`. Numerically identical
+for every current checkpoint; the invariant stops depending on the 128
+checks.
+
+**Key interfaces:**
+- `DeltaNetState`: promote the local cell-elements product to a member and
+  use it in `layer_state_offset`
+- No public interface changes; no kernel changes
+
+**Acceptance criteria:**
+- [ ] `layer_state_offset` uses the shared cell-elements product, not
+      `head_dim_` squared
+- [ ] The 128/128 construction checks still stand (kernels hard-code 128
+      layouts)
+- [ ] Build green; GDN model via `scripts/test_turbomind_model.py` produces
+      at least 128 meaningful tokens
+
+**Out of scope:**
+- Supporting asymmetric key/value head dims (the kernels hard-code 128)
+- Any change to `TM_GDN_BLOCK_CONFIG` semantics

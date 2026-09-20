@@ -33,3 +33,10 @@ own — nothing enforces the uniformity. Envisioned check: compare
 `rope_kernel_param()` against the exemplar's when a module joins an existing
 state in bind (needs a small accessor plus a field-wise compare;
 `RopeKernelParam` has no `operator==`). Kept needs-triage per maintainer.
+
+2026-09-20: deferred by maintainer — "the problem is much deeper than it
+seems." Treated as a signal that the exemplar-sized shared-state pattern
+(first-bound module defines the config every other module must match) may
+need a design answer rather than a per-field guard; possibly related to the
+shared-state design call in issue 01. Do not re-propose the narrow TM_CHECK
+without revisiting that framing.

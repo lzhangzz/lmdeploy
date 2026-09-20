@@ -34,3 +34,14 @@ the module, and the Context's sole Python owner is `Linear._engine` — so
 makes bound modules pin the engine; surviving Weights keep working instead
 of dangling after the Linear dies. `Linear.close()` must document that bound
 weights pin the engine. Kept needs-triage per maintainer.
+
+2026-09-20: under discussion — the maintainer questions whether the
+current linear.py surface (Weight handle + Linear-executes-Weight) is right
+at all; see issue 10. Nothing decided. The keep-alive fix analyzed above
+stands as the narrow fix if the surface survives the discussion unchanged;
+this ticket stays open regardless of issue 10's outcome.
+
+2026-09-20 (later): issue 10's direction is maintainer-approved — one
+per-weight Linear that holds its weight and pins its device engine. The
+dangle this ticket describes cannot arise in that shape: resolved by
+design; close when 10 lands.
