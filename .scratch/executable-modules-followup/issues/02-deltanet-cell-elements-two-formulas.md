@@ -12,7 +12,7 @@ compute wrong in-block recurrent offsets with no check failing.
 (cheapest), or store both dims and use key×value in the offset math.
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Comments
 
@@ -63,3 +63,17 @@ checks.
 **Out of scope:**
 - Supporting asymmetric key/value head dims (the kernels hard-code 128)
 - Any change to `TM_GDN_BLOCK_CONFIG` semantics
+
+## Answer
+
+Implemented as briefed (2026-09-20, `37c9cff3f`): the local
+`cell_elements` product in the `DeltaNetState` ctor was promoted to the
+member `cell_elements_` (`key_head_dim * value_head_dim`, computed once
+from the first module) and now feeds every sizing and offset site — the
+linear-state validation, `block_bytes_`, and `layer_state_offset`.
+`head_dim_` remains for planning (it is the key head dim the GDR kernels
+plan against); only the cell-size arithmetic unified. The 128/128
+construction checks stand unchanged.
+
+Gate: `ninja` clean; `Qwen/Qwen3.5-35B-A3B-FP8` tp=1 via
+`scripts/test_turbomind_model.py` — 256/256 meaningful tokens, exit 0.

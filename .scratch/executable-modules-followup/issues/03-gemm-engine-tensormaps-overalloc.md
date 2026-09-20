@@ -12,7 +12,7 @@ VRAM burned on every rank at engine creation.
 writes past 1 MiB of tensor-map space.
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Comments
 
@@ -62,3 +62,26 @@ fails loudly on overrun.
       tokens)
 
 **Out of scope:** barriers/partials sizing; family selection.
+
+## Answer
+
+Implemented as briefed with the maintainer amendment (2026-09-20):
+`tensormaps_size` is now `16384 * 128` (2 MiB) with a corrected slot
+comment (a `CUtensorMap` is 128 B, so the buffer holds up to 16k maps —
+the old comment's "4096" undercounted the 8192-slot contract), and the
+engine allocates exactly `tensormaps_size` instead of `partials_size`
+(~30 MiB recovered per rank). The plain-SM90 grouped path gained the
+bound check its sibling families already had: before
+`Gemm::PrepareTmaDescs`, `num_groups * Gemm::kTmaDescNum *
+sizeof(CUtensorMap) + (num_groups + 1) * sizeof(int)` is checked against
+`tensormaps_size` — the same formula the bf16/mixed/mxfp4 families use,
+verified against the `prepare_moe_tma_descs_sm90_fp8` write pattern (4
+descs/group blocked-A, 2/group indexed-A via `Gemm::kTmaDescNum`, plus a
+`num_groups + 1`-entry offsets tail). Grep-verified complete consumer
+set behind checks: sm90, sm90_bf16, sm90_mixed, sm90_mxfp4_fp8
+(`tma_workspace_bytes`), cublas (`total_bytes`); launch-arg passes hand
+the kernel the same region the adjacent check sized.
+
+Gate: `ninja` clean; GEMM warm-up plus `Qwen/Qwen3.5-35B-A3B-FP8` tp=1
+via `scripts/test_turbomind_model.py` — 256/256 meaningful tokens,
+exit 0.
