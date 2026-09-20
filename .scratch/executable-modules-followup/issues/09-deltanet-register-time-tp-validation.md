@@ -20,7 +20,7 @@ already carries engine values, rather than relying on the ambient guard the
 MoE factory uses at create time.
 
 **Category:** bug (latent)
-**Status:** needs-triage
+**Status:** wontfix
 
 ## Comments
 
@@ -32,3 +32,12 @@ guard, and the Python driver invokes it outside any weight context — so the
 engine tp must travel through the registry's engine-derived surface (as
 `set_layout` already does), not the ambient guard the MoE factory uses at
 create time. Kept needs-triage per maintainer.
+
+2026-09-20: closed wontfix per maintainer. Verified single-source
+derivation: the module config's tp_size is stamped from the model tp group,
+which the model loader builds directly as `ec.attn_tp_size *
+ec.attn_cp_size` (model_loader.py:50 → models/qwen3_5.py:187 →
+builders/deltanet.py:74) — the same engine-config values the C++
+EngineParam carries. The mismatch this ticket guarded against cannot arise
+on any reachable path; the bind-time `TM_CHECK_EQ` (RegisterLayer) remains
+as the drift tripwire if a second derivation ever appears.

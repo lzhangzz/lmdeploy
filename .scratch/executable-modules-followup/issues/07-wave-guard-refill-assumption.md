@@ -29,3 +29,13 @@ not advance the wave); `contracts.gated-deltanet` shares the guard. Proposed
 addition: same-phase `kSetup` repeats are only correct with an intervening
 non-setup op. Doc-only plus a comment at the guard. Kept needs-triage per
 maintainer.
+
+2026-09-20: maintainer rejects the wave design itself — "I don't think the
+`wave` is the right design." Documenting its cadence assumption would
+cement a flawed mechanism. Structural critique: implicit coordination
+(fill ownership decided by walk order; correctness depending on a shadow
+copy of the engine's op sequencing — `kForward` not ticking is the leak);
+DeltaNet already uses a conflicting mechanism (layer-0 gate for kPrepare
+batch work) alongside the wave. Folded into issue 11 with 01 and 06: the
+shared per-rank kind-state design question. Do not implement the doc-only
+fix.

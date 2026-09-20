@@ -40,3 +40,7 @@ seems." Treated as a signal that the exemplar-sized shared-state pattern
 need a design answer rather than a per-field guard; possibly related to the
 shared-state design call in issue 01. Do not re-propose the narrow TM_CHECK
 without revisiting that framing.
+
+2026-09-20: folded into issue 11 with 01 and 07 per maintainer — the three
+are symptoms of the shared per-rank kind-state design question (sizing,
+membership, batch-level coordination).

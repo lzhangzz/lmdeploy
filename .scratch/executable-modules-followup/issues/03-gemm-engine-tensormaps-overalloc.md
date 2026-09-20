@@ -12,7 +12,7 @@ VRAM burned on every rank at engine creation.
 writes past 1 MiB of tensor-map space.
 
 **Category:** bug
-**Status:** needs-triage
+**Status:** ready-for-agent
 
 ## Comments
 
@@ -24,3 +24,41 @@ cublas.cu), but `kernel_impl_sm90.h` consumes the tensormaps workspace with
 no visible bound check — that path must be audited (and checked) before
 shrinking the allocation to `tensormaps_size` (~1 MiB vs the 32 MiB
 `partials_size` currently passed). Kept needs-triage per maintainer.
+
+2026-09-20: moved to ready-for-agent per maintainer, with amendment: raise
+the ceiling itself to `16k * 128` (2 MiB), not merely allocate the old 1 MiB
+contract. Brief below.
+
+## Agent Brief
+
+**Category:** bug
+**Summary:** tensor-map workspace: raise the contract to 16k×128 and allocate it exactly
+
+**Current behavior:** the per-rank GEMM engine declares the tensor-map
+contract as `tensormaps_size = 8192 * 128` (~1 MiB; the size comment
+understates the slot count) but allocates the buffer with `partials_size`
+(32 MiB). Most kernel families bound-check their TMA workspace needs
+against `tensormaps_size` before use; the plain SM90 path passes the buffer
+into TMA-descriptor preparation and the kernel launch with no visible bound
+check.
+
+**Desired behavior:** `tensormaps_size` becomes `16384 * 128` (2 MiB, double
+the current contract), the size comment is corrected to match reality, the
+engine allocates exactly `tensormaps_size`, and every consumer of the
+tensor-map workspace checks its byte need against `tensormaps_size` and
+fails loudly on overrun.
+
+**Key interfaces:**
+- The GEMM engine workspace construction: sizes and allocation
+- The plain-SM90 kernel-impl TMA path: add the bound check its sibling
+  families already have
+- No kernel behavior or family-selection changes
+
+**Acceptance criteria:**
+- [ ] `tensormaps_size = 16384 * 128` with a correct comment; allocation
+      equals it (2 MiB, ~30 MiB/rank recovered)
+- [ ] Every tensormaps consumer is grep-verifiably bound-checked
+- [ ] Build green; GEMM warm-up plus a model gate (at least 128 meaningful
+      tokens)
+
+**Out of scope:** barriers/partials sizing; family selection.

@@ -19,7 +19,7 @@ state-free bind path, (b) keep the sharing and document it as a contract
 state per model tower. This is a design call, not a mechanical fix.
 
 **Category:** enhancement
-**Status:** ready-for-human
+**Status:** needs-triage
 
 ## Comments
 
@@ -61,3 +61,9 @@ fix.
 - [ ] One of (a)/(b)/(c) is chosen and recorded (ADR if it sets precedent)
 - [ ] Code or contracts match the choice
 - [ ] The walk-order dependence is either gone or documented
+
+2026-09-20: folded into issue 11 per maintainer — the (a)/(b)/(c) decision
+above is now one input to the shared per-rank kind-state design question
+(what belongs to the state, what to per-layer modules, how batch-level ops
+are dispatched once per pass). The human brief stands as the menu for this
+sub-question; status returned to needs-triage while 11 is open.
