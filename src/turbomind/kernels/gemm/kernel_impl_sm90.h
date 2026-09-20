@@ -305,6 +305,9 @@ public:
 
         // Grouped: prepare_moe_tma_descs rebases per-expert A/B/U/C before GEMM launch.
         if constexpr (is_grouped_gemm) {
+            const size_t tma_workspace_bytes =
+                (size_t)num_groups * Gemm::kTmaDescNum * sizeof(CUtensorMap) + (size_t)(num_groups + 1) * sizeof(int);
+            TM_CHECK_LE(tma_workspace_bytes, workspace.tensormaps_size);
             sched.offsets_ = Gemm::PrepareTmaDescs(tm_a,
                                                    tm_b,
                                                    tm_u,
