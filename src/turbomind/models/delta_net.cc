@@ -178,8 +178,8 @@ DeltaNetState::DeltaNetState(const EngineParam&     engine,
         << recurrent_state_dtype << " input_dtype=" << input_dtype_;
 
     const auto [linear_state_size, conv_state_size] = get_lc_state_size(first, tp_size);
-    const int cell_elements                         = first.key_head_dim * first.value_head_dim;
-    TM_CHECK_EQ(linear_state_size, num_v_heads_ * cell_elements);
+    cell_elements_                                  = first.key_head_dim * first.value_head_dim;
+    TM_CHECK_EQ(linear_state_size, num_v_heads_ * cell_elements_);
 
     int layers_per_block = 1;
     int heads_per_block  = num_v_heads_;
@@ -196,7 +196,7 @@ DeltaNetState::DeltaNetState(const EngineParam&     engine,
     num_head_groups_  = ceil_div(num_v_heads_, heads_per_block_);
     num_layer_groups_ = ceil_div(layer_num_, layers_per_block_);
     num_blocks_       = num_layer_groups_ * num_head_groups_;
-    block_bytes_      = byte_size(recurrent_state_dtype, size_t(layers_per_block_) * heads_per_block_ * cell_elements);
+    block_bytes_      = byte_size(recurrent_state_dtype, size_t(layers_per_block_) * heads_per_block_ * cell_elements_);
 
     auto require_mode = [&](linear_attn::delta_rule::GdrMode mode) {
         using namespace linear_attn::delta_rule;
@@ -299,8 +299,7 @@ int DeltaNetState::RegisterLayer(const DeltaNet& module)
 
 int64_t DeltaNetState::layer_state_offset(int layer_index) const
 {
-    const int cell_elements = head_dim_ * head_dim_;
-    return (layer_index % layers_per_block_) * heads_per_block_ * cell_elements;
+    return (layer_index % layers_per_block_) * heads_per_block_ * cell_elements_;
 }
 
 // ---------------------------------------------------------------------------

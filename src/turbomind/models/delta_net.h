@@ -123,6 +123,7 @@ struct DeltaNetState {
     int                                     num_k_heads_{};
     int                                     num_v_heads_{};
     int                                     head_dim_{};
+    int                                     cell_elements_{};  // key_head_dim * value_head_dim
     int                                     gate_stride_{};
     linear_attn::delta_rule::GatedDeltaRule delta_rule_;
 
