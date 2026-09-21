@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Torch-facing TurboMind linear API.
 
-Use ``Linear.get_weight_plan()`` followed by ``prepare_weight()`` or
-``fuse_weight()`` to create a reusable ``Weight``, then obtain an ``ExecPlan``
-with ``get_exec_plan()`` or ``tune()`` and execute with ``Linear`` or
-``forward_moe()``. Execution uses the current Torch CUDA stream and allocates
-outputs from the plan when destinations are omitted.
+Use ``get_engine().get_weight_plan()`` to select a ``WeightPlan``, construct a
+``Linear`` from the plan and land a weight on it with ``prepare_weight()`` or
+``fuse_weight()``, then obtain an ``ExecPlan`` with ``get_exec_plan()`` or
+``tune()`` and execute with the ``Linear`` itself or ``forward_moe()``.
+Execution uses the current Torch CUDA stream and allocates outputs from the
+plan when destinations are omitted.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from . import _tm
 if TYPE_CHECKING:
     from .weight_format import WeightFormat
 
-__all__ = ['ExecPlan', 'Linear', 'Weight', 'WeightPlan', 'get_linear']
+__all__ = ['ExecPlan', 'Linear', 'LinearEngine', 'WeightPlan', 'get_engine']
 
 
 _TORCH_TO_TM_NAME = {
@@ -104,39 +105,19 @@ class ExecPlan:
         )
 
 
-class Weight:
-    """Prepared native weight handle owned by the caller."""
+class LinearEngine:
+    """The ambient per-device engine: weight-family selection, kernel-selection
+    records, and the native context that ``Linear`` modules bind to."""
 
-    __slots__ = ('_impl', '_experts')
-
-    @property
-    def is_graph_compatible(self) -> bool:
-        """Return whether the prepared family supports CUDA graph capture."""
-        return bool(self._impl.is_graph_compatible)
-
-    def close(self) -> None:
-        """Release the prepared weight and any retained expert weights."""
-        experts = self._experts
-        self._impl = None
-        self._experts = None
-        if experts is not None:
-            for expert in experts:
-                expert.close()
-
-
-class Linear:
-    """Plan, prepare, tune, and execute TurboMind linear operations from
-    Torch."""
-
-    __slots__ = ('device', '_engine', '_context', '__weakref__')
+    __slots__ = ('device', '_impl', '_context', '__weakref__')
 
     def __init__(self):
         """Create an engine-root Context for the current CUDA device."""
         self.device = torch.device('cuda', torch.cuda.current_device())
-        self._engine = None
+        self._impl = None
         self._context = None
         with torch.cuda.device(self.device):
-            self._engine = _tm.Context(self.device.index)
+            self._impl = _tm.Context(self.device.index)
 
     def __del__(self):
         """Release the engine root when its last reference is dropped."""
@@ -161,7 +142,7 @@ class Linear:
     def close(self) -> None:
         """Release the engine root on its device."""
         with self._activate():
-            self._engine = None
+            self._impl = None
         self._context = None
 
     def get_weight_plan(
@@ -184,7 +165,7 @@ class Linear:
         query.output_dtype = _to_tm_dtype(dtype if output_dtype is None else output_dtype)
         query.grouped = grouped
 
-        impl = self._engine.gemm().get_weight_plan(query)
+        impl = self._impl.gemm().get_weight_plan(query)
         if impl is None:
             raise NotImplementedError(
                 f'no GEMM family accepts format={data_format}, dtype={dtype}, '
@@ -204,6 +185,57 @@ class Linear:
         result._grouped = grouped
         result._shape_constraints = (minimum, alignment)
         return result
+
+    def import_records(self, path: str | os.PathLike[str]) -> int:
+        """Import cached kernel-selection records from a file."""
+        return int(self._impl.import_records(os.fspath(path)))
+
+    def export_records(self, path: str | os.PathLike[str]) -> int:
+        """Export cached kernel-selection records to a file."""
+        return int(self._impl.export_records(os.fspath(path)))
+
+
+class Linear:
+    """One prepared linear operation: owns its packed weight and executes
+    itself on the ambient per-device engine it is bound to."""
+
+    __slots__ = ('_engine', '_plan', '_impl', '_experts', '_prepared')
+
+    def __init__(self, *, plan: WeightPlan):
+        """Create an unprepared Linear bound to the ambient engine of the
+        current CUDA device."""
+        self._engine = get_engine()
+        self._plan = plan
+        self._impl = None
+        self._experts = None
+        self._prepared = False
+
+    @property
+    def device(self) -> torch.device:
+        """Return the device of the engine this Linear is bound to."""
+        return self._engine.device
+
+    @property
+    def is_graph_compatible(self) -> bool:
+        """Return whether the prepared family supports CUDA graph capture."""
+        return bool(self._checked_impl().is_graph_compatible)
+
+    def close(self) -> None:
+        """Release the packed weight and any retained expert modules."""
+        self._impl = None
+        self._experts = None
+
+    def _checked_impl(self):
+        """Return the prepared native module, failing loudly otherwise."""
+        impl = self._impl
+        if impl is None:
+            raise RuntimeError('linear weight is not prepared (or the Linear has been closed)')
+        return impl
+
+    def _check_unprepared(self) -> None:
+        """Fail loudly if this Linear already holds a weight."""
+        if self._prepared:
+            raise RuntimeError('Linear is already prepared; create a new Linear to replace its weight')
 
     def _normalize_params(self, weight_format, weight, scales, zeros, bridge):
         """Normalize source weight components into TurboMind logical layouts
@@ -250,58 +282,44 @@ class Linear:
             )
 
         impl.prepare()
-        impl.bind(self._engine)
-
-        handle = Weight()
-        handle._impl = impl
-        handle._experts = None
-        return handle
+        impl.bind(self._engine._impl)
+        return impl
 
     def _prepare_grouped(self, normalized_experts, *, weight_format, plan, dtype, stored_output_dim, stream):
-        """Prepare expert weights and link them into one grouped weight
-        handle."""
-        experts = []
-        try:
-            for params in normalized_experts:
-                experts.append(
-                    self._prepare_one(
-                        params,
-                        weight_format=weight_format,
-                        plan=plan,
-                        dtype=dtype,
-                        stored_output_dim=stored_output_dim,
-                        stream=stream,
-                    )
-                )
-
-            impl = _tm.LinkLinearExperts([expert._impl for expert in experts])
-            impl.bind(self._engine)
-            handle = Weight()
-            handle._impl = impl
-            handle._experts = experts
-            return handle
-        except Exception:
-            for expert in reversed(experts):
-                expert.close()
-            raise
+        """Prepare expert weights and link them into one grouped module."""
+        experts = [
+            self._prepare_one(
+                params,
+                weight_format=weight_format,
+                plan=plan,
+                dtype=dtype,
+                stored_output_dim=stored_output_dim,
+                stream=stream,
+            ) for params in normalized_experts
+        ]
+        impl = _tm.LinkLinearExperts(experts)
+        impl.bind(self._engine._impl)
+        return impl, experts
 
     def prepare_weight(
         self,
         weight: torch.Tensor | Sequence[torch.Tensor],
         *,
-        plan: WeightPlan,
         scales: torch.Tensor | Sequence[torch.Tensor] | None = None,
         zeros: torch.Tensor | Sequence[torch.Tensor] | None = None,
-    ) -> Weight:
-        """Normalize and pack a dense weight or sequence of expert weights."""
+    ) -> None:
+        """Normalize and pack a dense weight or sequence of expert weights onto
+        this Linear."""
+        self._check_unprepared()
+        plan = self._plan
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
 
         if not plan._grouped:
-            with self._activate() as stream:
+            with self._engine._activate() as stream:
                 normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge)
-                return self._prepare_one(
+                self._impl = self._prepare_one(
                     normalized,
                     weight_format=weight_format,
                     plan=impl_plan,
@@ -309,17 +327,19 @@ class Linear:
                     stored_output_dim=normalized['weight'].shape[1],
                     stream=stream,
                 )
+            self._prepared = True
+            return
 
         weights = list(weight)
         expert_scales = [None] * len(weights) if scales is None else list(scales)
         expert_zeros = [None] * len(weights) if zeros is None else list(zeros)
 
-        with self._activate() as stream:
+        with self._engine._activate() as stream:
             normalized_experts = [
                 self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge)
                 for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros, strict=True)
             ]
-            return self._prepare_grouped(
+            self._impl, self._experts = self._prepare_grouped(
                 normalized_experts,
                 weight_format=weight_format,
                 plan=impl_plan,
@@ -327,6 +347,7 @@ class Linear:
                 stored_output_dim=normalized_experts[0]['weight'].shape[1],
                 stream=stream,
             )
+        self._prepared = True
 
     def _interleave_gate_up(self, gate, up, groups):
         """Interleave gate and up components in the selected family block
@@ -339,12 +360,13 @@ class Linear:
         self,
         weight: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]],
         *,
-        plan: WeightPlan,
         scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
         zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
-    ) -> Weight:
-        """Normalize, bridge, interleave, and pack gate/up weights for fused
-        SiLU execution."""
+    ) -> None:
+        """Normalize, bridge, interleave, and pack gate/up weights onto this
+        Linear for fused SiLU execution."""
+        self._check_unprepared()
+        plan = self._plan
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
@@ -374,7 +396,7 @@ class Linear:
             gate_zeros = list(gate_zero_arg) if plan._grouped else [gate_zero_arg]
             up_zeros = list(up_zero_arg) if plan._grouped else [up_zero_arg]
 
-        with self._activate() as stream:
+        with self._engine._activate() as stream:
             normalized_pairs = []
             for gate_weight, up_weight, gate_scale, up_scale, gate_zero, up_zero in zip(
                 gate_weights, up_weights, gate_scales, up_scales, gate_zeros, up_zeros, strict=True
@@ -396,7 +418,7 @@ class Linear:
 
             stored_output_dim = projection_n * 2
             if plan._grouped:
-                return self._prepare_grouped(
+                self._impl, self._experts = self._prepare_grouped(
                     combined_experts,
                     weight_format=weight_format,
                     plan=impl_plan,
@@ -404,27 +426,27 @@ class Linear:
                     stored_output_dim=stored_output_dim,
                     stream=stream,
                 )
-            return self._prepare_one(
-                combined_experts[0],
-                weight_format=weight_format,
-                plan=impl_plan,
-                dtype=dtype,
-                stored_output_dim=stored_output_dim,
-                stream=stream,
-            )
+            else:
+                self._impl = self._prepare_one(
+                    combined_experts[0],
+                    weight_format=weight_format,
+                    plan=impl_plan,
+                    dtype=dtype,
+                    stored_output_dim=stored_output_dim,
+                    stream=stream,
+                )
+        self._prepared = True
 
     def get_exec_plan(
         self,
         x: torch.Tensor,
-        weight: Weight,
         *,
         offsets: torch.Tensor | None = None,
         indices: torch.Tensor | None = None,
     ) -> ExecPlan:
-        """Select an immutable execution plan for an input and prepared
-        weight."""
+        """Select an immutable execution plan for an input."""
         tm = _tm
-        impl = weight._impl.get_exec_plan(
+        impl = self._checked_impl().get_exec_plan(
             tm.from_dlpack(x),
             None if indices is None else tm.from_dlpack(indices),
             None if offsets is None else tm.from_dlpack(offsets),
@@ -456,7 +478,6 @@ class Linear:
     def __call__(
         self,
         x: torch.Tensor,
-        weight: Weight,
         *,
         exec_plan: ExecPlan,
         out: torch.Tensor | None = None,
@@ -464,9 +485,9 @@ class Linear:
         out_scales: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Execute a dense linear operation with an explicit execution plan."""
-        with self._activate():
+        with self._engine._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            weight._impl.forward_dense(
+            self._checked_impl().forward_dense(
                 exec_plan._impl,
                 _tm.from_dlpack(x),
                 _tm.from_dlpack(out),
@@ -478,7 +499,6 @@ class Linear:
     def forward_moe(
         self,
         x: torch.Tensor,
-        weight: Weight,
         *,
         exec_plan: ExecPlan,
         offsets: torch.Tensor,
@@ -488,9 +508,9 @@ class Linear:
         out_scales: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Execute a grouped linear operation with optional indexed input."""
-        with self._activate():
+        with self._engine._activate():
             out, out_scales = self._allocate_output(exec_plan._impl, out, out_scales)
-            weight._impl.forward_moe(
+            self._checked_impl().forward_moe(
                 exec_plan._impl,
                 _tm.from_dlpack(x),
                 None if indices is None else _tm.from_dlpack(indices),
@@ -504,7 +524,6 @@ class Linear:
     def tune(
         self,
         x: torch.Tensor,
-        weight: Weight,
         *,
         offsets: torch.Tensor | None = None,
         indices: torch.Tensor | None = None,
@@ -519,10 +538,11 @@ class Linear:
         indices_impl = None if indices is None else tm.from_dlpack(indices)
         offsets_impl = None if offsets is None else tm.from_dlpack(offsets)
         input_scales_impl = None if input_scales is None else tm.from_dlpack(input_scales)
-        with self._activate():
-            output_spec = weight._impl._get_output_spec(input_impl, indices_impl)
+        impl = self._checked_impl()
+        with self._engine._activate():
+            output_spec = impl._get_output_spec(input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
-            impl = weight._impl.tune(
+            plan_impl = impl.tune(
                 input_impl,
                 indices_impl,
                 offsets_impl,
@@ -530,29 +550,21 @@ class Linear:
                 input_scales_impl,
                 None if out_scales is None else tm.from_dlpack(out_scales),
             )
-        if impl is None:
+        if plan_impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
         exec_plan = ExecPlan()
-        exec_plan._impl = impl
+        exec_plan._impl = plan_impl
         return exec_plan, out, out_scales
 
-    def import_records(self, path: str | os.PathLike[str]) -> int:
-        """Import cached kernel-selection records from a file."""
-        return int(self._engine.import_records(os.fspath(path)))
 
-    def export_records(self, path: str | os.PathLike[str]) -> int:
-        """Export cached kernel-selection records to a file."""
-        return int(self._engine.export_records(os.fspath(path)))
+_engines: weakref.WeakValueDictionary[int, LinearEngine] = weakref.WeakValueDictionary()
 
 
-_linears: weakref.WeakValueDictionary[int, Linear] = weakref.WeakValueDictionary()
-
-
-def get_linear() -> Linear:
-    """Return the functional Linear module for the current CUDA device."""
+def get_engine() -> LinearEngine:
+    """Return the ambient engine for the current CUDA device."""
     device = torch.cuda.current_device()
-    linear = _linears.get(device)
-    if linear is None:
-        linear = Linear()
-        _linears[device] = linear
-    return linear
+    engine = _engines.get(device)
+    if engine is None:
+        engine = LinearEngine()
+        _engines[device] = engine
+    return engine

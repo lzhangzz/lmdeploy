@@ -142,6 +142,28 @@ def test_smoke_linear_correctness(run):
 
 
 @cuda_required
+def test_linear_pins_engine():
+    """A Linear keeps its ambient per-device engine alive (followup 05/10):
+    the engine must survive the weak-value cache while any Linear bound to it
+    is still referenced."""
+    import gc
+
+    from lmdeploy.turbomind.linear import Linear, get_engine
+    from lmdeploy.turbomind.weight_format import TrivialFormat
+
+    engine = get_engine()
+    plan = engine.get_weight_plan(
+        weight_format=TrivialFormat(weight_dtype=_tm.DataType.TYPE_BF16),
+        dtype=torch.bfloat16,
+    )
+    linear = Linear(plan=plan)
+    del engine
+    gc.collect()
+    assert get_engine() is linear._engine
+    linear.close()
+
+
+@cuda_required
 def test_rank_three_dense_input():
     case = case_by_name()['llama2_7b_o__bf16_bf16_bf16']
     fx = LinearFixture(case)
@@ -150,7 +172,7 @@ def test_rank_three_dense_input():
         x = fx.x_original.view(2, 3, case.input_dim)
         fx.x_original = x
         fx.x_source = x
-        fx.exec_plan = fx.linear.get_exec_plan(x, fx.w_quant)
+        fx.exec_plan = fx.linear.get_exec_plan(x)
         fx.output = None
         fx.output_scales = None
         fx.run_reference()

@@ -51,4 +51,45 @@ sites keep their shape).
 spec before any agent work.
 
 **Category:** enhancement
-**Status:** needs-triage
+**Status:** resolved
+
+## Answer
+
+Landed 2026-09-21 per the settled direction (maintainer directed
+completion). The standalone `lmdeploy/turbomind/linear.py` surface is
+now one per-weight `Linear` over an ambient per-device engine; the
+`Weight` handle and the executor/data split are gone.
+
+- **`LinearEngine`** (new): owns the per-device `_tm.Context`,
+  `get_weight_plan(...)`, `import_records`/`export_records`, and the
+  stream-activated device-context cache. Reached via `get_engine()`
+  (per-device weak-value cache). `get_linear()` is dropped, not
+  aliased — its only in-repo callers were the two consumers below.
+  Measure-mode control, when exposed, lives here.
+- **`Linear`** (re-shaped): constructed from a plan only
+  (`Linear(plan=...)`), binding to the ambient engine of the current
+  CUDA device and holding it strongly for the instance's lifetime —
+  the structural pin that makes issue 05's dangle impossible (no
+  pybind `keep_alive`, no C++ change). `prepare_weight`/`fuse_weight`
+  keep their exact tensor arguments and land the packed params on the
+  instance, one-shot: a second call raises, weight replacement means a
+  new `Linear`. `get_exec_plan(x)`/`__call__`/`forward_moe`/`tune`
+  keep their names and signatures minus the retired `weight`/`plan=`
+  parameters; `is_graph_compatible`, `device`, `close()` carry over.
+  Grouped stays construction config on the same class via the plan.
+- Consumers migrated mechanically: `turbomind_awq_modules.py`'s
+  `_linear`/`_weight` pair collapsed to one `Linear` (`update_weights`
+  builds a fresh instance per update, sync-before-release unchanged);
+  `tests/turbomind/linear/fixture.py` keeps an `engine` reference for
+  records and a per-case `Linear`; `benchmark.py` records calls moved
+  to `fx.engine`.
+- `builders/*` untouched (separate builder `Linear`); the private
+  `_apply_bridge` import from `..linear` still works.
+
+Gate: `pytest tests/turbomind/linear/test_linear.py` — 9/9 passed,
+including a new `test_linear_pins_engine` regression test (engine
+survives the weak-value cache while a `Linear` holds it) and the
+re-shaped smoke/rank-three suites with assertions unchanged. AWQ
+backend imports cleanly.
+
+Closes issue 05 by design.

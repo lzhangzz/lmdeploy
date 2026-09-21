@@ -21,7 +21,7 @@ policy on the module `bind` call, or store the bound engine owner on the
 loudly-failing state rather than dangling.
 
 **Category:** bug (latent)
-**Status:** needs-triage
+**Status:** resolved
 
 ## Comments
 
@@ -45,3 +45,10 @@ this ticket stays open regardless of issue 10's outcome.
 per-weight Linear that holds its weight and pins its device engine. The
 dangle this ticket describes cannot arise in that shape: resolved by
 design; close when 10 lands.
+
+2026-09-21: closed with the landing of issue 10. The new per-weight
+`Linear` holds its ambient `LinearEngine` strongly for its whole
+lifetime (`Linear._engine`), so a surviving Linear can never dangle
+past its engine; `Weight` and the weak-cached executor are gone. The
+regression is locked by `test_linear_pins_engine` in
+tests/turbomind/linear/test_linear.py.

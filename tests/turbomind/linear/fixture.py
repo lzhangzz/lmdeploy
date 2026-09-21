@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import torch
 
 from lmdeploy.turbomind import _tm
-from lmdeploy.turbomind.linear import Weight, _to_tm_dtype, get_linear
+from lmdeploy.turbomind.linear import Linear, _to_tm_dtype, get_engine
 from lmdeploy.turbomind.weight_format import CompressedTensorFormat, FP8Format, MXFP4Format, TrivialFormat
 
 from .cases import LinearCase
@@ -86,10 +86,10 @@ class LinearFixture:
             resolved = torch.device('cuda', torch.cuda.current_device())
         self.device = resolved
 
+        self.engine = None
         self.linear = None
         self.weight_plan = None
         self.exec_plan = None
-        self.w_quant: Weight | None = None
         self.w_original_torch = None
         self.w_dequant_torch = None
 
@@ -112,7 +112,7 @@ class LinearFixture:
 
         try:
             with torch.cuda.device(self.device):
-                self.linear = get_linear()
+                self.engine = get_engine()
                 self._build_weights()
         except Exception:
             self.close()
@@ -120,7 +120,7 @@ class LinearFixture:
 
     @contextmanager
     def _quantization_context(self):
-        with self.linear._activate():
+        with self.engine._activate():
             yield
 
     def _torch_dtype(self, name: str | None = None) -> torch.dtype:
@@ -216,7 +216,7 @@ class LinearFixture:
         grouped = case.expert_num > 0
         weight_format = self._weight_format()
         input_dtype = self._torch_dtype(case.input_type)
-        plan = self.linear.get_weight_plan(
+        plan = self.engine.get_weight_plan(
             weight_format=weight_format,
             dtype=self._torch_dtype(),
             input_dtype=input_dtype,
@@ -232,6 +232,7 @@ class LinearFixture:
                 f'selected GEMM family does not accept prequantized {case.input_type} input'
             )
         self.weight_plan = plan
+        self.linear = Linear(plan=plan)
 
         if not grouped:
             if case.fuse_silu:
@@ -242,13 +243,13 @@ class LinearFixture:
                 up_weight, up_scales, up_zeros, up_original, up_dequant = self._make_weight_params(projection_n)
                 scales = None if gate_scales is None else (gate_scales, up_scales)
                 zeros = None if gate_zeros is None else (gate_zeros, up_zeros)
-                self.w_quant = self.linear.fuse_weight((gate_weight, up_weight), plan=plan, scales=scales, zeros=zeros)
+                self.linear.fuse_weight((gate_weight, up_weight), scales=scales, zeros=zeros)
                 self.w_original_torch = (gate_original, up_original)
                 self.w_dequant_torch = (gate_dequant, up_dequant)
                 return
 
             weight, scales, zeros, original, dequant = self._make_weight_params(case.output_dim)
-            self.w_quant = self.linear.prepare_weight(weight, plan=plan, scales=scales, zeros=zeros)
+            self.linear.prepare_weight(weight, scales=scales, zeros=zeros)
             self.w_original_torch = original
             self.w_dequant_torch = dequant
             return
@@ -280,7 +281,7 @@ class LinearFixture:
                 up_dequants.append(up_dequant)
             scales = None if gate_scales[0] is None else (gate_scales, up_scales)
             zeros = None if gate_zeros[0] is None else (gate_zeros, up_zeros)
-            self.w_quant = self.linear.fuse_weight((gate_weights, up_weights), plan=plan, scales=scales, zeros=zeros)
+            self.linear.fuse_weight((gate_weights, up_weights), scales=scales, zeros=zeros)
             self.w_original_torch = (gate_originals, up_originals)
             self.w_dequant_torch = (gate_dequants, up_dequants)
             return
@@ -297,8 +298,8 @@ class LinearFixture:
             zeros.append(zero)
             originals.append(original)
             dequants.append(dequant)
-        self.w_quant = self.linear.prepare_weight(
-            weights, plan=plan, scales=None if scales[0] is None else scales, zeros=None if zeros[0] is None else zeros
+        self.linear.prepare_weight(
+            weights, scales=None if scales[0] is None else scales, zeros=None if zeros[0] is None else zeros
         )
         self.w_original_torch = originals
         self.w_dequant_torch = dequants
@@ -355,10 +356,10 @@ class LinearFixture:
         if case.expert_num > 0:
             indices = self.f2n if case.moe_indexed else None
             self.exec_plan = self.linear.get_exec_plan(
-                self.x_original, self.w_quant, offsets=self.offsets, indices=indices
+                self.x_original, offsets=self.offsets, indices=indices
             )
         else:
-            self.exec_plan = self.linear.get_exec_plan(self.x_original, self.w_quant)
+            self.exec_plan = self.linear.get_exec_plan(self.x_original)
         self.output = None
         self.output_scales = None
         self.d_original = None
@@ -407,7 +408,6 @@ class LinearFixture:
         if case.expert_num > 0:
             self.output, self.output_scales = self.linear.forward_moe(
                 self.x_original,
-                self.w_quant,
                 exec_plan=self.exec_plan,
                 offsets=self.offsets,
                 indices=self.f2n if case.moe_indexed else None,
@@ -418,7 +418,6 @@ class LinearFixture:
         else:
             self.output, self.output_scales = self.linear(
                 self.x_original,
-                self.w_quant,
                 exec_plan=self.exec_plan,
                 input_scales=self.input_scales,
                 out=self.output,
@@ -446,7 +445,6 @@ class LinearFixture:
         indices = self.f2n if case.moe_indexed else None
         self.exec_plan, self.output, self.output_scales = self.linear.tune(
             self.x_original,
-            self.w_quant,
             offsets=self.offsets,
             indices=indices,
             out=self.output,
@@ -494,8 +492,8 @@ class LinearFixture:
             self.scales = None
             self.w_original_torch = None
             self.w_dequant_torch = None
-            if self.w_quant is not None:
-                self.w_quant.close()
-                self.w_quant = None
-            self.linear = None
+            if self.linear is not None:
+                self.linear.close()
+                self.linear = None
+            self.engine = None
             self.weight_plan = None

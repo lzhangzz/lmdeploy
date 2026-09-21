@@ -140,9 +140,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning(f'Unsupported benchmark case {case.name} (tp={case.tp}, ep={case.ep}): {e}')
             continue
         try:
-            assert fx.linear is not None
+            assert fx.engine is not None
             if import_path:
-                fx.linear.import_records(import_path)
+                fx.engine.import_records(import_path)
             for run in case_runs:
                 fx.prepare_batch(run.batch_size)
                 row = {
@@ -203,12 +203,12 @@ def main(argv: list[str] | None = None) -> int:
                     row['tflops'] = 0.0
                 if not args.quiet:
                     print(row)
-            assert fx.linear is not None
+            assert fx.engine is not None
             if export_path:
                 # Per-case export so a full-suite scan does not overwrite previous records;
-                # the dispatch cache is per-LinearFixture (per-Linear / per-Gemm).
+                # the dispatch cache is per-engine (ambient per device).
                 suffix = f'{case_runs[0].case.name}__tp{case_runs[0].case.tp}__ep{case_runs[0].case.ep}'
-                fx.linear.export_records(f'{export_path}.{suffix}')
+                fx.engine.export_records(f'{export_path}.{suffix}')
         finally:
             fx.close()
             # Release PyTorch cache between case groups; the MoE cases can be large and
