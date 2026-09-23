@@ -15,3 +15,15 @@ _Avoid_: matched length, lmcache_matched_end, external prefix hit
 **External Move**:
 A scheduler-planned relocation of sequence cache state between the local pool and external memory; planned as an intent inside the scheduler transaction, executed asynchronously by external memory's I/O service. Retrieve is an inbound move; store is an outbound move.
 _Avoid_: transfer (as a scheduling concept), retrieval (for the scheduling-level intent), tier move
+
+**Cache Layout**:
+The shape a module's cache state takes: object sizes, per-layer offsets, and state block shapes. Owned and computed by the cache-producing module that fills it.
+_Avoid_: cache geometry, cache plan (when meaning the module-owned shape)
+
+**Object Cache Plan**:
+The engine-level composition of a model's cache layouts under one page size. Owned by cache planning, never by a module.
+_Avoid_: object cache layout
+
+**Page Tuning**:
+Choosing the page size and which module-offered cache layouts to adopt so every cache part size divides the page, minimizing padding waste. Selection among offered layouts; the planner never writes a module's layout.
+_Avoid_: layout tuning, geometry tuning
