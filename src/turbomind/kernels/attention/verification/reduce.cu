@@ -66,7 +66,8 @@ __global__ void ReduceSplits(T*           out_ptr,
         sums[split]    = partial_ml(local_query, split, head, cute::_1{});
         thread_max    = maxima[split];
     }
-    thread_max = BlockReduce(reduce_storage.maximum).Reduce(thread_max, cub::Max{});
+    thread_max =
+        BlockReduce(reduce_storage.maximum).Reduce(thread_max, [](float a, float b) { return fmaxf(a, b); });
     if (threadIdx.x == 0) {
         global_max = thread_max;
     }

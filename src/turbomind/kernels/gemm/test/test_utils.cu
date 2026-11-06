@@ -19,6 +19,7 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/system/cuda/execution_policy.h>
 #include <thrust/transform_reduce.h>
+#include <thrust/tuple.h>
 
 namespace turbomind {
 
