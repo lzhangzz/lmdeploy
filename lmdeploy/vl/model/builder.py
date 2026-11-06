@@ -1,34 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import os
 
-import torch
-
 from lmdeploy.archs import get_model_arch
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.utils import get_logger, get_model
 from lmdeploy.vl.model.base import VISION_MODELS
 
-from .cogvlm import CogVLMVisionModel  # noqa F401
-from .deepseek import DeepSeekVisionModel  # noqa F401
-from .deepseek_vl2 import DeepSeek2VisionModel  # noqa F401
-from .gemma3_vl import Gemma3VisionModel  # noqa F401
-from .glm4_1v import GLM4_1_VisionModel  # noqa F401
-from .glm4_v import GLM4VisionModel  # noqa F401
-from .interns1_pro import InternS1ProVisionModel  # noqa F401
 from .internvl import InternVLVisionModel  # noqa F401
 from .internvl3_hf import InternVL3VisionModel  # noqa F401
-from .kimi_k25 import KimiK25VisionModel  # noqa F401
-from .llama4 import LLama4VisionModel  # noqa F401
-from .llava import LlavaVisionModel  # noqa F401
-from .llava_hf import LlavaHfVisionModel  # noqa F401
-from .llava_next import LlavaNextVisionModel  # noqa F401
-from .minicpmv import MiniCPMVModel  # noqa F401
-from .molmo import MolmoVisionModel  # noqa F401
-from .phi3_vision import Phi3VisionModel  # noqa F401
 from .qwen2 import Qwen2VLModel  # noqa F401
 from .qwen3 import Qwen3VLModel  # noqa F401
 from .qwen3_5 import Qwen3_5Model  # noqa F401
-from .qwen3_omni import Qwen3OmniModel  # noqa F401
 
 logger = get_logger('lmdeploy')
 
@@ -36,13 +18,13 @@ logger = get_logger('lmdeploy')
 def load_vl_model(model_path: str,
                   backend: str,
                   with_llm: bool = False,
-                  backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                  backend_config: TurbomindEngineConfig | None = None,
                   trust_remote_code: bool = False):
     """Load visual model.
 
     Args:
         model_path(str): the path or repo_id from model hub of the model
-        backend(str): the name of inference backend
+        backend(str): 'turbomind' for inference, or None outside inference
         with_llm(bool): load LLM model or not. Set it to False for VLM
             inference scenarios and True for VLM quantization
         backend_config: the config of the inference engine
@@ -52,15 +34,9 @@ def load_vl_model(model_path: str,
         download_dir = getattr(backend_config, 'download_dir', None)
         model_path = get_model(model_path, revision=revision, download_dir=download_dir)
 
-    max_memory = None
-    if not with_llm:
-        tp = getattr(backend_config, 'tp', 1)
-        max_memory = {i: torch.cuda.mem_get_info(i)[0] for i in range(tp)} if backend == 'turbomind' else None
-
     _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     kwargs = dict(model_path=model_path,
                   with_llm=with_llm,
-                  max_memory=max_memory,
                   hf_config=hf_config,
                   backend=backend,
                   trust_remote_code=trust_remote_code)
@@ -71,11 +47,9 @@ def load_vl_model(model_path: str,
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
                 model.build_preprocessor(trust_remote_code=trust_remote_code)
-                # build the Python vision part for legacy TurboMind models,
-                # or load the whole VLM model when `with_llm==True`. Native
-                # TurboMind vision models run the visual encoder in C++.
-                native_tm_vision = backend == 'turbomind' and model._turbomind_native_vision
-                if (backend == 'turbomind' and not native_tm_vision) or with_llm:
+                # TurboMind runs the visual encoder natively, so the Python
+                # model is only loaded for VLM quantization.
+                if with_llm:
                     model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:

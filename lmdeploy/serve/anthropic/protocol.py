@@ -10,7 +10,6 @@ import shortuuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
-RoutedExperts = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
 LOCAL_THINKING_SIGNATURE = 'lmdeploy-local'
 
@@ -128,10 +127,6 @@ class MessagesRequest(BaseModel):
                      'when messages is empty. Mutually exclusive with non-empty messages. '
                      'Can be a URL/base64 string, a dict, or a list of these.'),
     )
-    return_routed_experts: bool | None = Field(
-        default=False,
-        description=('Whether to return MoE routed expert indices in the response.'),
-    )
     return_token_ids: bool | None = Field(
         default=False,
         description=('Whether to include output token IDs in the response.'),
@@ -196,7 +191,6 @@ class MessagesResponse(BaseModel):
     usage: MessageUsage
     output_ids: list[int] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
-    routed_experts: RoutedExperts = None
 
 
 class StreamTextBlock(BaseModel):
@@ -314,7 +308,6 @@ class MessageDeltaEvent(BaseModel):
     type: Literal['message_delta'] = 'message_delta'
     delta: MessageDelta
     usage: MessageDeltaUsage
-    routed_experts: RoutedExperts = None
 
 
 class MessageStopEvent(BaseModel):

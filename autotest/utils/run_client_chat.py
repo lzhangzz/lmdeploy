@@ -41,9 +41,8 @@ def _sanitize_cli_stderr(errors: str) -> str:
 
 CHAT_EXCLUDED_PARAMS = {
     'max-batch-size', 'cache-max-entry-count', 'max-prefill-token-num', 'server-name', 'enable-prefix-caching',
-    'dllm-block-length', 'dllm-denoising-steps', 'dllm-confidence-threshold',
     # Serve / OpenAI-api only — ``lmdeploy chat`` does not accept these.
-    'reasoning-parser', 'tool-call-parser', 'logprobs-mode', 'enable-return-routed-experts',
+    'reasoning-parser', 'tool-call-parser',
     'allow-terminate-by-client', 'server-port', 'proxy-url', 'model-name',
 }
 

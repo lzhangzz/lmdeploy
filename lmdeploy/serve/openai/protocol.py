@@ -205,8 +205,6 @@ class ChatCompletionRequest(BaseModel):
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
     repetition_penalty: float | None = None
-    repetition_ngram_size: int = Field(default=0, ge=0)
-    repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
@@ -249,10 +247,6 @@ class ChatCompletionRequest(BaseModel):
         description=('Image data for multimodal input. Only used alongside input_ids '
                      'when messages is empty. Mutually exclusive with non-empty messages. '
                      'Can be a URL/base64 string, a dict, or a list of these.'),
-    )
-    return_routed_experts: bool | None = Field(
-        default=False,
-        description=('Whether to return MoE routed expert indices in the response.'),
     )
 
 
@@ -320,7 +314,6 @@ class ChatCompletionResponseChoice(BaseModel):
     output_token_logprobs: list[tuple[float, int]] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
     output_ids: list[int] | None = None
-    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -365,7 +358,6 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     output_token_logprobs: list[tuple[float, int]] | None = None
     output_ids: list[int] | None = None
     finish_reason: Literal['stop', 'length', 'tool_calls', 'parse_error', 'error', 'abort'] | None = None
-    routed_experts: list[list[list[int]]] | str | None = None
 
 
 class ChatCompletionStreamResponse(BaseModel):
@@ -407,8 +399,6 @@ class CompletionRequest(BaseModel):
     user: str | None = None
     # additional argument of lmdeploy
     repetition_penalty: float | None = None
-    repetition_ngram_size: int = Field(default=0, ge=0)
-    repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
     ignore_eos: bool | None = False
     skip_special_tokens: bool | None = True
@@ -469,33 +459,6 @@ class EmbeddingsResponse(BaseModel):
     usage: UsageInfo
 
 
-class PoolingRequest(BaseModel):
-    """Pooling request.
-
-    Currently we follow vLLM API protocol,
-    https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/protocol.py#L1174
-
-    Notice that ideally we should reuse the input format of embedding API
-    https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/protocol.py#L1174
-    https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/entrypoints/http_server.py#L383
-    """
-    model: str | None = None
-    input: list[int] | list[list[int]] | str | list[str]
-    encoding_format: Literal['float', 'base64'] = 'float'
-    dimensions: int | None = None
-    user: str | None = None
-
-
-class PoolingResponse(BaseModel):
-    """Pooling response."""
-    id: str = Field(default_factory=lambda: f'pool-{shortuuid.random()}')
-    object: str = 'list'
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str = None
-    data: list[dict[str, Any]]
-    usage: UsageInfo
-
-
 class PPLRequest(BaseModel):
     """Get perplexity request.
 
@@ -538,53 +501,7 @@ class GenerateResponse(BaseModel):
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: str | list[str] | dict
-    load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
-
-
-class UpdateWeightsFromIPCRequest(BaseModel):
-    """Receive checkpoint-engine CUDA IPC handles keyed by device UUID."""
-    zmq_handles: dict[str, str]
-
-
-class UpdateWeightsFromIPCStatus(BaseModel):
-    """Readiness of the checkpoint-engine weight-update receiver."""
-    ready: bool
-    message: str
-    backend: str | None = None
-    device_type: str | None = None
-    checkpoint_engine_version: str | None = None
-    is_sleeping: bool = False
-    sleeping_tags: list[str] = Field(default_factory=list)
-    device_uuids: list[str] = Field(default_factory=list)
-    worker_ranks: list[int] = Field(default_factory=list)
-
-
-class InitWeightsUpdateGroupRequest(BaseModel):
-    """Initialize a torch.distributed process group used to broadcast weights
-    from an external trainer into the rollout engine."""
-    master_address: str
-    master_port: int
-    rank_offset: int
-    world_size: int
-    group_name: str
-    backend: str = 'nccl'
-
-
-class UpdateWeightsFromDistributedRequest(BaseModel):
-    """Receive weights through a previously initialized distributed group and
-    load them into the running model."""
-    names: list[str]
-    dtypes: list[str]
-    shapes: list[list[int]]
-    group_name: str
-    load_format: str | None = None  # 'flattened_bucket' or None
-    finished: bool = False  # trigger mod.update_weights() finalization when True
-
-
-class DestroyWeightsUpdateGroupRequest(BaseModel):
-    """Tear down a previously initialized weights-update process group."""
-    group_name: str
 
 
 # /generate input
@@ -595,7 +512,6 @@ class GenerateReqInput(BaseModel):
     image_data: ImageDataFormat | None = None
     return_logprob: bool | None = None
     top_logprobs_num: int | None = None
-    logprob_start_len: int = Field(default=-1, ge=-1)
     max_tokens: int = 128
     stop: str | list[str] | None = None
     stop_token_ids: list[int] | None = None
@@ -609,9 +525,6 @@ class GenerateReqInput(BaseModel):
     skip_special_tokens: bool | None = True
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
-    return_routed_experts: bool | None = False
-    repetition_ngram_size: int = Field(default=0, ge=0)
-    repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO
     media_io_kwargs: dict[str, Any] | None = Field(
         default=None,
@@ -629,10 +542,7 @@ class GenerateReqMetaOutput(BaseModel):
     completion_tokens: int | None = None
     finish_reason: dict[str, Any] | None = None
     output_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
-    input_token_logprobs: list[tuple[float, int]] | None = None  # (logprob, token_id)
     output_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-output-token top (logprob, token_id)
-    input_top_logprobs: list[list[tuple[float, int]]] | None = None  # per-input-token top (logprob, token_id)
-    routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
 
 
 # /generate output

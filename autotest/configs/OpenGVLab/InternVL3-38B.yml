@@ -1,5 +1,4 @@
 # HF model id: OpenGVLab/InternVL3-38B
-
 a100:
 - model_type:
   - chat
@@ -10,26 +9,14 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   interface:
-    pytorch:
-      suites:
-      - base
-      - logprob
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
 h:
 - model_type:
   - chat
@@ -41,23 +28,11 @@ h:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   interface:
-    pytorch:
-      suites:
-      - base
-      - logprob
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs

@@ -8,10 +8,6 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
-    'InternLMDecoderLayer': {
-        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    },
     'InternLM2DecoderLayer': {
         'attention_norm': ['attention.wqkv'],
         'ffn_norm': ['feed_forward.w1', 'feed_forward.w3']
@@ -19,10 +15,6 @@ NORM_FCS_MAP = {
     'InternLM3DecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    },
-    'QWenBlock': {
-        'ln_1': ['attn.c_attn'],
-        'ln_2': ['mlp.w1', 'mlp.w2']
     },
     'Qwen2DecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
@@ -35,18 +27,6 @@ NORM_FCS_MAP = {
     'Qwen3MoeDecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    },
-    'DecoderLayer': {
-        'input_layernorm': ['self_attn.W_pack'],
-        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    },
-    'Phi3DecoderLayer': {
-        'input_layernorm': ['self_attn.qkv_proj'],
-        'post_attention_layernorm': ['mlp.gate_up_proj']
-    },
-    'GLMBlock': {
-        'input_layernorm': ['self_attention.query_key_value'],
-        'post_attention_layernorm': ['mlp.dense_h_to_4h']
     },
     'MixtralDecoderLayer': {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
@@ -61,18 +41,10 @@ NORM_FCS_MAP = {
         'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
         'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
     },
-    'MistralDecoderLayer': {
-        'input_layernorm': ['self_attn.k_proj', 'self_attn.q_proj', 'self_attn.v_proj'],
-        'post_attention_layernorm': ['mlp.gate_proj', 'mlp.up_proj']
-    },
 }
 
 FC_FCS_MAP = {
     'LlamaDecoderLayer': {
-        'self_attn.v_proj': ['self_attn.o_proj'],
-        'mlp.up_proj': ['mlp.down_proj']
-    },
-    'InternLMDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     },
@@ -83,10 +55,6 @@ FC_FCS_MAP = {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     },
-    'QWenBlock': {
-        'attn.c_attn': ['attn.c_proj'],
-        'mlp.w1': ['mlp.c_proj']
-    },
     'Qwen2DecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
@@ -94,18 +62,6 @@ FC_FCS_MAP = {
     'Qwen3DecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
-    },
-    'DecoderLayer': {
-        'self_attn.W_pack': ['self_attn.o_proj'],
-        'mlp.up_proj': ['mlp.down_proj']
-    },
-    'Phi3DecoderLayer': {
-        'self_attn.qkv_proj': ['self_attn.o_proj'],
-        'mlp.gate_up_proj': ['mlp.down_proj']
-    },
-    'GLMBlock': {
-        # 'self_attention.query_key_value': ['self_attention.dense']
-        # 'mlp.dense_h_to_4h': ['mlp.dense_4h_to_h']
     },
     'MixtralDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
@@ -116,10 +72,6 @@ FC_FCS_MAP = {
         'mlp.up_proj': ['mlp.down_proj']
     },
     'Qwen2_5_VLDecoderLayer': {
-        'self_attn.v_proj': ['self_attn.o_proj'],
-        'mlp.up_proj': ['mlp.down_proj']
-    },
-    'MistralDecoderLayer': {
         'self_attn.v_proj': ['self_attn.o_proj'],
         'mlp.up_proj': ['mlp.down_proj']
     }
@@ -248,8 +200,7 @@ def smooth_fc_fcs(pre_fc: torch.nn.Module,
     denom = (scales.max().float() * scales.min().float()).sqrt()
     scales = (scales.float() / denom).to(dtype=dtype)
 
-    # (for qwen&baichuan) pre_fc is packed QKV, only V needs to scale
-    # phi3 fused qkv and gate_up
+    # pre_fc is packed QKV (e.g. InternLM2 wqkv), only V needs to scale
     if size_pre_fc > size_a and size_pre_fc % size_a == 0 \
             and size_pre_fc // size_a in [2, 3]:
 

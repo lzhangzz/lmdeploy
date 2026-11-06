@@ -8,12 +8,12 @@
 
 ## 启动服务
 
-以 huggingface hub 上的 [llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) 模型为例，你可以任选以下方式之一，启动推理服务。
+以 huggingface hub 上的 [InternVL2_5-8B](https://huggingface.co/OpenGVLab/InternVL2_5-8B) 模型为例，你可以任选以下方式之一，启动推理服务。
 
 ### 方式一：使用 lmdeploy cli 工具
 
 ```shell
-lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b --server-port 23333
+lmdeploy serve api_server OpenGVLab/InternVL2_5-8B --server-port 23333
 ```
 
 api_server 启动时的参数可以通过命令行`lmdeploy serve api_server -h`查看。
@@ -30,7 +30,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b
+    lmdeploy serve api_server OpenGVLab/InternVL2_5-8B
 ```
 
 在这个例子中，`lmdeploy server api_server` 的命令参数与方式一一致。

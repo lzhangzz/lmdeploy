@@ -1,79 +1,7 @@
 import pytest
-import torch
 from transformers import AutoConfig
 
-from lmdeploy.utils import FlattenedTensorBucket, _get_and_verify_max_len
-
-
-def test_flattened_tensor_bucket_preallocated_buffer():
-    """Test FlattenedTensorBucket with preallocated buffer."""
-    if not torch.cuda.is_available():
-        print('CUDA not available, skipping test')
-        return
-
-    # Create test tensors on CUDA
-    tensor1 = torch.randn(10, 10, dtype=torch.float32, device='cuda')  # 100 elements
-    tensor2 = torch.randn(5, 20, dtype=torch.float32, device='cuda')  # 100 elements
-    named_tensors = [('tensor1', tensor1), ('tensor2', tensor2)]
-
-    # Test 1: Without preallocated buffer (original behavior)
-    bucket1 = FlattenedTensorBucket(named_tensors=named_tensors)
-    reconstructed = bucket1.reconstruct_tensors()
-    assert len(reconstructed) == 2
-    # reconstruct_tensors returns List[Tuple[str, torch.Tensor]]
-    reconstructed_dict = dict(reconstructed)
-    assert torch.allclose(reconstructed_dict['tensor1'], tensor1)
-    assert torch.allclose(reconstructed_dict['tensor2'], tensor2)
-
-    # Test 2: With valid preallocated buffer
-    preallocated = torch.empty(200, dtype=torch.float32, device='cuda')
-    bucket2 = FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated)
-    assert bucket2.flattened_tensor is preallocated  # Should use the same tensor
-
-    # Test 3: With preallocated buffer larger than needed
-    preallocated_large = torch.empty(500, dtype=torch.float32, device='cuda')
-    bucket3 = FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_large)
-    assert bucket3.flattened_tensor is preallocated_large
-
-    # Test 4: Error case - buffer too small
-    preallocated_small = torch.empty(50, dtype=torch.float32, device='cuda')  # Only 50 elements, need 200
-    try:
-        FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_small)
-        assert False, 'Should have raised ValueError'
-    except ValueError as e:
-        assert 'smaller than required numel' in str(e)
-
-    # Test 5: Error case - wrong dtype
-    preallocated_wrong_dtype = torch.empty(200, dtype=torch.float64, device='cuda')
-    try:
-        FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_wrong_dtype)
-        assert False, 'Should have raised ValueError'
-    except ValueError as e:
-        assert 'dtype' in str(e)
-
-    # Test 6: Error case - wrong device (CPU buffer for CUDA tensors)
-    preallocated_cpu = torch.empty(200, dtype=torch.float32, device='cpu')
-    try:
-        FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_cpu)
-        assert False, 'Should have raised ValueError'
-    except ValueError as e:
-        assert 'device' in str(e)
-
-    # Test 7: Error case - non-contiguous tensor
-    preallocated_non_contig = torch.empty(400, dtype=torch.float32, device='cuda')[::2]  # Strided view
-    try:
-        FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_non_contig)
-        assert False, 'Should have raised ValueError'
-    except ValueError as e:
-        assert 'contiguous' in str(e)
-
-    # Test 8: Error case - not 1-D tensor
-    preallocated_2d = torch.empty(10, 20, dtype=torch.float32, device='cuda')
-    try:
-        FlattenedTensorBucket(named_tensors=named_tensors, flattened_tensor=preallocated_2d)
-        assert False, 'Should have raised ValueError'
-    except ValueError as e:
-        assert '1-D tensor' in str(e)
+from lmdeploy.utils import _get_and_verify_max_len, override_hf_config
 
 
 def test_get_and_verify_max_len():
@@ -115,3 +43,30 @@ def test_get_chat_template_none():
     """Passing no chat template returns None."""
     from lmdeploy.cli.utils import get_chat_template
     assert get_chat_template(None) is None
+
+
+def test_override_hf_config_nested():
+    from transformers.models.llava import LlavaConfig
+    hf_config = LlavaConfig()
+
+    assert hf_config.model_type == 'llava'
+    override_hf_config(hf_config, dict(model_type='llava_custom'))
+    assert hf_config.model_type == 'llava_custom'
+
+    assert hf_config.text_config.model_type == 'llama'
+    assert hf_config.text_config.rope_parameters['rope_type'] == 'default'
+    override_hf_config(hf_config, dict(text_config=dict(rope_parameters=dict(rope_type='yarn'))))
+    assert hf_config.text_config.model_type == 'llama'
+    assert hf_config.text_config.rope_parameters['rope_type'] == 'yarn'
+
+    override_hf_config(hf_config,
+                       dict(model_type='llava_custom2', text_config=dict(rope_parameters=dict(rope_type='yarn2'))))
+    assert hf_config.model_type == 'llava_custom2'
+    assert hf_config.text_config.model_type == 'llama'
+    assert hf_config.text_config.rope_parameters['rope_type'] == 'yarn2'
+
+
+def test_override_hf_config_dict():
+    cfg = dict(a=1, nested=dict(x=1, y=2))
+    override_hf_config(cfg, dict(a=2, nested=dict(y=3, z=4), new=dict(k=1)))
+    assert cfg == dict(a=2, nested=dict(x=1, y=3, z=4), new=dict(k=1))

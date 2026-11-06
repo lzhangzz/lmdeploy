@@ -9,17 +9,11 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - evaluate
   - func
   - quantization
   quantization:
-    pytorch:
-    - awq
-    - w8a8
     turbomind:
     - awq
   deps:
@@ -34,18 +28,12 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
     - awq
-    pytorch:
-    - awq
-
 h:
 - model_type: chat
   engine_config:
@@ -54,17 +42,9 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   interface:
-    pytorch:
-      suites:
-      - toolcall
-      extra:
-        tool-call-parser: qwen2d5
     turbomind:
       suites:
       - toolcall

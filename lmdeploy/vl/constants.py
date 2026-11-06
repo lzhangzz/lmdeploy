@@ -7,8 +7,6 @@ IMAGE_TOKEN = '<IMAGE_TOKEN>'
 class Modality(Enum):
     IMAGE = 'image'
     VIDEO = 'video'
-    AUDIO = 'audio'
-    TIME_SERIES = 'time_series'
 
     def __eq__(self, other):
         if isinstance(other, Modality):

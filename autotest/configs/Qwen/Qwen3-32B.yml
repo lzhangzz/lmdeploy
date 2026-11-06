@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3-32B
-
 a100:
 - model_type: chat
   engine_config:
@@ -9,32 +8,18 @@ a100:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   interface:
-    pytorch:
-      suites:
-      - base
-      - logprob
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
     - kvint8
 h:
 - model_type: chat
@@ -45,42 +30,16 @@ h:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   interface:
-    pytorch:
-      suites:
-      - base
-      - logprob
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - awq
     - kvint8
-    pytorch:
-    - kvint8
-ascend:
-- model_type: chat
-  engine_config:
-    tp: 4
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - func
-  - prefix_cache

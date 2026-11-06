@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument(
         '--backends',
         default=None,
-        help='JSON list of backends, e.g. \'["turbomind","pytorch"]\'',
+        help='JSON list of backends, e.g. \'["turbomind"]\'',
     )
     parser.add_argument(
         '--pretty',

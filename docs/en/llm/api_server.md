@@ -178,35 +178,6 @@ curl http://{server_ip}:{server_port}/v1/completions \
 }'
 ```
 
-- score input tokens with the direct PyTorch `/generate` endpoint
-
-Start the server with `--backend pytorch --logprobs-mode raw_logprobs`, then
-set `return_logprob` and `logprob_start_len`:
-
-```bash
-curl http://{server_ip}:{server_port}/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "input_ids": [1234, 5678, 9012],
-    "return_logprob": true,
-    "logprob_start_len": 0,
-    "max_tokens": 0
-  }'
-```
-
-`meta_info.input_token_logprobs` is emitted once. For
-`N=logprob_start_len`, rows align with the processed source token ids after
-position `N`, and every entry is `[value, token_id]`; the boundary token itself
-is not emitted. With direct `input_ids`, this is `input_ids[N + 1:]`; with
-`prompt` or image input, the boundary is checked after tokenization and VLM
-placeholder expansion. At least one token must follow the boundary; otherwise
-the endpoint rejects the request. Both streaming and non-streaming forms return
-one terminal payload; streaming then emits `[DONE]`.
-
-This direct route requires `max_tokens=0` and speculative decoding disabled.
-Input scoring is not available for TurboMind, DistServe, proxy `/generate`, or
-the OpenAI/Anthropic/Responses schemas.
-
 ## Launch multiple api servers
 
 Following are two steps to launch multiple api servers through torchrun. Just create a python script with the following codes.
@@ -217,7 +188,7 @@ Following are two steps to launch multiple api servers through torchrun. Just cr
 ```python
 import os
 import socket
-from typing import List, Literal
+from typing import List
 
 import fire
 
@@ -235,8 +206,7 @@ def get_host_ip():
 def main(model_path: str,
          tp: int = 1,
          proxy_url: str = 'http://0.0.0.0:8000',
-         port: int = 23333,
-         backend: Literal['turbomind', 'pytorch'] = 'turbomind'):
+         port: int = 23333):
     local_rank = int(os.environ.get('LOCAL_RANK', -1))
     world_size = int(os.environ.get('WORLD_SIZE', -1))
     local_ip = get_host_ip()
@@ -249,7 +219,7 @@ def main(model_path: str,
         rank_list = ','.join([str(local_rank + i) for i in range(tp)])
         command = f'CUDA_VISIBLE_DEVICES={rank_list} lmdeploy serve api_server {model_path} '\
                   f'--server-name {local_ip} --server-port {port} --tp {tp} '\
-                  f'--proxy-url {proxy_url} --backend {backend}'
+                  f'--proxy-url {proxy_url}'
         print(f'running command: {command}')
         os.system(command)
 

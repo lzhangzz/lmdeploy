@@ -9,9 +9,6 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -23,11 +20,6 @@ a100:
     - awq
     - kvint4
     - kvint8
-    pytorch:
-    - awq
-    - kvint4
-    - kvint8
-    - w8a8
   gen_config:
     temperature: 0.6
 h:
@@ -36,9 +28,6 @@ h:
     tp: 1
   backends:
   - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
     communicators:
     - nccl
   test_coverage:
@@ -51,22 +40,3 @@ h:
     - awq
     - kvint4
     - kvint8
-    pytorch:
-    - awq
-    - kvint4
-    - kvint8
-    - w8a8
-- model_type: chat
-  engine_config:
-    tp: 1
-    extra:
-      speculative-algorithm: eagle3
-      speculative-num-draft-tokens: 3
-      speculative-draft-model: yuhuili/EAGLE3-LLaMA3.1-Instruct-8B
-      max-batch-size: 128
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - func

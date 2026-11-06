@@ -1,5 +1,4 @@
 # HF model id: meta-llama/Meta-Llama-3-8B-Instruct
-
 a100:
 - model_type: chat
   engine_config:
@@ -8,9 +7,6 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
@@ -19,11 +15,6 @@ a100:
     - awq
     - kvint4
     - kvint8
-    pytorch:
-    - awq
-    - kvint4
-    - kvint8
-    - w8a8
 h:
 - model_type: chat
   engine_config:
@@ -32,9 +23,6 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
@@ -43,8 +31,3 @@ h:
     - awq
     - kvint4
     - kvint8
-    pytorch:
-    - awq
-    - kvint4
-    - kvint8
-    - w8a8

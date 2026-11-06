@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3.5-0.8B
-
 a100:
 - model_type:
   - chat
@@ -10,13 +9,8 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   quantization:
     turbomind:
-    - kvint8
-    pytorch:
     - kvint8

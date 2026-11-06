@@ -24,7 +24,6 @@ env:
   HOST_PIP_CACHE_DIR: /nvme/github-actions/pip-cache
   HOST_LOCALTIME: /usr/share/zoneinfo/Asia/Shanghai
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  PYTHONPATH: /nvme/qa_test_models/offline_pkg/LLaVA
 
 
 jobs:
@@ -64,18 +63,18 @@ jobs:
         run: |
           pytest autotest -m 'pr_test and tp2' -x --alluredir=${{env.REPORT_DIR}} --clean-alluredir
           pytest autotest -m 'pr_test and tp1' -n 2 -x --alluredir=${{env.REPORT_DIR}}
-      - name: Test restful server - pytorch Qwen3.5-35B-A3B
+      - name: Test restful server - turbomind Qwen3.5-35B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm qwen3_5_mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3.5-35B-A3B --tp 2 --backend turbomind --reasoning-parser qwen-qwq --tool-call-parser qwen3coder --speculative-algorithm mtp --speculative-num-draft-tokens 4 --max-batch-size 256 --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3.5-35B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
             sleep 5
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and pytorch and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and turbomind and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and turbomind and not Qwen/Qwen3.5-35B-A3B-FP8' -m 'not not_turbomind' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/tool_parser/test_tool_call_basic.py -n 20 -k 'Qwen/Qwen3.5-35B-A3B and turbomind and not Qwen/Qwen3.5-35B-A3B-FP8' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
@@ -83,11 +82,11 @@ jobs:
 
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat ${{env.SERVER_LOG}}/pytorch_Qwen3.5-35B-A3B_start_restful.log
+          cat ${{env.SERVER_LOG}}/turbomind_Qwen3.5-35B-A3B_start_restful.log
           exit 1
       - name: Test restful server - turbomind Qwen3-32B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-32B --tp 2 --backend turbomind --allow-terminate-by-client > ${{env.SERVER_LOG}}/turbomind_Qwen3-32B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -95,7 +94,7 @@ jobs:
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-32B and turbomind' -m 'not not_turbomind' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
@@ -107,7 +106,7 @@ jobs:
           exit 1
       - name: Test restful server - turbomind InternVL3-38B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --logprobs-mode raw_logprobs --allow-terminate-by-client --trust-remote-code > ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3-38B --tp 2 --backend turbomind --allow-terminate-by-client --trust-remote-code > ${{env.SERVER_LOG}}/turbomind_InternVL3-38B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -115,7 +114,7 @@ jobs:
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3-38B and turbomind' -m 'not not_turbomind' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
@@ -127,7 +126,7 @@ jobs:
           exit 1
       - name: Test restful server - turbomind Qwen3-30B-A3B
         run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind --logprobs-mode raw_logprobs  --allow-terminate-by-client> ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
+          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend turbomind  --allow-terminate-by-client> ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log 2>&1 &
           echo "restful_pid=$!"
           for i in $(seq 1 180)
           do
@@ -135,7 +134,7 @@ jobs:
             echo "health check try $i"
             if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
               pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind and not experts' --alluredir=${{env.REPORT_DIR}}
+              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and turbomind' -m 'not not_turbomind' --alluredir=${{env.REPORT_DIR}}
               curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
               exit 0
             fi
@@ -144,66 +143,6 @@ jobs:
           echo "health check fail"
           curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
           cat ${{env.SERVER_LOG}}/turbomind_Qwen3-30B-A3B_start_restful.log
-          exit 1
-      - name: Test restful server - pytorch Qwen3-30B-A3B
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs --enable-return-routed-experts --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log 2>&1 &
-          echo "restful_pid=$!"
-          for i in $(seq 1 180)
-          do
-            sleep 5
-            echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-30B-A3B and pytorch' -m 'not not_pytorch' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-              exit 0
-            fi
-          done
-
-          echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat ${{env.SERVER_LOG}}/pytorch_Qwen3-30B-A3B_start_restful.log
-          exit 1
-      - name: Test restful server - pytorch Qwen3-VL-30B-A3B-Instruct
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/Qwen/Qwen3-VL-30B-A3B-Instruct --tp 2 --backend pytorch --logprobs-mode raw_logprobs --allow-terminate-by-client > ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log 2>&1 &
-          echo "restful_pid=$!"
-          for i in $(seq 1 180)
-          do
-            sleep 5
-            echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'Qwen/Qwen3-VL-30B-A3B-Instruct and pytorch' -m 'not not_pytorch and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-              exit 0
-            fi
-          done
-
-          echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat ${{env.SERVER_LOG}}/pytorch_Qwen3-VL-30B-A3B-Instruct_start_restful.log
-          exit 1
-      - name: Test restful server - pytorch InternVL3_5-30B-A3B
-        run: |
-          CUDA_VISIBLE_DEVICES=6,7 lmdeploy serve api_server /nvme/qa_test_models/OpenGVLab/InternVL3_5-30B-A3B --tp 2 --backend pytorch --logprobs-mode raw_logprobs  --allow-terminate-by-client --trust-remote-code > ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log 2>&1 &
-          echo "restful_pid=$!"
-          for i in $(seq 1 180)
-          do
-            sleep 5
-            echo "health check try $i"
-            if curl -f -s http://127.0.0.1:23333/health > /dev/null 2>&1; then
-              pytest autotest/interface/restful/test_restful_chat_completions_v1.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and pr_test' --alluredir=${{env.REPORT_DIR}}
-              pytest autotest/interface/restful/test_restful_generate.py -n 20 -k 'OpenGVLab/InternVL3_5-30B-A3B and pytorch' -m 'not not_pytorch and not experts' --alluredir=${{env.REPORT_DIR}}
-              curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-              exit 0
-            fi
-          done
-
-          echo "health check fail"
-          curl -f -s http://127.0.0.1:23333/terminate > /dev/null 2>&1
-          cat ${{env.SERVER_LOG}}/pytorch_InternVL3_5-30B-A3B_start_restful.log
           exit 1
       - name: Clear workfile
         if: always()

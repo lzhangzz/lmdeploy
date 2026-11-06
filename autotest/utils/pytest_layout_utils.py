@@ -4,10 +4,9 @@ Layout marks mirror the parallel segment in ``get_case_str_by_config``
 (``sorted(layout.items())``, no ``_``), e.g. ``tp1``, ``dp16ep16``,
 ``cp2tp8``, ``dp4ep8tp2``.
 
-Distributed *runner* (ray / proxy) is a separate concern: keep
+Distributed *runner* (proxy) is a separate concern: keep
 ``@pytest.mark.distributed`` on the test function when the case needs
-multi-node startup, even if the layout mark is the same (e.g. both local
-and ray tp16 use layout mark ``tp16``).
+multi-node startup, even if the layout mark is the same.
 """
 
 from __future__ import annotations

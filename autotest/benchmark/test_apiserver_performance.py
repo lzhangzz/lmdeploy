@@ -11,7 +11,6 @@ from utils.pytest_layout_utils import (
 )
 
 TURBOMIND_LAYOUTS = LOCAL_TP_LAYOUTS[:4]
-PYTORCH_LAYOUTS = LOCAL_TP_LAYOUTS
 
 
 def _run_proxy_distributed_benchmark_test(config, run_config, manager=None):
@@ -33,27 +32,19 @@ def _run_proxy_distributed_benchmark_test(config, run_config, manager=None):
 _APISERVER_PARAMS = build_multi_backend_layout_params(
     (
         ('turbomind', TURBOMIND_LAYOUTS),
-        ('pytorch', PYTORCH_LAYOUTS),
     ),
     func_type='benchmark',
     param_marks=[pytest.mark.flaky(reruns=0)],
 )
 
 _PROXY_PARAMS = build_layout_params(
-    'pytorch',
+    'turbomind',
     DISTRIBUTED_DP_EP_LAYOUTS,
     func_type='benchmark',
-    param_marks=[pytest.mark.flaky(reruns=0), pytest.mark.pytorch],
+    param_marks=[pytest.mark.flaky(reruns=0), pytest.mark.turbomind],
 )
 
 _FUNC_SMOKE_CONFIGS = [{
-    'model': 'Qwen/Qwen3-30B-A3B',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {'tp': 2},
-    'extra_params': {}
-}, {
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'nccl',
@@ -64,13 +55,6 @@ _FUNC_SMOKE_CONFIGS = [{
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
     'communicator': 'cuda-ipc',
-    'quant_policy': 8,
-    'parallel_config': {'tp': 2},
-    'extra_params': {}
-}, {
-    'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
     'quant_policy': 8,
     'parallel_config': {'tp': 2},
     'extra_params': {}

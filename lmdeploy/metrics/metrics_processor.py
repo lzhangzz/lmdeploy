@@ -2,8 +2,7 @@
 import asyncio
 
 from lmdeploy.messages import ResponseType, ScheduleMetrics
-from lmdeploy.pytorch.utils import singleton
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, singleton
 
 from .stats import SchedulerStats
 

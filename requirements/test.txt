@@ -1,6 +1,8 @@
 allure-pytest
 anthropic>=1.0.0
+apache-tvm-ffi==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 coverage
+flash-linear-attention>=0.4.2
 jsonschema
 matplotlib
 nvidia-ml-py
@@ -14,4 +16,6 @@ pytest-sugar
 pytest-xdist
 pyyaml
 qwen_vl_utils
+tilelang==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 timm!=1.0.23
+triton<=3.7.1,>=3.4.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine

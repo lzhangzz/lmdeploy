@@ -1,6 +1,6 @@
 # Tools
 
-LMDeploy 通过兼容 OpenAI 的 Chat Completions API 提供工具调用能力，支持 InternLM、Qwen、Llama、DeepSeek、GLM、Kimi 和 GPT-OSS 等系列中的模型。你可以在请求的 `tools` 字段中定义可用函数及其参数 schema。LMDeploy 将模型输出解析为包含函数名和参数的 `tool_calls`，由应用程序执行相应函数，再通过 `tool` 消息将结果传回模型，继续对话。
+LMDeploy 通过兼容 OpenAI 的 Chat Completions API 提供工具调用能力，支持 InternLM、Qwen、Llama、GLM 和 GPT-OSS 等系列中的模型。你可以在请求的 `tools` 字段中定义可用函数及其参数 schema。LMDeploy 将模型输出解析为包含函数名和参数的 `tool_calls`，由应用程序执行相应函数，再通过 `tool` 消息将结果传回模型，继续对话。
 
 启动 `lmdeploy serve api_server` 时，请通过 `--tool-call-parser` 选择与模型工具调用格式匹配的解析器，例如 Intern-S2-Preview 使用 `interns2-preview`，Qwen3.5 使用 `qwen3coder`。可通过 `lmdeploy serve api_server --help` 查看当前可用的解析器名称。GPT-OSS 在安装 `openai_harmony` 后会自动使用 Harmony 响应解析器。
 

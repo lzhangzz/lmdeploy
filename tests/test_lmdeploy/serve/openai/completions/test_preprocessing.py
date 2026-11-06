@@ -63,7 +63,7 @@ def test_multi_prompt_preprocessing_is_concurrent_and_fails_as_one_request():
 
         def __init__(self):
             self.async_engine = _AsyncEngine()
-            self.engine_config = SimpleNamespace(logprobs_mode=None)
+            self.engine_config = SimpleNamespace()
             self.session_manager = _SessionManager()
             self.default_gen_config = {}
             self.sessions = []

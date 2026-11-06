@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 import tqdm
 from typing_extensions import deprecated
 
-from .archs import autoget_backend_config, get_task
-from .messages import GenerationConfig, PytorchEngineConfig, Response, SpeculativeConfig, TurbomindEngineConfig
+from .archs import check_backend_config, check_turbomind_support, get_task
+from .messages import GenerationConfig, Response, SpeculativeConfig, TurbomindEngineConfig
 from .model import ChatTemplateConfig
 from .serve.core.exceptions import ErrorCode, RequestError
 from .serve.processors import MultimodalProcessor
@@ -35,7 +35,7 @@ class Pipeline:
 
     def __init__(self,
                  model_path: str,
-                 backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                 backend_config: TurbomindEngineConfig | None = None,
                  chat_template_config: ChatTemplateConfig | None = None,
                  log_level: str = 'WARNING',
                  max_log_len: int | None = None,
@@ -59,27 +59,20 @@ class Pipeline:
 
         os.environ.setdefault('TM_LOG_LEVEL', log_level)
         logger.setLevel(log_level)
+        backend_config = check_backend_config(backend_config)
 
         # Download model if the path does not exist locally
         if not os.path.exists(model_path):
-            download_dir = backend_config.download_dir if backend_config else None
-            revision = backend_config.revision if backend_config else None
-            model_path = get_model(model_path, download_dir, revision)
+            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
 
         # Download speculative model if the path does not exist locally
         if speculative_config and speculative_config.model and not os.path.exists(speculative_config.model):
-            download_dir = backend_config.download_dir if backend_config else None
-            speculative_config.model = get_model(speculative_config.model, download_dir)
+            speculative_config.model = get_model(speculative_config.model, backend_config.download_dir)
 
         # Create inference engine
-        backend, backend_config = autoget_backend_config(model_path, backend_config,
-                                                         trust_remote_code=trust_remote_code)
-        _, pipeline_class = get_task(backend,
-                                     model_path,
-                                     trust_remote_code=trust_remote_code,
-                                     backend_config=backend_config)
+        check_turbomind_support(model_path, trust_remote_code=trust_remote_code)
+        _, pipeline_class = get_task(model_path, trust_remote_code=trust_remote_code, backend_config=backend_config)
         self.async_engine = pipeline_class(model_path,
-                                           backend=backend,
                                            backend_config=backend_config,
                                            chat_template_config=chat_template_config,
                                            max_log_len=max_log_len,
@@ -97,7 +90,6 @@ class Pipeline:
               prompts: list[str] | str | list[dict] | list[list[dict]] | tuple | list[tuple],
               gen_config: GenerationConfig | list[GenerationConfig] | None = None,
               do_preprocess: bool = True,
-              adapter_name: str | None = None,
               use_tqdm: bool = False,
               **kwargs):
         """Inference prompts.
@@ -107,7 +99,6 @@ class Pipeline:
                 tuple can be (prompt, image or [images]) or (image or [images], prompt).
             gen_config: Generation configuration(s).
             do_preprocess: Whether to pre-process messages.
-            adapter_name: Adapter name.
             use_tqdm: Whether to use progress bar.
             **kwargs: Additional keyword arguments.
 
@@ -123,7 +114,6 @@ class Pipeline:
             requests = self._request_generator(prompts,
                                                gen_config=gen_config,
                                                do_preprocess=do_preprocess,
-                                               adapter_name=adapter_name,
                                                stream_response=False,
                                                **kwargs)
             for g in self._infer(requests, multiplex=False, pbar=pbar):
@@ -146,7 +136,6 @@ class Pipeline:
                      sessions: Session | list[Session] | None = None,
                      gen_config: GenerationConfig | list[GenerationConfig] | None = None,
                      do_preprocess: bool = True,
-                     adapter_name: str | None = None,
                      stream_response: bool = True,
                      **kwargs):
         """Stream inference.
@@ -157,7 +146,6 @@ class Pipeline:
             sessions: Sessions. Each of which corresponds to a prompt.
             gen_config: Generation configuration(s).
             do_preprocess: Whether to pre-process messages.
-            adapter_name: Adapter name.
             stream_response: Whether to stream the response. If True, the generator will stream the response.
                 Otherwise, the generator will run until finish and return the final response. This argument
                 is introduced to support the streaming and non-streaming modes of Pipeline.chat.
@@ -171,7 +159,6 @@ class Pipeline:
                                            sessions=sessions,
                                            gen_config=gen_config,
                                            do_preprocess=do_preprocess,
-                                           adapter_name=adapter_name,
                                            stream_response=stream_response,
                                            **kwargs)
         return self._infer(requests, multiplex=True)
@@ -206,7 +193,6 @@ class Pipeline:
              session=None,
              gen_config: GenerationConfig | None = None,
              stream_response=False,
-             adapter_name=None,
              **kwargs) -> Session | Iterator:
         """Chat.
 
@@ -215,7 +201,6 @@ class Pipeline:
             session: the chat session.
             gen_config: an instance of GenerationConfig. Default to None.
             stream_response: whether to stream the response.
-            adapter_name: adapter name.
             **kwargs: additional keyword arguments.
 
         Returns:
@@ -230,7 +215,6 @@ class Pipeline:
                                       sessions=session,
                                       gen_config=gen_config,
                                       stream_response=stream_response,
-                                      adapter_name=adapter_name,
                                       multiplex=True,
                                       **kwargs)
 
@@ -261,29 +245,6 @@ class Pipeline:
     def session(self) -> Session:
         """Create a new session."""
         return self.session_mgr.get()
-
-    def get_reward_score(self, input_ids: list) -> list[float]:
-        """Get reward score.
-
-        Args:
-            input_ids: a list of token_id or a list of token_id list or token_id tensor.
-
-        Returns:
-            list[float]: reward score in a list. If the input_ids is a list of token_id,
-                the return value is still a list with length 1.
-        """
-        supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
-        arch = self.async_engine.arch
-        if arch not in supported_reward_models:
-            raise ValueError(f'{arch} is not in reward model list: {supported_reward_models}')
-        assert isinstance(input_ids, list)
-        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, list) for x in input_ids)
-        # Make input_ids a list of token_id list
-        input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
-        logits = self._run(coro=self.async_engine.async_get_logits(input_ids=input_ids)).result()
-        logits = [x.squeeze() for x in logits]
-        scores = [x[-1].cpu().item() for x in logits]
-        return scores
 
     def get_ppl(self, input_ids: list[int] | list[list[int]]) -> list[float]:
         """Get perplexity scores given a list of input tokens.

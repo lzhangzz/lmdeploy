@@ -1,5 +1,4 @@
 import pytest
-from utils.config_utils import ROUTED_EXPERTS_UNSUPPORTED_SKIP
 from utils.constant import CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     ALL_OPTIONAL_TOOL,
@@ -19,7 +18,6 @@ from utils.tool_reasoning_definitions import (
     collect_stream_tool_call,
     validate_output_ids_match_usage,
     validate_output_ids_present,
-    validate_routed_experts_length,
     validate_stream_tool_call_result,
     validate_stream_tool_call_with_tokens,
 )
@@ -32,8 +30,8 @@ from .conftest import (
     MESSAGES_PARALLEL_MIXED,
     MESSAGES_PARALLEL_WEATHER,
     MULTI_TURN_WEATHER_CITIES,
-    _apply_experts_marks,
     _apply_marks,
+    _apply_token_ids_marks,
     _ToolCallTestBase,
 )
 
@@ -685,14 +683,13 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
 
 
 # ===========================================================================
-# return_token_ids + routed_experts
+# return_token_ids
 # ===========================================================================
 
 
-@_apply_experts_marks
-class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
-    """Streaming tool calls with return_token_ids; routed_experts on
-    pytorch."""
+@_apply_token_ids_marks
+class TestToolCallTokenIds(_ToolCallTestBase):
+    """Streaming tool calls with return_token_ids."""
 
     def test_streaming_return_token_ids(self, backend, model_case):
         """return_token_ids=True must yield one output_ids entry per completion
@@ -710,77 +707,8 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         validate_output_ids_present(r)
         validate_output_ids_match_usage(r)
 
-    def test_streaming_routed_experts_length(self, backend, model_case):
-        """routed_experts length must equal prompt_tokens + len(output_ids) - 1."""
-        if not self._validate_experts():
-            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
-        r = self._stream_tool_call_with_tokens(
-            MESSAGES_ASKING_FOR_WEATHER,
-            tools=[WEATHER_TOOL],
-        )
-        validate_stream_tool_call_result(
-            r,
-            expected_function_name=WEATHER_TOOL['function']['name'],
-            **self._parser_validation_kwargs([WEATHER_TOOL]),
-        )
-        assert r['stream_complete']
-        validate_output_ids_present(r)
-        validate_output_ids_match_usage(r)
-        validate_routed_experts_length(r)
-
-    def test_streaming_routed_experts_max_tokens_cap_followup(self, backend, model_case):
-        """Hit CAPPED_MAX_COMPLETION_TOKENS with routed_experts; no overshoot;
-        follow-up OK.
-
-        Does not require a tool call — forces length finish via ignore_eos so experts length stays correct when
-        completion hits the length cap.
-        """
-        if not self._validate_experts():
-            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
-        prompt = 'Continue writing forever without stopping.'
-        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
-        overshoot_slack = 1
-        messages = [
-            {
-                'role': 'user',
-                'content': prompt,
-            },
-        ]
-        r = self._stream_tool_call_with_tokens(
-            messages,
-            tools=None,
-            ignore_eos=True,
-            max_completion_tokens=max_tokens,
-        )
-        assert r['stream_complete'], 'stream ended before data: [DONE]'
-        assert r['finish_reason'] == 'length', (
-            f'Expected finish_reason length, got {r["finish_reason"]!r}')
-        validate_output_ids_present(r)
-        validate_output_ids_match_usage(r)
-        validate_routed_experts_length(r)
-
-        completion_tokens = r.get('completion_tokens') or len(r['output_ids'])
-        assert completion_tokens <= max_tokens + overshoot_slack, (
-            f'Length cap overshoot: completion_tokens={completion_tokens} > '
-            f'max_tokens={max_tokens}+{overshoot_slack}')
-
-        followup = self._stream_tool_call_with_tokens(
-            [
-                {
-                    'role': 'user',
-                    'content': 'Say hi in one word.',
-                },
-            ],
-            tools=None,
-            max_completion_tokens=8,
-        )
-        assert followup['stream_complete'], 'follow-up stream ended before data: [DONE]'
-        validate_output_ids_present(followup)
-        if self._validate_experts():
-            validate_routed_experts_length(followup)
-
     def test_streaming_tool_call_with_tokens_full_validation(self, backend, model_case):
-        """Single-turn: tool call + output_ids + routed_experts + parser checks."""
+        """Single-turn: tool call + output_ids + parser checks."""
         r = self._stream_tool_call_with_tokens(
             MESSAGES_ASKING_FOR_WEATHER,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
@@ -789,7 +717,6 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
             r,
             expected_function_name=WEATHER_TOOL['function']['name'],
             **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
-            **self._experts_validation_kwargs(),
         )
 
 
@@ -832,10 +759,9 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
         assert len(messages) == 1 + num_turns * 3, (
             f'Expected system + {num_turns}×(user+assistant+tool) messages')
 
-    @pytest.mark.experts
-    def test_multi_turn_streaming_with_token_ids_and_experts(self, backend, model_case):
-        """Multi-turn loop with per-turn output_ids; routed_experts on
-        pytorch."""
+    @pytest.mark.token_ids
+    def test_multi_turn_streaming_with_token_ids(self, backend, model_case):
+        """Multi-turn loop with per-turn output_ids."""
         messages = [
             {
                 'role': 'system',
@@ -852,14 +778,11 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
                 'content': f'What is the weather in {city}?',
             })
             r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
-            prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
             validate_stream_tool_call_with_tokens(
                 r,
-                prompt_tokens=prompt_tokens,
                 expected_function_name=WEATHER_TOOL['function']['name'],
                 **self._parser_validation_kwargs([WEATHER_TOOL]),
-                **self._experts_validation_kwargs(),
-            )
+                )
             self._append_assistant_and_tool_messages(messages, r)
 
 

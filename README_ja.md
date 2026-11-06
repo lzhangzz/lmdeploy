@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/11\] LMDeploy は TurboMind 専用になりました。PyTorch エンジン、CUDA 以外のプラットフォーム（Ascend、MACA、Cambricon、ROCm）、LoRA アダプター、報酬モデル、W8A8/SmoothQuant、PD 分離デプロイ（DistServe）は削除されました。詳細は[破壊的変更](docs/en/get_started/breaking_changes.md)を参照してください。
 - \[2026/04\] PyPI で LMDeploy のストレージ枠が拡張され、wheel のアップロードが再開されました。`v0.12.3` はすでに PyPI で公開されており、`pip install lmdeploy` で直接インストールできます。
 - \[2026/02\] [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35) をサポート
 - \[2026/02\] [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) の 4 ビット対称／非対称量子化をサポート。詳細な手順は[こちら](docs/en/quantization/llm_compressor.md)を参照してください
@@ -50,7 +51,7 @@ ______________________________________________________________________
 - \[2024/02\] Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOEなどをサポート
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE)が[LMDeployサービングサービス](./docs/en/llm/api_server.md)とシームレスに統合されました
 - \[2024/01\] 複数モデル、複数マシン、複数カードの推論サービスをサポート。使用方法は[こちら](./docs/en/llm/proxy_server.md)を参照してください
-- \[2024/01\] [PyTorch推論エンジン](./docs/en/inference/pytorch.md)をサポートし、完全にPythonで開発されており、開発者の障壁を下げ、新機能や技術の迅速な実験を可能にします
+- \[2024/01\] PyTorch推論エンジンをサポートし、完全にPythonで開発されており、開発者の障壁を下げ、新機能や技術の迅速な実験を可能にします
 
 </details>
 
@@ -124,41 +125,18 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
-  <li>Qwen3-Next(80B)</li>
   <li>Code Llama (7B - 34B)</li>
-  <li>ChatGLM2 (6B)</li>
-  <li>GLM-4 (9B)</li>
-  <li>GLM-4-0414 (9B, 32B)</li>
-  <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
-  <li>Mistral (7B)</li>
-  <li>DeepSeek-MoE (16B)</li>
-  <li>DeepSeek-V2 (16B, 236B)</li>
-  <li>DeepSeek-V2.5 (236B)</li>
-  <li>DeepSeek-V3 (685B)</li>
-  <li>DeepSeek-V3.2 (685B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
-  <li>Gemma (2B - 7B)</li>
-  <li>Phi-3-mini (3.8B)</li>
-  <li>Phi-3.5-mini (3.8B)</li>
-  <li>Phi-3.5-MoE (16x3.8B)</li>
-  <li>Phi-4-mini (3.8B)</li>
-  <li>MiniCPM3 (4B)</li>
-  <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
-  <li>GLM-5 (754B)</li>
 </ul>
 </td>
 <td>
 <ul>
-  <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
-  <li>Qwen3-VL (2B - 235B)</li>
   <li>Qwen3.5 (0.8B - 397B)</li>
-  <li>DeepSeek-VL (7B)</li>
-  <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
@@ -166,27 +144,16 @@ LMDeploy TurboMindエンジンは卓越した推論能力を持ち、さまざ�
   <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
+  <li>Intern-S2-Preview (35B-A3B, 397B)</li>
+  <li>Intern-S2-Mobius (35B)</li>
   <li>ChemVLM (8B-26B)</li>
-  <li>CogVLM-Chat (17B)</li>
-  <li>CogVLM2-Chat (19B)</li>
-  <li>MiniCPM-Llama3-V-2_5</li>
-  <li>MiniCPM-V-2_6</li>
-  <li>Phi-3-vision (4.2B)</li>
-  <li>Phi-3.5-vision (4.2B)</li>
-  <li>GLM-4V (9B)</li>
-  <li>GLM-4.1V-Thinking (9B)</li>
-  <li>Molmo (7B-D,72B)</li>
-  <li>Gemma3 (1B - 27B)</li>
-  <li>Llama4 (Scout, Maverick)</li>
 </ul>
 </td>
 </tr>
 </tbody>
 </table>
 
-LMDeployは、[TurboMind](./docs/en/inference/turbomind.md)および[PyTorch](./docs/en/inference/pytorch.md)の2つの推論エンジンを開発しました。それぞれ異なる焦点を持っています。前者は推論性能の究極の最適化を目指し、後者は完全にPythonで開発されており、開発者の障壁を下げることを目指しています。
-
-サポートされているモデルの種類や推論データタイプに違いがあります。各エンジンの能力については[この表](./docs/en/supported_models/supported_models.md)を参照し、実際のニーズに最適なものを選択してください。
+LMDeployは、C++とCUDAで開発されたNVIDIA GPU向けの推論エンジン[TurboMind](./docs/en/inference/turbomind.md)で動作します。サポートされているモデルと推論データタイプについては[この表](./docs/en/supported_models/supported_models.md)を参照してください。
 
 # クイックスタート [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
 
@@ -240,9 +207,7 @@ LMDeployの基本的な使用方法については、[getting_started](docs/en/g
   - [量子化](docs/en/quantization)
 - 高度なガイド
   - [推論エンジン - TurboMind](docs/en/inference/turbomind.md)
-  - [推論エンジン - PyTorch](docs/en/inference/pytorch.md)
   - [カスタムチャットテンプレート](docs/en/advance/chat_template.md)
-  - [新しいモデルの追加](docs/en/advance/pytorch_new_model.md)
   - gemmチューニング
   - [長文推論](docs/en/advance/long_context.md)
   - [マルチモデル推論サービス](docs/en/llm/proxy_server.md)

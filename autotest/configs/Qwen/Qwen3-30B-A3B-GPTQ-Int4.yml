@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3-30B-A3B-GPTQ-Int4
-
 a100:
 - model_type: chat
   engine_config:

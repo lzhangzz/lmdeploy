@@ -1,5 +1,4 @@
 # HF model id: meta-llama/Llama-3.2-3B-Instruct
-
 a100:
 - model_type: chat
   engine_config:
@@ -8,16 +7,11 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 h:
 - model_type: chat
@@ -27,31 +21,17 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   interface:
-    pytorch:
-      suites:
-      - base
-      - logprob
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 '3090':
 - model_type: chat
@@ -63,17 +43,12 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
     - awq
-    pytorch:
-    - w8a8
 '5080':
 - model_type: chat
   engine_config:
@@ -84,15 +59,9 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
     - awq
-    pytorch:
-    - awq
-    - w8a8

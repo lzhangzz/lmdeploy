@@ -20,15 +20,10 @@ LAYER_TYPE_MAP = {
     'Qwen3_5ForConditionalGeneration': 'Qwen3_5DecoderLayer',
     'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeDecoderLayer',
     'LlamaForCausalLM': 'LlamaDecoderLayer',
-    'LlavaLlamaForCausalLM': 'LlamaDecoderLayer',
-    'MGMLlamaForCausalLM': 'LlamaDecoderLayer',  # mini gemini
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewDecoderLayer',
-    'Phi3ForCausalLM': 'Phi3DecoderLayer',
-    'ChatGLMForConditionalGeneration': 'GLMBlock',
     'MixtralForCausalLM': 'MixtralDecoderLayer',
     'Qwen2VLForConditionalGeneration': 'Qwen2VLDecoderLayer',
     'Qwen2_5_VLForConditionalGeneration': 'Qwen2_5_VLDecoderLayer',
-    'MistralForCausalLM': 'MistralDecoderLayer',
 }
 
 NORM_TYPE_MAP = {
@@ -40,15 +35,10 @@ NORM_TYPE_MAP = {
     'Qwen3_5ForConditionalGeneration': 'Qwen3_5RMSNorm',
     'Qwen3_5MoeForConditionalGeneration': 'Qwen3_5MoeRMSNorm',
     'LlamaForCausalLM': 'LlamaRMSNorm',
-    'LlavaLlamaForCausalLM': 'LlamaRMSNorm',
-    'MGMLlamaForCausalLM': 'LlamaRMSNorm',  # mini gemini
     'InternS2PreviewForConditionalGeneration': 'InternS2PreviewRMSNorm',
-    'Phi3ForCausalLM': 'Phi3RMSNorm',
-    'ChatGLMForConditionalGeneration': 'RMSNorm',
     'MixtralForCausalLM': 'MixtralRMSNorm',
     'Qwen2VLForConditionalGeneration': 'Qwen2RMSNorm',
     'Qwen2_5_VLForConditionalGeneration': 'Qwen2RMSNorm',
-    'MistralForCausalLM': 'MistralRMSNorm',
 }
 
 HEAD_NAME_MAP = {
@@ -60,43 +50,23 @@ HEAD_NAME_MAP = {
     'Qwen3_5ForConditionalGeneration': 'lm_head',
     'Qwen3_5MoeForConditionalGeneration': 'lm_head',
     'LlamaForCausalLM': 'lm_head',
-    'LlavaLlamaForCausalLM': 'lm_head',
-    'MGMLlamaForCausalLM': 'lm_head',  # mini gemini
     'InternS2PreviewForConditionalGeneration': 'lm_head',
-    'Phi3ForCausalLM': 'lm_head',
-    'ChatGLMForConditionalGeneration': 'output_layer',
     'MixtralForCausalLM': 'lm_head',
     'Qwen2VLForConditionalGeneration': 'lm_head',
     'Qwen2_5_VLForConditionalGeneration': 'lm_head',
-    'MistralForCausalLM': 'lm_head',
 }
 
 
 def check_vl_llm(backend: str, config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
-            'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
-        return True
-
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
-        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
-        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
+        'InternVLChatModel', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
         'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
-        'Qwen3_5MoeForConditionalGeneration', 'MolmoForCausalLM', 'Gemma3ForConditionalGeneration',
-        'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration',
-        'InternS1ProForConditionalGeneration',
-        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration',
         'InternS2PreviewForConditionalGeneration'
     ])
-    if arch == 'MultiModalityCausalLM' and 'language_config' in config:
-        return True
-    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
-        return True
-    elif arch in supported_archs:
-        return True
-    return False
+    return arch in supported_archs
 
 
 def get_task(backend: str, model_path: str):
@@ -250,10 +220,8 @@ def load_model_and_tokenizer(model: str,
     elif model_type == 'vlm':
         vl_model = load_vl_model(model, backend=None, with_llm=True, trust_remote_code=trust_remote_code).vl_model
         model = vl_model
-        if hasattr(vl_model, 'language_model'):  # deepseek-vl, ...
+        if hasattr(vl_model, 'language_model'):  # InternVL, ...
             model = vl_model.language_model
-        if hasattr(vl_model, 'llm'):  # MiniCPMV, ...
-            model = vl_model.llm
         model.config.use_cache = False
         if hasattr(model.config, 'text_config'):
             model.config.text_config.use_cache = False

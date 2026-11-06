@@ -1,6 +1,6 @@
 # Tools Calling
 
-LMDeploy provides tool calling through its OpenAI-compatible Chat Completions API for models in the InternLM, Qwen, Llama, DeepSeek, GLM, Kimi, and GPT-OSS families. Define the available functions and their parameter schemas in the request's `tools` field. LMDeploy parses the model's output into `tool_calls` containing function names and arguments; your application executes the functions and sends their results back as `tool` messages to continue the conversation.
+LMDeploy provides tool calling through its OpenAI-compatible Chat Completions API for models in the InternLM, Qwen, Llama, GLM, and GPT-OSS families. Define the available functions and their parameter schemas in the request's `tools` field. LMDeploy parses the model's output into `tool_calls` containing function names and arguments; your application executes the functions and sends their results back as `tool` messages to continue the conversation.
 
 When starting `lmdeploy serve api_server`, select a parser that matches the model's tool-call format with `--tool-call-parser`, for example, `interns2-preview` for Intern-S2-Preview or `qwen3coder` for Qwen3.5. Run `lmdeploy serve api_server --help` to see the available parser names. GPT-OSS uses an automatically selected Harmony response parser when `openai_harmony` is installed.
 

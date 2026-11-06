@@ -5,7 +5,6 @@ import pytest
 from utils.config_utils import (
     SUFFIX_INNER_AWQ,
     SUFFIX_INNER_GPTQ,
-    SUFFIX_INNER_W8A8,
     get_cuda_prefix_by_workerid,
     get_quantization_model_list,
 )
@@ -15,7 +14,6 @@ from utils.quantization_utils import quantization
 _QUANT_SUFFIX = {
     'awq': SUFFIX_INNER_AWQ,
     'gptq': SUFFIX_INNER_GPTQ,
-    'w8a8': SUFFIX_INNER_W8A8,
 }
 
 

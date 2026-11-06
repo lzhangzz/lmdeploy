@@ -10,7 +10,7 @@ LMDeploy 把视觉-语言模型（VLM）复杂的推理过程，抽象为简单�
 
 使用 pipeline 接口推理其他 VLM 模型，大同小异，主要区别在于模型依赖的配置和安装。你可以阅读[此处](https://lmdeploy.readthedocs.io/zh-cn/latest/multi_modal/)，查看不同模型的环境安装和配置方式
 
-> **另请参阅：** [多模态输入](multimodal_inputs.md) — 涵盖所有模态（图像、视频、音频、时序数据）的消息格式参考，包含 OpenAI 风格示例。
+> **另请参阅：** [多模态输入](multimodal_inputs.md) — 涵盖所有模态（图像、视频）的消息格式参考，包含 OpenAI 风格示例。
 
 ## "Hello, world" 示例
 
@@ -97,14 +97,14 @@ print(response)
 
 ### 自定义图片 token 的位置
 
-默认情况下，LMDeploy 会根据算法 repo 提供的对话模版将表示图片的特殊 token 插入到 user prompt 中，但在一些模型中，图片 token 的位置并没有限制，如 deepseek-vl，或者用户需要自定义图片 token 插入的位置。这种情况下，用户需要手动将表示图片的 token 插入到 prompt 中。LMDeploy 使用 `<IMAGE_TOKEN>` 作为表示图片的特殊 token。
+默认情况下，LMDeploy 会根据算法 repo 提供的对话模版将表示图片的特殊 token 插入到 user prompt 中，但在一些模型中，图片 token 的位置并没有限制，或者用户需要自定义图片 token 插入的位置。这种情况下，用户需要手动将表示图片的 token 插入到 prompt 中。LMDeploy 使用 `<IMAGE_TOKEN>` 作为表示图片的特殊 token。
 
 ```python
 from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
-pipe = pipeline('deepseek-ai/deepseek-vl-1.3b-chat')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe((f'describe this image{IMAGE_TOKEN}', image))
@@ -113,33 +113,19 @@ print(response)
 
 ### 设置对话模板
 
-推理时，LMDeploy 会根据模型路径匹配内置的对话模板，并把对话模板应用到输入的提示词上。如果用户使用的是本地模型，并且模型文件夹名字与官方模型不一致时，需要手动指定对话模版。以 [llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) 为例，官方使用 ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) 对话模版，如果本地文件夹名字不是 `llava-v1.5-7b`，可以按照如下方式使用。
+推理时，LMDeploy 会根据模型路径匹配内置的对话模板，并把对话模板应用到输入的提示词上。如果用户使用的是本地模型，并且模型文件夹名字与官方模型不一致时，需要手动指定对话模版。以 [OpenGVLab/InternVL-Chat-V1-1](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-1) 为例，官方使用 'internvl-zh' 对话模版，如果本地文件夹名字与官方模型不一致，可以按照如下方式使用。
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
 from lmdeploy.vl import load_image
 pipe = pipeline('local_model_folder',
-                chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
+                chat_template_config=ChatTemplateConfig(model_name='internvl-zh'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
 print(response)
 ```
 
 关于如何自定义对话模版，请参考[这里](../advance/chat_template.md)
-
-### 设置视觉模型参数
-
-可通过设置 `VisionConfig` 修改视觉模型默认参数
-
-```python
-from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
-vision_config=VisionConfig(max_batch_size=16)
-pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
-image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe(('describe this image', image))
-print(response)
-```
 
 ### 获取生成 token 的 logits
 
@@ -240,23 +226,23 @@ gc.collect()
 
 ## 纯语言模型模式（language-model-only）
 
-对于同时支持视觉和文本的混合模型（如 Qwen3-VL、Qwen3.5、InternVL），可以只加载语言模型部分，不加载视觉/多模态编码器，从而释放更多 GPU 显存给 KV cache。
+对于同时支持视觉和文本的混合模型（如 Qwen3.5、InternVL），可以只加载语言模型部分，不加载视觉/多模态编码器，从而释放更多 GPU 显存给 KV cache。
 
 **CLI（serve）：**
 
 ```bash
-lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B --language-model-only
 ```
 
 **Python API：**
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import TurbomindEngineConfig
 
 pipe = pipeline(
-    'Qwen/Qwen3-VL-8B-Instruct',
-    backend_config=PytorchEngineConfig(language_model_only=True),
+    'Qwen/Qwen3.5-35B-A3B',
+    backend_config=TurbomindEngineConfig(language_model_only=True),
 )
 ```
 

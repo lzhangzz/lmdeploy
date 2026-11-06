@@ -2,12 +2,7 @@
 
 LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视化界面。
 
-对于 PyTorch 后端，`lmdeploy:gpu_cache_usage_perc` 默认仅统计仍被活跃请求引用的 GPU 逻辑块。
-同一逻辑块被多个请求共享时只计算一次，仅由前缀缓存或已停止会话持有的逻辑块不会被计算，适合跨副本路由时比较请求负载。
-启动服务前设置 `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` 后，同一指标将改为 GPU 逻辑块总占用率，
-其中包括为前缀复用保留的逻辑块。
-
-对于 Turbomind 后端，`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
+`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
 前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
 尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。
 
@@ -21,7 +16,7 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 
 - 已启用指标系统的 LMDeploy 服务正在运行
 
-## 使用说明 (DP = 1)
+## 使用说明
 
 1. **启动已启用指标的 LMDeploy 服务**
 
@@ -60,59 +55,6 @@ docker compose up
 6. **查看仪表盘**
 
 预配置的 LMDeploy 仪表盘将自动加载。
-
-## 使用说明 (DP > 1)
-
-1. **启动已启用指标的 LMDeploy 服务**
-
-以模型 `Qwen/Qwen2.5-7B-Instruct` 为例，使用 `DP=2，TP=2` 启动服务：
-
-```bash
-# Proxy server
-lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
-
-# API server
-LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
-LMDEPLOY_DP_MASTER_PORT=29555 \
-lmdeploy serve api_server \
-    Qwen/Qwen2.5-7B-Instruct \
-    --backend pytorch \
-    --tp 2 \
-    --dp 2 \
-    --proxy-url http://0.0.0.0:8000 \
-    --nnodes 1 \
-    --node-rank 0
-```
-
-您应该能在代理服务器列表中看到多个 API 服务实例。详细信息可以在 `lmdeploy/serve/proxy/proxy_config.json` 中找到。
-
-例如，您可能会看到如下 API 服务地址：
-
-```
-http://$host_ip:$api_server_port1
-
-http://$host_ip:$api_server_port2
-```
-
-2. **修改 Prometheus 配置**
-
-当 DP > 1 时，LMDeploy 会为每个 DP Rank 启动一个 API 服务。如果你想监控其中某个 API 服务，例如：`http://$host_ip:$api_server_port1`，请修改配置文件 `lmdeploy/monitoring/prometheus.yaml` 如下所示。
-
-> 注意：这里应使用实际主机的 IP 地址而非 127.0.0.1，因为当 DP > 1 时，LMDeploy 是通过实际主机 IP 启动 API 服务的。
-
-```
-global:
-  scrape_interval: 5s
-  evaluation_interval: 30s
-
-scrape_configs:
-  - job_name: lmdeploy
-    static_configs:
-      - targets:
-          - '$host_ip:$api_server_port1' # <= 修改此处
-```
-
-3. **进入监控目录并执行上述相同步骤**
 
 ## 故障排除
 

@@ -21,8 +21,6 @@ def build_eval_judge_run_config(config: dict, proxy_url: str) -> dict:
     eval_run_config = copy.deepcopy(EVAL_RUN_CONFIG)
     extra_params = eval_run_config.setdefault('extra_params', {})
     extra_params['proxy-url'] = proxy_url
-    if config.get('device') == 'ascend':
-        extra_params['device'] = 'ascend'
     return eval_run_config
 
 

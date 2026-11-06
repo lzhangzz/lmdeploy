@@ -41,7 +41,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    get_started/installation.md
    get_started/get_started.md
-   get_started/index.rst
+   get_started/breaking_changes.md
 
 .. _支持的模型:
 .. toctree::
@@ -49,7 +49,6 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 模型列表
 
    supported_models/supported_models.md
-   supported_models/reward_models.md
 
 .. _llm_部署:
 .. toctree::
@@ -62,7 +61,6 @@ LMDeploy 工具箱提供以下核心功能：
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md
    llm/api_server_responses.md
-   llm/api_server_lora.md
    llm/proxy_server.md
 
 .. _vlm_部署:
@@ -82,7 +80,6 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 量化
 
    quantization/w4a16.md
-   quantization/w8a8.md
    quantization/kv_quant.md
    quantization/llm_compressor.md
 
@@ -100,20 +97,15 @@ LMDeploy 工具箱提供以下核心功能：
    :caption: 进阶指南
 
    inference/turbomind.md
-   inference/pytorch.md
-   advance/pytorch_new_model.md
    advance/long_context.md
    advance/chat_template.md
    advance/debug_turbomind.md
    advance/structed_output.md
    advance/parser_design.md
-   advance/pytorch_multinodes.md
-   advance/pytorch_profiling.md
    advance/metrics.md
    advance/context_parallel.md
    advance/spec_decoding.md
    advance/update_weights.md
-   advance/checkpoint_engine.md
 
 .. toctree::
    :maxdepth: 1

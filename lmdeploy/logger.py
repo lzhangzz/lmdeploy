@@ -33,7 +33,7 @@ class RequestLogger:
                    f'prompt={prompt!r}')
 
     def log_inputs(self, session_id: int, prompt: str | None, prompt_token_ids: list[int] | None,
-                   gen_config: GenerationConfig, adapter_name: str) -> None:
+                   gen_config: GenerationConfig) -> None:
         if not logger.isEnabledFor(REQUEST_LOG_LEVEL):
             return
         max_log_len = self.max_log_len
@@ -43,7 +43,6 @@ class RequestLogger:
                 prompt = prompt[:max_log_len]
 
         logger.log(REQUEST_LOG_LEVEL, f'session={session_id}, '
-                   f'adapter_name={adapter_name}, '
                    f'input_tokens={input_tokens}, '
                    f'gen_config={gen_config}, '
                    f'prompt={prompt!r}')

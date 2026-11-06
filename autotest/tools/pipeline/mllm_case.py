@@ -7,7 +7,7 @@ import fire
 import numpy as np
 from PIL import Image
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.vl import encode_image_base64, load_image, load_video
 from lmdeploy.vl.constants import IMAGE_TOKEN
@@ -94,62 +94,37 @@ def _log_case_result(case_name: str, payload: Any) -> None:
     print(f'[caseresult {case_name} start]{dumped}[caseresult {case_name} end]\n')
 
 
-def _resolve_runtime_device(device: str | None = None) -> str:
-    if device:
-        return device
-    return os.environ.get('DEVICE', 'cuda')
-
-
-def _release_torch_device_memory(device: str) -> None:
+def _release_torch_device_memory() -> None:
     try:
         import torch
     except Exception:
         return
-    if device == 'ascend':
-        try:
-            if hasattr(torch, 'npu') and torch.npu.is_available():
-                torch.npu.empty_cache()
-                if hasattr(torch.npu, 'ipc_collect'):
-                    torch.npu.ipc_collect()
-        except Exception:
-            pass
-        return
-    if device == 'cuda' and torch.cuda.is_available():
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
         if hasattr(torch.cuda, 'ipc_collect'):
             torch.cuda.ipc_collect()
 
 
-def _best_effort_runtime_cleanup(pipe=None, device: str | None = None) -> None:
+def _best_effort_runtime_cleanup(pipe=None) -> None:
     if pipe is not None:
         try:
             pipe.close()
         except Exception as exc:
             print(f'Warning: failed to close pipeline cleanly: {exc!s}')
     gc.collect()
-    _release_torch_device_memory(_resolve_runtime_device(device))
-    try:
-        import ray
-        if ray.is_initialized():
-            ray.shutdown()
-    except Exception:
-        pass
+    _release_torch_device_memory()
 
 
 def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bool = False):
-    backend = run_config.get('backend')
     communicator = run_config.get('communicator')
     quant_policy = run_config.get('quant_policy')
     extra_params = run_config.get('extra_params', {})
     parallel_config = run_config.get('parallel_config', {})
 
-    if 'pytorch' == backend:
-        backend_config = PytorchEngineConfig(session_len=65152, quant_policy=quant_policy, cache_max_entry_count=0.6)
-    else:
-        backend_config = TurbomindEngineConfig(session_len=65152,
-                                               communicator=communicator,
-                                               quant_policy=quant_policy,
-                                               cache_max_entry_count=0.6)
+    backend_config = TurbomindEngineConfig(session_len=65152,
+                                           communicator=communicator,
+                                           quant_policy=quant_policy,
+                                           cache_max_entry_count=0.6)
 
     # quant format
     model_lower = model_path.lower()
@@ -181,25 +156,17 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
         if 'method' in spec_kwargs:
             speculative_config = SpeculativeConfig(**spec_kwargs)
 
-    # Extra params
-    # Normalize CLI-style kebab-case keys to PytorchEngineConfig attribute
-    param_name_map = {'device': 'device_type', 'cache_block_seq_len': 'block_size'}
+    # Extra params: CLI-style kebab-case keys map to TurbomindEngineConfig attributes.
     # YAML/CLI ``null`` means a bare flag (same as ``--enable-prefix-caching``).
     flag_true_on_null = {'enable_prefix_caching'}
-    set_attrs = set()
     for key, value in extra_params.items():
         attr_name = key.replace('-', '_')
-        attr_name = param_name_map.get(attr_name, attr_name)
         if attr_name in flag_true_on_null and (value is None or value == 'null'):
             value = True
         try:
             setattr(backend_config, attr_name, value)
-            set_attrs.add(attr_name)
         except AttributeError:
             print(f"Warning: Cannot set attribute '{attr_name}' on backend_config. Skipping.")
-
-    if 'block_size' in set_attrs and 'kernel_block_size' not in set_attrs:
-        backend_config.kernel_block_size = backend_config.block_size
 
     print('backend_config config: ' + str(backend_config))
     print('speculative_config config: ' + str(speculative_config))
@@ -255,13 +222,10 @@ def run_pipeline_mllm_test(model_path, run_config, resource_path, is_pr_test: bo
             if 'internvl' in model_path.lower() and 'internvl2-4b' not in model_path.lower():
                 internvl_vl_testcase(pipe, resource_path, enable_video_mixed=enable_video_mixed)
                 internvl_vl_testcase(pipe, resource_path, lang='cn', enable_video_mixed=enable_video_mixed)
-            if 'minicpm' in model_path.lower():
-                MiniCPM_vl_testcase(pipe, resource_path, enable_video_mixed=enable_video_mixed)
             if 'qwen' in model_path.lower():
                 Qwen_vl_testcase(pipe, resource_path, enable_video_mixed=enable_video_mixed)
     finally:
-        cleanup_device = getattr(backend_config, 'device_type', None)
-        _best_effort_runtime_cleanup(pipe, device=cleanup_device)
+        _best_effort_runtime_cleanup(pipe)
 
 
 def internvl_vl_testcase(pipe, resource_path, lang='en', enable_video_mixed: bool = True):
@@ -351,76 +315,6 @@ def internvl_vl_testcase(pipe, resource_path, lang='en', enable_video_mixed: boo
             skipped = _skip_video_error_text(exc)
             _log_case_result(f'internvl-video-{lang}', skipped)
             _log_case_result(f'internvl-video2-{lang}', skipped)
-
-
-def MiniCPM_vl_testcase(pipe, resource_path, enable_video_mixed: bool = True):
-    # Chat with multiple images
-    messages = [
-        dict(role='user',
-             content=[
-                 dict(type='text', text='Describe the two images in detail.'),
-                 dict(type='image_url', image_url=dict(max_slice_nums=9, url=f'{resource_path}/{PIC_REDPANDA}')),
-                 dict(type='image_url', image_url=dict(max_slice_nums=9, url=f'{resource_path}/{PIC_PANDA}'))
-             ])
-    ]
-    response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    _log_case_result('minicpm-combined-images', response.text)
-
-    messages.append(dict(role='assistant', content=response.text))
-    messages.append(dict(role='user', content=DESC))
-    response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    _log_case_result('minicpm-combined-images2', response.text)
-
-    # In-context few-shot learning
-    question = 'production date'
-    messages = [
-        dict(role='user',
-             content=[
-                 dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=f'{resource_path}/data1.jpeg')),
-             ]),
-        dict(role='assistant', content='2021.08.29'),
-        dict(role='user',
-             content=[
-                 dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=f'{resource_path}/data2.jpeg')),
-             ]),
-        dict(role='assistant', content='1999.05.15'),
-        dict(role='user',
-             content=[
-                 dict(type='text', text=question),
-                 dict(type='image_url', image_url=dict(url=f'{resource_path}/data3.jpeg')),
-             ])
-    ]
-    response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-    _log_case_result('minicpm-fewshot', response.text)
-
-
-    if not enable_video_mixed:
-        _log_case_result('minicpm-video', 'SKIPPED_VIDEO_GATED_MODEL')
-    else:
-        try:
-            max_video_frames = 32
-            video_path = f'{resource_path}/{DEFAULT_VIDEO_FILENAME}'
-            frames, video_meta = load_video_sampled_pil(video_path, num_frames=max_video_frames)
-            print('num frames:', len(frames), 'meta:', video_meta.get('frames_indices'))
-            question = 'What animals are in the video, and what are they doing?'
-
-            content = [dict(type='text', text=question)]
-            for frame in frames:
-                content.append(
-                    dict(type='image_url',
-                         image_url=dict(use_image_id=False,
-                                        max_slice_nums=2,
-                                        url=f'data:image/jpeg;base64,{encode_image_base64(frame)}')))  # noqa E231
-
-            messages = [dict(role='user', content=content)]
-            response = pipe(messages, gen_config=gen_config, log_level='INFO', max_log_len=10)
-            _log_case_result('minicpm-video', response.text)
-        except Exception as exc:
-            if not _is_unsupported_video_error(exc):
-                raise
-            _log_case_result('minicpm-video', _skip_video_error_text(exc))
 
 
 def Qwen_vl_testcase(pipe, resource_path, enable_video_mixed: bool = True):

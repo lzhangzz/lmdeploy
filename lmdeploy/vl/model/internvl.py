@@ -75,16 +75,14 @@ class InternVLVisionModel(VisionModel):
     """InternVL vision model."""
 
     _arch = 'InternVLChatModel'
-    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
+        super().__init__(model_path, with_llm, hf_config, backend, trust_remote_code=trust_remote_code)
         self.image_token = '<IMG_CONTEXT>'
         tokenizer = AutoTokenizer.from_pretrained(model_path,
                                                   trust_remote_code=trust_remote_code,

@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import asyncio
-import concurrent.futures
 import dataclasses
 import random
 import time
@@ -9,15 +8,12 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import Any, Literal
 
-import torch
-
 from lmdeploy._guided_decoding import ensure_response_format_compilable
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import check_backend, get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
     EngineOutput,
     GenerationConfig,
-    PytorchEngineConfig,
     Response,
     ResponseType,
     SpeculativeConfig,
@@ -26,11 +22,6 @@ from lmdeploy.messages import (
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.metrics.stats import IterationStats, RequestStats, SpeculativeDecodingStats
 from lmdeploy.model import ChatTemplateConfig, get_chat_template
-from lmdeploy.pytorch.disagg.conn.protocol import (
-    DistServeConnectionRequest,
-    DistServeDropConnectionRequest,
-    DistServeInitRequest,
-)
 from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
@@ -52,11 +43,7 @@ class GenOut:
     logprobs: list[dict[int, float]] | None = None
     logits: Any = None
     last_hidden_state: Any = None
-    cache_block_ids: list[int] | None = None  # for disaggregation
-    routed_experts: Any = None  # for RL router replay
     cached_tokens: int = 0
-    # Token ids aligned 1:1 with input-scoring logprobs rows.
-    logprob_token_ids: list[int] | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -72,7 +59,6 @@ class GenOut:
                         logprobs=self.logprobs,
                         last_hidden_state=self.last_hidden_state,
                         logits=self.logits,
-                        routed_experts=self.routed_experts,
                         cached_tokens=self.cached_tokens,
                         index=index)
 
@@ -85,13 +71,12 @@ class PreprocessedRequest:
     inputs: dict[str, Any]
     input_token_len: int
     gen_config: GenerationConfig
-    adapter_name: str | None
     consumed: bool = False
 
 
 # class AsyncEngine(LogitsMixin):
 class AsyncEngine:
-    """Async inference engine. Maintaining a bunch of tm_model instances.
+    """Async inference engine backed by TurboMind.
 
     Args:
         model_path (str): the path of a model.
@@ -109,10 +94,9 @@ class AsyncEngine:
         model_name (str): needed when model_path is a pytorch model on
             huggingface.co, such as "internlm/internlm2-chat-7b",
             "Qwen/Qwen2.5-7B-Instruct" and so on.
-        backend (str): either `turbomind` or `pytorch` backend. Default to
-            `turbomind` backend.
-        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
-            config instance. Default to none.
+        backend (str): the inference backend. Only `turbomind` is supported.
+        backend_config (TurbomindEngineConfig): backend config instance.
+            Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration.
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
@@ -122,18 +106,21 @@ class AsyncEngine:
     def __init__(self,
                  model_path: str,
                  model_name: str | None = None,
-                 backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-                 backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+                 backend: Literal['turbomind'] = 'turbomind',
+                 backend_config: TurbomindEngineConfig | None = None,
                  chat_template_config: ChatTemplateConfig | None = None,
                  max_log_len: int | None = None,
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
                  allowed_media_domains: list[str] | None = None,
                  **kwargs) -> None:
-        logger.info(f'input backend={backend}, backend_config={backend_config}')
+        if 'vision_config' in kwargs:
+            raise TypeError('vision_config was removed together with VisionConfig: '
+                            'TurboMind runs vision encoders natively. Remove this argument.')
+        check_backend(backend)
+        logger.info(f'backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
-        backend_config = backend_config or (TurbomindEngineConfig()
-                                            if backend == 'turbomind' else PytorchEngineConfig())
+        backend_config = backend_config or TurbomindEngineConfig()
         self.model_name = model_name if model_name else model_path
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
@@ -145,21 +132,11 @@ class AsyncEngine:
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
-        # build backend engine
-        if backend == 'turbomind':
-            self.engine = self._build_turbomind(model_path=model_path,
-                                                backend_config=backend_config,
-                                                trust_remote_code=trust_remote_code,
-                                                speculative_config=speculative_config,
-                                                **kwargs)
-        elif backend == 'pytorch':
-            self.engine = self._build_pytorch(model_path=model_path,
-                                              backend_config=backend_config,
-                                              trust_remote_code=trust_remote_code,
-                                              speculative_config=speculative_config,
-                                              **kwargs)
-        else:
-            raise ValueError(f'unsupported backend {backend}')
+        self.engine = self._build_turbomind(model_path=model_path,
+                                            backend_config=backend_config,
+                                            trust_remote_code=trust_remote_code,
+                                            speculative_config=speculative_config,
+                                            **kwargs)
         self.backend_config = self.engine.engine_config
         self.speculative_config = speculative_config
         self.is_sleeping = backend_config.empty_init
@@ -170,7 +147,7 @@ class AsyncEngine:
         self.stop_words = _stop_words(self.chat_template.stop_words, self.tokenizer)
         if self.stop_words is not None:
             self.stop_words = self.stop_words[0][0].tolist()
-        self.backend = backend
+        self.backend = 'turbomind'
         self.request_logger = RequestLogger(max_log_len)
 
         self.num_spec_token = (0
@@ -218,20 +195,6 @@ class AsyncEngine:
             **kwargs
         )
 
-    def _build_pytorch(self,
-                       model_path: str,
-                       backend_config: PytorchEngineConfig | None = None,
-                       speculative_config: SpeculativeConfig | None = None,
-                       trust_remote_code: bool = False,
-                       **kwargs):
-        """Inner build method for pytorch backend."""
-        from lmdeploy.pytorch.engine import Engine
-        return Engine.from_pretrained(model_path,
-                                      engine_config=backend_config,
-                                      speculative_config=speculative_config,
-                                      trust_remote_code=trust_remote_code,
-                                      **kwargs)
-
     def _build_stat_loggers(self):
         self.stat_loggers = []
 
@@ -239,7 +202,7 @@ class AsyncEngine:
             from lmdeploy.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
 
             # currently, metrics in TM engine doesn't support dp
-            dp_rank = self.backend_config.dp_rank if self.backend == 'pytorch' else 0
+            dp_rank = 0
 
             logger.info(f'enable metrics, with dp: {self.backend_config.dp} dp_rank: {dp_rank}')
             self.stat_loggers = [
@@ -390,20 +353,10 @@ class AsyncEngine:
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
             return
         self.engine.wakeup(tags)
-        # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
-        if self.backend == 'turbomind' and 'kv_cache' in tags:
+        # sleep/wakeup resets the TurboMind gateway, therefore we need to rebuild instances
+        if 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
-        self.is_sleeping = bool(self.sleeping_tags)
-
-    def complete_weights_update(self):
-        """Record that externally supplied weights are ready.
-
-        This does not wake the KV cache or enable inference. The caller must
-        explicitly wake ``kv_cache`` after the weight update succeeds.
-        """
-        self.engine.complete_weights_update()
-        self.sleeping_tags.discard('weights')
         self.is_sleeping = bool(self.sleeping_tags)
 
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
@@ -474,7 +427,6 @@ class AsyncEngine:
             tools: list[object] | None = None,
             reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
             do_preprocess: bool = True,
-            adapter_name: str | None = None,
             input_ids: list | None = None,
             enable_thinking: bool | None = None,
             chat_template_kwargs: dict | None = None,
@@ -535,7 +487,6 @@ class AsyncEngine:
                 prompt_input = await self.prompt_processor.get_prompt_input(
                     prompt=messages,
                     do_preprocess=do_preprocess,
-                    adapter_name=adapter_name,
                     tools=tools,
                     reasoning_effort=reasoning_effort,
                     chat_template_kwargs=chat_template_kwargs,
@@ -557,15 +508,7 @@ class AsyncEngine:
                     f'Input length ({input_len}) must be smaller than the model context length ({self.session_len}).')
 
             gen_config = self._determine_gen_config(input_ids, gen_config=gen_config)
-            input_logprobs_requested = gen_config.logprob_start_len >= 0
-            if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
-                raise RequestError(
-                    ErrorCode.INVALID_REQUEST,
-                    f'logprob_start_len({gen_config.logprob_start_len}) exceeds '
-                    f'the last source position for processed input_ids length({input_len}).')
-            if input_logprobs_requested and gen_config.max_new_tokens != 0:
-                raise RequestError(ErrorCode.INVALID_REQUEST, 'logprob_start_len requires max_new_tokens=0.')
-            if gen_config.max_new_tokens < 1 and not input_logprobs_requested:
+            if gen_config.max_new_tokens < 1:
                 raise RequestError(
                     ErrorCode.INVALID_REQUEST,
                     f'max_new_tokens must be at least 1, got {gen_config.max_new_tokens}.')
@@ -578,8 +521,7 @@ class AsyncEngine:
             self.request_logger.log_inputs(session,
                                            prompt=prompt,
                                            prompt_token_ids=input_ids,
-                                           gen_config=gen_config,
-                                           adapter_name=adapter_name)
+                                           gen_config=gen_config)
             logger.info(f'session={session.session_id}, '
                         f'input_tokens={input_len}, '
                         f'max_new_tokens={gen_config.max_new_tokens}, '
@@ -587,8 +529,7 @@ class AsyncEngine:
             return PreprocessedRequest(session=session,
                                        inputs=prompt_input,
                                        input_token_len=input_len,
-                                       gen_config=gen_config,
-                                       adapter_name=adapter_name)
+                                       gen_config=gen_config)
         except (asyncio.CancelledError, GeneratorExit):
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('cancel')
@@ -641,7 +582,6 @@ class AsyncEngine:
         prompt_input = request.inputs
         input_ids = prompt_input['input_ids']
         gen_config = request.gen_config
-        adapter_name = request.adapter_name
         input_len = request.input_token_len
         session_removed = False
 
@@ -651,9 +591,6 @@ class AsyncEngine:
                 self.session_mgr.remove(session)
                 session_removed = True
 
-        input_logprobs_requested = gen_config.logprob_start_len >= 0
-        logprob_token_ids = (input_ids[gen_config.logprob_start_len + 1:]
-                             if input_logprobs_requested else None)
         def is_error(status):
             return status not in [ResponseType.SUCCESS, ResponseType.FINISH, ResponseType.CANCEL]
 
@@ -691,7 +628,6 @@ class AsyncEngine:
                                      session=session,
                                      **prompt_input,
                                      gen_config=gen_config,
-                                     adapter_name=adapter_name,
                                      stream_output=stream_response) as gen:
                 # The engine has accepted multimodal data; avoid retaining preprocessed tensors here.
                 prompt_input.pop('multimodal', None)
@@ -737,9 +673,6 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=res,
-                                 logprob_token_ids=logprob_token_ids,
-                                 routed_experts=outputs.routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -766,9 +699,7 @@ class AsyncEngine:
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
-                    if input_logprobs_requested:
-                        logprobs = outputs.logprobs
-                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                    if gen_config.include_stop_str_in_output and finish_reason == 'stop':
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
@@ -776,12 +707,6 @@ class AsyncEngine:
                         last_hidden_state = outputs.last_hidden_state[-1:] if outputs.last_hidden_state else None
                         logprobs = outputs.logprobs[-1:] if outputs.logprobs else None
                         gen_len += 1
-
-                    # router replay
-                    routed_experts = outputs.routed_experts
-                    if routed_experts is not None and not isinstance(routed_experts, str) and (
-                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
-                        routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
@@ -791,12 +716,9 @@ class AsyncEngine:
                                  gen_len,
                                  finish_reason,
                                  token_ids=token_ids,
-                                 logprob_token_ids=logprob_token_ids,
                                  logprobs=logprobs,
                                  logits=logits,
                                  last_hidden_state=last_hidden_state,
-                                 routed_experts=routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids,
                                  cached_tokens=cached_tokens)
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
@@ -808,101 +730,9 @@ class AsyncEngine:
             raise runtime_error
 
     def start_loop(self, loop, use_async_api=False):
-        """Start engine loop.
-
-        When using pytorch backend with dp > 1, all dp_rank should receive at least one request before it can start
-        processing (warmup). Since pytorch engine will bound to event loop, the pipeline can only choose either the
-        synchronous apis(__call__, stream_infer, etc.) or the asynchronous api (generate) during its lifetime.
-
-        The purpose of this function is to allow users to choose whether to use the synchronous interface or the
-        asynchronous interface for the pipeline.
-        """
+        """Attach the event loop that drives request handles."""
         self.session_mgr.attach_event_loop(loop)
-        if hasattr(self.engine, 'start_loop'):
-            if use_async_api:
-                return self.engine.start_loop()
-            else:
-                fut = concurrent.futures.Future()
-
-                def _start_loop(fut):
-                    res = self.engine.start_loop()
-                    fut.set_result(res)
-
-                loop.call_soon_threadsafe(_start_loop, fut)
-                return fut.result()
-        else:
-            return True
-
-    """ DistServe Async Engine API Begin """
-
-    def free_cache(self, session_id: int):
-        if self.engine.end_session(session_id):
-            logger.debug(f'successfully free session {session_id}')
-        else:
-            logger.warning(f'Invalid Free session {session_id}.')
-
-    def p2p_initialize(self, init_request: DistServeInitRequest):
-        return self.engine.p2p_initialize(init_request)
-
-    def p2p_connect(self, conn_request: list[DistServeConnectionRequest]):
-        return self.engine.p2p_connect(conn_request)
-
-    def p2p_drop_connect(self, drop_conn_request: list[DistServeDropConnectionRequest]):
-        return self.engine.p2p_drop_connect(drop_conn_request)
-
-    """ DistServe Async Engine API End """
-
-    async def async_get_reward_score(self, input_ids: list) -> list[float]:
-        """Async version of get_reward_score."""
-        supported_reward_models = ['InternLM2ForRewardModel', 'Qwen2ForRewardModel']
-        if self.arch not in supported_reward_models:
-            raise ValueError(f'{self.arch} is not in reward model list: {supported_reward_models}')
-        assert isinstance(input_ids, list)
-        assert all(isinstance(x, int) for x in input_ids) or all(isinstance(x, list) for x in input_ids)
-        # Make input_ids a list of token_id list
-        input_ids = [input_ids] if isinstance(input_ids[0], int) else input_ids
-
-        logits = await self.async_get_logits(input_ids=input_ids)
-
-        logits = [x.squeeze() for x in logits]
-        scores = [x[-1].cpu().item() for x in logits]
-        return scores
-
-    async def async_get_logits(self,
-                               input_ids,
-                               sessions: list['Session'] | None = None) -> list[torch.Tensor]:
-        assert input_ids and all(isinstance(_, list) for _ in input_ids)
-        assert sessions is None or (len(sessions) == len(input_ids))
-
-        logits = [None] * len(input_ids)
-
-        async def _proc(session, i):
-            async with session.request_handle() as handle:
-                input_len = len(input_ids[i])
-                # TODO(lvhan): Fix the ugly code later on
-                max_new_tokens = 1 if self.backend == 'turbomind' else 0
-                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
-                # when perform inference on a reward model.
-                gen_config = GenerationConfig(max_new_tokens=max_new_tokens, output_logits='all', top_k=1)
-                async with self.safe_run(handle,
-                                         session=session,
-                                         input_ids=input_ids[i],
-                                         gen_config=gen_config,
-                                         stream_output=False) as gen:
-                    async for outputs in gen:
-                        pass
-                    logits[i] = outputs.logits[:input_len, :]
-
-        create_sessions = False
-        if sessions is None:
-            create_sessions = True
-            sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
-        tasks = [_proc(session, i) for i, session in enumerate(sessions)]
-        await asyncio.gather(*tasks)
-        if create_sessions:
-            for session in sessions:
-                self.session_mgr.remove(session)
-        return logits
+        return True
 
     async def async_get_ppl(self, input_ids: list[int]) -> float:
         """Get the perplexity (mean cross-entropy loss) of a single input
@@ -928,8 +758,6 @@ class AsyncEngine:
         session = self.session_mgr.get()
         try:
             async with session.request_handle() as handle:
-                # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
-                # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=1, return_ppl=True, top_k=1)
                 async with self.safe_run(handle,
                                          session=session,

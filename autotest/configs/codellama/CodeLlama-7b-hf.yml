@@ -1,5 +1,4 @@
 # HF model id: codellama/CodeLlama-7b-hf
-
 a100:
 - model_type: base
   engine_config:

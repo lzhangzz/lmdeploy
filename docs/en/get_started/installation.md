@@ -1,7 +1,7 @@
 # Installation
 
 LMDeploy is a python library for compressing, deploying, and serving Large Language Models(LLMs) and Vision-Language Models(VLMs).
-Its core inference engines include TurboMind Engine and PyTorch Engine. The former is developed by C++ and CUDA, striving for ultimate optimization of inference performance, while the latter, developed purely in Python, aims to decrease the barriers for developers.
+Its inference engine, TurboMind, is developed in C++ and CUDA and strives for ultimate optimization of inference performance.
 
 It supports LLMs and VLMs deployment on both Linux and Windows platforms. Furthermore, it is compatible with the following NVIDIA GPUs:
 
@@ -22,18 +22,12 @@ pip install lmdeploy
 
 ## Install from source
 
-By default, LMDeploy will build with NVIDIA CUDA support, utilizing both the Turbomind and PyTorch backends. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a C++20-capable host compiler supported by your CUDA Toolkit, such as GCC 10 or newer on Linux or Visual Studio 2022 on Windows.
+LMDeploy builds the TurboMind engine with NVIDIA CUDA support. A source installation always compiles the native extension. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a C++20-capable host compiler supported by your CUDA Toolkit, such as GCC 10 or newer on Linux or Visual Studio 2022 on Windows.
 
 Once the CUDA toolkit is successfully set up, you can build and install LMDeploy with a single command:
 
 ```shell
 pip install git+https://github.com/InternLM/lmdeploy.git
-```
-
-You can also explicitly disable the Turbomind backend to avoid CUDA compilation by setting the `DISABLE_TURBOMIND` environment variable:
-
-```shell
-DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
 If you prefer a specific version instead of the `main` branch of LMDeploy, you can specify it in your command:
@@ -42,25 +36,4 @@ If you prefer a specific version instead of the `main` branch of LMDeploy, you c
 pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.11.0.zip
 ```
 
-If you want to build LMDeploy with support for Ascend, Cambricon, or MACA, install LMDeploy with the corresponding `LMDEPLOY_TARGET_DEVICE` environment variable.
-
-LMDeploy also supports installation on AMD GPUs with ROCm.
-
-```shell
-#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
-docker run -it \
-    --cap-add=SYS_PTRACE \
-    --security-opt seccomp=unconfined \
-    --device=/dev/kfd \
-    --device=/dev/dri \
-    --group-add video \
-    --ipc=host \
-    --network=host \
-    --shm-size 32G \
-    -v /root:/workspace \
-    rocm/pytorch:latest
-
-
-#Once inside the container, install LMDeploy with ROCm support:
-LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
-```
+LMDeploy only supports NVIDIA CUDA GPUs. Ascend, Cambricon, MACA and AMD ROCm devices are not supported.

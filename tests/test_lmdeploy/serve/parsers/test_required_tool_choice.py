@@ -107,10 +107,7 @@ def _walk_formats(value):
         'qwen2d5',
         'qwen3',
         'qwen3coder',
-        'kimi-k2',
         'glm47',
-        'deepseek-v32',
-        'deepseek-v4',
         'interns2-preview',
         'intern-s1',
     ],
@@ -379,41 +376,3 @@ def test_xml_required_format_round_trip(configured_parser, xgrammar_compiler, to
         _, calls, _ = parser.parse_complete(text)
         arguments = calls[0].function.arguments
     assert json.loads(arguments) == {'value': 42}
-
-
-@pytest.mark.parametrize(
-    ('reasoning_parser', 'tool_parser', 'model', 'block_name'),
-    [
-        ('deepseek-v32', 'deepseek-v32', 'deepseek-ai/DeepSeek-V3.2', 'function_calls'),
-        ('deepseek-v4', 'deepseek-v4', 'deepseek-ai/DeepSeek-V4', 'tool_calls'),
-    ],
-)
-def test_deepseek_required_default_disables_reasoning_grammar(
-    configured_parser,
-    reasoning_parser,
-    tool_parser,
-    model,
-    block_name,
-):
-    parser = configured_parser(
-        request=_request(model=model),
-        reasoning=True,
-        reasoning_parser=reasoning_parser,
-        tool_parser=tool_parser,
-    )
-
-    assert parser.request.response_format['format']['elements'][0]['type'] == 'const_string'
-
-    completion = (
-        f'\n\n<｜DSML｜{block_name}>\n'
-        '<｜DSML｜invoke name="get_weather">\n'
-        '<｜DSML｜parameter name="city" string="true">Paris</｜DSML｜parameter>\n'
-        '</｜DSML｜invoke>\n'
-        f'</｜DSML｜{block_name}>'
-    )
-    content, tool_calls, reasoning = parser.parse_complete(completion)
-
-    assert content is None
-    assert reasoning is None
-    assert tool_calls is not None
-    assert tool_calls[0].function.name == 'get_weather'

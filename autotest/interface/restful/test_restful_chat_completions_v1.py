@@ -356,7 +356,6 @@ class TestRestfulOpenAI:
         assert outputList[-1].get('choices')[0].get('finish_reason') == 'length'
         assert length == 5 or length == 6
 
-    @pytest.mark.not_pytorch
     @pytest.mark.pr_test
     def test_logprobs(self, backend, model_case, openai_client_and_model):
         client, model_name = openai_client_and_model
@@ -376,7 +375,6 @@ class TestRestfulOpenAI:
         assert output.get('choices')[0].get('finish_reason') == 'length'
         assert output.get('usage').get('completion_tokens') == 6 or output.get('usage').get('completion_tokens') == 5
 
-    @pytest.mark.not_pytorch
     @pytest.mark.pr_test
     def test_logprobs_streaming(self, backend, model_case, openai_client_and_model, config):
         client, model_name = openai_client_and_model

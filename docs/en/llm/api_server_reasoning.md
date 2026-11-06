@@ -74,12 +74,6 @@ The registered `--reasoning-parser` names are:
 
 - `default`: the common `<think>...</think>` protocol used by Qwen3,
   QwQ, DeepSeek R1, Intern-S1, and compatible models.
-- `deepseek-v3`: starts in reasoning mode only when
-  `enable_thinking=True`.
-- `deepseek-v32` and `deepseek-v3.2`: aliases for DeepSeek V3.2; they
-  start in reasoning mode when either `thinking=True` or
-  `enable_thinking=True`.
-- `deepseek-v4`: uses the same mode switches as the DeepSeek V3.2 parser.
 
 The legacy names `qwen-qwq`, `intern-s1`, and `deepseek-r1` still map to
 `default`, but emit a deprecation warning. GPT-OSS does not use a registered

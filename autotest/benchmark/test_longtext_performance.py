@@ -4,7 +4,6 @@ from utils.config_utils import get_case_str_by_config, get_func_config_list
 from utils.pytest_layout_utils import LOCAL_TP_LAYOUTS, layout_mark
 
 TURBOMIND_LAYOUTS = LOCAL_TP_LAYOUTS[:4]
-PYTORCH_LAYOUTS = LOCAL_TP_LAYOUTS
 
 
 def get_models(backend, parallel_config):
@@ -13,7 +12,7 @@ def get_models(backend, parallel_config):
 
 def _build_longtext_params():
     rows = []
-    for backend, layouts in (('turbomind', TURBOMIND_LAYOUTS), ('pytorch', PYTORCH_LAYOUTS)):
+    for backend, layouts in (('turbomind', TURBOMIND_LAYOUTS),):
         backend_mark = getattr(pytest.mark, backend)
         for layout in layouts:
             configs = get_models(backend, layout)

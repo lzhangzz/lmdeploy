@@ -22,7 +22,6 @@ class ChatRunnerOptions:
 
     input_ids: list[int] | None = None
     do_preprocess: bool = True
-    adapter_name: str | None = None
     gen_config_kwargs: dict[str, Any] = field(default_factory=dict)
     preprocess_kwargs: dict[str, Any] = field(default_factory=dict)
 
@@ -39,8 +38,6 @@ class ChatStreamChunk:
     input_token_len: int
     generate_token_len: int
     cached_tokens: int
-    routed_experts: Any = None
-    cache_block_ids: list[int] | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
 
@@ -58,9 +55,6 @@ class ChatResult:
     cached_tokens: int
     token_ids: list[int]
     logprobs: list[dict[int, float]]
-    routed_experts: Any = None
-    cache_block_ids: list[Any] = field(default_factory=list)
-    remote_token_ids: list[Any] = field(default_factory=list)
     reasoning_tokens: int | None = None
 
 
@@ -102,10 +96,6 @@ class ChatRunner:
             server_context,
             options.gen_config_kwargs,
         )
-        adapter_name = options.adapter_name
-        if adapter_name is None and parsed_request.model != server_context.async_engine.model_name:
-            adapter_name = parsed_request.model
-
         engine_messages = None if options.input_ids is not None else parsed_request.messages
         session = server_context.create_session(parsed_request.session_id)
         preprocessed = await server_context.async_engine.preprocess(
@@ -115,7 +105,6 @@ class ChatRunner:
             tools=parsed_request.tools,
             reasoning_effort=parsed_request.reasoning_effort,
             do_preprocess=options.do_preprocess,
-            adapter_name=adapter_name,
             chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
             input_ids=options.input_ids,
             media_io_kwargs=parsed_request.media_io_kwargs,
@@ -170,11 +159,7 @@ class ChatRunner:
                         # With no visible parser output, emit only when this
                         # engine result still carries transport-level data.
                         has_token_metadata = return_token_metadata and bool(delta_token_ids)
-                        if (
-                            res.finish_reason is None
-                            and not has_token_metadata
-                            and res.cache_block_ids is None
-                        ):
+                        if res.finish_reason is None and not has_token_metadata:
                             continue
                         stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
 
@@ -203,8 +188,6 @@ class ChatRunner:
                         input_token_len=res.input_token_len,
                         generate_token_len=res.generate_token_len,
                         cached_tokens=res.cached_tokens,
-                        routed_experts=res.routed_experts if finish_reason is not None else None,
-                        cache_block_ids=res.cache_block_ids,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                     )
@@ -217,8 +200,6 @@ class ChatRunner:
         text = ''
         final_token_ids: list[int] = []
         final_logprobs: list[dict[int, float]] = []
-        cache_block_ids: list[Any] = []
-        remote_token_ids: list[Any] = []
         try:
             async for res in self.result_generator:
                 if raw_request is not None and await raw_request.is_disconnected():
@@ -230,8 +211,6 @@ class ChatRunner:
                     final_token_ids.extend(res.token_ids)
                 if res.logprobs:
                     final_logprobs.extend(res.logprobs)
-                cache_block_ids.append(res.cache_block_ids)
-                remote_token_ids.append(res.token_ids)
         finally:
             await self.close()
 
@@ -255,9 +234,6 @@ class ChatRunner:
             cached_tokens=final_res.cached_tokens,
             token_ids=final_token_ids,
             logprobs=final_logprobs,
-            routed_experts=final_res.routed_experts,
-            cache_block_ids=cache_block_ids,
-            remote_token_ids=remote_token_ids,
             reasoning_tokens=self.response_parser.reasoning_tokens,
         )
 

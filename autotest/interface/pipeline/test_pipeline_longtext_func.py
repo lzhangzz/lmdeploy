@@ -7,7 +7,7 @@ from transformers import AutoTokenizer
 from utils.config_utils import get_model_path_from_config, set_device_env_variable, unset_device_env_variable
 from utils.pytest_layout_utils import layout_mark
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
 
 SESSION_LEN = 198000
@@ -38,17 +38,17 @@ def run_case_in_spawn(target, args):
 _PASSKEY_CASES = (
     (
         ['Qwen/Qwen2.5-7B-Instruct', 'meta-llama/Meta-Llama-3-1-8B-Instruct'],
-        ['turbomind', 'pytorch'],
+        ['turbomind'],
         1,
     ),
     (
         ['Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-32B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-27B'],
-        ['turbomind', 'pytorch'],
+        ['turbomind'],
         2,
     ),
     (
         ['meta-llama/Meta-Llama-3-1-70B-Instruct'],
-        ['turbomind', 'pytorch'],
+        ['turbomind'],
         8,
     ),
 )
@@ -101,37 +101,23 @@ NTK_CONFIG = {
 
 def passkey_retrival_worker(config, model, backend, log_name, tp_num, session_len: int = SESSION_LEN_128K):
     model_path = get_model_path_from_config(config, model)
-    if backend == 'turbomind':
-        if 'qwen' in model.lower():
-            backend_config = TurbomindEngineConfig(session_len=session_len,
-                                                   max_batch_size=1,
-                                                   cache_max_entry_count=0.7,
-                                                   tp=tp_num,
-                                                   hf_overrides=YARN_CONFIG)
-        elif 'intern-s1' in model.lower():
-            backend_config = TurbomindEngineConfig(session_len=session_len,
-                                                   max_batch_size=1,
-                                                   cache_max_entry_count=0.7,
-                                                   tp=tp_num,
-                                                   hf_overrides={'text_config': NTK_CONFIG})
-        else:
-            backend_config = TurbomindEngineConfig(session_len=session_len,
-                                                   max_batch_size=1,
-                                                   cache_max_entry_count=0.7,
-                                                   tp=tp_num)
+    if 'qwen' in model.lower():
+        backend_config = TurbomindEngineConfig(session_len=session_len,
+                                               max_batch_size=1,
+                                               cache_max_entry_count=0.7,
+                                               tp=tp_num,
+                                               hf_overrides=YARN_CONFIG)
+    elif 'intern-s1' in model.lower():
+        backend_config = TurbomindEngineConfig(session_len=session_len,
+                                               max_batch_size=1,
+                                               cache_max_entry_count=0.7,
+                                               tp=tp_num,
+                                               hf_overrides={'text_config': NTK_CONFIG})
     else:
-        if 'qwen' in model.lower():
-            backend_config = PytorchEngineConfig(session_len=session_len,
-                                                 tp=tp_num,
-                                                 max_batch_size=1,
-                                                 hf_overrides=YARN_CONFIG)
-        elif 'intern-s1' in model.lower():
-            backend_config = PytorchEngineConfig(session_len=session_len,
-                                                 tp=tp_num,
-                                                 max_batch_size=1,
-                                                 hf_overrides={'text_config': NTK_CONFIG})
-        else:
-            backend_config = PytorchEngineConfig(session_len=session_len, tp=tp_num, max_batch_size=1)
+        backend_config = TurbomindEngineConfig(session_len=session_len,
+                                               max_batch_size=1,
+                                               cache_max_entry_count=0.7,
+                                               tp=tp_num)
 
     pipe = pipeline(model_path, backend_config=backend_config)
 

@@ -15,9 +15,9 @@ on:
         default: 'main'
       backend:
         required: true
-        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind"]"'
         type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['turbomind']"
       model:
         required: true
         description: 'Set testcase module filter: llm, mllm. Default contains all models'
@@ -59,7 +59,6 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
   # git 2.35+: avoid "dubious ownership" when container user ≠ checkout owner.
   GIT_CONFIG_COUNT: 1
@@ -174,7 +173,7 @@ jobs:
       matrix:
         deps_profile: ['', 'transformers==4.57.6']
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
@@ -205,8 +204,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Install pinned deps (DEPS_PROFILE)
         if: matrix.deps_profile != ''
         run: pip install ${{ matrix.deps_profile }}
@@ -244,7 +241,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
         deps_profile: ['', 'transformers==4.57.6']
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
@@ -252,15 +249,12 @@ jobs:
           - backend: turbomind
             model: mllm
             function: chat
-          - backend: pytorch
-            model: mllm
-            function: chat
         include:
           - backend: turbomind
             model: llm
             function: other
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
@@ -290,8 +284,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Install pinned deps (DEPS_PROFILE)
         if: matrix.deps_profile != ''
         run: pip install ${{ matrix.deps_profile }}
@@ -306,7 +298,7 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp1 and not pr_test' -n 8 --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
@@ -402,7 +394,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind"]')}}
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
       options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
@@ -416,12 +408,12 @@ jobs:
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
       DEPS_PROFILE: ''
-      # Collect only this backend (pytorch / turbomind). Driven by workflow input `backend`.
+      # Collect only this backend (turbomind). Driven by workflow input `backend`.
       INTERFACE_BACKENDS: ${{ matrix.backend }}
     steps:
       - name: Copy repository and Artifacts
@@ -509,7 +501,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 240
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
@@ -539,8 +531,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
           python3 -m pip list
@@ -595,7 +585,7 @@ jobs:
     needs: test_quantization
     timeout-minutes: 120
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: a100
@@ -624,8 +614,6 @@ jobs:
         run: |
           python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
           python3 -m pip install -r requirements/test.txt
-          pip install ${{env.DEEPSEEK_VL}} --no-deps
-          rm -rf ${{env.DEEPSEEK_VL}}/build
       - name: Check env
         run: |
           python3 -m pip list

@@ -349,44 +349,6 @@ class HuggingFaceTokenizer:
         return self.model(s, add_special_tokens=add_special_tokens)
 
 
-class ChatGLM4Tokenizer(HuggingFaceTokenizer):
-    """Tokenizer of GLM4."""
-
-    def __init__(self, model_path, trust_remote_code: bool = False):
-        super().__init__(model_path, trust_remote_code=trust_remote_code)
-        original_pad = self.model._pad
-
-        def __pad(*args, **kwargs):
-            if 'padding_side' in kwargs:
-                kwargs.pop('padding_side')
-            return original_pad(*args, **kwargs)
-
-        # fix for transformers>4.45.0
-        self.model._pad = __pad
-
-    def encode(self, s: str, add_bos: bool = True, add_special_tokens: bool = True, **kwargs):
-        """Tokenize a prompt."""
-        # ChtGLM4Tokenizer hardcode `add_speical_tokens=False` when tokenizing
-        # a prompt. Refer to https://huggingface.co/THUDM/glm-4-9b-chat/blob/main/tokenization_chatglm.py#L227 # noqa E501
-        return super().encode(s, add_bos, add_special_tokens=False, **kwargs)
-
-
-class ChatGLMTokenizer(HuggingFaceTokenizer):
-    """Tokenizer of GLM2."""
-
-    def __init__(self, model_path, trust_remote_code: bool = False):
-        super().__init__(model_path, trust_remote_code=trust_remote_code)
-        original_pad = self.model._pad
-
-        def __pad(*args, **kwargs):
-            if 'padding_side' in kwargs:
-                kwargs.pop('padding_side')
-            return original_pad(*args, **kwargs)
-
-        # fix for transformers>4.45.0
-        self.model._pad = __pad
-
-
 class GptOssTokenizer(HuggingFaceTokenizer):
     """Tokenizer of GPT-OSS."""
 
@@ -427,14 +389,7 @@ class Tokenizer:
         from lmdeploy.hf_configs import config_from_pretrained
         model_cfg = config_from_pretrained(model_path, trust_remote_code=trust_remote_code)
         is_gpt_oss = getattr(model_cfg, 'model_type', '') == 'gpt_oss'
-        from transformers.models.auto.tokenization_auto import get_tokenizer_config
-        tokenizer_config = get_tokenizer_config(model_path, trust_remote_code=trust_remote_code)
-        config_tokenizer_class = tokenizer_config.get('tokenizer_class')
-        if config_tokenizer_class == 'ChatGLM4Tokenizer':
-            self.model = ChatGLM4Tokenizer(model_path, trust_remote_code=trust_remote_code)
-        elif config_tokenizer_class == 'ChatGLMTokenizer':
-            self.model = ChatGLMTokenizer(model_path, trust_remote_code=trust_remote_code)
-        elif is_gpt_oss:
+        if is_gpt_oss:
             self.model = GptOssTokenizer(model_path, trust_remote_code=trust_remote_code)
         else:
             self.model = HuggingFaceTokenizer(model_path, trust_remote_code=trust_remote_code)

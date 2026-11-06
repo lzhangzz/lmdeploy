@@ -20,8 +20,7 @@ FROM ${CUDA_VERSION}
 # environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
-    PATH=/opt/py3/bin:/root/.local/bin:${PATH} \
-    TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+    PATH=/opt/py3/bin:/root/.local/bin:${PATH}
 
 # Install dependencies and create python virtual environment
 RUN --mount=type=cache,target=/var/cache/apt \

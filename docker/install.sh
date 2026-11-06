@@ -56,11 +56,6 @@ if [ ! -f "/opt/py3/bin/python" ]; then
     rm -rf /var/lib/apt/lists/*
 fi
 
-# install GDRCopy debs
-if [ "$(ls -A /wheels/*.deb 2>/dev/null)" ]; then
-    dpkg -i /wheels/*.deb
-fi
-
 # install python packages
 export PATH=/opt/py3/bin:$PATH
 
@@ -77,27 +72,12 @@ if [ -f /tmp/requirements/runtime_cuda.txt ]; then
     pip install -r /tmp/requirements/runtime_cuda.txt
 fi
 
-if [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
-    pip install nvidia-nvshmem-cu13==3.4.5
-else
-    pip install nvidia-nvshmem-cu12==3.4.5
+# install local wheels (lmdeploy and optional third-party builds)
+if compgen -G "/wheels/*.whl" >/dev/null; then
+    pip install /wheels/*.whl
 fi
 
-for package in deep_ep deep_gemm flash_attn_3; do
-    if ! compgen -G "/wheels/${package}-*.whl" >/dev/null; then
-        echo "${package} wheel is missing from /wheels" >&2
-        exit 1
-    fi
-done
-pip install /wheels/*.whl
-python - <<'PY'
-import deep_ep
-import deep_gemm
-import lmdeploy.pytorch.third_party.flash_attn_interface
-PY
-pip install dlslime==0.0.2.post1
-
-pip install ninja einops packaging
+pip install packaging
 
 # install requirements/serve.txt dependencies such as timm
 if [ -f /tmp/requirements/serve.txt ]; then
@@ -111,8 +91,6 @@ pip check
 if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     pip install "nvidia-nccl-cu12>=2.30.4"
 elif [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
-    # tile-kernels (for DeepSeek-V4) requires a cu13 tilelang build.
-    pip install "tile-kernels==1.0.0"
     pip install "nvidia-nccl-cu13>=2.30.4"
 fi
 

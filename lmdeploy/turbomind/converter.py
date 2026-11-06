@@ -4,8 +4,7 @@ import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
-from lmdeploy.pytorch.config import override_hf_config
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, override_hf_config
 
 from ..utils import _get_and_verify_max_len
 from . import _tm

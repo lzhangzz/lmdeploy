@@ -12,7 +12,6 @@ from lmdeploy.lite.apis.calibrate import LAYER_TYPE_MAP, calibrate, load_model_a
 from lmdeploy.lite.model import MODELS
 from lmdeploy.lite.quantization.awq import FC_FCS_MAP, NORM_FCS_MAP, awq_layers, quant_weights, smooth_layers
 from lmdeploy.lite.utils import collect_target_modules
-from lmdeploy.utils import try_import_deeplink
 
 
 def save_vl_model(vl_model, model_path, dst_path):
@@ -79,7 +78,6 @@ def auto_awq(model: str,
         download_dir (str): Directory to download and load the weights,
             default to the default cache directory of huggingface.
     """
-    try_import_deeplink(device)
     if not osp.exists(model):
         print(f'can\'t find model from local_path {model}, '
               'try to download from remote')

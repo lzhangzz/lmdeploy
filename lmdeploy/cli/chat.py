@@ -4,8 +4,8 @@ from urllib.parse import urlparse
 
 import fire
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.archs import autoget_backend
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+from lmdeploy.archs import check_backend
 
 IMAGE_COMMAND = '/image'
 
@@ -91,23 +91,11 @@ def parse_interactive_prompt(prompt: str):
     return content if has_image else prompt
 
 
-def build_pipe(model_path, backend, trust_remote_code=False, **kwargs):
-    engine_config = None
-    if backend == 'turbomind':
-        engine_config = TurbomindEngineConfig()
-        for key, value in kwargs.items():
-            if hasattr(TurbomindEngineConfig, key):
-                setattr(engine_config, key, value)
-    else:
-        engine_config = PytorchEngineConfig()
-        for key, value in kwargs.items():
-            key = 'device_type' if key == 'device' else key
-            if hasattr(PytorchEngineConfig, key):
-                setattr(engine_config, key, value)
-        if kwargs.get('adapters', None):
-            from .utils import get_lora_adapters
-            adapters = get_lora_adapters(kwargs['adapters'])
-            engine_config.adapters = adapters
+def build_pipe(model_path, trust_remote_code=False, **kwargs):
+    engine_config = TurbomindEngineConfig()
+    for key, value in kwargs.items():
+        if hasattr(TurbomindEngineConfig, key):
+            setattr(engine_config, key, value)
     # disable metrics to avoid installing prometheus_client, which is not needed
     # in interactive chat
     engine_config.enable_metrics = False
@@ -135,23 +123,12 @@ def build_gen_config(**kwargs):
     return gen_config
 
 
-def get_adapter_name(adapters=None, **kwargs):
-    if adapters is None:
-        return None
-    from .utils import get_lora_adapters
-    adapters = get_lora_adapters(adapters)
-    return list(adapters.keys())[0]
-
-
-def main(model_path, backend, trust_remote_code=False, **kwargs):
-    if backend != 'pytorch':
-        # set auto backend mode
-        backend = autoget_backend(model_path, trust_remote_code=trust_remote_code)
+def main(model_path, backend='turbomind', trust_remote_code=False, **kwargs):
+    check_backend(backend)
     quit = False
     messages = []
-    with build_pipe(model_path, backend, trust_remote_code=trust_remote_code, **kwargs) as pipe:
+    with build_pipe(model_path, trust_remote_code=trust_remote_code, **kwargs) as pipe:
         gen_config = build_gen_config(**kwargs)
-        adapter_name = get_adapter_name(**kwargs)
         while not quit:
             try:
                 prompt = input_prompt()
@@ -182,7 +159,6 @@ def main(model_path, backend, trust_remote_code=False, **kwargs):
             resps = pipe.stream_infer(request_messages,
                                       sessions=request_session,
                                       gen_config=gen_config,
-                                      adapter_name=adapter_name,
                                       stream_response=True,
                                       sequence_start=True,
                                       sequence_end=True)

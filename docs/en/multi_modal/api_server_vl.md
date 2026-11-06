@@ -9,12 +9,12 @@ Next, we focus on the definition of the service's RESTful API, explore the vario
 
 ## Launch Service
 
-Take the [llava-v1.6-vicuna-7b](https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
+Take the [InternVL2_5-8B](https://huggingface.co/OpenGVLab/InternVL2_5-8B) model hosted on huggingface hub as an example, you can choose one the following methods to start the service.
 
 ### Option 1: Launching with lmdeploy CLI
 
 ```shell
-lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b --server-port 23333
+lmdeploy serve api_server OpenGVLab/InternVL2_5-8B --server-port 23333
 ```
 
 The arguments of `api_server` can be viewed through the command `lmdeploy serve api_server -h`, for instance, `--tp` to set tensor parallelism, `--session-len` to specify the max length of the context window, `--cache-max-entry-count` to adjust the GPU mem ratio for k/v cache etc.
@@ -30,7 +30,7 @@ docker run --runtime nvidia --gpus all \
     -p 23333:23333 \
     --ipc=host \
     openmmlab/lmdeploy:latest \
-    lmdeploy serve api_server liuhaotian/llava-v1.6-vicuna-7b
+    lmdeploy serve api_server OpenGVLab/InternVL2_5-8B
 ```
 
 The parameters of `api_server` are the same with that mentioned in "[option 1](#option-1-launching-with-lmdeploy-cli)" section
@@ -38,7 +38,7 @@ The parameters of `api_server` are the same with that mentioned in "[option 1](#
 Each model may require specific dependencies not included in the Docker image. If you run into issues, you may need to install those yourself
 on a case-by-case basis. If in doubt, refer to the specific model's project for documentation.
 
-For example, for Llava:
+For example, for InternVL:
 
 ```
 FROM openmmlab/lmdeploy:latest
@@ -49,11 +49,10 @@ WORKDIR /app
 
 RUN pip3 install --upgrade pip
 RUN pip3 install timm
-RUN pip3 install git+https://github.com/haotian-liu/LLaVA.git --no-deps
 
 COPY . .
 
-CMD ["lmdeploy", "serve", "api_server", "liuhaotian/llava-v1.6-34b"]
+CMD ["lmdeploy", "serve", "api_server", "OpenGVLab/InternVL2_5-8B"]
 ```
 
 ## RESTful API

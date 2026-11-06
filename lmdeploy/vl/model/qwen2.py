@@ -7,7 +7,6 @@ class Qwen2VLModel(VisionModel):
     """Qwen2VL model."""
 
     _arch = ['Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration']
-    _turbomind_native_vision = True
 
     def build_preprocessor(self, trust_remote_code: bool = False):
         from transformers import AutoProcessor
@@ -87,6 +86,6 @@ class Qwen2VLModel(VisionModel):
                    tools=None,
                    chat_template_kwargs=None,
                    **kwargs):
-        """Return to the information needed by pytorch engine."""
+        """Return the information needed by TurboMind native vision."""
         prompt, IMAGE_TOKEN = self.proc_messages(messages, chat_template, tools, chat_template_kwargs)
         return self.to_pytorch_aux(messages, prompt, IMAGE_TOKEN, tokenizer)

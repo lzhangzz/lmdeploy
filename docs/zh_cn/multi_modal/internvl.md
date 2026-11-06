@@ -5,10 +5,9 @@ LMDeploy 支持 InternVL 系列模型，具体如下：
 |         Model         |     Size      | Supported Inference Engine |
 | :-------------------: | :-----------: | :------------------------: |
 |       InternVL        |    13B-19B    |         TurboMind          |
-|      InternVL1.5      |    2B-26B     |     TurboMind, PyTorch     |
-|       InternVL2       |      4B       |          PyTorch           |
-|       InternVL2       | 1B-2B, 8B-76B |     TurboMind, PyTorch     |
-| InternVL2.5/2.5-MPO/3 |    1B-78B     |     TurboMind, PyTorch     |
+|      InternVL1.5      |    2B-26B     |         TurboMind          |
+|       InternVL2       | 1B-2B, 8B-76B |         TurboMind          |
+| InternVL2.5/2.5-MPO/3 |    1B-78B     |         TurboMind          |
 
 本文将以[InternVL2-8B](https://huggingface.co/OpenGVLab/InternVL2-8B)为例，演示使用 LMDeploy 部署 InternVL 系列模型的方法。
 

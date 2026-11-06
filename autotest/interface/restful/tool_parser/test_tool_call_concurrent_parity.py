@@ -60,7 +60,7 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
 
         asyncio.run(_run())
 
-    @pytest.mark.experts
+    @pytest.mark.token_ids
     def test_input_ids_path_streaming(self, backend, model_case):
         """``input_ids`` + empty ``messages`` in request payload."""
         messages = []
@@ -71,17 +71,14 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             use_input_ids=True,
             reference_payload=True,
         )
-        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
-        assert prompt_tokens > 0
+        assert r['prompt_tokens_computed'] or r['prompt_tokens']
         validate_reference_turn_result(
             r,
-            prompt_tokens,
             expected_function_name='get_weather',
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
-            **self._experts_validation_kwargs(),
         )
 
-    @pytest.mark.experts
+    @pytest.mark.token_ids
     def test_messages_path_streaming_with_done_and_tokens(self, backend, model_case):
         """Standard messages path still requires ``[DONE]`` + token fields."""
         messages = []
@@ -91,16 +88,13 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             tools=[CONCURRENT_WEATHER_TOOL],
             use_input_ids=False,
         )
-        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
         validate_stream_tool_call_with_tokens(
             r,
-            prompt_tokens=prompt_tokens,
             expected_function_name='get_weather',
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
-            **self._experts_validation_kwargs(),
         )
 
-    @pytest.mark.experts
+    @pytest.mark.token_ids
     def test_parser_drop_via_decoded_output_ids(self, backend, model_case):
         """Per-turn validation including ``decoded_str`` parser-drop check."""
         messages = []
@@ -111,16 +105,13 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
             use_input_ids=True,
             reference_payload=True,
         )
-        prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
         validate_reference_turn_result(
             r,
-            prompt_tokens,
             expected_function_name='get_weather',
             **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
-            **self._experts_validation_kwargs(),
         )
 
-    @pytest.mark.experts
+    @pytest.mark.token_ids
     def test_multi_turn_input_ids_with_tool_name_in_history(self, backend, model_case):
         """3-turn loop via ``input_ids``; tool messages include ``name``
         field."""
@@ -136,14 +127,11 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
                 use_input_ids=True,
                 reference_payload=True,
             )
-            prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
             validate_reference_turn_result(
                 r,
-                prompt_tokens,
                 expected_function_name='get_weather',
                 **self._parser_validation_kwargs([CONCURRENT_WEATHER_TOOL]),
-                **self._experts_validation_kwargs(),
-            )
+                )
             self._append_assistant_and_tool_messages(messages, r)
             last_tool = messages[-1]
             assert last_tool['role'] == 'tool'
@@ -154,12 +142,12 @@ class TestToolCallConcurrentParity(_ToolCallTestBase):
 
 
 @_apply_marks_stress
-@pytest.mark.experts
+@pytest.mark.token_ids
 class TestToolCallConcurrentStress(_ToolCallTestBase):
     """High concurrency stress (default 50 workers; override via
     TOOL_CALL_CONCURRENCY).
 
-    Marked ``experts``: stress path uses encode/input_ids + token returns.
+    Marked ``token_ids``: stress path uses encode/input_ids + token returns.
     """
 
     def test_concurrent_multi_turn_workers(self, backend, model_case):

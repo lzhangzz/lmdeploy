@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3-8B-Base
-
 a100:
 - model_type: base
   engine_config:
@@ -8,25 +7,17 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - evaluate
   - quantization
   interface:
-    pytorch:
-      suites:
-      - base
     turbomind:
       suites:
       - base
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
     - kvint8
 h:
 - model_type: base
@@ -36,23 +27,15 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - evaluate
   - quantization
   interface:
-    pytorch:
-      suites:
-      - base
     turbomind:
       suites:
       - base
   quantization:
     turbomind:
     - awq
-    - kvint8
-    pytorch:
     - kvint8

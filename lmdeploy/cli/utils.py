@@ -35,35 +35,6 @@ def convert_args(args):
     return kwargs
 
 
-def get_lora_adapters(adapters: list[str]):
-    """Parse lora adapers from cli input.
-
-    Args:
-        adapters (list[str]): CLI input string of lora adapter path(s).
-
-    Returns:
-        dict[str, str] | None: Parsed lora adapter path(s).
-    """
-    if not adapters:
-        return None
-    n = len(adapters)
-    output = {}
-    if n == 1:
-        name = 'default'
-        path = adapters[0].strip()
-        if '=' in path:
-            name, path = path.split('=', 1)
-        output[name] = path
-    else:
-        for pair in adapters:
-            assert '=' in pair, f'Multiple lora paths must in format of ' \
-                                 f'xxx=yyy. But given: {pair}'
-            name, path = pair.strip().split('=', 1)
-            assert name not in output, f'Multiple lora paths with repeated lora name: {name}'
-            output[name] = path
-    return output
-
-
 def get_chat_template(chat_template: str | None, model_path: str | None = None):
     """Get chat template config.
 
@@ -92,16 +63,12 @@ def get_speculative_config(args):
     """Get speculative config from args."""
     from lmdeploy.messages import SpeculativeConfig
     speculative_config = None
-    dflash_block_size = getattr(args, 'speculative_dflash_block_size', None)
     if args.speculative_algorithm is not None:
         speculative_config = SpeculativeConfig(
             method=args.speculative_algorithm,
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
-            dflash_block_size=dflash_block_size,
         )
-    elif dflash_block_size is not None:
-        raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
     return speculative_config
 
 
@@ -130,15 +97,6 @@ class ArgumentHelper:
                                    'for FP32 and FP16 models, and BF16 precision '
                                    'for BF16 models. This option will be ignored if '
                                    'the model is a quantized model')
-
-    @staticmethod
-    def quant_dtype(parser, default: str = 'int8'):
-        return parser.add_argument('--quant-dtype',
-                                   type=str,
-                                   default=default,
-                                   choices=['int8', 'float8_e4m3fn', 'float8_e5m2', 'fp8'],
-                                   help='data type for the quantized model weights and activations.'
-                                   'Note "fp8" is the short version of "float8_e4m3fn"')
 
     @staticmethod
     def model_format(parser, default: str = None):
@@ -185,7 +143,7 @@ class ArgumentHelper:
         return parser.add_argument('--dp',
                                    type=int,
                                    default=1,
-                                   help='data parallelism. dp_rank is required when pytorch engine is used.')
+                                   help='data parallelism')
 
     @staticmethod
     def ep(parser):
@@ -194,7 +152,7 @@ class ArgumentHelper:
         return parser.add_argument('--ep',
                                    type=int,
                                    default=1,
-                                   help='expert parallelism. dp is required when pytorch engine is used.')
+                                   help='expert parallelism')
 
     @staticmethod
     def cp(parser):
@@ -204,16 +162,7 @@ class ArgumentHelper:
             '--cp',
             type=int,
             default=1,
-            help='context parallelism size in attention for turbomind backend, tp must be a multiple of cp.')
-
-    @staticmethod
-    def dp_rank(parser):
-        """Add argument dp_rank to parser."""
-
-        return parser.add_argument('--dp-rank',
-                                   type=int,
-                                   default=0,
-                                   help='data parallelism rank, all ranks between 0 ~ dp should be created.')
+            help='context parallelism size in attention, tp must be a multiple of cp.')
 
     @staticmethod
     def node_rank(parser):
@@ -262,24 +211,25 @@ class ArgumentHelper:
 
         from lmdeploy.messages import QuantPolicy
 
-        _aliases = {p.name.lower(): p.value for p in QuantPolicy}
-        _aliases['fp8_e4m3'] = QuantPolicy.FP8.value
+        supported = list(QuantPolicy)
+        _aliases = {p.name.lower(): p.value for p in supported}
 
         def _parse(x):
             key = x.lower()
             if key in _aliases:
                 return _aliases[key]
-            v = int(x)
-            if v not in list(QuantPolicy):
-                raise ValueError(f'invalid quant_policy: {x!r}')
+            try:
+                v = int(x)
+            except ValueError:
+                v = None
+            if v not in supported:
+                raise argparse.ArgumentTypeError(f'invalid quant_policy {x!r}; choose from none/int4/int8 (or 0/4/8)')
             return v
 
         return parser.add_argument('--quant-policy',
                                    type=_parse,
                                    default=default,
-                                   help='KV cache quant policy: none/int4/int8/fp8/fp8_e5m2/'
-                                   'turbo_quant (or 0/4/8/16/17/42). For DSA models, fp8 uses the '
-                                   'fp8_ds_mla layout.')
+                                   help='KV cache quant policy: none/int4/int8 (or 0/4/8).')
 
     @staticmethod
     def rope_scaling_factor(parser):
@@ -315,12 +265,6 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to use logn attention scaling')
-
-    @staticmethod
-    def block_size(parser):
-        """Add argument block_size to parser."""
-
-        return parser.add_argument('--block-size', type=int, default=64, help='The block size for paging cache')
 
     @staticmethod
     def top_p(parser):
@@ -394,11 +338,16 @@ class ArgumentHelper:
     def backend(parser):
         """Add argument backend to parser."""
 
+        def _parse(x):
+            if x != 'turbomind':
+                raise argparse.ArgumentTypeError(f'unsupported backend {x!r}: TurboMind is the only inference '
+                                                 'backend; the PyTorch engine has been removed')
+            return x
+
         return parser.add_argument('--backend',
-                                   type=str,
+                                   type=_parse,
                                    default='turbomind',
-                                   choices=['pytorch', 'turbomind'],
-                                   help='Set the inference backend')
+                                   help='The inference backend. Only "turbomind" is supported')
 
     @staticmethod
     def stream_output(parser):
@@ -456,16 +405,6 @@ class ArgumentHelper:
             help=\
             'Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
         )
-
-    @staticmethod
-    def device(parser, default: str = 'cuda', choices: list[str] = ['cuda', 'ascend', 'maca', 'camb']):
-        """Add argument device to parser."""
-
-        return parser.add_argument('--device',
-                                   type=str,
-                                   default=default,
-                                   choices=choices,
-                                   help='The device type of running')
 
     @staticmethod
     def chat_template(parser):
@@ -533,29 +472,6 @@ class ArgumentHelper:
                                    'cache, excluding weights ')
 
     @staticmethod
-    def num_gpu_blocks(parser):
-        """Add argument num_gpu_blocks to parser."""
-
-        return parser.add_argument('--num-gpu-blocks',
-                                   type=int,
-                                   default=0,
-                                   help='Explicit number of GPU KV cache blocks for PyTorch engine. '
-                                   'Use 0 to auto-size from cache-max-entry-count.')
-
-    @staticmethod
-    def adapters(parser):
-        """Add argument adapters to parser."""
-
-        return parser.add_argument('--adapters',
-                                   nargs='*',
-                                   type=str,
-                                   default=None,
-                                   help='Used to set path(s) of lora adapter(s). One can input '
-                                   'key-value pairs in xxx=yyy format for multiple lora '
-                                   'adapters. If only have one adapter, one can only input '
-                                   'the path of the adapter.')
-
-    @staticmethod
     def work_dir(parser):
         """Add argument work_dir to parser."""
 
@@ -572,24 +488,8 @@ class ArgumentHelper:
                                    type=int,
                                    default=64,
                                    help='The length of the token sequence in a k/v block. '
-                                   'For Turbomind Engine, if the GPU compute capability '
-                                   'is >= 8.0, it should be a multiple of 32, otherwise '
-                                   'it should be a multiple of 64. For Pytorch Engine, '
-                                   'if Lora Adapter is specified, this parameter will '
-                                   'be ignored')
-
-    @staticmethod
-    def kernel_block_size(parser):
-        """Add argument kernel_block_size to parser."""
-
-        return parser.add_argument('--kernel-block-size',
-                                   type=int,
-                                   default=-1,
-                                   help='The length of the token sequence in a k/v block for kernels. '
-                                   'Only supported by Pytorch Engine. '
-                                   'When set to a different value than --cache-block-seq-len, '
-                                   'memory allocators and prefix cache use --cache-block-seq-len '
-                                   'as the block size, while kernels use --kernel-block-size.')
+                                   'If the GPU compute capability is >= 8.0, it should be a '
+                                   'multiple of 32, otherwise it should be a multiple of 64')
 
     @staticmethod
     def enable_prefix_caching(parser):
@@ -599,30 +499,6 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Enable cache and match prefix')
-
-    @staticmethod
-    def prefix_cache_state_budget(parser):
-        """Add argument prefix_cache_state_budget to parser."""
-
-        return parser.add_argument('--prefix-cache-state-budget',
-                                   type=int,
-                                   default=0,
-                                   help='Extra SSM state-cache slots budgeted for prefix-cache checkpoints. '
-                                   '0 adds no extra slots, but checkpoints may borrow idle runtime state slots. '
-                                   'Only used by the PyTorch engine.')
-
-    @staticmethod
-    def prefix_cache_decode_state_interval(parser):
-        """Add argument prefix_cache_decode_state_interval to parser."""
-
-        return parser.add_argument('--prefix-cache-decode-state-interval',
-                                   type=int,
-                                   default=0,
-                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
-                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
-                                   'Use a positive multiple of block size only for long SSM decoding where later '
-                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
-                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
 
     @staticmethod
     def num_tokens_per_iter(parser):
@@ -656,29 +532,6 @@ class ArgumentHelper:
                                    help='the max number of tokens per iteration during prefill')
 
     @staticmethod
-    def piecewise_cudagraph_max_tokens(parser):
-        return parser.add_argument('--piecewise-cudagraph-max-tokens',
-                                   type=int,
-                                   default=None,
-                                   help='Enable piecewise CUDA graph in the PyTorch engine and capture prefill '
-                                   'token buckets up to this value. If not specified, piecewise CUDA graph is '
-                                   'disabled')
-
-    @staticmethod
-    def cudagraph_capture_batch_sizes(parser):
-        return parser.add_argument('--cudagraph-capture-batch-sizes',
-                                   type=int,
-                                   nargs='+',
-                                   default=None,
-                                   help='Batch sizes to capture CUDA graphs for in the PyTorch engine. '
-                                   'If not specified, the engine infers them from max_batch_size. '
-                                   'max_batch_size is always captured')
-
-    @staticmethod
-    def vision_max_batch_size(parser):
-        return parser.add_argument('--vision-max-batch-size', type=int, default=1, help='the vision model batch size')
-
-    @staticmethod
     def max_log_len(parser):
         return parser.add_argument('--max-log-len',
                                    type=int,
@@ -693,26 +546,6 @@ class ArgumentHelper:
                                    default=False,
                                    help="Disable FastAPI's OpenAPI schema,"
                                    ' Swagger UI, and ReDoc endpoint')
-
-    @staticmethod
-    def eager_mode(parser):
-        """Add argument eager_mode to parser."""
-
-        return parser.add_argument('--eager-mode',
-                                   action='store_true',
-                                   default=False,
-                                   help='Whether to enable eager mode. '
-                                   'If True, cuda graph would be disabled')
-
-    @staticmethod
-    def empty_init(parser):
-        """Add the PyTorch empty-weight initialization argument."""
-        return parser.add_argument(
-            '--empty-init',
-            action='store_true',
-            default=False,
-            help='Build the PyTorch runtime without loading model weights or KV cache. '
-            'Use checkpoint-engine IPC to load weights, then wake kv_cache explicitly.')
 
     @staticmethod
     def communicator(parser):
@@ -733,45 +566,12 @@ class ArgumentHelper:
                                    '"default" for single-node inference and "deepep" for multi-node inference')
 
     @staticmethod
-    def enable_microbatch(parser):
-        """Add argument enable_microbatch to parser."""
-
-        return parser.add_argument('--enable-microbatch',
-                                   action='store_true',
-                                   help='enable microbatch for specified model')
-
-    @staticmethod
-    def enable_eplb(parser):
-        """Add argument enable_eplb to parser."""
-
-        return parser.add_argument('--enable-eplb', action='store_true', help='enable eplb for specified model')
-
-    @staticmethod
     def disable_metrics(parser):
         """Add argument disable_metrics to parser."""
         return parser.add_argument('--disable-metrics',
                                    action='store_true',
                                    default=False,
                                    help='disable metrics system')
-
-    # For Disaggregation
-    @staticmethod
-    def role(parser):
-        return parser.add_argument('--role',
-                                   type=str,
-                                   default='Hybrid',
-                                   choices=['Hybrid', 'Prefill', 'Decode'],
-                                   help='Hybrid for Non-Disaggregated Engine; '
-                                   'Prefill for Disaggregated Prefill Engine; '
-                                   'Decode for Disaggregated Decode Engine')
-
-    @staticmethod
-    def migration_backend(parser):
-        return parser.add_argument('--migration-backend',
-                                   type=str,
-                                   default='DLSlime',
-                                   choices=['DLSlime', 'Mooncake'],
-                                   help='kvcache migration management backend when PD disaggregation')
 
     @staticmethod
     def language_model_only(parser):
@@ -782,90 +582,25 @@ class ArgumentHelper:
                                    help='Run as text-only LLM: do not load vision/multimodal encoder modules.')
 
     @staticmethod
-    def logprobs_mode(parser):
-        """The mode of logprobs."""
-        return parser.add_argument('--logprobs-mode',
-                                   type=str,
-                                   default=None,
-                                   choices=[None, 'raw_logits', 'raw_logprobs'],
-                                   help='The mode of logprobs.')
-
-    @staticmethod
-    def dllm_block_length(parser):
-        """dllm_block_length for dllm."""
-        return parser.add_argument('--dllm-block-length', type=int, default=None, help='Block length for dllm')
-
-    @staticmethod
-    def dllm_unmasking_strategy(parser):
-        """Dllm unmasking strategy."""
-        return parser.add_argument('--dllm-unmasking-strategy',
-                                   type=str,
-                                   default='low_confidence_dynamic',
-                                   choices=['low_confidence_dynamic', 'low_confidence_static', 'sequential'],
-                                   help='The unmasking strategy for dllm.')
-
-    @staticmethod
-    def dllm_denoising_steps(parser):
-        """Dllm denoising steps."""
-        return parser.add_argument('--dllm-denoising-steps',
-                                   type=int,
-                                   default=None,
-                                   help='The number of denoising steps for dllm.')
-
-    @staticmethod
-    def dllm_confidence_threshold(parser):
-        """Dllm confidence threshold."""
-        return parser.add_argument('--dllm-confidence-threshold',
-                                   type=float,
-                                   default=0.85,
-                                   help='The confidence threshold for dllm.')
-
-    @staticmethod
-    def enable_return_routed_experts(parser):
-        """Add argument return routed experts to parser."""
-
-        return parser.add_argument('--enable-return-routed-experts',
-                                   action='store_true',
-                                   default=False,
-                                   help='Whether to output routed expert ids for replay')
-
-    @staticmethod
     def add_spec_group(parser):
         spec_group = parser.add_argument_group('Speculative decoding arguments')
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'dflash'],
+                                choices=['mtp', 'eagle3'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
                                 type=str,
                                 default=None,
-                                help='The path to speculative draft model')
+                                help='The path to speculative draft model. Required by eagle3')
 
         spec_group.add_argument('--speculative-num-draft-tokens',
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
 
-        spec_group.add_argument(
-            '--speculative-dflash-block-size',
-            type=int,
-            default=None,
-            help='DFlash only. Runtime draft block length, including the current target token. '
-            'Overrides --speculative-num-draft-tokens with block_size - 1 proposed tokens and must not exceed '
-            'the DFlash checkpoint block_size.')
-
         return spec_group
-
-    @staticmethod
-    def distributed_executor_backend(parser):
-        """Distributed_executor_backend."""
-        return parser.add_argument('--distributed-executor-backend',
-                                   type=str,
-                                   default=None,
-                                   choices=['uni', 'mp', 'ray'],
-                                   help='The distributed executor backend for pytorch engine.')
 
     @staticmethod
     def trust_remote_code(parser):
@@ -874,20 +609,6 @@ class ArgumentHelper:
                                    action='store_true',
                                    default=False,
                                    help='Whether to trust remote code from model repositories.')
-
-    @staticmethod
-    def kv_transfer_config(parser):
-        """Add external KV-cache connector configuration."""
-        return parser.add_argument(
-            '--kv-transfer-config',
-            type=json.loads,
-            default=None,
-            help='External KV-cache connector configuration for the PyTorch engine. '
-            'Mooncake Store requires MOONCAKE_CONFIG_PATH (or '
-            'kv_connector_extra_config.mooncake_config_path) and does not support '
-            'distributed_executor_backend="mp". '
-            'Example: '
-            "'{\"kv_connector\":\"MooncakeStoreConnector\",\"kv_role\":\"kv_both\"}'.")
 
 
 # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/utils/__init__.py

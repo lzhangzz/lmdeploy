@@ -64,20 +64,10 @@ def _validate_model(request: MessagesRequest, server_context):
 
 
 def _validate_extended_outputs(request: MessagesRequest, server_context):
-    # TurbomindEngineConfig has neither field; treat missing attrs as disabled.
-    engine_config = server_context.engine_config
-    logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
-    if request.return_logprob and logprobs_mode is None:
+    if request.return_logprob:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f'return_logprob={request.return_logprob} was requested, but '
-            'logprobs_mode is not enabled in the engine configuration.')
-
-    if request.return_routed_experts and not getattr(engine_config, 'enable_return_routed_experts', False):
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            ('routed experts requested but not configured in engine configuration. '
-             'May start the api_server with --enable-return-routed-experts flag.'))
+            f'return_logprob={request.return_logprob} is not supported by the Messages API.')
 
     return None
 

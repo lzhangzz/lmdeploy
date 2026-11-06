@@ -77,7 +77,7 @@ import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
 from lmdeploy.messages import SpeculativeConfig
 from lmdeploy.profiler import Profiler, Session
@@ -203,7 +203,6 @@ class Engine:
                              log_level='ERROR',
                              speculative_config=speculative_config)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        self.return_routed_experts = getattr(self.pipe.backend_config, 'enable_return_routed_experts', False)
 
     def process_request(self, requests, profiler: Profiler, temperature, top_p, top_k,
                         stream_output, ignore_eos, response_format=None):
@@ -215,7 +214,6 @@ class Engine:
                              top_k=top_k,
                              ignore_eos=ignore_eos,
                              do_sample=False,
-                             return_routed_experts=self.return_routed_experts,
                              response_format=response_format,
                              max_new_tokens=output_len) for _, _, output_len in requests
         ]
@@ -483,23 +481,14 @@ def parse_args():
     ArgumentHelper.log_level(parser)
     ArgumentHelper.backend(parser)
 
-    pt_group = parser.add_argument_group('PyTorch engine arguments')
-    ArgumentHelper.eager_mode(pt_group)
-    ArgumentHelper.enable_return_routed_experts(pt_group)
-    tp_act = ArgumentHelper.tp(pt_group)
-    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
-    session_len_act = ArgumentHelper.session_len(pt_group)
-    cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-
     ArgumentHelper.add_spec_group(parser)
 
-    tb_group = parser.add_argument_group('TurboMind engine argument')
-    tb_group._group_actions.append(tp_act)
-    tb_group._group_actions.append(cache_count_act)
-    tb_group._group_actions.append(session_len_act)
-    tb_group._group_actions.append(cache_block_seq_len_act)
-    tb_group._group_actions.append(prefix_caching_act)
+    tb_group = parser.add_argument_group('TurboMind engine arguments')
+    ArgumentHelper.tp(tb_group)
+    ArgumentHelper.cache_max_entry_count(tb_group)
+    ArgumentHelper.session_len(tb_group)
+    ArgumentHelper.cache_block_seq_len(tb_group)
+    ArgumentHelper.enable_prefix_caching(tb_group)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.quant_policy(tb_group, default=0)
     ArgumentHelper.num_tokens_per_iter(tb_group)
@@ -540,33 +529,20 @@ def main():
     print(f'response_format: {json.dumps(response_format, indent=2)}')
     print(f'ignore_eos: {args.ignore_eos}')
 
-    if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            cache_max_entry_count=args.cache_max_entry_count,
-            session_len=args.session_len,
-            cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format,
-            quant_policy=args.quant_policy,
-            num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters,
-            enable_prefix_caching=args.enable_prefix_caching,
-            communicator=args.communicator,
-            enable_metrics=False,
-            async_=args.async_)
-    elif args.backend == 'pytorch':
-        engine_config = PytorchEngineConfig(
-            cache_max_entry_count=args.cache_max_entry_count,
-            session_len=args.session_len,
-            block_size=args.cache_block_seq_len,
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            thread_safe=False,
-            eager_mode=args.eager_mode,
-            enable_prefix_caching=args.enable_prefix_caching,
-            enable_return_routed_experts=args.enable_return_routed_experts,
-        )
+    engine_config = TurbomindEngineConfig(
+        max_batch_size=args.concurrency,
+        tp=args.tp,
+        cache_max_entry_count=args.cache_max_entry_count,
+        session_len=args.session_len,
+        cache_block_seq_len=args.cache_block_seq_len,
+        model_format=args.model_format,
+        quant_policy=args.quant_policy,
+        num_tokens_per_iter=args.num_tokens_per_iter,
+        max_prefill_iters=args.max_prefill_iters,
+        enable_prefix_caching=args.enable_prefix_caching,
+        communicator=args.communicator,
+        enable_metrics=False,
+        async_=args.async_)
 
     speculative_config = get_speculative_config(args)
     engine = Engine(args.model_path, engine_config, speculative_config=speculative_config)

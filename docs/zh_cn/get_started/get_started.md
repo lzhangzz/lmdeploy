@@ -21,27 +21,14 @@ response = pipe(["Hi, pls intro yourself", "Shanghai is"])
 print(response)
 ```
 
-在构造 `pipeline` 时，如果没有指定使用 TurboMind 引擎或 PyTorch 引擎进行推理，LMDeploy 将根据[它们各自的能力](../supported_models/supported_models.md)自动分配一个，默认优先使用 TurboMind 引擎。
+`pipeline` 使用 TurboMind 引擎进行推理。模型是否支持请参考[支持的模型列表](../supported_models/supported_models.md)。
 
-然而，你可以选择手动选择一个引擎。例如，
+你可以通过 `TurbomindEngineConfig` 配置引擎。例如，
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=TurbomindEngineConfig(
-                    max_batch_size=32,
-                    enable_prefix_caching=True,
-                    cache_max_entry_count=0.8,
-                    session_len=8192,
-                ))
-```
-
-或者，
-
-```python
-from lmdeploy import pipeline, PytorchEngineConfig
-pipe = pipeline('internlm/internlm2_5-7b-chat',
-                backend_config=PytorchEngineConfig(
                     max_batch_size=32,
                     enable_prefix_caching=True,
                     cache_max_entry_count=0.8,
@@ -90,25 +77,7 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-在 VLM pipeline 中，默认的图像处理批量大小是 1。这可以通过 `VisionConfig` 调整。例如，你可以这样设置：
-
-```python
-from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
-
-pipe = pipeline('OpenGVLab/InternVL2-8B',
-                vision_config=VisionConfig(
-                    max_batch_size=8
-                ))
-
-image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe(('describe this image', image))
-print(response)
-```
-
-然而，图像批量大小越大，OOM 错误的风险越大，因为 VLM 模型中的 LLM 部分会提前预分配大量的内存。
-
-VLM pipeline 对于推理引擎的选择方式与 LLM pipeline 类似。你可以参考 [LLM 推理](#llm-推理)并结合两个引擎支持的 VLM 模型列表，手动选择和配置推理引擎。
+VLM pipeline 的引擎配置方式与 LLM pipeline 类似。你可以参考 [LLM 推理](#llm-推理)并结合支持的 VLM 模型列表配置推理引擎。
 
 ## 模型服务
 

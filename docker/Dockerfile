@@ -66,11 +66,9 @@ RUN --mount=type=cache,target=/root/.cache \
     bash /tmp/prepare_3rdparty_wheel.sh
 
 # Full tree for local package build.
-# Base on thirdparty-wheels (not runtime-deps-pip) to force buildx to build
-# this stage only after thirdparty-wheels finishes. Both stages run heavy nvcc
-# compilation; building them in parallel OOMs the 16GB CI runner (exit 143 /
-# runner shutdown). Serializing halves peak memory. Only /wheels is consumed
-# downstream, so the final image is unchanged.
+# Base on thirdparty-wheels (not runtime-deps-pip) so buildx serializes the
+# third-party wheel builds and the TurboMind compilation, keeping peak memory
+# within the CI runner limit. Only /wheels is consumed downstream.
 FROM thirdparty-wheels AS lmdeploy-wheel
 
 COPY . /opt/lmdeploy
@@ -111,7 +109,5 @@ RUN --mount=type=cache,target=/root/.cache \
     --mount=type=bind,target=/wheels,from=wheels,source=/wheels \
     /tmp/install.sh
 
-# explicitly set ptxas path for triton
 ENV PATH=/opt/py3/bin:$PATH
-ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 FROM ${IMAGE_TYPE}

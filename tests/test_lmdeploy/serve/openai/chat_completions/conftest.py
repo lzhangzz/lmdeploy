@@ -22,7 +22,7 @@ class FakeAsyncEngine:
     """
 
     model_name = 'fake-model'
-    backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+    backend_config = SimpleNamespace()
 
     def __init__(self):
         self.session_mgr = FakeSessionManager()
@@ -48,8 +48,6 @@ class FakeAsyncEngine:
                 finish_reason='stop',
                 logprobs=None,
                 cached_tokens=0,
-                routed_experts=None,
-                cache_block_ids=None,
             )
 
         return _generator()

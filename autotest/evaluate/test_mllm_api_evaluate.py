@@ -24,10 +24,6 @@ TURBOMIND_LOCAL_LAYOUTS = LOCAL_TP_LAYOUTS[:4]
 _MLLM_EXTRA = {'session-len': 65536, 'cache-max-entry-count': 0.6}
 
 
-def _pytorch_ascend_marks(_layout: dict[str, int]):
-    return [pytest.mark.test_ascend]
-
-
 def run_eval_test(config, run_config, worker_id, test_type='infer', eval_config_name='default', eval_subpath=None):
     eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
     extra_config = get_eval_preset_config(config, run_config, eval_config_name, mllm=True)
@@ -142,23 +138,6 @@ _LOCAL_EVAL_PARAMS = (
         extra=_MLLM_EXTRA,
     )
     + build_eval_stage_params(
-        'pytorch',
-        LOCAL_TP_LAYOUTS,
-        model_type='vl_model',
-        func_type='mllm_evaluate',
-        extra=_MLLM_EXTRA,
-        layout_extra_marks=_pytorch_ascend_marks,
-    )
-    + build_eval_stage_params(
-        'pytorch',
-        DISTRIBUTED_TP_DP_EP_LAYOUTS,
-        test_types=('eval',),
-        model_type='vl_model',
-        func_type='mllm_evaluate',
-        extra=_MLLM_EXTRA,
-        layout_extra_marks=_pytorch_ascend_marks,
-    )
-    + build_eval_stage_params(
         'turbomind',
         DISTRIBUTED_TP_DP_EP_LAYOUTS,
         test_types=('eval',),
@@ -170,15 +149,6 @@ _LOCAL_EVAL_PARAMS = (
 
 _PROXY_INFER_PARAMS = (
     build_eval_stage_params(
-        'pytorch',
-        DISTRIBUTED_TP_DP_EP_LAYOUTS,
-        test_types=('infer',),
-        model_type='vl_model',
-        func_type='mllm_evaluate',
-        extra=_MLLM_EXTRA,
-        layout_extra_marks=_pytorch_ascend_marks,
-    )
-    + build_eval_stage_params(
         'turbomind',
         DISTRIBUTED_TP_DP_EP_LAYOUTS,
         test_types=('infer',),

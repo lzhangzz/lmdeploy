@@ -28,10 +28,7 @@ _MessageT = TypeVar('_MessageT', bound=dict[str, Any])
 def get_model_list(server_context) -> list[str]:
     """Return available model names from the server context."""
 
-    model_names = [server_context.async_engine.model_name]
-    cfg = server_context.engine_config
-    model_names += getattr(cfg, 'adapters', None) or []
-    return model_names
+    return [server_context.async_engine.model_name]
 
 
 def detect_inline_system_support(chat_template) -> bool:

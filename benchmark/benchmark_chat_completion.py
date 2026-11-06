@@ -7,8 +7,7 @@ chat ``messages``, or a string/list ``prompt`` (e.g. dapo-math-17k). List-type
 aggregates TTFT/ITL/TPOT metrics, and writes table plus report artifacts for concurrency/RPS sweeps.
 
 Generation options include ``--output-tokens`` (``max_completion_tokens``),
-``--ignore-eos``, ``--return-token-ids``, ``--return-routed-experts``,
-``--return-logprob``, and ``--logprobs`` / ``--top-logprobs``.
+``--ignore-eos``, ``--return-token-ids``, ``--return-logprob``, and ``--logprobs`` / ``--top-logprobs``.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ import html
 import importlib
 import json
 import math
-import os
 import random
 import time
 from collections import defaultdict
@@ -55,7 +53,6 @@ class SSEEvent:
     usage: dict[str, int] | None = None
     done: bool = False
     raw: dict[str, Any] | None = None
-    routed_experts: str | None = None
 
     @property
     def token_text(self) -> str:
@@ -110,34 +107,6 @@ class RequestTrace:
 
 
 SendOne = Callable[[BenchmarkRequest, str, float, int], Awaitable[RequestTrace]]
-SHARED_STORE = 'shared_store'
-SHARED_STORE_NAMESPACE = 'lmdeploy'
-_shared_store_actor: Any | None = None
-
-
-def init_shared_store() -> Any:
-    """Connect to the Ray cluster and return the LMDeploy shared_store
-    actor."""
-    global _shared_store_actor
-    if _shared_store_actor is not None:
-        return _shared_store_actor
-
-    import ray
-
-    ray_address = os.environ.get('RAY_ADDRESS', 'auto')
-    ctx = ray.init(address=ray_address, namespace=SHARED_STORE_NAMESPACE, ignore_reinit_error=True)
-    print(f'ray cluster address: {ctx.address_info["address"]}')
-    _shared_store_actor = ray.get_actor(SHARED_STORE, namespace=SHARED_STORE_NAMESPACE)
-    return _shared_store_actor
-
-
-async def fetch_routed_experts(shared_store: Any, key: str) -> Any:
-    """Fetch routed_experts from shared_store without blocking the event
-    loop."""
-    import ray
-
-    ref = shared_store.get.remote(key)
-    return await asyncio.to_thread(ray.get, ref)
 
 
 def _split_csv(value: str | None) -> list[str] | None:
@@ -353,7 +322,6 @@ def parse_sse_line(line: bytes | str) -> SSEEvent:
         finish_reason=choice.get('finish_reason'),
         usage=data.get('usage'),
         raw=data,
-        routed_experts=choice.get('routed_experts'),
     )
 
 
@@ -373,7 +341,6 @@ def build_payload(
     max_completion_tokens: int | None,
     ignore_eos: bool = False,
     return_token_ids: bool = False,
-    return_routed_experts: bool = False,
     return_logprob: bool = False,
     logprobs: bool = False,
     top_logprobs: int | None = None,
@@ -402,8 +369,6 @@ def build_payload(
         payload['ignore_eos'] = True
     if return_token_ids:
         payload['return_token_ids'] = True
-    if return_routed_experts:
-        payload['return_routed_experts'] = True
     if return_logprob:
         payload['return_logprob'] = True
     if logprobs:
@@ -459,14 +424,12 @@ async def request_chat_completion(
     max_completion_tokens: int | None,
     ignore_eos: bool,
     return_token_ids: bool,
-    return_routed_experts: bool,
     return_logprob: bool,
     logprobs: bool,
     top_logprobs: int | None,
     extra_body: dict[str, Any] | None,
     headers: dict[str, str] | None = None,
     save_response_text: bool = False,
-    shared_store: Any | None = None,
 ) -> RequestTrace:
     payload = build_payload(
         request=request,
@@ -477,7 +440,6 @@ async def request_chat_completion(
         max_completion_tokens=max_completion_tokens,
         ignore_eos=ignore_eos,
         return_token_ids=return_token_ids,
-        return_routed_experts=return_routed_experts,
         return_logprob=return_logprob,
         logprobs=logprobs,
         top_logprobs=top_logprobs,
@@ -525,11 +487,6 @@ async def request_chat_completion(
                             event.usage.get('completion_tokens', trace.completion_tokens) or 0
                         )
                         trace.cached_tokens = _cached_tokens_from_usage(event.usage)
-                    if event.routed_experts and shared_store is not None:
-                        try:
-                            await fetch_routed_experts(shared_store, event.routed_experts)
-                        except Exception as e:  # noqa: BLE001 - record and keep consuming SSE.
-                            trace.error = repr(e)
 
             trace.end_time = time.perf_counter()
             trace.success = trace.error == ''
@@ -1015,10 +972,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         headers['Authorization'] = f'Bearer {args.api_key}'
     extra_body = json.loads(args.extra_request_body) if args.extra_request_body else {}
 
-    shared_store = None
-    if args.return_routed_experts:
-        shared_store = init_shared_store()
-
     tokenizer = None
     if args.input_ids:
         model_path = args.model_path
@@ -1055,8 +1008,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
             print('ignore_eos=True')
         if args.return_token_ids:
             print('return_token_ids=True')
-        if args.return_routed_experts:
-            print('return_routed_experts=True')
         if args.return_logprob:
             print('return_logprob=True')
         if args.logprobs:
@@ -1077,14 +1028,12 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 max_completion_tokens=args.max_completion_tokens,
                 ignore_eos=args.ignore_eos,
                 return_token_ids=args.return_token_ids,
-                return_routed_experts=args.return_routed_experts,
                 return_logprob=args.return_logprob,
                 logprobs=args.logprobs,
                 top_logprobs=args.top_logprobs,
                 extra_body=extra_body,
                 headers=headers,
                 save_response_text=args.save_response_text,
-                shared_store=shared_store,
             )
 
         all_traces: list[RequestTrace] = []
@@ -1267,11 +1216,6 @@ def parse_args() -> argparse.Namespace:
         '--return-token-ids',
         action='store_true',
         help='Set return_token_ids=true to include output token ids in stream chunks (LMDeploy extension).',
-    )
-    parser.add_argument(
-        '--return-routed-experts',
-        action='store_true',
-        help='Set return_routed_experts=true to include MoE routed expert indices (LMDeploy extension).',
     )
     parser.add_argument(
         '--return-logprob',

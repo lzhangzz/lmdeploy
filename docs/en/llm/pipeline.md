@@ -150,7 +150,6 @@ hidden_states = [x.last_hidden_state for x in response]
 from transformers import AutoTokenizer
 from lmdeploy import pipeline
 
-
 model_repoid_or_path = 'internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
@@ -169,54 +168,6 @@ print(ppl)
 - get_ppl returns the cross entropy loss without applying the exponential operation afterwards
 ```
 
-### Use PyTorchEngine
-
-```shell
-pip install triton>=2.1.0
-```
-
-```python
-from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
-
-backend_config = PytorchEngineConfig(session_len=2048)
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2_5-7b-chat',
-                backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': 'Hi, pls intro yourself'
-}], [{
-    'role': 'user',
-    'content': 'Shanghai is'
-}]]
-response = pipe(prompts, gen_config=gen_config)
-print(response)
-```
-
-### Inference with LoRA
-
-```python
-from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
-
-backend_config = PytorchEngineConfig(session_len=2048,
-                                     adapters=dict(lora_name_1='chenchi/lora-chatglm2-6b-guodegang'))
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = pipeline('THUDM/chatglm2-6b',
-                backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': '您猜怎么着'
-}]]
-response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
-print(response)
-```
-
 ### Release pipeline
 
 You can release the pipeline explicitly by calling its `close()` method, or alternatively, use the `with` statement as demonstrated below:
@@ -233,7 +184,7 @@ with pipeline('internlm/internlm2_5-7b-chat') as pipe:
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
 
-  If you got this for tp>1 in pytorch backend. Please make sure the python script has following
+  If you got this error, please make sure the python script has the following entry point
 
   ```python
   if __name__ == '__main__':
@@ -242,5 +193,3 @@ with pipeline('internlm/internlm2_5-7b-chat') as pipe:
   Generally, in the context of multi-threading or multi-processing, it might be necessary to ensure that initialization code is executed only once. In this case, `if __name__ == '__main__':` can help to ensure that these initialization codes are run only in the main program, and not repeated in each newly created process or thread.
 
 - To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).
-
-- If the weight of lora has a corresponding chat template, you can first register the chat template to lmdeploy, and then use the chat template name as the adapter name.

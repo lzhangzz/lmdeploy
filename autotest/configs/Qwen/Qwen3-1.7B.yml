@@ -9,16 +9,11 @@
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 '5080':
 - model_type: chat
@@ -30,14 +25,9 @@
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq

@@ -15,9 +15,9 @@ on:
         default: 'main'
       backend:
         required: true
-        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind"]"'
         type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['turbomind']"
       execution_mode:
         required: false
         description: 'Select execution mode: infer, eval, or both. Default is "both"'
@@ -47,7 +47,6 @@ env:
   TEST_CODE_PATH: /nvme/qa_test_models/test_pkg/lmdeploy/${{ inputs.repo_ref }}_${{ github.run_id }}
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
-  DEEPSEEK_VL: /nvme/qa_test_models/offline_pkg/DeepSeek-VL
   LMUData: /nvme/qa_test_models/LMUData
   LOCAL_LLM: turbomind_Qwen2.5-32B-Instruct_nccl_tp2_0
   OPENAI_API_KEY: sk-empty
@@ -159,7 +158,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind"]')}}
         layout: ['tp1', 'tp2', 'tp4', 'tp8']
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
@@ -200,7 +199,7 @@ jobs:
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
       - name: Setup paths for evaluation
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind')
+        if: matrix.backend == 'turbomind'
         run: |
           unset HTTP_PROXY;unset HTTPS_PROXY;unset http_proxy;unset https_proxy;
           cd VLMEvalKit && cp -r ../autotest .

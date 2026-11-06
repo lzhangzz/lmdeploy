@@ -15,7 +15,7 @@ Claude Code -> http://<server>:<port>/v1/messages -> LMDeploy api_server
 Launch an LMDeploy API server with the model you want Claude Code to use:
 
 ```bash
-lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B --backend pytorch --server-port 23333
+lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B --server-port 23333
 ```
 
 For tool calling, launch the server with a tool parser supported by your model:

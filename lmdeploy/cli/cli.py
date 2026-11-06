@@ -47,40 +47,21 @@ class CLI:
         ArgumentHelper.download_dir(parser)
         ArgumentHelper.trust_remote_code(parser)
 
-        # pytorch engine args
-        pt_group = parser.add_argument_group('PyTorch engine arguments')
-        ArgumentHelper.adapters(pt_group)
-        ArgumentHelper.device(pt_group)
-        ArgumentHelper.eager_mode(pt_group)
-        ArgumentHelper.dllm_block_length(pt_group)
-        ArgumentHelper.prefix_cache_state_budget(pt_group)
-        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
-        # common engine args
-        dtype_act = ArgumentHelper.dtype(pt_group)
-        tp_act = ArgumentHelper.tp(pt_group)
-        ep_act = ArgumentHelper.ep(pt_group)
-        session_len_act = ArgumentHelper.session_len(pt_group)
-        cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
-        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-        quant_policy = ArgumentHelper.quant_policy(pt_group)
-        language_model_only = ArgumentHelper.language_model_only(pt_group)
-
-        # turbomind args
+        # engine args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
-        # common engine args
-        tb_group._group_actions.append(dtype_act)
-        tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(ep_act)
-        tb_group._group_actions.append(session_len_act)
-        tb_group._group_actions.append(cache_max_entry_act)
-        tb_group._group_actions.append(prefix_caching_act)
-        tb_group._group_actions.append(quant_policy)
-        tb_group._group_actions.append(language_model_only)
+        ArgumentHelper.dtype(tb_group)
+        ArgumentHelper.tp(tb_group)
+        ArgumentHelper.ep(tb_group)
+        ArgumentHelper.cp(tb_group)
+        ArgumentHelper.session_len(tb_group)
+        ArgumentHelper.cache_max_entry_count(tb_group)
+        ArgumentHelper.enable_prefix_caching(tb_group)
+        ArgumentHelper.quant_policy(tb_group)
+        ArgumentHelper.language_model_only(tb_group)
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.moe_a2a_backend(tb_group)
-        ArgumentHelper.cp(tb_group)
         ArgumentHelper.async_(tb_group)
 
         # speculative decoding
@@ -174,7 +155,6 @@ class CLI:
             'speculative_algorithm',
             'speculative_draft_model',
             'speculative_num_draft_tokens',
-            'speculative_dflash_block_size',
         ]
         for key in to_remove:
             kwargs.pop(key)

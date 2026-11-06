@@ -1,5 +1,4 @@
 # HF model id: OpenGVLab/Mini-InternVL-Chat-2B-V1-5
-
 a100:
 - model_type:
   - chat

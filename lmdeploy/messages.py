@@ -1,15 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
-
-from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 
 from .tokenizer import Tokenizer
 from .utils import get_logger
@@ -22,57 +18,6 @@ class QuantPolicy(enum.IntEnum):
     NONE = 0
     INT4 = 4  # 4-bit KV cache
     INT8 = 8  # 8-bit KV cache
-    FP8 = 16  # FP8 KV cache (float8_e4m3fn, per-tensor scale. DSA uses the fp8_ds_mla layout)
-    FP8_E5M2 = 17  # FP8 KV cache (float8_e5m2, per-tensor scale)
-    TURBO_QUANT = 42  # TurboQuant: K=4bit QJL4 + V=2bit MSE
-
-
-KVTransferRole = Literal['kv_producer', 'kv_consumer', 'kv_both']
-
-
-@dataclass
-class KVTransferConfig:
-    """Configuration for an external KV-cache connector."""
-
-    kv_connector: str | None = None
-    kv_role: KVTransferRole | None = None
-    kv_connector_extra_config: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        """Validate connector configuration."""
-        supported_roles = ('kv_producer', 'kv_consumer', 'kv_both')
-        if self.kv_connector is None and self.kv_role is not None:
-            raise ValueError('kv_connector must be specified when kv_role is set')
-        if self.kv_connector is not None:
-            if not isinstance(self.kv_connector, str) or not self.kv_connector.strip():
-                raise ValueError('kv_connector must be a non-empty string')
-            if self.kv_role is None:
-                raise ValueError('kv_role must be specified when kv_connector is set')
-        if self.kv_role is not None and self.kv_role not in supported_roles:
-            raise ValueError(f'unsupported kv_role: {self.kv_role}; supported roles are {supported_roles}')
-        if not isinstance(self.kv_connector_extra_config, dict):
-            raise TypeError('kv_connector_extra_config must be a dict')
-
-    @property
-    def is_kv_transfer_instance(self) -> bool:
-        """Return whether a connector is enabled for this engine."""
-        return self.kv_connector is not None and self.kv_role is not None
-
-    @property
-    def is_kv_producer(self) -> bool:
-        """Return whether this engine saves KV cache through the connector."""
-        return self.kv_connector is not None and self.kv_role in ('kv_producer', 'kv_both')
-
-    @property
-    def is_kv_consumer(self) -> bool:
-        """Return whether this engine loads KV cache through the connector."""
-        return self.kv_connector is not None and self.kv_role in ('kv_consumer', 'kv_both')
-
-
-LogitsProcessor = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-"""LogitsProcessor is a function that takes a tensor of input_ids, the logits
-tensor for the next token, and returns a modified tensor of logits to sample
-from."""
 
 
 @dataclass
@@ -117,10 +62,6 @@ class GenerationConfig:
             around special tokens. The behavior of Fast tokenizers is to have
             this to False. This is setup to True in slow tokenizers.
         logprobs: Number of log probabilities to return per output token.
-        logprob_start_len: Source-token boundary in the current
-            model-processed input after multimodal expansion. Rows are returned
-            for tokens after this boundary. ``-1`` disables input logprobs
-            while preserving generated-token logprobs.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -168,12 +109,6 @@ class GenerationConfig:
                         "end": "</answer>"
                     }
                 }
-
-        logits_processors: Custom logit processors.
-        repetition_ngram_size: The size of n-grams to consider for repetition early stop.
-            Must be non-negative; values below 0 are treated as 0.
-        repetition_ngram_threshold: The number of times an n-gram must be repeated to trigger early stop.
-            Must be non-negative; values below 0 are treated as 0.
     """
 
     n: int = 1
@@ -194,27 +129,13 @@ class GenerationConfig:
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     logprobs: int = None
-    logprob_start_len: int = -1
     response_format: dict | None = None
-    logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
     output_last_hidden_state: Literal['all', 'generation'] = None
     include_stop_str_in_output: bool = False
 
     # return the perplexity (mean cross-entropy loss) of the input prompt,
     return_ppl: bool = False
-
-    # for disaggregation
-    with_cache: bool = False
-    preserve_cache: bool = False
-    migration_request: MigrationRequest | None = None
-
-    # router replay
-    return_routed_experts: bool = False
-
-    # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
-    repetition_ngram_size: int = 0
-    repetition_ngram_threshold: int = 0
 
     def convert_stop_bad_words_to_ids(self, tokenizer: Tokenizer):
         """Convert stop_words/bad_sords to ids and append the ids to
@@ -264,13 +185,6 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
-        if self.logprob_start_len < -1:
-            raise ValueError('logprob_start_len must be greater than or equal to -1')
-        if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
-            raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
-        if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
-            self.repetition_ngram_size = 0
-            self.repetition_ngram_threshold = 0
 
 
 @pydantic_dataclass
@@ -431,10 +345,6 @@ class TurbomindEngineConfig:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
             raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
-        assert self.quant_policy not in (
-            QuantPolicy.FP8,
-            QuantPolicy.FP8_E5M2,
-        ), 'invalid quant_policy for TurboMind, FP8 quantization is not supported'
         assert self.rope_scaling_factor >= 0, 'invalid rope_scaling_factor'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
@@ -446,203 +356,6 @@ class TurbomindEngineConfig:
         assert self.async_ in (0, 1), 'async_ must be 0 (disabled) or 1 (enabled)'
         assert self.moe_a2a_backend in ('auto', 'default', 'deepep'), \
             'invalid moe_a2a_backend'
-
-
-@dataclass
-class PytorchEngineConfig:
-    """PyTorch Engine Config.
-
-    Args:
-        dtype: data type for model weights and activations. It can be
-            one of the following values, ['auto', 'float16', 'bfloat16']
-            The `auto` option will use FP16 precision for FP32 and FP16
-            models, and BF16 precision for BF16 models.
-        tp: Tensor Parallelism. default 1.
-        dp: Data Parallelism. default 1.
-        dp_rank: rank of dp.
-        ep: Expert Parallelism. default 1.
-        session_len: Max session length. Default None.
-        max_batch_size: Max batch size. If it is not specified,
-            the engine will automatically set it according to the device
-        attn_tp_size: tp size for attention, only works for dp>1
-        mlp_tp_size: tp size for mlp, only works for dp>1
-        moe_tp_size: tp size for moe, only works for dp>1
-        cache_max_entry_count: the percentage of gpu memory occupied
-            by the k/v cache. For lmdeploy versions greater than `v0.2.1`,
-            it defaults to 0.8, signifying the percentage of FREE GPU memory
-            to be reserved for the k/v cache
-        prefill_interval: Interval to perform prefill,
-            Default 16.
-        block_size: paging cache block size, default 64.
-        num_cpu_blocks: Num cpu blocks. If num is 0, cache
-            would be allocate according to current environment.
-        num_gpu_blocks: Num gpu blocks. If num is 0, cache
-            would be allocate according to current environment.
-        adapters: The path configs to lora adapters.
-        max_prefill_token_num: tokens per iteration.
-        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
-            maximum captured prefill token bucket. If not specified, piecewise
-            CUDA graph is disabled.
-        cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
-            If not specified, the engine will infer them from max_batch_size.
-            max_batch_size is always captured.
-        thread_safe: thread safe engine instance.
-        enable_prefix_caching: Enable token match and sharing caches.
-        prefix_cache_state_budget: Extra SSM state-cache slots budgeted for
-            prefix-cache checkpoints. 0 adds no extra slots, but SSM
-            checkpoints may still borrow idle runtime state slots.
-        prefix_cache_decode_state_interval: Token interval for SSM decode
-            state checkpoints. 0 disables decode-state checkpoint saves; prefill
-            and chunk checkpoints may still be saved. Keep 0 unless the workload
-            has long SSM decoding and repeated continuations that can reuse
-            decode checkpoints. Smaller positive values create more hit points
-            but use more checkpoint memory and copy work; larger values reduce
-            overhead but make decode-prefix hits less likely. Positive values
-            must be multiples of the cache block size.
-        device_type: The inference device type, options ['cuda']
-        eager_mode: Enable "eager" mode or not
-        custom_module_map: nn module map customized by users. Once
-            provided, the original nn modules of the model will be
-            substituted by the mapping ones
-        download_dir: Directory to download and load the weights,
-            default to the default cache directory of huggingface.
-        revision: The specific model version to use.
-            It can be a branch name, a tag name, or a commit id.
-            If unspecified, will use the default version.
-        quant_policy: default to 0. When k/v is quantized into int4,
-            int8, fp8, or fp8_e5m2, set it to 4, 8, 16, or 17,
-            respectively. For DSA models, fp8 selects the fp8_ds_mla layout.
-        distributed_executor_backend: backend of distributed backend,
-            options: ['uni', 'mp', 'ray']
-        empty_init: Whether to load the model weights, you should set
-            it to True if you want to update weights after create the pipeline
-        enable_microbatch: enable microbatch for specified model
-        enable_eplb: enable eplb for specified model
-        enable_metrics: enable metrics system
-        role: role of engin, options: ['Hybrid', 'Prefill',
-            'Decode']. Default to `EngineRole.Hybrid`.
-        migration_backend: migration backend. options: ['DLSlime'].
-            Default to `MigrationBackend.DLSlime`.
-        enable_mp_engine: run engine in multi-process mode.
-        mp_engine_backend: backend of mp engine, options:
-            ['mp', 'ray']. Default to `mp`.
-        model_format: weight quantization policy, options: ['fp8'].
-        hf_overrides: Huggingface overrides for the model.
-            It can be used to override the default config of the model,
-        language_model_only: Whether to run as text-only LLM without loading
-            vision/multimodal encoder modules. Default to False.
-        logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
-        dllm_block_length: Block size of block diffusion model.
-        dllm_unmasking_strategy: Dllm unmasking strategy, options:
-            ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
-        dllm_denoising_steps: Dllm denoising steps.
-        dllm_confidence_threshold: dllm unmasking threshold for
-            dynamic unmasking.
-        kv_transfer_config: External KV-cache connector configuration. This is
-            supported only by the PyTorch engine. ``None`` disables external
-            KV-cache transfer.
-    """
-    dtype: str = 'auto'
-    tp: int = 1
-    dp: int = 1
-    dp_rank: int = 0
-    ep: int = 1
-    session_len: int = None
-    max_batch_size: int = None
-    attn_tp_size: int = None
-    mlp_tp_size: int = None
-    moe_tp_size: int = None
-    cache_max_entry_count: float = 0.8
-    prefill_interval: int = 16
-    block_size: int = 64
-    kernel_block_size: int = -1
-    num_cpu_blocks: int = 0
-    num_gpu_blocks: int = 0
-    adapters: dict[str, str] = None
-    max_prefill_token_num: int = 8192
-    cudagraph_capture_batch_sizes: list[int] | None = None
-    thread_safe: bool = False
-    enable_prefix_caching: bool = False
-    prefix_cache_state_budget: int = 0
-    prefix_cache_decode_state_interval: int = 0
-    device_type: str = 'cuda'
-    eager_mode: bool = False
-    custom_module_map: dict[str, str] = None
-    download_dir: str = None
-    revision: str = None
-    quant_policy: QuantPolicy = QuantPolicy.NONE
-    distributed_executor_backend: str = None
-    empty_init: bool = False
-    enable_microbatch: bool = False
-    enable_eplb: bool = False
-    enable_mp_engine: bool = False
-    mp_engine_backend: str = 'mp'
-    model_format: str = None
-    enable_metrics: bool = True
-    hf_overrides: dict[str, Any] | None = None
-    language_model_only: bool = False
-    logprobs_mode: str = None
-    # router replay
-    enable_return_routed_experts: bool = False
-    enable_transfer_obj_ref: bool = False
-
-    # dllm
-    dllm_block_length: int = None
-    dllm_unmasking_strategy: str = 'low_confidence_dynamic'
-    dllm_denoising_steps: int = None
-    dllm_confidence_threshold: float = 0.85
-
-    role: EngineRole = EngineRole.Hybrid
-    migration_backend: MigrationBackend = MigrationBackend.DLSlime
-    kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
-    piecewise_cudagraph_max_tokens: int | None = None
-
-    def __post_init__(self):
-        """Check input validation."""
-        if self.kernel_block_size == -1:
-            self.kernel_block_size = self.block_size
-        assert self.dtype in ['auto', 'float16', 'bfloat16']
-        assert self.tp >= 1, 'invalid tp'
-        assert self.dp >= 1, 'invalid dp'
-        assert self.ep >= 1, 'invalid ep'
-        assert 0 < self.cache_max_entry_count < 1, \
-            'invalid cache_max_entry_count'
-        assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
-        assert self.max_prefill_token_num >= 0, \
-            'invalid max_prefill_token_num'
-        assert (self.piecewise_cudagraph_max_tokens is None
-                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
-        assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
-        assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
-        assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
-        try:
-            self.quant_policy = QuantPolicy(self.quant_policy)
-        except ValueError as e:
-            raise ValueError(f'invalid quant_policy: {self.quant_policy}') from e
-        assert self.device_type in ['cuda', 'ascend', 'maca', 'camb'], (f'invalid device_type: {self.device_type}')
-        assert self.kernel_block_size >= 16 and \
-               (self.kernel_block_size & (self.kernel_block_size - 1)) == 0, \
-               f'kernel_block_size must be >= 16 and a power of 2, but got {self.kernel_block_size}'
-        assert self.block_size >= self.kernel_block_size and \
-               self.block_size % self.kernel_block_size == 0, \
-               (f'block_size must be >= kernel_block_size and an integer multiple '
-                f'of kernel_block_size, but got block_size {self.block_size} '
-                f'and kernel_block_size {self.kernel_block_size}')
-        if self.prefix_cache_decode_state_interval > 0:
-            assert self.prefix_cache_decode_state_interval % self.block_size == 0, (
-                'prefix_cache_decode_state_interval must be a multiple of block_size')
-        if self.quant_policy > 0 and self.device_type not in ['cuda', 'ascend']:
-            assert False, \
-                   'kv cache quantization only works for CUDA and ASCEND.'
-        if self.device_type == 'camb' and self.block_size != 16:
-            self.block_size = 16
-            self.kernel_block_size = 16
-            logger.warning('Currently, camb device requires block_size and kernel_block_size to be 16, '
-                           'setting both to 16.')
-        if isinstance(self.kv_transfer_config, dict):
-            self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
-        elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
-            raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
 
 
 class ResponseType(enum.Enum):
@@ -679,9 +392,7 @@ class Response:
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
         token_ids: the output token ids.
-        logprobs: the top logprobs for each output position. For a scoring-only
-            input-logprob request, this field carries the complete ordered
-            input-token rows on the terminal response.
+        logprobs: the top logprobs for each output position.
         index: it refers to the position index of the input request batch.
     """
     text: str
@@ -693,7 +404,6 @@ class Response:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
-    routed_experts: Any = None
     cached_tokens: int = 0
     error_code: str | None = None
     error_message: str | None = None
@@ -725,7 +435,6 @@ class Response:
         # Format tensor fields
         fields.extend(_format_tensor('logits', self.logits))
         fields.extend(_format_tensor('last_hidden_state', self.last_hidden_state))
-        fields.extend(_format_tensor('routed_experts', self.routed_experts))
         return '\n'.join(fields)
 
     def extend(self, other: 'Response') -> 'Response':
@@ -751,7 +460,6 @@ class Response:
         if other.logprobs is not None:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
-        self.routed_experts = other.routed_experts
         self.error_code = other.error_code
         self.error_message = other.error_message
         return self
@@ -816,16 +524,12 @@ class RequestMetrics:
 
 @dataclass
 class EngineOutput:
-    """Engine output from turbomind/pytorch engine.
+    """Engine output from the TurboMind engine.
 
     Args:
         status: the response type.
         token_ids: the newly generated token ids in each iteration.
-        logprobs: the top logprobs for each output position. For a scoring-only
-            input-logprob request, this internal field carries the complete
-            ordered input-token rows on its terminal output.
-        cache_block_ids: send cache blocks back for migration in
-            Disaggregated LLM Serving when Prefill Engine is Done.
+        logprobs: the top logprobs for each output position.
         req_metrics: request metrics information
         ce_loss: the summed, unnormalized cross-entropy (NLL) of the input
             prompt, available when ``GenerationConfig.return_ppl`` is set.
@@ -835,26 +539,11 @@ class EngineOutput:
     logprobs: list[dict[int, float]] = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
-    cache_block_ids: list[int] | None = None
     req_metrics: RequestMetrics | None = None
-    routed_experts: torch.Tensor = None
     ce_loss: float = None
 
 
-@dataclass
-class VisionConfig:
-    """Vision model configs.
-
-    Args:
-        max_batch_size: the max image size passed to the model, since
-            some models will use image patch, the actual running batch could
-            be larger than this value.
-        thread_safe: Specifies whether the engine instance is
-            thread-safe. Please set it to True when using the pipeline
-            in a multi-threaded environment.
-    """
-    max_batch_size: int = 1
-    thread_safe: bool = False
+SPECULATIVE_METHODS = ('mtp', 'eagle3')
 
 
 @dataclass
@@ -862,25 +551,17 @@ class SpeculativeConfig:
     """Speculative decoding config.
 
     Args:
-        method: the speculative decoding method.
+        method: the speculative decoding method, one of ``SPECULATIVE_METHODS``.
+            ``mtp`` uses the target checkpoint's multi-token-prediction layers;
+            ``eagle3`` requires a draft model path.
         model: the path of speculative model.
         num_speculative_tokens: number of generated token of draft model per step
-        dflash_block_size: DFlash query/verify window length. When set, this
-            DFlash-specific value overrides ``num_speculative_tokens`` using
-            ``num_speculative_tokens = dflash_block_size - 1``.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
-    dflash_block_size: int | None = None
 
     def __post_init__(self):
-        """Resolve the DFlash block-size override."""
-        if self.dflash_block_size is not None:
-            if self.method != 'dflash':
-                raise ValueError('dflash_block_size is supported only when method="dflash".')
-            if self.dflash_block_size < 2:
-                raise ValueError('dflash_block_size must be an integer greater than or equal to 2.')
-            # DFlash's complete query contains the current/next target token in
-            # slot zero followed by the newly proposed draft tokens.
-            self.num_speculative_tokens = self.dflash_block_size - 1
+        if self.method not in SPECULATIVE_METHODS:
+            raise ValueError(f'unsupported speculative method {self.method!r}; '
+                             f'supported methods are {list(SPECULATIVE_METHODS)}')

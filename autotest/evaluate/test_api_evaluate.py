@@ -21,55 +21,10 @@ from utils.pytest_layout_utils import (
     build_eval_longtext_params,
     build_eval_stage_params,
 )
-from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, start_proxy_server, stop_restful_api, terminate_restful_api
 
 TURBOMIND_LOCAL_LAYOUTS = LOCAL_TP_LAYOUTS[:4]
-PYTORCH_LOCAL_LAYOUTS = LOCAL_TP_LAYOUTS
 _PREFIX_CACHE_EXTRA = {'enable-prefix-caching': True}
-
-
-def _pytorch_ascend_marks(_layout: dict[str, int]):
-    return [pytest.mark.test_ascend]
-
-
-def _run_ray_distributed_test(
-        config,
-        run_config,
-        worker_id,
-        test_type='infer',
-        manager=None,
-        eval_config_name='default'):
-    """Universal distributed test executor (using shared Ray cluster)"""
-    assert manager is not None, 'Manager instance must be provided'
-    eval_config_name = resolve_eval_config_name(config, run_config, eval_config_name)
-
-    preset_config = get_eval_preset_config(config, run_config, eval_config_name)
-
-    if manager.is_master:
-        model_path = get_model_path_from_config(config, run_config['model'])
-        eval_path = config.get('eval_path')
-
-        manager.start_lmdeploy_api_server(config=config, run_config=run_config)
-
-        try:
-            print(f'🧪 Master node executing {test_type} test ({eval_config_name})...')
-            case_name = get_case_str_by_config(run_config)
-
-            result, msg = eval_test(model_path,
-                                    eval_path,
-                                    case_name,
-                                    port=constant.PROXY_PORT,
-                                    test_type=test_type,
-                                    **preset_config)
-            assert result, f'❌ {test_type} test failed: {msg}'
-            print(f'✅ {test_type} test passed')
-
-        finally:
-            manager.cleanup(force=False)
-    else:
-        time.sleep(10)
-        ray_worker_node_wait(manager, timeout_minutes=4880)
 
 
 def _run_proxy_distributed_test(config,
@@ -219,52 +174,31 @@ _LOCAL_EVAL_PARAMS = (
         'turbomind',
         DISTRIBUTED_CP_TP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
     )
-    + build_eval_stage_params(
-        'pytorch',
-        PYTORCH_LOCAL_LAYOUTS,
-        layout_extra_marks=_pytorch_ascend_marks,
-    )
-    + build_eval_stage_params(
-        'pytorch',
-        DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
-        test_types=('eval',),
-        layout_extra_marks=_pytorch_ascend_marks,
-    )
 )
 
 _PROXY_INFER_PARAMS = build_eval_stage_params(
-    'pytorch',
+    'turbomind',
     DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
     test_types=('infer',),
-    layout_extra_marks=lambda layout: (
-        [pytest.mark.test_ascend] if layout == {'dp': 32, 'ep': 32} else []
-    ),
-)
-
-_RAY_INFER_PARAMS = build_eval_stage_params(
-    'pytorch',
-    ({'tp': 16},),
-    test_types=('infer',),
-    layout_extra_marks=_pytorch_ascend_marks,
 )
 
 _LONGTEXT_LOCAL_PARAMS = (
     build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2},
         session_len=400000,
         eval_config_name='longtext-256k',
         eval_subpath='longtext',
     )
     + build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2},
         session_len=700000,
         eval_config_name='longtext-512k',
         eval_subpath='longtext-512k',
     )
     + build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2, 'dp': 4, 'ep': 8},
         session_len=400000,
         eval_config_name='longtext-256k',
@@ -272,7 +206,7 @@ _LONGTEXT_LOCAL_PARAMS = (
         test_types=('eval',),
     )
     + build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2, 'dp': 4, 'ep': 8},
         session_len=700000,
         eval_config_name='longtext-512k',
@@ -283,7 +217,7 @@ _LONGTEXT_LOCAL_PARAMS = (
 
 _LONGTEXT_PROXY_INFER_PARAMS = (
     build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2, 'dp': 4, 'ep': 8},
         session_len=400000,
         eval_config_name='longtext-256k',
@@ -292,7 +226,7 @@ _LONGTEXT_PROXY_INFER_PARAMS = (
         use_proxy=True,
     )
     + build_eval_longtext_params(
-        'pytorch',
+        'turbomind',
         {'tp': 2, 'dp': 4, 'ep': 8},
         session_len=700000,
         eval_config_name='longtext-512k',
@@ -304,14 +238,8 @@ _LONGTEXT_PROXY_INFER_PARAMS = (
 
 _PREFIX_CACHE_LOCAL_PARAMS = (
     build_eval_stage_params(
-        'pytorch',
-        PYTORCH_LOCAL_LAYOUTS[:2],
-        extra=_PREFIX_CACHE_EXTRA,
-    )
-    + build_eval_stage_params(
-        'pytorch',
-        DISTRIBUTED_TP_DP_EP_LAYOUTS,
-        test_types=('eval',),
+        'turbomind',
+        TURBOMIND_LOCAL_LAYOUTS[:2],
         extra=_PREFIX_CACHE_EXTRA,
     )
     + build_eval_stage_params(
@@ -322,7 +250,7 @@ _PREFIX_CACHE_LOCAL_PARAMS = (
 )
 
 _PREFIX_CACHE_PROXY_INFER_PARAMS = build_eval_stage_params(
-    'pytorch',
+    'turbomind',
     DISTRIBUTED_TP_DP_EP_LAYOUTS,
     test_types=('infer',),
     extra=_PREFIX_CACHE_EXTRA,
@@ -343,18 +271,6 @@ def test_api_evaluate_proxy_infer(shared_proxy_manager, config, run_config, work
         worker_id=worker_id,
         test_type=test_type,
         manager=shared_proxy_manager,
-    )
-
-
-@pytest.mark.distributed
-@pytest.mark.parametrize('test_type, run_config', _RAY_INFER_PARAMS)
-def test_api_evaluate_ray_infer(shared_ray_manager, config, run_config, worker_id, test_type):
-    _run_ray_distributed_test(
-        config=config,
-        run_config=run_config,
-        worker_id=worker_id,
-        test_type=test_type,
-        manager=shared_ray_manager,
     )
 
 

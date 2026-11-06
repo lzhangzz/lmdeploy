@@ -10,7 +10,6 @@ from utils.pytest_layout_utils import (
 )
 from utils.run_interface_restful import (
     run_interface_restful_proxy_distributed_test,
-    run_interface_restful_ray_distributed_test,
     run_interface_restful_test,
 )
 
@@ -36,10 +35,9 @@ def _iface_id(run_config):
 
 
 def _iface_layout_marks(layout: dict[str, int]):
-    marks = [pytest.mark.test_ascend]
     if layout == {'tp': 1}:
-        marks.append(pytest.mark.test_3090)
-    return marks
+        return [pytest.mark.test_3090]
+    return []
 
 
 def _build_iface_params(layouts):
@@ -52,7 +50,6 @@ def _build_iface_params(layouts):
 
 
 _LOCAL_IFACE_PARAMS = _build_iface_params(LOCAL_TP_LAYOUTS)
-_RAY_IFACE_PARAMS = _build_iface_params(({'tp': 16},))
 _PROXY_IFACE_PARAMS = _build_iface_params(
     DISTRIBUTED_DP_EP_LAYOUTS + DISTRIBUTED_TP_DP_EP_LAYOUTS,
 )
@@ -61,13 +58,6 @@ _PROXY_IFACE_PARAMS = _build_iface_params(
 @pytest.mark.parametrize('run_config', _LOCAL_IFACE_PARAMS)
 def test_restful_interface_local(config, run_config, worker_id):
     run_interface_restful_test(config, run_config, worker_id)
-
-
-@pytest.mark.distributed
-@pytest.mark.parametrize('run_config', _RAY_IFACE_PARAMS)
-def test_restful_interface_ray(shared_ray_manager, config, run_config, worker_id):
-    del worker_id
-    run_interface_restful_ray_distributed_test(config, run_config, shared_ray_manager)
 
 
 @pytest.mark.distributed

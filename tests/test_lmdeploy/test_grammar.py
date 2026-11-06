@@ -5,16 +5,15 @@ import pytest
 from jsonschema import validate
 
 from lmdeploy import pipeline
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
 MODEL_IDS = [
     'Qwen/Qwen3-0.6B',
-    'Qwen/Qwen3-VL-2B-Instruct'
+    'Qwen/Qwen3.5-0.8B',
 ]
 
 BACKEND_FACTORIES = [
     ('tm', lambda: TurbomindEngineConfig(max_batch_size=2, session_len=1024, cache_max_entry_count=0.1)),
-    ('pt', lambda: PytorchEngineConfig(max_batch_size=1, session_len=1024, cache_max_entry_count=0.1)),
 ]
 
 SCHEMA_MAP = {

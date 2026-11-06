@@ -2,13 +2,7 @@
 
 LMDeploy exposes a set of metrics via Prometheus, and provides visualization via Grafana.
 
-For the PyTorch backend, `lmdeploy:gpu_cache_usage_perc` reports logical GPU blocks referenced by live requests. Blocks
-shared by multiple requests are counted once, while blocks held only by the prefix cache or stopped sessions are
-excluded. This default is useful for comparing request load when routing across replicas. Set
-`LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` before starting the server to report total logical GPU-block occupancy
-instead, including blocks retained for prefix reuse.
-
-For the Turbomind backend, `lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
+`lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
 checkpoint objects divided by the configured cache-region size. Prefix-cache hit metrics count prompt tokens that
 the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;
 per-rank Turbomind metrics with DP greater than 1 are not yet supported.
@@ -23,7 +17,7 @@ This section describes how to set up the monitoring stack (Prometheus + Grafana)
 
 - LMDeploy server running with metrics system enabled
 
-## Usage (DP = 1)
+## Usage
 
 1. **Start your LMDeploy server with metrics enabled**
 
@@ -63,59 +57,6 @@ This command will start Prometheus and Grafana in the background.
 6. **View the Dashboard**
 
 The LMDeploy dashboard is pre-configured and should be available automatically.
-
-## Usage (DP > 1)
-
-1. **Start your LMDeploy server with metrics enabled**
-
-As an example, we use the model `Qwen/Qwen2.5-7B-Instruct` with `DP=2, TP=2`. Start the service as follows:
-
-```bash
-# Proxy server
-lmdeploy serve proxy --server-port 8000 --routing-strategy 'min_expected_latency' --serving-strategy Hybrid --log-level INFO
-
-# API server
-LMDEPLOY_DP_MASTER_ADDR=127.0.0.1 \
-LMDEPLOY_DP_MASTER_PORT=29555 \
-lmdeploy serve api_server \
-    Qwen/Qwen2.5-7B-Instruct \
-    --backend pytorch \
-    --tp 2 \
-    --dp 2 \
-    --proxy-url http://0.0.0.0:8000 \
-    --nnodes 1 \
-    --node-rank 0
-```
-
-You should be able to see multiple API servers added to the proxy server list. Details can be found in `lmdeploy/serve/proxy/proxy_config.json`.
-
-For example, you may have the following API servers:
-
-```
-http://$host_ip:$api_server_port1
-
-http://$host_ip:$api_server_port2
-```
-
-2. **Modify the Prometheus configuration**
-
-When `DP > 1`, LMDeploy will launch one API server for each DP rank. If you want to monitor a specific API server, e.g. `http://$host_ip:$api_server_port1`, modify the configuration file `lmdeploy/monitoring/prometheus.yaml` as follows.
-
-> Note that you should use the actual host machine IP instead of `127.0.0.1` here, since LMDeploy starts the API server using the actual host IP when `DP > 1`
-
-```
-global:
-  scrape_interval: 5s
-  evaluation_interval: 30s
-
-scrape_configs:
-  - job_name: lmdeploy
-    static_configs:
-      - targets:
-          - '$host_ip:$api_server_port1' # <= Modify this
-```
-
-3. **Navigate to the monitoring folder and perform the same steps as described above**
 
 ## Troubleshooting
 

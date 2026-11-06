@@ -157,7 +157,6 @@ def test_generate_rejects_raw_and_consumed_requests():
             inputs={'input_ids': [1]},
             input_token_len=1,
             gen_config=GenerationConfig(max_new_tokens=1),
-            adapter_name=None,
             consumed=True,
         )
         with pytest.raises(RequestError) as exc_info:

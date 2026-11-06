@@ -4,13 +4,11 @@ LMDeploy uses the OpenAI message format for all modalities. Each content item in
 
 **Quick reference:**
 
-| Modality    | `type` key        | URL field             |
-| ----------- | ----------------- | --------------------- |
-| Text        | `text`            | —                     |
-| Image       | `image_url`       | `image_url.url`       |
-| Video       | `video_url`       | `video_url.url`       |
-| Audio       | `audio_url`       | `audio_url.url`       |
-| Time Series | `time_series_url` | `time_series_url.url` |
+| Modality | `type` key  | URL field       |
+| -------- | ----------- | --------------- |
+| Text     | `text`      | —               |
+| Image    | `image_url` | `image_url.url` |
+| Video    | `video_url` | `video_url.url` |
 
 All examples below target the lmdeploy OpenAI-compatible API server. Start it with:
 
@@ -134,7 +132,7 @@ ______________________________________________________________________
 
 ## Single Video
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native video input is currently supported for **Qwen3.5** and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -177,7 +175,7 @@ ______________________________________________________________________
 
 ## Multiple Videos
 
-> **Note:** Native video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native video input is currently supported for **Qwen3.5** and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -223,7 +221,7 @@ ______________________________________________________________________
 
 ## Mixed Image and Video
 
-> **Note:** Native mixed image/video input is currently supported for **Qwen3-VL**, **Qwen3.5**, **Qwen3-Omni**, **InternS1-Pro**, and **Intern-S2-Preview** models only.
+> **Note:** Native mixed image/video input is currently supported for **Qwen3.5** and **Intern-S2-Preview** models only.
 
 <details>
 <summary>Complete example</summary>
@@ -253,130 +251,6 @@ response = client.chat.completions.create(
             {
                 'type': 'text',
                 'text': 'Describe both the image and the video.',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
-    max_completion_tokens=256,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## Single Audio
-
-> **Note:** Audio input is currently supported for **Qwen3-Omni** models only.
-
-<details>
-<summary>Complete example</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {
-                'type': 'audio_url',
-                'audio_url': {
-                    'url': 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav',
-                },
-            },
-            {
-                'type': 'text',
-                'text': 'Describe this audio.',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## Multiple Audios
-
-> **Note:** Audio input is currently supported for **Qwen3-Omni** models only.
-
-<details>
-<summary>Complete example</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-audio_url_1 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-audio_url_2 = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-Omni/demo/cough.wav'
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_1}},
-            {'type': 'audio_url', 'audio_url': {'url': audio_url_2}},
-            {
-                'type': 'text',
-                'text': 'Compare these two audios. What are the similarities and differences?',
-            },
-        ],
-    }],
-    temperature=0.8,
-    top_p=0.8,
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-______________________________________________________________________
-
-## Time Series
-
-> **Note:** Time series input is currently supported for the **InternS1-Pro** model only.
-
-The `time_series_url` content item requires a `sampling_rate` field (in Hz) alongside the URL.
-
-<details>
-<summary>Complete example</summary>
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {
-                'type': 'text',
-                'text': ('Please determine whether an Earthquake event has occurred. '
-                         'If so, specify P-wave and S-wave starting indices.'),
-            },
-            {
-                'type': 'time_series_url',
-                'time_series_url': {
-                    'url': 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy',
-                    'sampling_rate': 100,
-                },
             },
         ],
     }],
@@ -498,71 +372,6 @@ print(response.choices[0].message.content)
 
 </details>
 
-<details>
-<summary>Base64 encoding example (audio)</summary>
-
-```python
-from openai import OpenAI
-from lmdeploy.vl.utils import encode_audio_base64
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-b64 = encode_audio_base64('/path/to/your/audio.wav')
-audio_url = f'data:audio/wav;base64,{b64}'
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {
-                'type': 'audio_url',
-                'audio_url': {'url': audio_url},
-            },
-            {'type': 'text', 'text': 'Describe this audio.'},
-        ],
-    }],
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
-<details>
-<summary>Base64 encoding example (time series)</summary>
-
-```python
-from openai import OpenAI
-from lmdeploy.vl.utils import encode_time_series_base64
-
-client = OpenAI(api_key='EMPTY', base_url='http://localhost:23333/v1')
-model_name = client.models.list().data[0].id
-
-b64 = encode_time_series_base64('/path/to/your/data.npy')
-ts_url = f'data:application/octet-stream;base64,{b64}'
-
-response = client.chat.completions.create(
-    model=model_name,
-    messages=[{
-        'role': 'user',
-        'content': [
-            {'type': 'text', 'text': 'Analyze this time series.'},
-            {
-                'type': 'time_series_url',
-                'time_series_url': {
-                    'url': ts_url,
-                    'sampling_rate': 100,
-                },
-            },
-        ],
-    }],
-)
-print(response.choices[0].message.content)
-```
-
-</details>
-
 ______________________________________________________________________
 
 ## Processor and IO kwargs
@@ -570,7 +379,7 @@ ______________________________________________________________________
 Two optional parameters let you control media processing:
 
 - **`mm_processor_kwargs`**: controls vision token resolution (min/max pixels per image or video frame)
-- **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate/count and audio sampling rate)
+- **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate/count)
 
 Both are passed as extra fields in the API request body via `extra_body`, or directly to `pipe()` when using the pipeline API.
 
@@ -619,9 +428,9 @@ print(response.choices[0].message.content)
 <summary>Pipeline API equivalent</summary>
 
 ```python
-from lmdeploy import pipeline, PytorchEngineConfig
+from lmdeploy import pipeline, TurbomindEngineConfig
 
-pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
+pipe = pipeline('<model_path>', backend_config=TurbomindEngineConfig(tp=1))
 
 video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 

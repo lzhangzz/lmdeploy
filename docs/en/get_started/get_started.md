@@ -19,27 +19,14 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-When constructing the `pipeline`, if an inference engine is not designated between the TurboMind Engine and the PyTorch Engine, LMDeploy will automatically assign one based on [their respective capabilities](../supported_models/supported_models.md), with the TurboMind Engine taking precedence by default.
+The `pipeline` runs on the TurboMind engine. Check [the supported-models matrix](../supported_models/supported_models.md) to see whether a model can be served.
 
-However, you have the option to manually select an engine. For instance,
+You can tune the engine through `TurbomindEngineConfig`. For instance,
 
 ```python
 from lmdeploy import pipeline, TurbomindEngineConfig
 pipe = pipeline('internlm/internlm2_5-7b-chat',
                 backend_config=TurbomindEngineConfig(
-                    max_batch_size=32,
-                    enable_prefix_caching=True,
-                    cache_max_entry_count=0.8,
-                    session_len=8192,
-                ))
-```
-
-or,
-
-```python
-from lmdeploy import pipeline, PytorchEngineConfig
-pipe = pipeline('internlm/internlm2_5-7b-chat',
-                backend_config=PytorchEngineConfig(
                     max_batch_size=32,
                     enable_prefix_caching=True,
                     cache_max_entry_count=0.8,
@@ -92,25 +79,7 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
-In VLM pipeline, the default image processing batch size is 1. This can be adjusted by `VisionConfig`. For instance, you might set it like this:
-
-```python
-from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
-
-pipe = pipeline('OpenGVLab/InternVL2-8B',
-                vision_config=VisionConfig(
-                    max_batch_size=8
-                ))
-
-image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe(('describe this image', image))
-print(response)
-```
-
-However, the larger the image batch size, the greater risk of an OOM error, because the LLM component within the VLM model pre-allocates a massive amount of memory in advance.
-
-We encourage you to manually choose between the TurboMind Engine and the PyTorch Engine based on their respective capabilities, as detailed in [the supported-models matrix](../supported_models/supported_models.md).
+Check [the supported-models matrix](../supported_models/supported_models.md) for supported VLMs.
 Additionally, follow the instructions in [LLM Inference](#llm-inference) section to reduce the values of memory-related parameters
 
 ## Serving

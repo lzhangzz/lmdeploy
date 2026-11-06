@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from itertools import groupby
 from typing import Any
 
-import numpy as np
 import torch
 from mmengine import Registry
 from transformers import AutoConfig, AutoTokenizer
@@ -24,7 +23,6 @@ VISION_MODELS = Registry('vision_model')
 class VisionModel(ABC):
     """Visual model which extract image feature."""
     _arch: str | list[str] = None
-    _turbomind_native_vision = False
 
     # mapping from processor output attribute names to modality types
     ATTR_NAME_TO_MODALITY = {
@@ -35,34 +33,23 @@ class VisionModel(ABC):
         'pixel_values_videos': Modality.VIDEO,
         'video_grid_thw': Modality.VIDEO,
         'video_second_per_grid': Modality.VIDEO,
-        # audio-related attributes
-        'input_features': Modality.AUDIO,
-        'feature_attention_mask': Modality.AUDIO,
-        # time series-related attributes
-        'ts_values': Modality.TIME_SERIES,
-        'ts_sr': Modality.TIME_SERIES,
-        'ts_lens': Modality.TIME_SERIES,
     }
 
     # processor output attributes that carry the main feature tensor
     FEATURE_NAMES = [
         'pixel_values',
         'pixel_values_videos',
-        'input_features',
-        'ts_values',
     ]
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
         """init."""
         self.model_path = model_path
         self.with_llm = with_llm
-        self.max_memory = max_memory
         self.backend = backend
         self.mm_feature_dtype: torch.dtype | None = None
         if hf_config is None:
@@ -113,12 +100,11 @@ class VisionModel(ABC):
         raise NotImplementedError()
 
     def build_model(self, trust_remote_code: bool = False):
-        """Build the vision part of a VLM model when backend is turbomind.
+        """Load the whole VLM model.
 
-        But when `with_llm=True`, load the whole VLM model
+        Only used when `with_llm=True`.
         """
-        if self.backend == 'turbomind' or self.with_llm:
-            raise NotImplementedError()
+        raise NotImplementedError()
 
     def preprocess(self,
                    messages: list[dict],
@@ -133,19 +119,12 @@ class VisionModel(ABC):
         mm_items = self.collect_multimodal_items(messages)
 
         raw_images, raw_videos, video_metadatas = [], [], []
-        raw_audios = []
-        raw_time_series, sampling_rates = [], []
         for modality, data, params in mm_items:
             if modality == Modality.IMAGE:
                 raw_images.append(data)
             elif modality == Modality.VIDEO:
                 raw_videos.append(data)
                 video_metadatas.append(params.get('video_metadata', None))
-            elif modality == Modality.AUDIO:
-                raw_audios.append(data[0] if isinstance(data, tuple) else data)
-            elif modality == Modality.TIME_SERIES:
-                raw_time_series.append(data)
-                sampling_rates.append(params.get('sampling_rate', None))
             else:
                 raise ValueError(f'unsupported modality {modality}')
 
@@ -153,7 +132,6 @@ class VisionModel(ABC):
         kwargs = {}
         images_kwargs = {}
         videos_kwargs = {}
-        audio_kwargs = {}
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
@@ -173,32 +151,14 @@ class VisionModel(ABC):
                                            modality='video')
             if video_size is not None:
                 videos_kwargs['size'] = video_size
-        if raw_audios:
-            kwargs['audio'] = raw_audios
-            audio_kwargs = dict(mm_processor_kwargs.get('audio') or {})
-            feature_extractor = getattr(self.processor, 'feature_extractor', None)
-            sampling_rate = getattr(feature_extractor, 'sampling_rate', None)
-            if sampling_rate is not None:
-                audio_kwargs.setdefault('sampling_rate', sampling_rate)
         if images_kwargs:
             kwargs['images_kwargs'] = images_kwargs
         if videos_kwargs:
             kwargs['videos_kwargs'] = videos_kwargs
-        if audio_kwargs:
-            kwargs['audio_kwargs'] = audio_kwargs
-        if raw_time_series:
-            assert hasattr(self, 'time_series_processor'), \
-                'time series processor is not defined for time series input'
-            assert not raw_images and not raw_videos and not raw_audios, \
-                'time series is not compatible with image/video/audio input'
-            self.tokenizer = self.processor.tokenizer
-            time_series_processor = self.time_series_processor
-            kwargs['time_series'] = raw_time_series
-            kwargs['sampling_rate'] = sampling_rates
 
         # process raw items with hf processor
         input_text = input_prompt if isinstance(input_prompt, str) else ''
-        processor_outputs = (time_series_processor if raw_time_series else self.processor)(
+        processor_outputs = self.processor(
             text=[input_text],
             padding=True,
             return_tensors='pt',
@@ -284,25 +244,9 @@ class VisionModel(ABC):
             return messages[0]['content'][0]['text']
         return chat_template.messages2prompt(messages, tools=tools, **(chat_template_kwargs or {}))
 
-    def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
-        """Extract image feature. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(list[dict]): the outputs of `preprocess`
-            max_batch_size(int): the max batch size when forwarding vision
-                model
-        Return:
-            the message list with forwarding results included, which is
-            determined by the derived classes
-        """
-        if self.backend == 'turbomind':
-            raise NotImplementedError()
-
     def to_pytorch(self, messages, chat_template, tokenizer, chat_template_kwargs=None, **kwargs):
-        """Pack the preprocessing results in a format compatible with what is
-        required by pytorch engine. ONLY implement it when the backend is
-        pytorch engine.
+        """Pack the preprocessing results into ``prompt``, ``input_ids`` and
+        ``multimodal`` items consumed by TurboMind's native vision encoder.
 
         Args:
             messages(list[dict]): the output of `preprocess`
@@ -311,23 +255,7 @@ class VisionModel(ABC):
             chat_template_kwargs: additional arguments for chat template
                 processing, such as `add_vision_id` and `enable_thinking`
         """
-        if self.backend == 'pytorch':
-            raise NotImplementedError()
-
-    def to_turbomind(self, messages, chat_template, tokenizer, chat_template_kwargs=None, **kwargs):
-        """Pack the forwarding results in a format compatible with what is
-        required by turbomind engine. ONLY implement it when the backend is
-        turbomind engine.
-
-        Args:
-            messages(list[dict]): the output of `preprocess`
-            chat_template: the chat template defined in `lmdeploy/model.py`
-            tokenizer: the tokenizer model
-            chat_template_kwargs: additional arguments for chat template
-                processing, such as `add_vision_id` and `enable_thinking`
-        """
-        if self.backend == 'turbomind':
-            raise NotImplementedError()
+        raise NotImplementedError()
 
     @staticmethod
     def collect_multimodal_items(messages):
@@ -381,8 +309,7 @@ class VisionModel(ABC):
         return False
 
     def to_pytorch_with_input_ids(self, messages):
-        """Pack the preprocessing results in a format compatible with what is
-        required by pytorch engine when input_ids are provided directly.
+        """Pack the preprocessing results when input_ids are provided directly.
 
         Args:
             messages(list[dict]): the output of `preprocess`
@@ -418,8 +345,7 @@ class VisionModel(ABC):
         return dict(prompt=None, input_ids=input_ids, multimodal=preps)
 
     def to_pytorch_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
-        """Auxiliary function to pack the preprocessing results in a format
-        compatible with what is required by pytorch engine.
+        """Auxiliary function to pack the preprocessing results.
 
         Args:
             messages(list[dict]): the output of `preprocess`
@@ -451,41 +377,6 @@ class VisionModel(ABC):
 
         return dict(prompt=prompt, input_ids=input_ids, multimodal=preps)
 
-    def to_turbomind_aux(self, messages, prompt, IMAGE_TOKEN, tokenizer):
-        """Auxiliary function to pack the forwarding results in a format
-        compatible with what is required by turbomind engine.
-
-        Args:
-            messages(list[dict]): the output of `preprocess`
-            prompt(str): the prompt after applying chat template
-            IMAGE_TOKEN(str): a placeholder where image tokens will be
-                inserted
-            tokenizer: the tokenizer model
-        """
-        # collect image features from messages
-        features = [x['content'] for x in messages if x['role'] == 'forward']
-        features = features[0]
-        features = [x.cpu() for x in features]
-        # split prompt into segments and validate data
-        segs = prompt.split(IMAGE_TOKEN)
-        assert len(segs) == len(features) + 1, (f'the number of {IMAGE_TOKEN} is not equal '
-                                                f'to input images, {len(segs) - 1} vs {len(features)}')
-
-        # tokenizer prompt, and get input_embeddings and input_embedding_ranges
-        input_ids = []
-        begins = []
-        ends = []
-        for i, seg in enumerate(segs):
-            if i > 0 and i <= len(features):
-                image_dim = features[i - 1].shape[0]
-                begins.append(len(input_ids))
-                ends.append(begins[-1] + image_dim)
-                input_ids.extend([self.image_token_id] * image_dim)
-            seg_ids = tokenizer.encode(seg, add_bos=(i == 0))
-            input_ids.extend(seg_ids)
-        ranges = np.stack([begins, ends], axis=1).tolist()
-        return dict(prompt=prompt, input_ids=input_ids, input_embeddings=features, input_embedding_ranges=ranges)
-
     @classmethod
     def match(cls, config: AutoConfig):
         """Check whether the config match the model."""
@@ -498,19 +389,13 @@ class VisionModel(ABC):
 class MultimodalSpecialTokens:
     image_token: str | None = None
     video_token: str | None = None
-    audio_token: str | None = None
-    ts_token: str | None = None
 
     image_token_id: int | None = None
     video_token_id: int | None = None
-    audio_token_id: int | None = None
-    ts_token_id: int | None = None
 
     def get_token_id_by_modality(self, modality: Modality) -> int | None:
         """Get token ID for a given modality."""
         return {
             Modality.IMAGE: self.image_token_id,
             Modality.VIDEO: self.video_token_id,
-            Modality.AUDIO: self.audio_token_id,
-            Modality.TIME_SERIES: self.ts_token_id,
         }.get(modality)

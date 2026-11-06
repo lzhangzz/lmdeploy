@@ -1,14 +1,14 @@
 # Structured output
 
 Structured output, also known as guided decoding, forces the model to generate text that exactly matches a user-supplied JSON schema, grammar, or regex.
-Both the PyTorch and Turbomind backends now support structured (schema-constrained) generation.
+The TurboMind engine supports structured (schema-constrained) generation.
 Below are examples for the pipeline API and the API server.
 
 ## pipeline
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig
+from lmdeploy.messages import GenerationConfig, TurbomindEngineConfig
 
 model = 'internlm/internlm2-chat-1_8b'
 guide = {
@@ -43,7 +43,7 @@ guide = {
     },
     'required': ['name', 'skills', 'work history']
 }
-pipe = pipeline(model, backend_config=PytorchEngineConfig(), log_level='INFO')
+pipe = pipeline(model, backend_config=TurbomindEngineConfig(), log_level='INFO')
 gen_config = GenerationConfig(
     response_format=dict(type='json_schema', json_schema=dict(name='test', schema=guide)))
 response = pipe(['Make a self introduction please.'], gen_config=gen_config)
@@ -55,7 +55,7 @@ print(response)
 Firstly, start the api_server service for the InternLM2 model.
 
 ```shell
-lmdeploy serve api_server internlm/internlm2-chat-1_8b --backend pytorch
+lmdeploy serve api_server internlm/internlm2-chat-1_8b
 ```
 
 The client can test using OpenAI’s python package: The output result is a response in JSON format.

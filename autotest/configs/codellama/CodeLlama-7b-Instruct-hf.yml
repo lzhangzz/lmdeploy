@@ -1,5 +1,4 @@
 # HF model id: codellama/CodeLlama-7b-Instruct-hf
-
 a100:
 - model_type: chat
   engine_config:

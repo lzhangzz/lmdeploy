@@ -168,7 +168,6 @@ def build_payload(
     max_tokens: int | None,
     ignore_eos: bool,
     return_logprob: bool,
-    return_routed_experts: bool,
     extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -186,8 +185,6 @@ def build_payload(
         payload['ignore_eos'] = True
     if return_logprob:
         payload['return_logprob'] = True
-    if return_routed_experts:
-        payload['return_routed_experts'] = True
     if extra_body:
         payload.update(extra_body)
     return payload
@@ -213,7 +210,6 @@ async def request_generate(
     max_tokens: int | None,
     ignore_eos: bool,
     return_logprob: bool,
-    return_routed_experts: bool,
     extra_body: dict[str, Any] | None,
     headers: dict[str, str] | None = None,
     save_response_text: bool = False,
@@ -226,7 +222,6 @@ async def request_generate(
         max_tokens=max_tokens,
         ignore_eos=ignore_eos,
         return_logprob=return_logprob,
-        return_routed_experts=return_routed_experts,
         extra_body=extra_body,
     )
     trace = RequestTrace(
@@ -297,8 +292,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
         print('ignore_eos=True')
     if args.return_logprob:
         print('return_logprob=True')
-    if args.return_routed_experts:
-        print('return_routed_experts=True')
 
     model_path = args.model_path
     if not model_path:
@@ -343,7 +336,6 @@ async def run_benchmark(args: argparse.Namespace) -> tuple[list[RequestTrace], l
                 max_tokens=args.max_tokens,
                 ignore_eos=args.ignore_eos,
                 return_logprob=args.return_logprob,
-                return_routed_experts=args.return_routed_experts,
                 extra_body=extra_body,
                 headers=headers,
                 save_response_text=args.save_response_text,
@@ -522,12 +514,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--return-logprob',
         action='store_true',
-        help='Set return_logprob=true (requires logprobs_mode in server config).',
-    )
-    parser.add_argument(
-        '--return-routed-experts',
-        action='store_true',
-        help='Set return_routed_experts=true for MoE routed expert indices.',
+        help='Set return_logprob=true.',
     )
     parser.add_argument(
         '--extra-request-body',

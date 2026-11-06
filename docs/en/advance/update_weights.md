@@ -2,15 +2,10 @@
 
 LMDeploy supports update model weights online for scenes such as RL training. Here are the steps to do so.
 
-For checkpoint-engine Broadcast and Mooncake P2P updates, see
-[Updating PyTorch weights with checkpoint-engine](./checkpoint_engine.md).
-
 ## Step 1: Launch server
 
-For pytorch backend you have to add `--distributed-executor-backend ray`.
-
 ```shell
-lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333 --distributed-executor-backend ray # for pytorch backend
+lmdeploy serve api_server internlm/internlm2_5-7b-chat --server-port 23333
 ```
 
 ## Step 2: Offloads weights & kv cache
@@ -51,24 +46,6 @@ for seg_idx in range(num_segment):
     response = requests.post(f"{BASE_URL}/update_weights", headers=headers, json=data)
     assert response.status_code == 200, f"response.status_code = {response.status_code}"
 
-```
-
-**Note**: For pytorch backend, lmdeploy also supports flattened bucket tensors:
-
-```python
-from lmdeploy.utils import serialize_state_dict, FlattenedTensorBucket, FlattenedTensorMetadata
-
-segmented_state_dict: List[Dict[str, torch.Tensor]] = ...
-num_segment = len(segmented_state_dict)
-for seg_idx in range(num_segment):
-    named_tensors = list(segmented_state_dict[seg_idx].items())
-    bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-    metadata = bucket.get_metadata()
-    flattened_tensor_data = dict(flattened_tensor=bucket.get_flattened_tensor(), metadata=metadata)
-    serialized_data = serialize_state_dict(flattened_tensor_data)
-    data = dict(serialized_named_tensors=serialized_data, finished=seg_idx == num_segment-1, load_format='flattened_bucket')
-    response = requests.post(f"{BASE_URL}/update_weights", headers=headers, json=data)
-    assert response.status_code == 200, f"response.status_code = {response.status_code}"
 ```
 
 ## Step 4: Wakeup server

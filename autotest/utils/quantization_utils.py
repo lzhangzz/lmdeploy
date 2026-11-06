@@ -24,17 +24,9 @@ def quantization(config,
     elif quantization_type == 'gptq':
         quantization_cmd = ' '.join(
             ['lmdeploy lite auto_gptq', origin_model_path, '--work-dir', quantization_model_path])
-    elif quantization_type == 'w8a8':
-        quantization_cmd = ' '.join(
-            ['lmdeploy lite smooth_quant', origin_model_path, '--work-dir', quantization_model_path])
     else:
-        return False, 'quantization type should in [awq, gptq, w8a8], \
+        return False, 'quantization type should in [awq, gptq], \
             now the type is ' + quantization_type
-
-    # Add device option if specified in environment
-    device = os.environ.get('DEVICE', '')
-    if device == 'ascend':
-        quantization_cmd += ' --device npu '
 
     if cuda_prefix is not None:
         quantization_cmd = ' '.join([cuda_prefix, quantization_cmd])

@@ -40,7 +40,7 @@ class _FakeSessionManager:
 class _FakeEngine:
 
     model_name = 'fake-model'
-    backend_config = SimpleNamespace(adapters=[])
+    backend_config = SimpleNamespace()
 
     def __init__(self, outputs=None):
         self.outputs = outputs or [
@@ -54,8 +54,6 @@ class _FakeEngine:
                 logprobs=[{
                     1: -0.1,
                 }],
-                routed_experts=[[1]],
-                cache_block_ids=['cache'],
             )
         ]
         self.session_mgr = _FakeSessionManager()
@@ -216,7 +214,7 @@ def test_runner_stream_chunks_preserve_metadata():
     async def _run():
         chat_runner = await ChatRunner.prepare(
             context,
-            _request(return_token_ids=True, return_routed_experts=True, return_logprob=True),
+            _request(return_token_ids=True, return_logprob=True),
         )
         return [chunk async for chunk in chat_runner.stream()]
 
@@ -226,7 +224,6 @@ def test_runner_stream_chunks_preserve_metadata():
     assert chunks[0].delta_message.content == 'ok'
     assert chunks[0].token_ids == [1]
     assert chunks[0].logprobs == [{1: -0.1}]
-    assert chunks[0].routed_experts == [[1]]
     assert chunks[0].reasoning_tokens == 2
     assert context.async_engine.generator_closed is True
     assert context.session_manager.removed == [context.session_manager.session]

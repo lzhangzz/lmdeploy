@@ -14,7 +14,7 @@ from lmdeploy.serve.openai.responses import create_responses_router
 class FakeAsyncEngine:
 
     model_name = 'fake-model'
-    backend_config = SimpleNamespace(adapters=[])
+    backend_config = SimpleNamespace()
 
     def __init__(self):
         self.generate_kwargs = None
@@ -39,8 +39,6 @@ class FakeAsyncEngine:
                 finish_reason='stop',
                 cached_tokens=0,
                 logprobs=None,
-                routed_experts=None,
-                cache_block_ids=None,
             )
 
         return _generator()

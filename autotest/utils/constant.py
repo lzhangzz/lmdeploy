@@ -72,87 +72,6 @@ EVAL_CONFIGS = {
             'reasoning_effort': 'high',
         },
     },
-    'sdar': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        },
-    },
-    'sdar-32k': {
-        'query_per_second': 4,
-        'max_out_len': 32768,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        },
-    },
-    'sdar-2batch': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 2,
-        'temperature': 1.0,
-        'openai_extra_kwargs': {
-            'top_p': 1.0,
-        },
-        'extra_body': {
-            'top_k': 0,
-        },
-    },
-    'intern-s1-pro': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        },
-    },
-    'intern-s1-pro-32k': {
-        'query_per_second': 4,
-        'max_out_len': 32768,
-        'max_seq_len': 65536,
-        'batch_size': 500,
-        'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        },
-    },
-    'intern-s1-pro-2batch': {
-        'query_per_second': 4,
-        'max_out_len': 64000,
-        'max_seq_len': 65536,
-        'batch_size': 2,
-        'temperature': 0.8,
-        'openai_extra_kwargs': {
-            'top_p': 0.95,
-        },
-        'extra_body': {
-            'top_k': 50,
-            'min_p': 0.0,
-        },
-    },
     'qwen3.5': {
         'query_per_second': 4,
         'max_out_len': 128000,
@@ -217,11 +136,10 @@ MLLM_EVAL_CONFIGS = {
     }
 }
 
-BACKEND_LIST = ['turbomind', 'pytorch']
+BACKEND_LIST = ['turbomind']
 
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
-SUFFIX_INNER_W8A8 = '-inner-w8a8'
 
 EVAL_RUN_CONFIG = {
     'model': 'Qwen/Qwen2.5-32B-Instruct',

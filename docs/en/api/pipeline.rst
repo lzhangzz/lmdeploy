@@ -13,7 +13,6 @@ Pipeline
 
 Config
 -------------------
-.. autoclass:: PytorchEngineConfig
 .. autoclass:: TurbomindEngineConfig
 .. autoclass:: GenerationConfig
 .. autoclass:: ChatTemplateConfig

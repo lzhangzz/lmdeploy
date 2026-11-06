@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dataclasses
 import json
-import os
 import uuid
 from typing import Literal
 
@@ -197,42 +196,6 @@ class BaseChatTemplate:
         return None
 
 
-@MODELS.register_module(name='cogvlm')
-class CogVLM(BaseChatTemplate):
-    """Chat template of CogVLM model."""
-
-    def __init__(self,
-                 meta_instruction='',
-                 eosys='',
-                 user='Question: ',
-                 separator='\n',
-                 eoh=' ',
-                 assistant='Answer:',
-                 eoa='</s>',
-                 stop_words=['</s>'],
-                 **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         separator=separator,
-                         assistant=assistant,
-                         eoa=eoa,
-                         stop_words=stop_words,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'cogvlm' in path and 'cogvlm2' not in path:
-            return 'cogvlm'
-
-
 @MODELS.register_module(name='vicuna')
 class Vicuna(BaseChatTemplate):
     """Chat template of vicuna model."""
@@ -281,31 +244,6 @@ class Vicuna(BaseChatTemplate):
             return 'vicuna'
         if 'wizardlm' in path:
             return 'wizardlm'
-
-
-@MODELS.register_module(name='llava-v1')
-class Llavav1(Vicuna):
-    """Chat template of llava-v1 model."""
-
-    def __init__(
-            self,
-            meta_instruction="""A chat between a curious human and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the human's questions.""",  # noqa: E501
-            **kwargs):
-        super().__init__(meta_instruction=meta_instruction, **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'llava' in path and 'v1' in path and 'v1.6-34b' not in path \
-                and 'mistral' not in path:
-            return 'llava-v1'
-        elif 'llava-1.5' in path:
-            return 'llava-v1'
 
 
 @MODELS.register_module(name='llama2')
@@ -390,61 +328,10 @@ class CodeLlama(Llama2):
             return 'codellama'
 
 
-@MODELS.register_module(name='chatglm')
-class ChatGLM2(BaseChatTemplate):
+@MODELS.register_module(name='mixtral')
+class MixtralChat(BaseChatTemplate):
+    """Template of Mixtral Instruct models.
 
-    def __init__(self, user='问：', eoh='\n\n', assistant='答：', eoa='\n\n', **kwargs):
-        super().__init__(**kwargs)
-        self._user = user
-        self._assistant = assistant
-        self._eoh = eoh
-        self._eoa = eoa
-
-    def get_prompt(self, prompt):
-        """Get prompt."""
-        # need more check
-        # https://github.com/THUDM/ChatGLM2-6B/issues/48
-        # [64790, 64792] to be prepended
-        ret = '[Round 1]\n\n'
-        ret += f'{self._user}{prompt}{self._eoh}'
-        ret += f'{self._assistant}'
-        return ret
-
-    def messages2prompt(self, messages, **kwargs):
-        """Message to prompt."""
-        if isinstance(messages, str):
-            return self.get_prompt(messages)
-        ret = ''
-        count = 0
-        for message in messages:
-            role = message['role']
-            content = get_text(message['content'])
-            if role == 'user':
-                count += 1
-                ret += f'[Round {count}]\n\n'
-                ret += f'{self._user}{content}{self._eoh}'
-                ret += f'{self._assistant}'
-            if role == 'assistant':
-                ret += f'{content}'
-        return ret
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'chatglm2' in path:
-            return 'chatglm'
-
-
-@MODELS.register_module(name=['mistral', 'mixtral'])
-class MistralChat(BaseChatTemplate):
-    """Template of Mistral and Mixtral Instruct models.
-
-    `https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.1`
     `https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1`
     """
 
@@ -459,11 +346,8 @@ class MistralChat(BaseChatTemplate):
             model_path (str): the model path used for matching.
         """
         model_path = model_path.lower()
-        if 'instruct' in model_path or 'llava' in model_path:
-            if 'mistral' in model_path:
-                return 'mistral'
-            if 'mixtral' in model_path:
-                return 'mixtral'
+        if 'instruct' in model_path and 'mixtral' in model_path:
+            return 'mixtral'
 
 
 @MODELS.register_module(name=['internvl-zh'])
@@ -495,264 +379,6 @@ class InternVLZH(BaseChatTemplate):
         path = model_path.lower()
         if 'internvl-chat' in path and 'v1-1' in path:
             return 'internvl-zh'
-
-
-@MODELS.register_module(name=['deepseek-vl'])
-class DeepseekVL(BaseChatTemplate):
-
-    def __init__(
-            self,
-            meta_instruction="""You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.""",  # noqa: E501
-            eosys='\n\n',
-            user='User: ',
-            eoh='\n\n',
-            assistant='Assistant: ',
-            eoa='<｜end▁of▁sentence｜>',
-            **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         **kwargs)
-
-    def get_prompt(self, prompt):
-        if self.capability == 'chat':
-            return super().get_prompt(prompt)[:-1]
-        return super().get_prompt(prompt)
-
-    def messages2prompt(self, messages, **kwargs):
-        if isinstance(messages, str):
-            return self.get_prompt(messages)
-        prompt = super().messages2prompt(messages, **kwargs)
-        if len(messages) and messages[-1]['role'] == 'assistant':
-            return prompt
-        return prompt[:-1]
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'deepseek-vl' in path and 'chat' in path:
-            return 'deepseek-vl'
-
-
-@MODELS.register_module(name=['deepseek-vl2'])
-class DeepseekVL2(BaseChatTemplate):
-
-    def __init__(self,
-                 meta_instruction='',
-                 eosys='',
-                 user='<|User|>: ',
-                 eoh='\n\n',
-                 assistant='<|Assistant|>: ',
-                 eoa='<｜end▁of▁sentence｜>',
-                 **kwargs):
-        super().__init__(meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         **kwargs)
-
-    def get_prompt(self, prompt):
-        return super().get_prompt(prompt)[:-1]
-
-    def messages2prompt(self, messages, **kwargs):
-        if isinstance(messages, str):
-            return self.get_prompt(messages)
-        prompt = super().messages2prompt(messages, **kwargs)
-        if len(messages) and messages[-1]['role'] == 'assistant':
-            return prompt
-        return prompt[:-1]
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'deepseek-vl2' in path:
-            return 'deepseek-vl2'
-
-
-@MODELS.register_module(name=['deepseek-v4'])
-class DeepseekV4ChatTemplate(BaseChatTemplate):
-    """Chat template of DeepSeek-V4 models."""
-
-    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
-        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
-
-    def get_prompt(self, prompt, sequence_start=True, **kwargs):
-        messages = [{'role': 'user', 'content': prompt}]
-        return self.messages2prompt(messages, sequence_start, **kwargs)
-
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        from lmdeploy.deepseek_v4_encoding import encode_messages
-
-        if isinstance(messages, str):
-            messages = [{'role': 'user', 'content': messages}]
-
-        tools = self._normalize_tools(kwargs.pop('tools', None))
-        messages = self._with_tools(messages, tools) if tools else list(messages)
-
-        reasoning_effort = kwargs.pop('reasoning_effort', None)
-        if reasoning_effort not in ('high', 'max'):
-            reasoning_effort = None
-
-        thinking = kwargs.pop('thinking', False)
-        enable_thinking = kwargs.pop('enable_thinking', False)
-        thinking = thinking or enable_thinking
-
-        drop_thinking = kwargs.pop('drop_thinking', True)
-        return encode_messages(messages,
-                               thinking_mode='thinking' if thinking else 'chat',
-                               drop_thinking=drop_thinking,
-                               add_default_bos_token=sequence_start,
-                               reasoning_effort=reasoning_effort)
-
-    @staticmethod
-    def _normalize_tools(tools):
-        if not tools:
-            return None
-
-        normalized = []
-        for tool in tools:
-            if hasattr(tool, 'model_dump'):
-                tool = tool.model_dump()
-            if not isinstance(tool, dict):
-                continue
-            if 'function' in tool:
-                normalized.append(tool)
-            else:
-                normalized.append({'type': 'function', 'function': tool})
-        return normalized or None
-
-    @staticmethod
-    def _with_tools(messages, tools):
-        messages = [dict(message) for message in messages]
-        for message in messages:
-            if message.get('role') in ('system', 'developer'):
-                message['tools'] = tools
-                return messages
-        return [{'role': 'system', 'content': '', 'tools': tools}] + messages
-
-    @classmethod
-    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
-        try:
-            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
-            cfg_dict = cfg.to_dict()
-        except Exception:
-            cfg_dict = {}
-            config_path = os.path.join(model_path, 'config.json')
-            if os.path.exists(config_path):
-                try:
-                    with open(config_path, encoding='utf-8') as f:
-                        cfg_dict = json.load(f)
-                except Exception:
-                    cfg_dict = {}
-            arch = (cfg_dict.get('architectures') or [None])[0]
-
-        if arch == 'DeepseekV4ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v4':
-            return 'deepseek-v4'
-        return None
-
-
-@MODELS.register_module(name=['deepseek-v32', 'deepseek-v3.2'])
-class DeepseekV32ChatTemplate(BaseChatTemplate):
-    """Chat template of DeepSeek-V3.2 models."""
-
-    def __init__(self, eoa='<｜end▁of▁sentence｜>', stop_words=['<｜end▁of▁sentence｜>'], **kwargs):
-        super().__init__(eoa=eoa, stop_words=stop_words, **kwargs)
-
-    def get_prompt(self, prompt, sequence_start=True, **kwargs):
-        messages = [{'role': 'user', 'content': prompt}]
-        return self.messages2prompt(messages, sequence_start, **kwargs)
-
-    def messages2prompt(self, messages, sequence_start=True, **kwargs):
-        from lmdeploy.deepseek_v32_encoding import encode_messages
-
-        if isinstance(messages, str):
-            messages = [{'role': 'user', 'content': messages}]
-
-        tools = DeepseekV4ChatTemplate._normalize_tools(kwargs.pop('tools', None))
-        messages = DeepseekV4ChatTemplate._with_tools(messages, tools) if tools else list(messages)
-
-        thinking = kwargs.pop('thinking', False)
-        enable_thinking = kwargs.pop('enable_thinking', False)
-        thinking = thinking or enable_thinking
-
-        drop_thinking = kwargs.pop('drop_thinking', None)
-        if drop_thinking is None:
-            drop_thinking = bool(messages and messages[-1].get('role') == 'user')
-
-        return encode_messages(messages,
-                               thinking_mode='thinking' if thinking else 'chat',
-                               drop_thinking=drop_thinking,
-                               add_default_bos_token=sequence_start)
-
-    @classmethod
-    def match(cls, model_path: str, trust_remote_code: bool = False, **kwargs) -> str | None:
-        try:
-            arch, cfg = get_model_arch(model_path, trust_remote_code=trust_remote_code)
-            cfg_dict = cfg.to_dict()
-        except Exception:
-            cfg_dict = {}
-            config_path = os.path.join(model_path, 'config.json')
-            if os.path.exists(config_path):
-                try:
-                    with open(config_path, encoding='utf-8') as f:
-                        cfg_dict = json.load(f)
-                except Exception:
-                    cfg_dict = {}
-            arch = (cfg_dict.get('architectures') or [None])[0]
-
-        if arch == 'DeepseekV32ForCausalLM' or cfg_dict.get('model_type') == 'deepseek_v32':
-            return 'deepseek-v32'
-        return None
-
-
-@MODELS.register_module(name=['llava-chatml'])
-class ChatmlDirect(BaseChatTemplate):
-
-    def __init__(self,
-                 system='<|im_start|>system\n',
-                 meta_instruction='Answer the questions.',
-                 eosys='<|im_end|>',
-                 user='<|im_start|>user\n',
-                 eoh='<|im_end|>',
-                 assistant='<|im_start|>assistant\n',
-                 eoa='<|im_end|>',
-                 separator='',
-                 **kwargs):
-        super().__init__(system,
-                         meta_instruction=meta_instruction,
-                         eosys=eosys,
-                         user=user,
-                         eoh=eoh,
-                         assistant=assistant,
-                         eoa=eoa,
-                         separator=separator,
-                         **kwargs)
-
-    @classmethod
-    def match(cls, model_path: str, **kwargs) -> str | None:
-        """Return the model_name that was registered to MODELS.
-
-        Args:
-            model_path (str): the model path used for matching.
-        """
-        path = model_path.lower()
-        if 'llava' in path and 'v1.6-34b' in path:
-            return 'llava-chatml'
 
 
 @MODELS.register_module(name=['hf'])

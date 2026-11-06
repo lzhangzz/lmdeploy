@@ -19,7 +19,7 @@ def get_mm_items_offset(input_ids: torch.Tensor, mm_token_id: int) -> list[tuple
     Example:
         input_ids = [1, 2, 3, 3, 3, 4, 3, 3], mm_token_id = 3
         returns [(2, 5), (6, 8)]
-        end_positions + 1 to turn it into exclusive end index for pytorch engine
+        end_positions + 1 to turn it into an exclusive end index
     """
     mask = (input_ids == mm_token_id)
     prev_is_false = ~F.pad(mask[:-1], (1, 0), value=False)  # [True] + ~mask[:-1]
@@ -129,7 +129,7 @@ def _expand_bundled_video_items(item: dict, token_id: int) -> list[dict]:
     cumulative = torch.cumsum(torch.tensor(patches_per_video, dtype=torch.long), dim=0)
     slice_indices = [0] + cumulative.tolist()
 
-    # qwen3-omni emits one offset per video: keep each [T, H, W] grid intact.
+    # One offset per video: keep each [T, H, W] grid intact.
     if num_items == num_videos:
         for video_idx in range(num_videos):
             feature_start, feature_end = slice_indices[video_idx], slice_indices[video_idx + 1]
@@ -186,23 +186,6 @@ def _expand_bundled_video_items(item: dict, token_id: int) -> list[dict]:
     return expanded_mm_items
 
 
-def _expand_bundled_audio_items(item: dict, token_id: int) -> list[dict]:
-    expanded_mm_items = []
-    for i in range(len(item['offset'])):
-        feature_attention_mask = item.get('feature_attention_mask')
-        if feature_attention_mask is not None:
-            feature_attention_mask = feature_attention_mask[i:i + 1].clone()
-        expanded_mm_items.append(
-            dict(
-                modality=Modality.AUDIO,
-                input_features=item['feature'][i:i + 1].clone(),
-                feature_attention_mask=feature_attention_mask,
-                offset=item['offset'][i],
-                audio_token_id=token_id,
-            ))
-    return expanded_mm_items
-
-
 # adapted from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/mm_utils.py
 def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialTokens'):
     """When multiple mm items of the same modality present, HF processors
@@ -241,25 +224,6 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
                         second_per_grid=second_per_grid,
                         video_token_id=token_id,
                     ))
-            elif modality == Modality.AUDIO:
-                expanded_mm_items.append(
-                    dict(
-                        modality=modality,
-                        input_features=item['feature'],
-                        feature_attention_mask=item.get('feature_attention_mask'),
-                        offset=item['offset'][0],
-                        audio_token_id=token_id,
-                    ))
-            elif modality == Modality.TIME_SERIES:
-                expanded_mm_items.append(
-                    dict(
-                        modality=modality,
-                        ts_values=item['feature'],
-                        ts_sr=item['ts_sr'],
-                        ts_lens=item['ts_lens'],
-                        offset=item['offset'][0],
-                        ts_token_id=token_id,
-                    ))
             continue
 
         # bundled case, expand into per-item entries
@@ -267,8 +231,6 @@ def get_expanded_mm_items(collected_mm_items, mm_tokens: 'MultimodalSpecialToken
             expanded_mm_items.extend(_expand_bundled_image_items(item, token_id))
         elif modality == Modality.VIDEO:
             expanded_mm_items.extend(_expand_bundled_video_items(item, token_id))
-        elif modality == Modality.AUDIO:
-            expanded_mm_items.extend(_expand_bundled_audio_items(item, token_id))
 
     # HF processors return features grouped by modality; offsets restore prompt order for mixed inputs.
     expanded_mm_items.sort(key=lambda item: item['offset'][0])

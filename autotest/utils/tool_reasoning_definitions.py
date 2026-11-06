@@ -773,7 +773,6 @@ def _new_stream_tool_call_result() -> dict:
         'raw_chunks': [],
         'raw_sse_chunks': [],
         'output_ids': [],
-        'routed_experts': None,
         'prompt_tokens': 0,
         'completion_tokens': 0,
         'prompt_tokens_computed': 0,
@@ -861,10 +860,6 @@ def _merge_stream_choice(
     if output_ids:
         result['output_ids'].extend(output_ids)
 
-    routed_experts = _stream_choice_extension(choice, 'routed_experts')
-    if routed_experts is not None:
-        result['routed_experts'] = routed_experts
-
 
 def _merge_stream_choice_dict(choice: dict, result: dict, tool_calls: dict) -> None:
     """Merge one SSE ``choices[]`` element via ``protocol`` models (no soft
@@ -933,7 +928,6 @@ def collect_stream_tool_call_http(
     use_input_ids: bool = False,
     tokenizer_path: str | None = None,
     reference_payload: bool = False,
-    return_routed_experts: bool = True,
     **payload_extra,
 ) -> dict:
     tok_path = tokenizer_path or api_model_name
@@ -945,7 +939,6 @@ def collect_stream_tool_call_http(
         use_input_ids=use_input_ids,
         tokenizer_path=tok_path,
         reference_payload=reference_payload,
-        return_routed_experts=return_routed_experts,
         **payload_extra,
     )
 
@@ -1013,13 +1006,10 @@ def _build_stream_tool_call_payload(
     use_input_ids: bool,
     tokenizer_path: str,
     reference_payload: bool = False,
-    return_routed_experts: bool = True,
     **payload_extra,
 ) -> tuple[dict, int]:
     prompt_tokens_computed = 0
     token_fields = {'return_token_ids': True}
-    if return_routed_experts:
-        token_fields['return_routed_experts'] = True
     if use_input_ids:
         if messages is None:
             raise ValueError('messages required when use_input_ids=True')
@@ -1095,7 +1085,6 @@ async def collect_stream_tool_call_http_async(
     use_input_ids: bool = False,
     tokenizer_path: str | None = None,
     reference_payload: bool = False,
-    return_routed_experts: bool = True,
     **payload_extra,
 ) -> dict:
     """Async SSE collector for streaming tool-call HTTP responses."""
@@ -1108,7 +1097,6 @@ async def collect_stream_tool_call_http_async(
         use_input_ids=use_input_ids,
         tokenizer_path=tok_path,
         reference_payload=reference_payload,
-        return_routed_experts=return_routed_experts,
         **payload_extra,
     )
     headers = {
@@ -1174,10 +1162,6 @@ async def collect_stream_tool_call_http_async(
         tool_parser_name=resolve_tool_parser_name(tok_path),
         tools=tools,
     )
-
-
-class RoutedExpertsNotSupported(Exception):
-    pass
 
 
 class HttpToolCallError(Exception):
@@ -1370,18 +1354,6 @@ def validate_stream_tool_call_result(
     )
 
 
-def _resolve_prompt_tokens(result: dict) -> int:
-    """Prompt token count from stream usage or precomputed tokenizer count."""
-    computed = result['prompt_tokens_computed']
-    if computed:
-        return computed
-    usage_prompt = result['prompt_tokens']
-    if usage_prompt:
-        return usage_prompt
-    raise AssertionError(
-        'prompt_tokens missing: enable stream_options.include_usage or use_input_ids')
-
-
 def validate_output_ids_present(result: dict) -> None:
     output_ids = result['output_ids']
     assert isinstance(output_ids, list), f'output_ids should be list, got {type(output_ids)}'
@@ -1404,36 +1376,9 @@ def validate_output_ids_match_usage(result: dict) -> None:
         'server dropped output_ids on some SSE chunks (see api_server continue path)')
 
 
-def validate_routed_experts_length(result: dict, prompt_tokens: int | None = None) -> None:
-    routed_experts = result['routed_experts']
-    if routed_experts is None:
-        raise RoutedExpertsNotSupported(
-            'return_routed_experts=True but routed_experts missing in final stream chunk')
-
-    if prompt_tokens is None:
-        prompt_tokens = _resolve_prompt_tokens(result)
-    completion_tokens = len(result['output_ids'])
-    expected_len = prompt_tokens + completion_tokens - 1 if prompt_tokens > 0 else 0
-    actual_len = len(routed_experts)
-    usage_completion = result['completion_tokens']
-
-    assert prompt_tokens > 0, (
-        'prompt_tokens missing from stream usage; enable stream_options.include_usage')
-    assert completion_tokens > 0, 'completion_tokens (len output_ids) must be > 0'
-    assert expected_len == actual_len, (
-        f'Routed experts length mismatch: expected {expected_len} '
-        f'(prompt_tokens={prompt_tokens} + len(output_ids)={completion_tokens} - 1), '
-        f'got {actual_len}'
-        + (f'; usage.completion_tokens={usage_completion} '
-           f'(routed_experts aligns with usage, not with streamed output_ids — server bug)'
-           if usage_completion and usage_completion != completion_tokens else ''))
-
-
 def validate_stream_tool_call_with_tokens(
     result: dict,
-    prompt_tokens: int | None = None,
     *,
-    validate_experts: bool = True,
     tokenizer_path: str | None = None,
     tool_parser_name: str | None = None,
     tools: list | None = None,
@@ -1449,8 +1394,6 @@ def validate_stream_tool_call_with_tokens(
     assert result['stream_complete'], 'stream ended before data: [DONE]'
     validate_output_ids_present(result)
     validate_output_ids_match_usage(result)
-    if validate_experts:
-        validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
 def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
@@ -1470,9 +1413,7 @@ def _tool_calls_for_reference_validation(tool_calls) -> list[dict]:
 
 def validate_reference_turn_result(
     result: dict,
-    prompt_tokens: int,
     *,
-    validate_experts: bool = True,
     expected_function_name: str | None = None,
     tokenizer_path: str | None = None,
     tool_parser_name: str | None = None,
@@ -1503,9 +1444,6 @@ def validate_reference_turn_result(
             tool_parser_name=tool_parser_name,
             tools=tools,
         )
-
-    if validate_experts and result['routed_experts'] is not None and prompt_tokens > 0:
-        validate_routed_experts_length(result, prompt_tokens=prompt_tokens)
 
 
 def append_concurrent_turn_to_messages(messages: list, result: dict) -> None:
@@ -1564,8 +1502,6 @@ async def _async_concurrent_worker_turns(
     use_input_ids: bool,
     log_file: str | None,
     reference_payload: bool,
-    return_routed_experts: bool = True,
-    validate_experts: bool = True,
 ) -> bool:
     messages: list = []
     expected_name = tools[0]['function']['name'] if tools else None
@@ -1586,23 +1522,19 @@ async def _async_concurrent_worker_turns(
                 log_file=log_file,
                 tokenizer_path=tokenizer_path,
                 reference_payload=reference_payload,
-                return_routed_experts=return_routed_experts,
-            )
+                    )
         except HttpToolCallError as exc:
             raise AssertionError(
                 f'worker {worker_id} turn {turn + 1}: HTTP tool-call request failed: {exc}'
             ) from exc
 
-        prompt_tokens = _resolve_prompt_tokens(result)
         try:
             validate_reference_turn_result(
                 result,
-                prompt_tokens,
                 expected_function_name=expected_name,
                 tokenizer_path=tokenizer_path,
                 tool_parser_name=resolve_tool_parser_name(tokenizer_path),
                 tools=tools,
-                validate_experts=validate_experts,
             )
         except AssertionError as exc:
             raise AssertionError(f'worker {worker_id} turn {turn + 1}: {exc}') from exc
@@ -1623,8 +1555,6 @@ async def _run_concurrent_tool_call_workers_async(
     use_input_ids: bool = True,
     log_file: str | None = None,
     reference_payload: bool = True,
-    return_routed_experts: bool = True,
-    validate_experts: bool = True,
 ) -> tuple[int, int]:
     tok_path = tokenizer_path or api_model_name
     if num_workers is None:
@@ -1654,8 +1584,6 @@ async def _run_concurrent_tool_call_workers_async(
                 use_input_ids,
                 log_file,
                 reference_payload,
-                return_routed_experts,
-                validate_experts,
             ) for i in range(num_workers)
         ]
         await asyncio.gather(*tasks)
@@ -1738,8 +1666,6 @@ def run_concurrent_tool_call_workers(
     use_input_ids: bool = True,
     log_file: str | None = None,
     reference_payload: bool = True,
-    return_routed_experts: bool = True,
-    validate_experts: bool = True,
 ) -> tuple[int, int]:
     """Run N asyncio workers for multi-turn concurrent tool-call stress."""
     return asyncio.run(_run_concurrent_tool_call_workers_async(
@@ -1752,8 +1678,6 @@ def run_concurrent_tool_call_workers(
         use_input_ids=use_input_ids,
         log_file=log_file,
         reference_payload=reference_payload,
-        return_routed_experts=return_routed_experts,
-        validate_experts=validate_experts,
     ))
 
 

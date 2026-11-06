@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3.5-122B-A10B
-
 h:
 - model_type:
   - chat
@@ -11,9 +10,6 @@ h:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -22,29 +18,6 @@ h:
   - mllm_evaluate
   - quantization
   interface:
-    pytorch:
-    - suites:
-      - base
-      - logprob
-      - experts
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-        tool-call-parser: qwen3coder
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-    - suites:
-      - abort
-      extra:
-        enable-abort-handling: true
-    - suites:
-      - sleep
     turbomind:
     - suites:
       - base
@@ -52,13 +25,10 @@ h:
       - toolcall
       - reasoning
       extra:
-        logprobs-mode: raw_logprobs
         tool-call-parser: qwen3coder
         reasoning-parser: default
     - suites:
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     - suites:
       - abort
       extra:

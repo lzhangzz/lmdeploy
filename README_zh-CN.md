@@ -26,6 +26,7 @@ ______________________________________________________________________
 <details open>
 <summary><b>2026</b></summary>
 
+- \[2026/11\] LMDeploy 现仅保留 TurboMind 引擎：PyTorch 引擎、非 CUDA 平台（昇腾、沐曦、寒武纪、ROCm）、LoRA 适配器、奖励模型、W8A8/SmoothQuant 以及 PD 分离部署（DistServe）均已移除。详见[不兼容变更说明](docs/zh_cn/get_started/breaking_changes.md)。
 - \[2026/04\] PyPI 已为 LMDeploy 完成存储扩容，预编译安装包（wheels）上传已恢复。`v0.12.3` 已发布到 PyPI，可直接通过 `pip install lmdeploy` 安装。
 - \[2026/02\] 支持 [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35)
 - \[2026/02\] 支持 [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) 4bit 对称和非对称量化。 具体操作指南详见[此处](./docs/zh_cn/quantization/llm_compressor.md)
@@ -48,7 +49,7 @@ ______________________________________________________________________
 
 - \[2024/11\] PyTorch engine 支持 Mono-InternVL 模型
 - \[2024/10\] PyTorchEngine 在 ascend 平台上支持了图模式，推理性能提高了 1 倍
-- \[2024/09\] LMDeploy PyTorchEngine 增加了对 [华为 Ascend](docs/zh_cn/get_started/ascend/get_started.md) 的支持。支持的模型请见[这里](docs/zh_cn/supported_models/supported_models.md)
+- \[2024/09\] LMDeploy PyTorchEngine 增加了对华为 Ascend 的支持
 - \[2024/09\] 通过引入 CUDA Graph，LMDeploy PyTorchEngine 在 Llama3-8B 推理上实现了 1.3 倍的加速
 - \[2024/08\] LMDeploy现已集成至 [modelscope/swift](https://github.com/modelscope/swift)，成为 VLMs 推理的默认加速引擎
 - \[2024/07\] 支持 Llama3.1 8B 和 70B 模型，以及工具调用功能
@@ -65,7 +66,7 @@ ______________________________________________________________________
 - \[2024/02\] 支持 Qwen 1.5、Gemma、Mistral、Mixtral、Deepseek-MOE 等模型
 - \[2024/01\] [OpenAOE](https://github.com/InternLM/OpenAOE) 发布，支持无缝接入[LMDeploy Serving Service](docs/zh_cn/llm/api_server.md)
 - \[2024/01\] 支持多模型、多机、多卡推理服务。使用方法请参考[此处](docs/zh_cn/llm/proxy_server.md)
-- \[2024/01\] 增加 [PyTorch 推理引擎](./docs/zh_cn/inference/pytorch.md)，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
+- \[2024/01\] 增加 PyTorch 推理引擎，作为 TurboMind 引擎的补充。帮助降低开发门槛，和快速实验新特性、新技术
 
 </details>
 
@@ -139,46 +140,18 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Qwen2-MoE (57BA14B)</li>
   <li>Qwen2.5 (0.5B - 32B)</li>
   <li>Qwen3, Qwen3-MoE</li>
-  <li>Qwen3-Next(80B)</li>
   <li>Code Llama (7B - 34B)</li>
-  <li>ChatGLM2 (6B)</li>
-  <li>GLM-4 (9B)</li>
-  <li>GLM-4-0414 (9B, 32B)</li>
-  <li>CodeGeeX4 (9B)</li>
   <li>YI (6B-34B)</li>
-  <li>Mistral (7B)</li>
-  <li>DeepSeek-MoE (16B)</li>
-  <li>DeepSeek-V2 (16B, 236B)</li>
-  <li>DeepSeek-V2.5 (236B)</li>
-  <li>DeepSeek-V3 (685B)</li>
-  <li>DeepSeek-V3.2 (685B)</li>
-  <li>DeepSeek-V4 (284B, 1.6T)</li>
-  <li>Hy3 (295B-A21B)</li>
   <li>Mixtral (8x7B, 8x22B)</li>
-  <li>Gemma (2B - 7B)</li>
-  <li>Phi-3-mini (3.8B)</li>
-  <li>Phi-3.5-mini (3.8B)</li>
-  <li>Phi-3.5-MoE (16x3.8B)</li>
-  <li>Phi-4-mini (3.8B)</li>
-  <li>MiniCPM3 (4B)</li>
-  <li>SDAR (1.7B-30B)</li>
   <li>gpt-oss (20B, 120B)</li>
   <li>GLM-4.7-Flash (30B)</li>
-  <li>GLM-5 (754B)</li>
-  <li>GLM-5.2 (754B)</li>
 </ul>
 </td>
 <td>
 <ul>
-  <li>LLaVA(1.5,1.6) (7B-34B)</li>
   <li>Qwen2-VL (2B, 7B, 72B)</li>
   <li>Qwen2.5-VL (3B, 7B, 72B)</li>
-  <li>Qwen3-VL (2B - 235B)</li>
   <li>Qwen3.5 (0.8B - 397B)</li>
-  <li>Qwen3-Omni (30B-A3B)</li>
-  <li>Kimi-K2.6 (1T-A32B)</li>
-  <li>DeepSeek-VL (7B)</li>
-  <li>DeepSeek-VL2 (3B, 16B, 27B)</li>
   <li>InternVL-Chat (v1.1-v1.5)</li>
   <li>InternVL2 (1B-76B)</li>
   <li>InternVL2.5(MPO) (1B-78B)</li>
@@ -186,30 +159,16 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>InternVL3.5 (1B-241BA28B)</li>
   <li>Intern-S1 (241B)</li>
   <li>Intern-S1-mini (8.3B)</li>
-  <li>Intern-S1-Pro (1TB)</li>
   <li>Intern-S2-Preview (35B-A3B, 397B)</li>
   <li>Intern-S2-Mobius (35B)</li>
   <li>ChemVLM (8B-26B)</li>
-  <li>CogVLM-Chat (17B)</li>
-  <li>CogVLM2-Chat (19B)</li>
-  <li>MiniCPM-Llama3-V-2_5</li>
-  <li>MiniCPM-V-2_6</li>
-  <li>Phi-3-vision (4.2B)</li>
-  <li>Phi-3.5-vision (4.2B)</li>
-  <li>GLM-4V (9B)</li>
-  <li>GLM-4.1V-Thinking (9B)</li>
-  <li>Molmo (7B-D,72B)</li>
-  <li>Gemma3 (1B - 27B)</li>
-  <li>Llama4 (Scout, Maverick)</li>
 </ul>
 </td>
 </tr>
 </tbody>
 </table>
 
-LMDeploy 支持 2 种推理引擎： [TurboMind](./docs/zh_cn/inference/turbomind.md) 和 [PyTorch](./docs/zh_cn/inference/pytorch.md)，它们侧重不同。前者追求推理性能的极致优化，后者纯用python开发，着重降低开发者的门槛。
-
-它们在支持的模型类别、计算精度方面有所差别。用户可参考[这里](./docs/zh_cn/supported_models/supported_models.md), 查阅每个推理引擎的能力，并根据实际需求选择合适的。
+LMDeploy 使用 [TurboMind](./docs/zh_cn/inference/turbomind.md) 推理引擎，它基于 C++ 和 CUDA 开发，面向 NVIDIA GPU。支持的模型和计算精度请参考[这里](./docs/zh_cn/supported_models/supported_models.md)。
 
 # 快速开始 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Dh-YlSwg78ZO3AlleO441NF_QP2shs95#scrollTo=YALmXnwCG1pQ)
 
@@ -259,9 +218,7 @@ with lmdeploy.pipeline("internlm/internlm3-8b-instruct") as pipe:
   - [模型量化](./docs/zh_cn/quantization)
 - 进阶指南
   - [推理引擎 - TurboMind](./docs/zh_cn/inference/turbomind.md)
-  - [推理引擎 - PyTorch](./docs/zh_cn/inference/pytorch.md)
   - [自定义对话模板](./docs/zh_cn/advance/chat_template.md)
-  - [支持新模型](./docs/zh_cn/advance/pytorch_new_model.md)
   - gemm tuning
   - [长文本推理](./docs/zh_cn/advance/long_context.md)
   - [多模型推理服务](docs/zh_cn/llm/proxy_server.md)

@@ -278,8 +278,6 @@ def prefixcache_throughput_test(config, run_config, worker_id: str = '', is_smok
 
 
 def get_max_cache_entry(model, backend):
-    if backend == 'pytorch':
-        return 0.8
     if 'Llama-2' in model:
         return 0.95
     elif 'internlm2' in model:

@@ -8,8 +8,6 @@ from http import HTTPStatus
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from lmdeploy.messages import PytorchEngineConfig
-from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
@@ -56,24 +54,12 @@ def _create_top_logprobs(token_ids: list[int] | None = None,
 
 
 def check_request(request: GenerateReqInput, server_context) -> str:
-    engine_config = server_context.engine_config
     session_manager = server_context.session_manager
-    logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
-    return_logprob = request.return_logprob
     top_logprobs_num = request.top_logprobs_num or 0
     if top_logprobs_num < 0:
         return f'The top_logprobs_num {request.top_logprobs_num!r} cannot be a negative integer.'
-    if top_logprobs_num > 0 and return_logprob is not True:
+    if top_logprobs_num > 0 and request.return_logprob is not True:
         return 'top_logprobs_num requires return_logprob=True.'
-    if hasattr(engine_config, 'logprobs_mode') and logprobs_mode is None and return_logprob:
-        return f'return_logprob({return_logprob}) requested but not enabled logprobs_mode in engine configuration.'
-
-    if request.return_routed_experts:
-        if not hasattr(engine_config, 'enable_return_routed_experts'):
-            return f'return_routed_experts is not supported in {type(engine_config).__name__}.'
-        if not engine_config.enable_return_routed_experts:
-            return ('routed experts requested but not configured in engine configuration. '
-                    'May start api_server with --enable-return-routed-experts flag.')
 
     if (request.prompt is not None) ^ (request.input_ids is None):
         return 'You must specify exactly one of prompt or input_ids'
@@ -84,22 +70,7 @@ def check_request(request: GenerateReqInput, server_context) -> str:
     if request.input_ids is not None and len(request.input_ids) == 0:
         return 'The input_ids must not be an empty list'
 
-    if request.max_tokens is not None and request.max_tokens < 0:
-        return f'The max_tokens {request.max_tokens!r} must be non-negative.'
-
-    # Check for input-logprob specific requirements.
-    if request.logprob_start_len >= 0:
-        if not isinstance(engine_config, PytorchEngineConfig) or engine_config.role != EngineRole.Hybrid:
-            return 'input logprobs are supported only by the PyTorch hybrid engine.'
-        if getattr(getattr(server_context, 'async_engine', None), 'speculative_config', None) is not None:
-            return 'logprob_start_len is not supported with speculative decoding.'
-        if return_logprob is not True:
-            return 'logprob_start_len requires return_logprob=True.'
-        if logprobs_mode not in ('raw_logits', 'raw_logprobs'):
-            return 'logprob_start_len requires raw_logits or raw_logprobs mode.'
-        if request.max_tokens != 0:
-            return 'logprob_start_len requires max_tokens=0.'
-    elif request.max_tokens is not None and request.max_tokens == 0:
+    if request.max_tokens is not None and request.max_tokens <= 0:
         return f'The max_tokens {request.max_tokens!r} must be a positive integer.'
 
     if session_manager.has(request.session_id):
@@ -127,7 +98,6 @@ def register(router: APIRouter, server_context) -> None:
 
         prompt = request.prompt
         input_ids = request.input_ids
-        input_logprobs_requested = request.logprob_start_len >= 0
         image_data = request.image_data
         if image_data is not None:
             # convert to openai format
@@ -150,7 +120,6 @@ def register(router: APIRouter, server_context) -> None:
             request,
             server_context,
             logprobs=gen_logprobs,
-            logprob_start_len=request.logprob_start_len,
             stop_words=request.stop,
         )
 
@@ -168,26 +137,13 @@ def register(router: APIRouter, server_context) -> None:
             return create_request_error_response(e)
         result_generator = server_context.async_engine.generate(prepared_request, stream_response=True)
 
-        def create_generate_response_json(res,
-                                          text,
-                                          output_ids,
-                                          logprobs,
-                                          input_logprobs,
-                                          top_logprobs,
-                                          input_top_logprobs,
-                                          finish_reason,
-                                          routed_experts=None):
-            # only output router experts in last chunk
-            routed_experts = None if finish_reason is None else routed_experts
+        def create_generate_response_json(res, text, output_ids, logprobs, top_logprobs, finish_reason):
             meta = GenerateReqMetaOutput(
                 finish_reason=dict(
                     type=finish_reason) if finish_reason else None,
                 output_token_logprobs=logprobs,
-                input_token_logprobs=input_logprobs,
                 output_top_logprobs=top_logprobs,
-                input_top_logprobs=input_top_logprobs,
                 prompt_tokens=res.input_token_len,
-                routed_experts=routed_experts,
                 completion_tokens=res.generate_token_len)
 
             response = GenerateReqOutput(text=text,
@@ -200,31 +156,11 @@ def register(router: APIRouter, server_context) -> None:
                 async for res in result_generator:
                     text = res.response or ''
                     output_ids = res.token_ids
-                    routed_experts = res.routed_experts
-                    if input_logprobs_requested:
-                        input_logprob_token_ids = res.logprob_token_ids
-                        logprobs = None
-                        input_logprobs = _create_token_logprobs(input_logprob_token_ids, res.logprobs)
-                        top_logprobs = None
-                        input_top_logprobs = (_create_top_logprobs(input_logprob_token_ids, res.logprobs,
-                                                                   request.top_logprobs_num)
-                                              if request.top_logprobs_num else None)
-                    else:
-                        logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
-                        top_logprobs = (_create_top_logprobs(res.token_ids, res.logprobs, request.top_logprobs_num)
-                                        if request.top_logprobs_num else None)
-                        input_logprobs = None
-                        input_top_logprobs = None
-                    response_json = create_generate_response_json(
-                        res,
-                        text,
-                        output_ids,
-                        logprobs,
-                        input_logprobs,
-                        top_logprobs,
-                        input_top_logprobs,
-                        res.finish_reason,
-                        routed_experts=routed_experts)
+                    logprobs = _create_token_logprobs(res.token_ids, res.logprobs)
+                    top_logprobs = (_create_top_logprobs(res.token_ids, res.logprobs, request.top_logprobs_num)
+                                    if request.top_logprobs_num else None)
+                    response_json = create_generate_response_json(res, text, output_ids, logprobs, top_logprobs,
+                                                                  res.finish_reason)
                     yield f'data: {response_json}\n\n'
             except RequestError as e:
                 yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
@@ -241,10 +177,6 @@ def register(router: APIRouter, server_context) -> None:
             text = ''
             output_ids = []
             logprobs = []
-            input_logprobs = []
-            input_token_logprobs = None
-            input_top_logprobs = None
-            input_logprob_token_ids = None
             try:
                 async with aclosing(
                         with_request_cleanup(
@@ -258,11 +190,7 @@ def register(router: APIRouter, server_context) -> None:
                                                          'Client disconnected')
                         text += res.response or ''
                         output_ids.extend(res.token_ids or [])
-                        if input_logprobs_requested:
-                            input_logprob_token_ids = res.logprob_token_ids
-                            if res.logprobs:
-                                input_logprobs = res.logprobs
-                        elif res.logprobs:
+                        if res.logprobs:
                             logprobs.extend(res.logprobs)
             except RequestError as e:
                 return create_request_error_response(e)
@@ -270,21 +198,13 @@ def register(router: APIRouter, server_context) -> None:
             output_token_logprobs = _create_token_logprobs(output_ids, logprobs) if logprobs else None
             output_top_logprobs = (_create_top_logprobs(output_ids, logprobs, request.top_logprobs_num)
                                    if request.top_logprobs_num and logprobs else None)
-            if input_logprobs_requested and input_logprobs:
-                input_token_logprobs = _create_token_logprobs(input_logprob_token_ids, input_logprobs)
-                input_top_logprobs = (_create_top_logprobs(input_logprob_token_ids, input_logprobs,
-                                                           request.top_logprobs_num)
-                                      if request.top_logprobs_num else None)
 
             meta = GenerateReqMetaOutput(
                 finish_reason=dict(
                     type=res.finish_reason) if res.finish_reason else None,
                 output_token_logprobs=output_token_logprobs or None,
-                input_token_logprobs=input_token_logprobs,
                 output_top_logprobs=output_top_logprobs,
-                input_top_logprobs=input_top_logprobs,
                 prompt_tokens=res.input_token_len,
-                routed_experts=res.routed_experts,
                 completion_tokens=res.generate_token_len)
             return GenerateReqOutput(text=text,
                                      output_ids=output_ids,

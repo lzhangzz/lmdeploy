@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 from lmdeploy.messages import Response
 from lmdeploy.pipeline import Pipeline, _EventLoopThread
 from lmdeploy.serve.core.async_engine import GenOut
@@ -113,20 +113,12 @@ def test_pipeline_batch_keeps_siblings_when_preprocess_fails():
     assert responses_by_index[2].text == 'third'
 
 
-@pytest.mark.parametrize('backend', ['pytorch', 'turbomind'], scope='class')
 class TestBackendInference:
-    """Test class grouping all tests for each backend."""
+    """Pipeline inference tests on the TurboMind engine."""
 
     @pytest.fixture(scope='class', autouse=True)
-    def backend_config(self, backend):
-        """Parametrized backend configuration for all tests."""
-
-        if backend == 'pytorch':
-            return PytorchEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
-        elif backend == 'turbomind':
-            return TurbomindEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
-        else:
-            raise ValueError(f'Unknown backend type: {backend}')
+    def backend_config(self):
+        return TurbomindEngineConfig(session_len=4096, max_batch_size=4, tp=1, cache_max_entry_count=0.1)
 
     @pytest.fixture(scope='class', autouse=True)
     def pipe(self, backend_config):

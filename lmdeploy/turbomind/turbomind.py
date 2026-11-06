@@ -232,8 +232,7 @@ class TurboMind:
                  speculative_config: SpeculativeConfig | None = None):
         """Load model which is in hf format."""
         assert is_supported(model_path, trust_remote_code=trust_remote_code), (
-            f'turbomind does not support {model_path}. '
-            'Plz try pytorch engine instead.')
+            f'turbomind does not support {model_path}.')
 
         from .converter import get_tm_config
         from .model_loader import ModelLoader

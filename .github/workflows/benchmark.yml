@@ -20,9 +20,9 @@ on:
         default: "['apiserver', 'mllm_apiserver', 'throughput', 'longtext', 'prefixcache']"
       backend:
         required: true
-        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind"]"'
         type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['turbomind']"
       offline_mode:
         required: true
         description: 'Whether start a offline mode, if true, you should prepare code and whl package by yourself'
@@ -189,18 +189,10 @@ jobs:
         run: |
           python3 -m pip list
           lmdeploy check_env
-      - name: Run other benchmark - all
-        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && contains(fromJson(github.event.inputs.backend), 'pytorch')
-        run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Run other benchmark - turbomind
-        if: contains(fromJson(github.event.inputs.backend), 'turbomind') && !contains(fromJson(github.event.inputs.backend), 'pytorch')
+        if: contains(fromJson(github.event.inputs.backend), 'turbomind')
         run: |
             pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
-      - name: Run other benchmark - pytorch
-        if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
-        run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Generate result
         if: always()
         run: |

@@ -30,16 +30,14 @@ class InternVL3VisionModel(InternVLVisionModel):
     """Internvl3 vision model."""
 
     _arch = ['InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration']
-    _turbomind_native_vision = True
 
     def __init__(self,
                  model_path: str,
                  with_llm: bool = False,
-                 max_memory: dict[int, int] = None,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
-        super().__init__(model_path, with_llm, max_memory, hf_config, backend, trust_remote_code=trust_remote_code)
+        super().__init__(model_path, with_llm, hf_config, backend, trust_remote_code=trust_remote_code)
         self.arch = self.hf_config.architectures[0]
 
     def build_preprocessor(self, trust_remote_code: bool = False):

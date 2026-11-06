@@ -98,17 +98,9 @@ class _SystemFirstChatTemplate(_FakeChatTemplate):
 
 class _FakeEngine:
 
-    def __init__(
-            self,
-            *,
-            logprobs_mode='raw_logprobs',
-            enable_return_routed_experts: bool = True,
-            chat_template=None,
-    ):
+    def __init__(self, *, chat_template=None):
         self.model_name = 'fake-model'
-        self.backend_config = SimpleNamespace(adapters=['adapter-model'],
-                                             logprobs_mode=logprobs_mode,
-                                             enable_return_routed_experts=enable_return_routed_experts)
+        self.backend_config = SimpleNamespace()
         self.tokenizer = _FakeTokenizer()
         self.chat_template = chat_template or _FakeChatTemplate()
         self.preprocess_calls = []
@@ -129,8 +121,6 @@ class _FakeEngine:
                 generate_token_len=1,
                 finish_reason=None,
                 cached_tokens=0,
-                cache_block_ids=None,
-                routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
             yield SimpleNamespace(
@@ -140,8 +130,6 @@ class _FakeEngine:
                 generate_token_len=2,
                 finish_reason='stop',
                 cached_tokens=0,
-                cache_block_ids=None,
-                routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
 
@@ -167,16 +155,10 @@ class _FakeServerContext:
             self,
             *,
             response_parser_cls=_BasicParser,
-            logprobs_mode='raw_logprobs',
-            enable_return_routed_experts: bool = True,
             chat_template=None,
     ):
         self.session_mgr = _FakeSessionManager()
-        self.async_engine = _FakeEngine(
-            logprobs_mode=logprobs_mode,
-            enable_return_routed_experts=enable_return_routed_experts,
-            chat_template=chat_template,
-        )
+        self.async_engine = _FakeEngine(chat_template=chat_template)
         self.async_engine.session_mgr = self.session_mgr
         self.default_gen_config = {}
         self.response_parser_cls = response_parser_cls
@@ -322,10 +304,8 @@ class _ToolAndReasoningParser:
 def _make_client(response_parser_cls=_BasicParser,
                  *,
                  server_context=None,
-                 logprobs_mode='raw_logprobs',
                  return_context=False):
-    context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls,
-                                                  logprobs_mode=logprobs_mode)
+    context = server_context or _FakeServerContext(response_parser_cls=response_parser_cls)
     client = _AnthropicTestClient(context)
     if return_context:
         return client, context
@@ -459,7 +439,6 @@ async def _parsed_stream(result_generator, response_parser):
                 input_token_len=res.input_token_len,
                 generate_token_len=res.generate_token_len,
                 cached_tokens=getattr(res, 'cached_tokens', 0),
-                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
                 reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
                 is_last_delta=is_last_delta,
             )
@@ -501,14 +480,6 @@ def test_stream_messages_runtime_exception_emits_error_event():
             'message': 'An internal server error occurred.',
         },
     }]
-
-
-def test_messages_return_routed_experts_requires_engine_flag():
-    client = _make_client(server_context=_FakeServerContext(enable_return_routed_experts=False))
-    response = _post_messages(client, return_routed_experts=True)
-
-    assert response.status_code == 400
-    assert 'enable-return-routed-experts' in response.json()['error']['message']
 
 
 def test_messages_tools_require_tool_parser():
@@ -756,30 +727,6 @@ def test_messages_streaming_with_reasoning_and_tool_use_events():
     assert '"output_ids": [102]' in body
 
 
-def test_stream_messages_response_serializes_numpy_routed_experts():
-    import numpy as np
-
-    async def _result_generator():
-        yield SimpleNamespace(
-            response='Hello',
-            token_ids=[1],
-            input_token_len=2,
-            generate_token_len=1,
-            finish_reason='stop',
-            routed_experts=np.array([[[1, 2]]]),
-            logprobs=None,
-        )
-
-    payloads = _collect_stream_response_payloads(
-        _result_generator(),
-        _BasicParser(None),
-        return_routed_experts=True,
-    )
-    message_delta = next(item for item in payloads if item['type'] == 'message_delta')
-
-    assert message_delta['routed_experts'] == [[[1, 2]]]
-
-
 def test_stream_messages_response_preserves_tool_start_output_ids():
     class _ToolStartParser:
 
@@ -805,7 +752,6 @@ def test_stream_messages_response_preserves_tool_start_output_ids():
             input_token_len=8,
             generate_token_len=3,
             finish_reason=None,
-            routed_experts=None,
             logprobs=None,
         )
 
@@ -1046,18 +992,16 @@ def test_stream_messages_response_maps_stop_to_tool_use_on_empty_terminal_chunk(
     assert message_delta['delta']['stop_reason'] == 'tool_use'
 
 
-def test_messages_non_stream_with_output_ids_and_routed_experts():
+def test_messages_non_stream_with_output_ids():
     client = _make_client()
     response = _post_messages(
         client,
         messages=[{'role': 'user', 'content': 'Hi'}],
         return_token_ids=True,
-        return_routed_experts=True,
     )
     assert response.status_code == 200
     data = response.json()
     assert data.get('output_ids') == [101, 102]
-    assert data.get('routed_experts') == [[[1, 2, 3]]]
 
 
 @pytest.mark.parametrize(
@@ -1133,20 +1077,11 @@ def test_anthropic_model_listing():
     assert response.status_code == 200
     data = response.json()
     assert data['has_more'] is False
-    assert [item['id'] for item in data['data']] == ['fake-model', 'adapter-model']
+    assert [item['id'] for item in data['data']] == ['fake-model']
 
 
-def test_messages_non_stream_includes_logprobs():
+def test_messages_rejects_logprobs():
     client = _make_client()
-    response = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}], return_logprob=True)
-    assert response.status_code == 200
-    data = response.json()
-    # output_token_logprobs should be [(logprob, token_id), ...]
-    assert data['output_token_logprobs'] == [[-0.5, 101], [-0.3, 102]]
-
-
-def test_messages_rejects_logprobs_when_engine_logprobs_mode_disabled():
-    client = _make_client(logprobs_mode=None)
     response = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}], return_logprob=True)
     assert response.status_code == 400
     assert 'return_logprob' in response.json()['error']['message']

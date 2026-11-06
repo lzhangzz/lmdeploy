@@ -6,24 +6,47 @@ import time
 from typing import Any
 
 import requests
-from utils.ascend_multinode_utils import build_ascend_multinode_env, ensure_ascend_multinode_env
 from utils.config_utils import (
     get_case_str_by_config,
     get_cli_common_param,
     get_model_path_from_config,
     resolve_extra_params,
 )
-from utils.ray_distributed_utils import (
-    RAY_PORT,
-    RayLMDeployManager,
-    ascend_multinode_enabled,
-    verify_service_functionality,
-)
 
 time_time = time.time
 
 DEFAULT_PROXY_PORT = 8000
 WORKER_WAIT_INTERVAL = 15  # seconds
+
+
+def verify_service_functionality(host: str, api_port: int, model_name: str, check_count: int) -> bool:
+    """Verify that the API Server can respond to basic requests."""
+    try:
+        test_data = {
+            'model': model_name,
+            'messages': [{
+                'role': 'user',
+                'content': 'hi'
+            }],
+            'max_tokens': 5,
+            'stream': False
+        }
+
+        resp = requests.post(f'http://{host}:{api_port}/v1/chat/completions', json=test_data, timeout=15)
+
+        if resp.status_code == 200:
+            print(f'✅ Check {check_count}: Service functionality normal (received valid response)')
+            return True
+        elif resp.status_code == 400:
+            print(f'✅ Check {check_count}: Service framework activated (received 400)')
+            return True
+        else:
+            print(f'🔧 Check {check_count}: Service test failed, status code: {resp.status_code}')
+            return False
+
+    except requests.exceptions.RequestException as e:
+        print(f'🔧 Check {check_count}: Service test exception - {e}')
+        return False
 
 
 def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -205,29 +228,17 @@ class ProxyDistributedManager:
         self.node_rank = int(os.getenv('NODE_RANK', '0'))
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proxy_port = int(os.getenv('PROXY_PORT', str(DEFAULT_PROXY_PORT)))
-        self.ray_port = int(os.getenv('RAY_PORT', str(RAY_PORT)))
 
         self.is_master = (self.node_rank == 0)
         self.proxy_process = None
-        self._ray_manager = None
-        if ascend_multinode_enabled():
-            self._ray_manager = RayLMDeployManager(
-                master_addr=self.master_addr,
-                ray_port=self.ray_port,
-                api_port=self.proxy_port,
-                health_check=False,
-            )
 
     def start(self):
-        if self._ray_manager is not None:
-            self._ray_manager.start_ray_cluster()
-
         if not self.is_master:
             return
 
         cmd = [
             'lmdeploy', 'serve', 'proxy', '--server-name', self.master_addr, '--server-port',
-            str(self.proxy_port), '--routing-strategy', 'min_expected_latency', '--serving-strategy', 'Hybrid'
+            str(self.proxy_port), '--routing-strategy', 'min_expected_latency'
         ]
         print(f"[Proxy] Starting: {' '.join(cmd)}")
         self.proxy_process = subprocess.Popen(cmd)
@@ -242,9 +253,6 @@ class ProxyDistributedManager:
                 self.proxy_process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.proxy_process.kill()
-
-        if self._ray_manager is not None:
-            self._ray_manager.cleanup(force=True)
 
 
 class ApiServerPerTest:
@@ -263,13 +271,9 @@ class ApiServerPerTest:
         self.node_count = int(os.getenv('NODE_COUNT', '1'))
         self.proc_per_node = int(os.getenv('PROC_PER_NODE', '1'))
 
-        _pc = run_config.get('parallel_config') or {}
-        _dp = int(_pc.get('dp', 0) or 0)
-        # turbomind's dp is handled inside a single api_server process, which registers
-        # with the proxy once regardless of dp; only ray/pytorch spawn dp separate
-        # processes that each register independently.
-        _backend = run_config.get('backend')
-        self.expected_instances = _dp if (_dp > 1 and _backend != 'turbomind') else 1
+        # TurboMind handles dp inside a single api_server process, which registers
+        # with the proxy once regardless of dp.
+        self.expected_instances = 1
         self.is_master = (self.node_rank == 0)
         self.api_process = None
 
@@ -278,7 +282,6 @@ class ApiServerPerTest:
 
         extra_params = self.run_config.get('extra_params', {})
         resolve_extra_params(extra_params, self.config)
-        ensure_ascend_multinode_env(self.config, self.run_config)
 
         # Get model-name: use extra_params['model-name'] if specified, otherwise use case_name
         case_name = get_case_str_by_config(self.run_config)
@@ -304,7 +307,7 @@ class ApiServerPerTest:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, f'log_{case_name}_{timestamp}.log')
         self._log_file = open(log_path, 'w')
-        env = build_ascend_multinode_env(self.config, self.run_config)
+        env = os.environ.copy()
         env['MASTER_PORT'] = os.getenv('MASTER_PORT', '29500')
         self.api_process = subprocess.Popen(cmd,
                                             stdout=self._log_file,

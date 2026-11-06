@@ -73,10 +73,6 @@ response = client.chat.completions.create(
 
 - `default`：使用常见的 `<think>...</think>` 协议，适用于 Qwen3、QwQ、
   DeepSeek R1、Intern-S1 以及兼容模型。
-- `deepseek-v3`：仅当 `enable_thinking=True` 时从推理模式开始解析。
-- `deepseek-v32` 和 `deepseek-v3.2`：DeepSeek V3.2 的两个别名；当
-  `thinking=True` 或 `enable_thinking=True` 时从推理模式开始解析。
-- `deepseek-v4`：使用与 DeepSeek V3.2 parser 相同的模式开关。
 
 旧名称 `qwen-qwq`、`intern-s1` 和 `deepseek-r1` 仍会映射到
 `default`，但会产生弃用警告。GPT-OSS 不使用注册的 reasoning parser；

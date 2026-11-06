@@ -72,7 +72,6 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             tool_choice=normalize_tool_choice(request.tool_choice),
             return_logprob=bool(request.return_logprob),
             return_token_ids=bool(request.return_token_ids),
-            return_routed_experts=bool(request.return_routed_experts),
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
         )
         try:
@@ -140,6 +139,5 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             ),
             output_ids=res.token_ids if chat_request.return_token_ids else None,
             output_token_logprobs=output_token_logprobs,
-            routed_experts=res.routed_experts if chat_request.return_routed_experts else None,
         )
         return response.model_dump()

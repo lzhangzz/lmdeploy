@@ -88,39 +88,6 @@ TURBOMIND_PR_TEST_MLLM_GPU2 = [{
     'extra_params': {}
 }]
 
-TURBOMIND_FALLBACK_TEST_LLM_GPU1 = [{
-    'model': 'google/gemma-2-9b-it',
-    'backend': 'turbomind',
-    'communicator': 'cuda-ipc',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}]
-
-TURBOMIND_FALLBACK_TEST_LLM_GPU2 = [{
-    'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
-    'backend': 'turbomind',
-    'communicator': 'cuda-ipc',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'Qwen/Qwen3-VL-30B-A3B-Instruct',
-    'backend': 'turbomind',
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}]
-
-TURBOMIND_FALLBACK_TEST_MLLM_GPU1 = []
-
 TURBOMIND_LOGPROBS_TEST_LLM_GPU2 = [{
     'model': 'Qwen/Qwen3-30B-A3B',
     'backend': 'turbomind',
@@ -167,92 +134,7 @@ BASE_MODELSCOPE_CONFIG = [{
 
 MODELSCOPE_CONFIG = [{
     **item, 'backend': 'turbomind'
-} for item in BASE_MODELSCOPE_CONFIG] + [{
-    **item, 'backend': 'pytorch'
 } for item in BASE_MODELSCOPE_CONFIG]
-
-PYTORCH_LORA_TEST_LLM_GPU1 = [{
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'adapters': {
-            'default': 'lora/Llama2-Chinese-7b-Chat-LoRA'
-        }
-    }
-}, {
-    'model': 'meta-llama/Llama-2-7b-chat-hf',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {
-        'adapters': {
-            'a': 'lora/2024-01-25_self_dup',
-            'b': 'lora/2024-01-25_self'
-        }
-    }
-}]
-
-PYTORCH_PR_TEST_LLM_GPU2 = [{
-    'model': 'Qwen/Qwen3-30B-A3B',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'mistralai/Mixtral-8x7B-Instruct-v0.1',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {}
-}, {
-    'model': 'Qwen/Qwen3.5-35B-A3B',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 2
-    },
-    'extra_params': {
-        'speculative-algorithm': 'qwen3_5_mtp',
-        'speculative-num-draft-tokens': 4,
-        'max-batch-size': 256
-    }
-}
-]
-
-PYTORCH_PR_TEST_LLM_GPU1 = [{
-    'model': 'meta-llama/Meta-Llama-3-1-8B-Instruct',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 0,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}, {
-    'model': 'Qwen/Qwen3-0.6B',
-    'backend': 'pytorch',
-    'communicator': 'nccl',
-    'quant_policy': 8,
-    'parallel_config': {
-        'tp': 1
-    },
-    'extra_params': {}
-}]
 
 BASE_TOOLCALL_TEST_LLM = [{
     'model': 'Qwen/Qwen3-8B',
@@ -310,12 +192,8 @@ BASE_REASONING_TEST_LLM = [{
 
 TOOLCALL_TEST_LLM = [{
     **item, 'backend': 'turbomind'
-} for item in BASE_TOOLCALL_TEST_LLM] + [{
-    **item, 'backend': 'pytorch'
 } for item in BASE_TOOLCALL_TEST_LLM]
 
 REASONING_TEST_LLM = [{
     **item, 'backend': 'turbomind'
-} for item in BASE_REASONING_TEST_LLM] + [{
-    **item, 'backend': 'pytorch'
 } for item in BASE_REASONING_TEST_LLM]

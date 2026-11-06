@@ -17,7 +17,6 @@ from utils.config_utils import (
 )
 from utils.constant import DEFAULT_PORT, PROXY_PORT
 from utils.proxy_distributed_utils import ApiServerPerTest, is_port_open
-from utils.ray_distributed_utils import ray_worker_node_wait
 from utils.run_restful_chat import start_openai_service, terminate_restful_api
 
 _AUTOTEST_ROOT = Path(__file__).resolve().parents[1]
@@ -165,11 +164,10 @@ def _run_interface_suites(
 ) -> None:
     """Execute configured interface protocol suites against ``port``.
 
-    ``via_proxy=True`` skips suites/cases that return large token-id /
-    routed-experts payloads (proxy response size limits): the whole
-    ``generate`` suite (``/generate`` always emits ``output_ids``), and
-    toolcall tests marked ``experts`` (return_token_ids / routed_experts /
-    encode+input_ids paths). Also skips Anthropic suites and toolcall
+    ``via_proxy=True`` skips suites/cases that return large token-id
+    payloads (proxy response size limits): the whole ``generate`` suite
+    (``/generate`` always emits ``output_ids``), and toolcall tests marked
+    ``token_ids`` (return_token_ids / encode+input_ids paths). Also skips Anthropic suites and toolcall
     tests marked ``anthropic`` (proxy does not expose ``/v1/messages``).
     """
     model = run_config['model']
@@ -185,7 +183,7 @@ def _run_interface_suites(
         case_info = [c for c in case_info if c != 'generate']
         print(
             'proxy: skipping generate suite '
-            '(/generate output_ids / routed_experts exceed proxy limits)',
+            '(/generate output_ids exceed proxy limits)',
             flush=True,
         )
 
@@ -224,9 +222,9 @@ def _run_interface_suites(
 
     toolcall_marker = f'tool_call and not not_{backend}'
     if via_proxy:
-        # Exclude return_token_ids / routed_experts / encode(input_ids) cases.
+        # Exclude return_token_ids / encode(input_ids) cases.
         # Exclude Anthropic /v1/messages toolcall cases (proxy returns 404).
-        toolcall_marker += ' and not experts and not anthropic'
+        toolcall_marker += ' and not token_ids and not anthropic'
 
     anthropic_marker = f'anthropic and not not_{backend}'
 
@@ -332,36 +330,6 @@ def run_interface_restful_test(config, run_config, worker_id) -> None:
                 terminate_restful_api(worker_id)
 
 
-def run_interface_restful_ray_distributed_test(config, run_config, manager) -> None:
-    """Run interface suites against a Ray multi-node api_server (tp16).
-
-    One api_server restart per launch profile. Workers wait on Ray GCS;
-    intermediate ``cleanup(force=False)`` does not tear down the cluster.
-    """
-    assert manager is not None, 'Manager instance must be provided'
-    phases = _phase_run_configs(run_config)
-
-    if manager.is_master:
-        try:
-            for phase_idx, phase_cfg in enumerate(phases):
-                print(
-                    f'interface phase {phase_idx}: suites={phase_cfg.get("interface_suites")} '
-                    f'cases={phase_cfg.get("case_info")} '
-                    f'extra_keys={sorted((phase_cfg.get("extra_params") or {}).keys())}',
-                    flush=True,
-                )
-                manager.start_lmdeploy_api_server(config=config, run_config=phase_cfg)
-                try:
-                    _run_interface_suites(config, phase_cfg, PROXY_PORT)
-                finally:
-                    manager.cleanup(force=False)
-        finally:
-            manager.cleanup(force=False)
-    else:
-        time.sleep(10)
-        ray_worker_node_wait(manager, timeout_minutes=4880)
-
-
 def _proxy_phase_flag_path(config, run_config, phase_idx: int) -> str:
     log_dir = config.get('log_path') or config.get('server_log_path') or '/tmp'
     case_str = get_case_str_by_config(run_config)
@@ -406,9 +374,9 @@ def run_interface_restful_proxy_distributed_test(config, run_config, manager) ->
     """Run interface suites against LMDeploy proxy (dp/ep multi-node).
 
     Skips ``generate``, Anthropic suites (``/v1/messages`` 404 via proxy),
-    and toolcall ``experts`` / ``anthropic``-marked cases: proxy cannot
-    safely carry large ``/generate`` / encode / return_token_ids /
-    routed_experts payloads, and does not forward Anthropic Messages.
+    and toolcall ``token_ids`` / ``anthropic``-marked cases: proxy cannot
+    safely carry large ``/generate`` / encode / return_token_ids
+    payloads, and does not forward Anthropic Messages.
 
     One ``ApiServerPerTest`` restart per launch profile. All ranks join each
     phase; workers sync via a shared done-flag, and also exit when master

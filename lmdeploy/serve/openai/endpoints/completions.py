@@ -11,7 +11,6 @@ from http import HTTPStatus
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
@@ -33,18 +32,7 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 
 
 def check_request(request: CompletionRequest, server_context) -> str:
-    engine_config = server_context.engine_config
     session_manager = server_context.session_manager
-    try:
-        # Check logprobs settings
-        logprobs_mode = engine_config.logprobs_mode
-        logprobs = request.logprobs or 0
-        if logprobs > 0 and logprobs_mode is None:
-            return f'logprobs({logprobs}) requested but not enabled logprobs_mode in engine configuration.'
-        if logprobs_mode is not None and logprobs < 0:
-            return 'logprobs must be non-negative when logprobs_mode is enabled in engine configuration.'
-    except AttributeError:
-        pass
 
     if session_manager.has(request.session_id):
         return f'The session_id {request.session_id!r} is occupied.'
@@ -111,10 +99,6 @@ def register(router: APIRouter, server_context) -> None:
           0 and 1. Typical values are in the 0.01-0.2 range, comparably
           selective as setting `top_p` in the 0.99-0.8 range (use the
           opposite of normal `top_p` values)
-        - **repetition_ngram_size** (int): N-gram length for repetition early stop
-          (PyTorch engine). ``0`` disables.
-        - **repetition_ngram_threshold** (int): How many times that n-gram must
-          repeat to trigger early stop. ``0`` disables.
 
         Currently we do not support the following features:
 
@@ -126,18 +110,7 @@ def register(router: APIRouter, server_context) -> None:
                                            check_request)
         if error_check_ret is not None:
             return error_check_ret
-        json_request = await raw_request.json()
-        migration_request = json_request.pop('migration_request', None)
-        with_cache = json_request.pop('with_cache', False)
-        preserve_cache = json_request.pop('preserve_cache', False)
-        if migration_request:
-            migration_request = MigrationRequest.model_validate(
-                migration_request)
-
         model_name = request.model
-        adapter_name = None
-        if model_name != server_context.async_engine.model_name:
-            adapter_name = model_name  # got a adapter name
         request_id = str(request.session_id)
         created_time = int(time.time())
         sessions = []
@@ -155,16 +128,12 @@ def register(router: APIRouter, server_context) -> None:
             server_context,
             stop_words=request.stop,
             random_seed=request.seed,
-            migration_request=migration_request,
-            with_cache=with_cache,
-            preserve_cache=preserve_cache,
         )
         prepared_requests = await asyncio.gather(*[
             server_context.async_engine.preprocess(prompt,
                                                    session,
                                                    gen_config=gen_config,
-                                                   do_preprocess=False,
-                                                   adapter_name=adapter_name)
+                                                   do_preprocess=False)
             for prompt, session in zip(request.prompt, sessions)
         ], return_exceptions=True)
         preprocess_error = next((result for result in prepared_requests if isinstance(result, BaseException)), None)
@@ -242,9 +211,6 @@ def register(router: APIRouter, server_context) -> None:
                             text=res.response,
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
-                        if res.cache_block_ids is not None:
-                            response_json['cache_block_ids'] = res.cache_block_ids
-                            response_json['remote_token_ids'] = res.token_ids
                         yield f'data: {json.dumps(response_json)}\n\n'
             except RequestError as e:
                 yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
@@ -265,11 +231,8 @@ def register(router: APIRouter, server_context) -> None:
         # Non-streaming response
         usage = UsageInfo()
         choices = [None] * len(generators)
-        cache_block_ids = []
-        remote_token_ids = []
 
         async def _inner_call(i, generator, session):
-            nonlocal cache_block_ids, remote_token_ids
             final_logprobs = []
             final_token_ids = []
             final_res = None
@@ -287,8 +250,6 @@ def register(router: APIRouter, server_context) -> None:
                                                          'Client disconnected')
                         final_res = res
                         text += res.response
-                        cache_block_ids.append(res.cache_block_ids)
-                        remote_token_ids.append(res.token_ids)
                         if res.token_ids:
                             final_token_ids.extend(res.token_ids)
                         if res.logprobs:
@@ -304,10 +265,6 @@ def register(router: APIRouter, server_context) -> None:
                 finish_reason=final_res.finish_reason,
                 logprobs=logprobs)
             choices[i] = choice_data
-
-            if with_cache:
-                cache_block_ids = cache_block_ids[0]
-                remote_token_ids = [remote_token_ids[0][-1]]
 
             total_tokens = sum(
                 [final_res.input_token_len, final_res.generate_token_len])
@@ -331,9 +288,5 @@ def register(router: APIRouter, server_context) -> None:
             choices=choices,
             usage=usage,
         ).model_dump()
-
-        if with_cache:
-            response['cache_block_ids'] = cache_block_ids
-            response['remote_token_ids'] = remote_token_ids
 
         return response

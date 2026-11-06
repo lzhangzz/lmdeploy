@@ -6,7 +6,6 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 from logging import Logger, LogRecord
 
 import torch
@@ -262,6 +261,70 @@ def get_hf_gen_cfg(path: str, trust_remote_code: bool = False):
     return cfg.to_dict()
 
 
+def _override_hf_config_dict(hf_config: dict, key: str, hf_overrides):
+    """Override hf_config dict."""
+    if key not in hf_config:
+        hf_config[key] = hf_overrides
+        return
+
+    hf_config_val = hf_config[key]
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        hf_config[key] = hf_overrides
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _override_hf_config_cfg(hf_config: PretrainedConfig, key: str, hf_overrides):
+    """Override hf_config config."""
+    if getattr(hf_config, key, None) is None:
+        hf_config.update({key: hf_overrides})
+
+    hf_config_val = getattr(hf_config, key)
+    is_dict = isinstance(hf_config_val, dict)
+    is_cfg = isinstance(hf_config_val, PretrainedConfig)
+    if not isinstance(hf_overrides, dict) or not (is_dict or is_cfg):
+        hf_config.update({key: hf_overrides})
+        return
+
+    for key, value in hf_overrides.items():
+        _override_hf_config(hf_config_val, key, value)
+
+
+def _override_hf_config(hf_config, key: str, hf_overrides):
+    """Override HF config."""
+    if isinstance(hf_config, dict):
+        _override_hf_config_dict(hf_config, key, hf_overrides)
+    else:
+        _override_hf_config_cfg(hf_config, key, hf_overrides)
+
+
+def override_hf_config(hf_config, hf_overrides: dict):
+    """Recursively override HF config entries, merging nested dicts and
+    configs."""
+    for k, v in hf_overrides.items():
+        _override_hf_config(hf_config, k, v)
+
+
+def singleton(cls):
+    """Singleton decorator."""
+    import multiprocessing as mp
+
+    instances = {}
+
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            pid = mp.current_process().pid
+            get_logger('lmdeploy').debug(f'pid:{pid} - Creating instance of singleton class {cls.__name__}')
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return get_instance
+
+
 def get_model(pretrained_model_name_or_path: str, download_dir: str = None, revision: str = None, token: str = None):
     """Get model from huggingface, modelscope or openmind_hub."""
     import os
@@ -339,10 +402,6 @@ def _get_and_verify_max_len(
     for key in llm_keys:
         hf_config = getattr(hf_config, key, hf_config)
 
-    # for qwen3-omni thinker
-    if hasattr(hf_config, 'thinker_config'):
-        hf_config = hf_config.thinker_config.text_config
-
     logger = get_logger('lmdeploy')
     derived_max_model_len = float('inf')
     possible_keys = [
@@ -401,87 +460,38 @@ def _get_and_verify_max_len(
     return int(max_model_len)
 
 
-def get_max_batch_size(device_type: str):
-    """Get the max inference batch size for LLM models according to the device
-    type.
+def get_max_batch_size(device_type: str = 'cuda'):
+    """Get the max inference batch size for LLM models according to the device.
 
     Args:
-        device_type (str): the type of device
+        device_type (str): the type of device. Only 'cuda' is supported.
     """
-    assert device_type in ['cuda', 'ascend', 'maca', 'camb']
-    if device_type == 'cuda':
-        max_batch_size_map = {'a100': 384, 'a800': 384, 'h100': 1024, 'h800': 1024, 'l20y': 1024, 'h200': 1024}
-        import torch
-        device_name = torch.cuda.get_device_name(0).lower()
-        for name, size in max_batch_size_map.items():
-            if name in device_name:
-                return size
-        # for devices that are not in `max_batch_size_map`, set
-        # the max_batch_size 128
-        return 128
-    elif device_type == 'ascend':
-        return 256
-    elif device_type == 'maca':
-        return 256
-    elif device_type == 'camb':
-        return 256
+    assert device_type == 'cuda', f'unsupported device type: {device_type}'
+    max_batch_size_map = {'a100': 384, 'a800': 384, 'h100': 1024, 'h800': 1024, 'l20y': 1024, 'h200': 1024}
+    device_name = torch.cuda.get_device_name(0).lower()
+    for name, size in max_batch_size_map.items():
+        if name in device_name:
+            return size
+    # for devices that are not in `max_batch_size_map`, set
+    # the max_batch_size 128
+    return 128
 
 
 def is_bf16_supported(device_type: str = 'cuda'):
-    """Check if device support bfloat16.
+    """Check if the CUDA device supports bfloat16.
 
     Args:
-        device_type (str): the type of device
+        device_type (str): the type of device. Only 'cuda' and 'auto' are supported.
     """
-
-    if device_type in ['cuda', 'auto']:
-        import torch
-        device = torch.cuda.current_device()
-
-        # Check for CUDA version and device compute capability.
-        # This is a fast way to check for it.
-        cuda_version = torch.version.cuda
-        if (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
-                and torch.cuda.get_device_properties(device).major >= 8):
-            return True
-        else:
-            return False
-    elif device_type == 'ascend':
-        # The following API doesn't work somehow in multi-npu devices. Due to
-        # the `ascend910` device's capability to support bfloat16, we are
-        # returning true as a workaround
-        return True
-        # import torch_npu
-        # device_name = torch_npu.npu.get_device_name(0)[:10]
-        # device_name = device_name.lower()
-        # if device_name.startwith('ascend910'):
-        #     return True
-        # else:
-        #     return False
-    elif device_type == 'maca':
-        return True
-    elif device_type == 'camb':
-        return True
-    elif device_type == 'rocm':
-        return True
-    else:
+    if device_type not in ['cuda', 'auto']:
         return False
+    device = torch.cuda.current_device()
 
-
-def try_import_deeplink(device_type: str):
-    deeplink_device_type_list = [
-        'ascend',
-        'npu',
-        'maca',
-        'camb',
-    ]
-    if device_type in deeplink_device_type_list:
-        try:
-            import dlinfer.framework.lmdeploy_ext  # noqa: F401
-        except Exception as e:
-            logger = get_logger('lmdeploy')
-            logger.error(f'{type(e).__name__}: {e}')
-            exit(1)
+    # Check for CUDA version and device compute capability.
+    # This is a fast way to check for it.
+    cuda_version = torch.version.cuda
+    return (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
+            and torch.cuda.get_device_properties(device).major >= 8)
 
 
 def serialize_state_dict(state_dict: dict) -> str:
@@ -502,197 +512,9 @@ def serialize_state_dict(state_dict: dict) -> str:
     import pybase64
     from torch.multiprocessing.reductions import reduce_tensor
 
-    # flattened_tensor
-    if 'metadata' in state_dict:
-        data = state_dict
-        if 'flattened_tensor' in data and isinstance(data['flattened_tensor'], torch.Tensor):
-            data['flattened_tensor'] = reduce_tensor(state_dict['flattened_tensor'])
-    else:
-        data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
+    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
 
     buf = BytesIO()
     ForkingPickler(buf).dump(data)
     buf.seek(0)
     return pybase64.b64encode(buf.read()).decode('utf-8')
-
-
-def is_deep_ep_installed():
-    try:
-        import deep_ep  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
-def is_deep_gemm_installed():
-    try:
-        import deep_gemm  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
-# from https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/weight_sync/tensor_bucket.py
-
-
-@dataclass
-class FlattenedTensorMetadata:
-    """Metadata for flatten bucket tensor."""
-    name: str
-    shape: torch.Size
-    dtype: torch.dtype
-    start_idx: int
-    end_idx: int
-    numel: int
-
-
-class FlattenedTensorBucket:
-    """Pack multiple flattened tensor into one to transfer efficiently."""
-
-    def __init__(
-        self,
-        named_tensors: list[tuple[str, torch.Tensor]] | None = None,
-        flattened_tensor: torch.Tensor = None,
-        metadata: list[FlattenedTensorMetadata] | None = None,
-    ):
-        """Initialize a tensor bucket from a list of named tensors or from pre-
-        flattened data.
-
-        Args:
-            named_tensors: List of (name, tensor) tuples (for creating new bucket)
-            flattened_tensor: Pre-flattened tensor (for reconstruction)
-            metadata: Pre-computed metadata (for reconstruction)
-        """
-        if named_tensors is not None:
-            num_tensors = len(named_tensors)
-            self.metadata = [None] * num_tensors
-            self.flattened_tensor = [None] * num_tensors
-            flattened_tensor_list = [None] * num_tensors
-            if num_tensors > 0:
-                if num_tensors > 1:
-                    dtypes = [t.dtype for _, t in named_tensors]
-                    if not all([d == dtypes[0] for d in dtypes[1:]]):
-                        raise ValueError(f'All tensors should have same dtype, but given {dtypes}')
-
-                current_idx = 0
-                for idx, (name, tensor) in enumerate(named_tensors):
-                    flattened_tensor_list[idx] = tensor.flatten()
-                    numel = tensor.numel()
-                    self.metadata[idx] = FlattenedTensorMetadata(name=name,
-                                                                 shape=tensor.shape,
-                                                                 dtype=tensor.dtype,
-                                                                 start_idx=current_idx,
-                                                                 end_idx=current_idx + numel,
-                                                                 numel=numel)
-                    current_idx += numel
-                if flattened_tensor is None:
-                    self.flattened_tensor = torch.cat(flattened_tensor_list, dim=0)
-                else:
-                    # Validate user-provided preallocated buffer
-                    if flattened_tensor.dim() != 1:
-                        raise ValueError(
-                            f'flattened_tensor must be a 1-D tensor, but got shape {tuple(flattened_tensor.shape)}')
-                    if flattened_tensor.numel() < current_idx:
-                        raise ValueError('Provided flattened tensor numel is smaller than required numel: '
-                                         f'{flattened_tensor.numel()} < {current_idx}')
-                    # Validate dtype and device compatibility with source tensors
-                    reference_tensor = named_tensors[0][1]
-                    if flattened_tensor.dtype != reference_tensor.dtype:
-                        raise ValueError(f'flattened_tensor dtype {flattened_tensor.dtype} does not match source '
-                                         f'tensors dtype {reference_tensor.dtype}')
-                    if flattened_tensor.device != reference_tensor.device:
-                        raise ValueError(f'flattened_tensor device {flattened_tensor.device} does not match source '
-                                         f'tensors device {reference_tensor.device}')
-                    if not flattened_tensor.is_contiguous():
-                        raise ValueError('flattened_tensor must be contiguous')
-                    total_numel = sum(t.numel() for t in flattened_tensor_list)
-                    if total_numel != current_idx:
-                        raise ValueError('Mismatch between computed and expected flattened size: '
-                                         f'{total_numel} != {current_idx}')
-                    torch.cat(flattened_tensor_list, dim=0, out=flattened_tensor[:current_idx])
-                    self.flattened_tensor = flattened_tensor
-        else:
-            if flattened_tensor is None or metadata is None:
-                raise ValueError('Must provide either named_tensors or both flattened_tensor and metadata')
-            self.metadata = metadata
-            self.flattened_tensor = flattened_tensor
-
-    def get_flattened_tensor(self) -> torch.Tensor:
-        """Get the flattened tensor containing multiple tensors."""
-        return self.flattened_tensor
-
-    def get_metadata(self) -> list[FlattenedTensorMetadata]:
-        """Get all metadatas for all tensors in the bucket."""
-        return self.metadata
-
-    def reconstruct_tensors(self) -> list[tuple[str, torch.Tensor]]:
-        """Reconstruct original tensors."""
-        # preallocate the result list
-        reconstructed = [None] * len(self.metadata)
-
-        for i, meta in enumerate(self.metadata):
-            tensor = self.flattened_tensor[meta.start_idx:meta.end_idx].reshape(meta.shape)
-
-            # batch dtype conversion (if needed)
-            if tensor.dtype != meta.dtype:
-                tensor = tensor.to(meta.dtype)
-
-            reconstructed[i] = (meta.name, tensor)
-
-        return reconstructed
-
-
-# Copied from Xtuner to allow creating a NCCL process group that is
-# NOT a subgroup of the current default world.
-# https://github.com/InternLM/xtuner/blob/main/xtuner/v1/rl/trainer/update_weighter.py#L491
-def init_custom_process_group(backend=None,
-                              init_method=None,
-                              timeout=None,
-                              world_size: int = -1,
-                              rank: int = -1,
-                              store=None,
-                              group_name: str | None = None,
-                              pg_options=None):
-    from packaging.version import parse as parse_version
-    from torch.distributed.distributed_c10d import (
-        Backend,
-        PrefixStore,
-        _new_process_group_helper,
-        _world,
-        default_pg_timeout,
-        rendezvous,
-    )
-
-    assert (store is None) or (init_method is None), 'Cannot specify both init_method and store.'
-    if store is not None:
-        assert world_size > 0, 'world_size must be positive if using store'
-        assert rank >= 0, 'rank must be non-negative if using store'
-    elif init_method is None:
-        init_method = 'env://'
-
-    backend = Backend(backend) if backend else Backend('undefined')
-    if timeout is None:
-        timeout = default_pg_timeout
-
-    if store is None:
-        rendezvous_iterator = rendezvous(init_method, rank, world_size, timeout=timeout)
-        store, rank, world_size = next(rendezvous_iterator)
-        store.set_timeout(timeout)
-        if group_name is not None:
-            store = PrefixStore(group_name, store)
-
-    # PyTorch >= 2.6 renamed pg_options -> backend_options.
-    pg_options_param_name = 'backend_options' if parse_version(torch.__version__) >= parse_version('2.6') else \
-        'pg_options'
-    pg, _ = _new_process_group_helper(
-        world_size,
-        rank,
-        [],
-        backend,
-        store,
-        group_name=group_name,
-        **{pg_options_param_name: pg_options},
-        timeout=timeout,
-    )
-    _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
-    return pg

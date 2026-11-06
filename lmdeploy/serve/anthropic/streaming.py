@@ -36,7 +36,7 @@ from .protocol import (
     ThinkingDelta,
 )
 
-_OPTIONAL_EXTENSION_FIELDS = ('output_ids', 'output_token_logprobs', 'routed_experts')
+_OPTIONAL_EXTENSION_FIELDS = ('output_ids', 'output_token_logprobs')
 
 
 def _format_sse(data: AnthropicStreamEvent) -> str:
@@ -188,7 +188,6 @@ async def stream_messages_response(parsed_stream,
                                    request: ChatCompletionRequest) -> AsyncGenerator[str, None]:
     """Convert LMDeploy generation stream to Anthropic SSE events."""
     return_token_ids = bool(request.return_token_ids)
-    return_routed_experts = bool(request.return_routed_experts)
     return_logprob = bool(request.return_logprob)
 
     # Anthropic's message_start event carries usage while its content is
@@ -318,11 +317,9 @@ async def stream_messages_response(parsed_stream,
 
     output_tokens = 0 if final_chunk is None else final_chunk.generate_token_len
     stop_reason = map_finish_reason(None if final_chunk is None else final_chunk.finish_reason)
-    routed_experts = final_chunk.routed_experts if return_routed_experts and final_chunk is not None else None
     yield _format_sse(
         MessageDeltaEvent(
             delta=MessageDelta(stop_reason=stop_reason, stop_sequence=None),
             usage=MessageDeltaUsage(output_tokens=output_tokens),
-            routed_experts=routed_experts,
         ))
     yield _format_sse(MessageStopEvent())

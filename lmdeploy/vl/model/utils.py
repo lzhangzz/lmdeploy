@@ -2,28 +2,6 @@
 
 import inspect
 from collections.abc import Callable, MutableSequence
-from contextlib import contextmanager
-
-import torch
-
-
-@contextmanager
-def disable_transformers_logging():
-    import transformers
-    from transformers.utils import logging
-    previous_level = logging.get_verbosity()
-    logging.set_verbosity(transformers.logging.ERROR)
-    yield
-    logging.set_verbosity(previous_level)
-
-
-@contextmanager
-def disable_logging():
-    import logging
-    previous_level = logging.root.manager.disable
-    logging.disable(logging.ERROR)
-    yield
-    logging.disable(previous_level)
 
 
 def _set_func(origin_func_path: str | None, rewrite_func: Callable, origin_func: Callable = None):
@@ -69,42 +47,3 @@ def _set_func(origin_func_path: str | None, rewrite_func: Callable, origin_func:
         raise NotImplementedError
 
     return origin_func
-
-
-@contextmanager
-def rewrite_ctx(origin_func_path: list[str | Callable], rewrite_func: list[Callable]):
-    """Rewrite context."""
-    assert len(origin_func_path) == len(rewrite_func)
-    origin_func_list = []
-    for (func_path, dst_func) in zip(origin_func_path, rewrite_func):
-        if isinstance(func_path, Callable):
-            origin_func = _set_func(None, dst_func, func_path)
-        else:
-            origin_func = _set_func(func_path, dst_func)
-        origin_func_list.append(origin_func)
-    yield
-    for (func_path, dst_func, origin_func) in zip(origin_func_path, rewrite_func, origin_func_list):
-        if isinstance(func_path, Callable):
-            _set_func(None, origin_func, dst_func)
-        else:
-            _set_func(func_path, origin_func, dst_func)
-
-
-def add_device_hook(module: torch.nn.Module, device: torch.device, fn: Callable = None):
-    """Add device hook."""
-    from accelerate.hooks import ModelHook, add_hook_to_module
-
-    class ToDevice(ModelHook):
-        """ToDevice hook."""
-
-        def __init__(self, device):
-            self.device = device
-
-        def post_forward(self, module, output):
-            if fn is not None:
-                output = fn(output)
-            else:
-                output = output.to(device=self.device)
-            return output
-
-    add_hook_to_module(module=module, hook=ToDevice(device=device), append=True)

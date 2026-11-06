@@ -10,10 +10,8 @@ import pytest
 import requests
 from transformers import AutoTokenizer
 from utils.config_utils import (
-    ROUTED_EXPERTS_UNSUPPORTED_SKIP,
     get_model_path_from_config,
     get_restful_chat_model_list,
-    model_enables_return_routed_experts,
 )
 from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.toolkit import encode_text, parse_sse_stream
@@ -71,7 +69,6 @@ class TestGenerateComprehensive:
             accumulated_text = ''
             output_ids = []
             stream_events_count = 0
-            routed_experts = None
             prompt_tokens = None
             completion_tokens = None
 
@@ -90,8 +87,6 @@ class TestGenerateComprehensive:
                     if isinstance(ids, list):
                         output_ids.extend(ids)
                     meta = data.get('meta_info') or {}
-                    if meta.get('routed_experts') is not None:
-                        routed_experts = meta['routed_experts']
                     if meta.get('prompt_tokens') is not None:
                         prompt_tokens = meta['prompt_tokens']
                     if meta.get('completion_tokens') is not None:
@@ -102,8 +97,6 @@ class TestGenerateComprehensive:
                     continue
 
             meta_info = {'stream_events': stream_events_count}
-            if routed_experts is not None:
-                meta_info['routed_experts'] = routed_experts
             if prompt_tokens is not None:
                 meta_info['prompt_tokens'] = prompt_tokens
             if completion_tokens is not None:
@@ -136,8 +129,7 @@ class TestGenerateComprehensive:
                                       data: dict[str, Any],
                                       expected_fields: list[str] | None = None,
                                       validate_tokens: bool = True,
-                                      expect_logprobs: bool = False,
-                                      validate_experts: bool = False) -> None:
+                                      expect_logprobs: bool = False) -> None:
         assert isinstance(data, dict), f'Response should be a dict, got {type(data)}'
 
         required_fields = ['text']
@@ -147,55 +139,6 @@ class TestGenerateComprehensive:
 
         assert isinstance(data['text'], str), \
             f"text should be string, got {type(data['text'])}"
-
-        if validate_experts:
-            assert 'routed_experts' in data[
-                'meta_info'], "Response should contain 'routed_experts' when validate_experts=True"
-
-            experts_data = data['meta_info']['routed_experts']
-
-            assert isinstance(experts_data, list)
-            assert len(experts_data) > 0
-
-            total_steps = len(experts_data)
-            # Derive shape from first token so topk/layers stay model-compatible.
-            first_token = experts_data[0]
-            assert isinstance(first_token, list) and len(first_token) > 0, first_token
-            expected_num_layers = len(first_token)
-            assert isinstance(first_token[0], list) and len(first_token[0]) > 0, first_token[0]
-            expected_topk = len(first_token[0])
-
-            for step_idx in range(total_steps):
-                token_experts = experts_data[step_idx]
-
-                assert isinstance(token_experts, list)
-                assert len(token_experts) == expected_num_layers, (
-                    f'step {step_idx}: num_layers={len(token_experts)} '
-                    f'!= expected {expected_num_layers}')
-
-                for layer_idx in range(len(token_experts)):
-                    layer_experts = token_experts[layer_idx]
-
-                    assert isinstance(layer_experts, list)
-                    assert len(layer_experts) == expected_topk, (
-                        f'step {step_idx} layer {layer_idx}: topk={len(layer_experts)} '
-                        f'!= expected {expected_topk}')
-
-                    for expert_idx, expert_id in enumerate(layer_experts):
-                        assert isinstance(expert_id, int)
-                        assert 0 <= expert_id < 256, f'Invalid expert_id: {expert_id}. Must be in [0, 256)'
-
-            assert 'output_ids' in data, "Response should contain 'output_ids' when validate_experts=True"
-            output_ids = data['output_ids']
-            assert isinstance(output_ids, list) and len(output_ids) > 0, output_ids
-            prompt_tokens = data['meta_info'].get('prompt_tokens')
-            assert isinstance(prompt_tokens, int) and prompt_tokens > 0, (
-                f'meta_info.prompt_tokens missing/invalid: {prompt_tokens!r}')
-            expected_len = prompt_tokens + len(output_ids) - 1
-            assert total_steps == expected_len, (
-                f'routed_experts length mismatch: expected {expected_len} '
-                f'(prompt_tokens={prompt_tokens} + len(output_ids)={len(output_ids)} - 1), '
-                f'got {total_steps}')
 
         if validate_tokens:
             assert 'output_ids' in data, "Response should contain 'output_ids'"
@@ -1252,100 +1195,3 @@ class TestGenerateComprehensive:
         for i in range(len(generated_text) - 1):
             if generated_text[i] in special_patterns and generated_text[i + 1] not in [' ', '\n']:
                 assert False, f'Expected space after special token {generated_text[i]} but found none.'
-
-    @pytest.mark.experts
-    @pytest.mark.not_turbomind
-    def test_request_returns_experts(self, backend):
-        if not model_enables_return_routed_experts(
-                self.model_name, backend, required_suites=frozenset({'experts'})):
-            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
-        print(f'\n[Model: {self.model_name}] Running request with experts test')
-        resp1 = self._post({
-            'prompt': 'Deterministic generation',
-            'max_tokens': 50,
-            'temperature': 0.8,
-            'return_routed_experts': True
-        })
-        assert resp1.status_code == 200
-        data1 = resp1.json()
-
-        self._validate_generation_response(data1, validate_experts=True)
-
-    @pytest.mark.experts
-    @pytest.mark.not_turbomind
-    def test_request_returns_experts_max_tokens_cap_followup(self, backend):
-        """Hit CAPPED_MAX_COMPLETION_TOKENS with return_routed_experts;
-        length/experts OK; follow-up OK.
-
-        Catches regressions where length-capped MoE generation overshoots a few tokens and breaks routed_experts length
-        or the next request.
-        """
-        if not model_enables_return_routed_experts(
-                self.model_name, backend, required_suites=frozenset({'experts'})):
-            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
-        prompt = 'Continue writing forever without stopping.'
-        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
-        print(f'\n[Model: {self.model_name}] Running experts max_tokens='
-              f'{max_tokens} length-cap / follow-up test')
-        overshoot_slack = 1
-
-        resp = self._post(
-            {
-                'prompt': prompt,
-                'max_tokens': max_tokens,
-                'ignore_eos': True,
-                'stream': False,
-                'temperature': 0.01,
-                'return_routed_experts': True,
-            },
-            timeout=1800,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        self._validate_generation_response(data, validate_experts=True)
-
-        meta = data.get('meta_info', {})
-        finish_type = meta.get('finish_reason', {}).get('type')
-        assert finish_type == 'length', f'Expected finish_reason length, got {finish_type}'
-
-        completion_tokens = meta.get('completion_tokens')
-        if completion_tokens is None and 'output_ids' in data:
-            completion_tokens = len(data['output_ids'])
-        assert completion_tokens is not None, 'Missing completion_tokens / output_ids'
-        assert completion_tokens <= max_tokens + overshoot_slack, (
-            f'Length cap overshoot: completion_tokens={completion_tokens} > '
-            f'max_tokens={max_tokens}+{overshoot_slack}')
-
-        resp_followup = self._post({
-            'prompt': 'Say hi in one word.',
-            'max_tokens': 8,
-            'stream': False,
-            'temperature': 0.01,
-            'return_routed_experts': True,
-        })
-        assert resp_followup.status_code == 200, (
-            f'Follow-up /generate with experts failed after length-capped request: '
-            f'{resp_followup.status_code} {resp_followup.text}')
-        self._validate_generation_response(resp_followup.json(), validate_experts=True)
-        print('  Experts max_tokens length-cap / follow-up test passed')
-
-    @pytest.mark.experts
-    @pytest.mark.not_turbomind
-    def test_request_returns_experts_stream(self, backend):
-        if not model_enables_return_routed_experts(
-                self.model_name, backend, required_suites=frozenset({'experts'})):
-            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
-        print(f'\n[Model: {self.model_name}] Running streaming request with experts test')
-        resp = self._post(
-            {
-                'prompt': 'Deterministic generation',
-                'max_tokens': 50,
-                'temperature': 0.8,
-                'stream': True,
-                'return_routed_experts': True,
-            },
-            stream=True,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        self._validate_generation_response(data, validate_experts=True)

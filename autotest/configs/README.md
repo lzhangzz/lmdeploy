@@ -30,8 +30,6 @@ a100:
   backends:
   - name: turbomind
     communicators: [nccl]
-  - name: pytorch
-    communicators: [nccl]
   test_coverage:
   - func
 ```
@@ -80,8 +78,7 @@ Common environment keys:
 - `h`
 - `3090`
 - `5080`
-- `ascend`
-- `test` / `testascend` (fixtures)
+- `test` (fixtures)
 
 Environment paths and devices are defined in `autotest/env_paths.yml`.
 
@@ -102,7 +99,7 @@ Rules:
 
 - Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
-- Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`, `w8a8`).
+- Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`).
 
 ## `interface` (REST interface coverage)
 
@@ -120,14 +117,10 @@ Same launch command → one profile (merge suites; no extra restart):
 
 ```yaml
 interface:
-  pytorch:
-    suites: [base, logprob, anthropic]
-    extra:
-      logprobs-mode: raw_logprobs
   turbomind:
     suites: [base, logprob, anthropic]
     extra:
-      logprobs-mode: raw_logprobs
+      session-len: 32768
 ```
 
 Different launch extras (e.g. tool/reasoning parsers must not be on the
@@ -135,26 +128,12 @@ anthropic server) → list of profiles:
 
 ```yaml
 interface:
-  pytorch:
-  - suites: [base, logprob, experts, toolcall, reasoning]
-    extra:
-      logprobs-mode: raw_logprobs
-      enable-return-routed-experts: true
-      tool-call-parser: qwen3coder
-      reasoning-parser: default
-  - suites: [anthropic]
-    extra:
-      logprobs-mode: raw_logprobs
-      enable-return-routed-experts: true
   turbomind:
   - suites: [base, logprob, toolcall, reasoning]
     extra:
-      logprobs-mode: raw_logprobs
       tool-call-parser: qwen3coder
       reasoning-parser: default
   - suites: [anthropic]
-    extra:
-      logprobs-mode: raw_logprobs
 ```
 
 (YAML cannot have two sibling `suites:` keys under the same mapping; use a
@@ -165,7 +144,6 @@ Shorthand (single suite list; missing launch keys filled from suite defaults):
 
 ```yaml
 interface:
-  pytorch: [base, logprob, experts]
   turbomind: [base, logprob]
 ```
 
@@ -178,7 +156,7 @@ accepted and normalized into the two-profile shape.
 
 Merge order for each profile's `api_server` command (later wins):
 
-1. suite defaults (`logprobs-mode` for logprob/experts; `enable-return-routed-experts` for experts suite only)
+1. suite defaults
 2. row `engine_config.extra` (shared with tools on the same row)
 3. that profile's `extra`
 
@@ -188,11 +166,10 @@ is enabled.
 
 Suites:
 
-- `base` — chat/completions basic cases; generate without logprob/experts
+- `base` — chat/completions basic cases; generate without logprob
 - `logprob` — generate logprob cases
-- `experts` — generate routed-experts cases
 - `anthropic` — Anthropic Messages HTTP + SDK smoke (chat protocol models from yaml). Share a profile with `base`/`logprob` when `extra` matches; otherwise its own profile **without** `tool-call-parser` / `reasoning-parser`.
-- `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; add `enable-return-routed-experts: true` when toolcall includes `@experts` cases)
+- `toolcall` — `interface/restful/tool_parser/` (requires `tool-call-parser` in yaml `extra`; `token_ids`-marked cases are skipped behind the proxy)
 - `reasoning` — `interface/restful/reasoning_parser/` (requires `reasoning-parser` in yaml `extra`)
 
 Notes:
@@ -202,17 +179,15 @@ Notes:
 - Each distinct `extra` is one api_server phase (generic; not hardcoded to anthropic).
   Add more `- suites: [...]` / `extra:` blocks only when launch flags differ.
 - Put tool-call / reasoning parsers only on profiles that need them (yaml only).
-- Suite default for `experts` includes `enable-return-routed-experts`; set it explicitly on `toolcall` profiles when needed;
-  yaml `extra` can still override if needed.
-- Chat/vl rows run `chat_completions_v1` + `generate` when any of base/logprob/experts is set.
+- Chat/vl rows run `chat_completions_v1` + `generate` when base or logprob is set.
 - Base-only rows run `completions_v1`.
-- Generate logprob/experts stay in one file and use pytest marks (`-m`).
+- Generate logprob cases stay in one file and use pytest marks (`-m`).
 - Put `interface` on the main functional row only; do not put it on MTP-only rows.
 - Daily GPU-concurrent entrypoint (tools-style `gpu_num_*` + xdist):
   `autotest/interface/restful/test_restful_interface_llm.py`
   (covers chat/base/vl via config `interface`; chat+vl rows use the chat path).
   Each case self-starts `api_server` via `worker_id` port/GPU isolation.
-- Backend filter env: `INTERFACE_BACKENDS=pytorch` / `turbomind` / `pytorch,turbomind` (workflow `test_restful` sets it from input `backend` / matrix).
+- Backend filter env: `INTERFACE_BACKENDS=turbomind` (workflow `test_restful` sets it from input `backend` / matrix).
 - Nested protocol suite concurrency: `INTERFACE_SUITE_WORKERS` (default `20`, same as historical `-n 20`); set `0`/`1` to disable.
 
 ## `quantization`
@@ -222,20 +197,15 @@ Backend-scoped format:
 ```yaml
 quantization:
   turbomind: [awq, kvint4, kvint8]
-  pytorch: [w8a8, kvint4]
 ```
 
-Supported flags: `awq`, `gptq`, `w8a8`, `kvint4`, `kvint8`, `kvint42`, `fp8`.
+Supported flags: `awq`, `gptq`, `kvint4`, `kvint8`, `fp8`.
 
 For pre-quantized checkpoints (`AWQ`, `GPTQ`, `Int4` in model id):
 
 - Do not include `quantization` in `test_coverage`.
-- Do not include runtime weight flags (`awq`, `gptq`, `w8a8`, `fp8`) in `quantization`.
+- Do not include runtime weight flags (`awq`, `gptq`, `fp8`) in `quantization`.
 - KV flags can still exist.
-
-## Context parallel (`cp`)
-
-When `engine_config` includes `cp`, use **TurboMind only** — do not list `pytorch` under `backends` or `quantization`. Export/normalize tooling strips pytorch automatically if present.
 
 ## `engine_config.extra` vs `gen_config`
 

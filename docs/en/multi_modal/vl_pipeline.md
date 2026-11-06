@@ -10,7 +10,7 @@ Moreover, we will provide practical inference examples tailored to scenarios wit
 
 Using the pipeline interface to infer other VLM models is similar, with the main difference being the configuration and installation dependencies of the models. You can read [here](https://lmdeploy.readthedocs.io/en/latest/multi_modal/index.html) for environment installation and configuration methods for different models.
 
-> **See also:** [Multi-Modal Inputs](multimodal_inputs.md) — message format reference for all modalities (image, video, audio, time series) with OpenAI-style examples.
+> **See also:** [Multi-Modal Inputs](multimodal_inputs.md) — message format reference for all modalities (image, video) with OpenAI-style examples.
 
 ## A 'Hello, world' example
 
@@ -97,14 +97,14 @@ print(response)
 
 ### Customize image token position
 
-By default, LMDeploy inserts the special image token into the user prompt following the chat template defined by the upstream algorithm repository. However, for certain models where the image token's position is unrestricted, such as deepseek-vl, or when users require a customized image token placement, manual insertion of the special image token into the prompt is necessary. LMDeploy use `<IMAGE_TOKEN>` as the special image token.
+By default, LMDeploy inserts the special image token into the user prompt following the chat template defined by the upstream algorithm repository. However, for models where the image token's position is unrestricted, or when users require a customized image token placement, manual insertion of the special image token into the prompt is necessary. LMDeploy use `<IMAGE_TOKEN>` as the special image token.
 
 ```python
 from lmdeploy import pipeline
 from lmdeploy.vl import load_image
 from lmdeploy.vl.constants import IMAGE_TOKEN
 
-pipe = pipeline('deepseek-ai/deepseek-vl-1.3b-chat')
+pipe = pipeline('OpenGVLab/InternVL2_5-8B')
 
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe((f'describe this image{IMAGE_TOKEN}', image))
@@ -113,33 +113,19 @@ print(response)
 
 ### Set chat template
 
-While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [liuhaotian/llava-v1.5-7b](https://huggingface.co/liuhaotian/llava-v1.5-7b) employs the ['llava-v1'](https://github.com/haotian-liu/LLaVA/blob/v1.2.2/llava/conversation.py#L325-L335) chat template, if user have a custom folder name instead of the official 'llava-v1.5-7b', the user needs to specify it by setting 'llava-v1' to `ChatTemplateConfig` as follows:
+While performing inference, LMDeploy identifies an appropriate chat template from its builtin collection based on the model path and subsequently applies this template to the input prompts. However, when a chat template cannot be told from its model path, users have to specify it. For example, [OpenGVLab/InternVL-Chat-V1-1](https://huggingface.co/OpenGVLab/InternVL-Chat-V1-1) employs the 'internvl-zh' chat template. If the model is stored in a folder that does not keep the official name, the user needs to specify it by setting 'internvl-zh' to `ChatTemplateConfig` as follows:
 
 ```python
 from lmdeploy import pipeline, ChatTemplateConfig
 from lmdeploy.vl import load_image
 pipe = pipeline('local_model_folder',
-                chat_template_config=ChatTemplateConfig(model_name='llava-v1'))
+                chat_template_config=ChatTemplateConfig(model_name='internvl-zh'))
 image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
 response = pipe(('describe this image', image))
 print(response)
 ```
 
 For more information about customizing a chat template, please refer to [this](../advance/chat_template.md) guide
-
-### Setting vision model parameters
-
-The default parameters of the visual model can be modified by setting `VisionConfig`.
-
-```python
-from lmdeploy import pipeline, VisionConfig
-from lmdeploy.vl import load_image
-vision_config=VisionConfig(max_batch_size=16)
-pipe = pipeline('liuhaotian/llava-v1.5-7b', vision_config=vision_config)
-image = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg')
-response = pipe(('describe this image', image))
-print(response)
-```
 
 ### Output logits for generated tokens
 
@@ -240,23 +226,23 @@ gc.collect()
 
 ## Language-model-only mode
 
-For hybrid vision-language checkpoints (e.g. Qwen3-VL, Qwen3.5, InternVL), you can run text-only inference without loading vision/multimodal encoder modules. This frees GPU memory for the KV cache.
+For hybrid vision-language checkpoints (e.g. Qwen3.5, InternVL), you can run text-only inference without loading vision/multimodal encoder modules. This frees GPU memory for the KV cache.
 
 **CLI (serve):**
 
 ```bash
-lmdeploy serve api_server Qwen/Qwen3-VL-8B-Instruct --backend pytorch --language-model-only
+lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B --language-model-only
 ```
 
 **Python API:**
 
 ```python
 from lmdeploy import pipeline
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import TurbomindEngineConfig
 
 pipe = pipeline(
-    'Qwen/Qwen3-VL-8B-Instruct',
-    backend_config=PytorchEngineConfig(language_model_only=True),
+    'Qwen/Qwen3.5-35B-A3B',
+    backend_config=TurbomindEngineConfig(language_model_only=True),
 )
 ```
 

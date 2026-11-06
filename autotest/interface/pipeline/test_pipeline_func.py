@@ -13,18 +13,15 @@ from utils.pipeline_chat import (
 )
 from utils.restful_return_check import has_repeated_fragment
 
-from lmdeploy import GenerationConfig, PytorchEngineConfig, TurbomindEngineConfig, pipeline
-from lmdeploy.utils import is_bf16_supported
+from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
 
 # Shared params for pipeline functional cases (change once, apply everywhere).
 PIPELINE_MODELS = ['Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3-30B-A3B']
 PIPELINE_MODEL_QWEN35 = ['Qwen/Qwen3.5-35B-A3B']
-BACKENDS_BOTH = [TurbomindEngineConfig, PytorchEngineConfig]
-BACKENDS_TM = [TurbomindEngineConfig]
-BACKENDS_PT = [PytorchEngineConfig]
+BACKENDS = [TurbomindEngineConfig]
 
 
-def pipeline_params(models=PIPELINE_MODELS, backends=BACKENDS_BOTH):
+def pipeline_params(models=PIPELINE_MODELS, backends=BACKENDS):
     """Parametrize ``model`` x ``backend`` (backend outer, matches historical
     ids)."""
 
@@ -37,8 +34,6 @@ def pipeline_params(models=PIPELINE_MODELS, backends=BACKENDS_BOTH):
 
 
 def init_pipeline(model_path, backend_config):
-    if not is_bf16_supported() and isinstance(backend_config, PytorchEngineConfig):
-        backend_config.dtype = 'float16'
     return pipeline(model_path, backend_config=backend_config)
 
 
@@ -417,11 +412,11 @@ def test_return_with_message_batch(config, model, backend, worker_id):
 def test_return_with_message_batch_stream(config, model, backend, worker_id):
     run_spawned_pipeline_case(config, model, backend, worker_id, run_pipeline_testcase_message_batch_stream)
 
-@pipeline_params(backends=BACKENDS_TM)
+@pipeline_params()
 def test_return_check_logprobs(config, model, backend, worker_id):
     run_spawned_pipeline_case(config, model, backend, worker_id, run_pipeline_testcase_logprobs)
 
-@pipeline_params(backends=BACKENDS_TM)
+@pipeline_params()
 def test_return_check_logprobs_stream(config, model, backend, worker_id):
     run_spawned_pipeline_case(config, model, backend, worker_id, run_pipeline_testcase_logprobs_stream)
 
@@ -548,7 +543,7 @@ def test_backend_config_input_validation(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pipeline_params(backends=BACKENDS_TM)
+@pipeline_params()
 def test_backend_config_validate_turbomind(config, model, backend, worker_id):
     if 'gw' in worker_id:
         set_device_env_variable(worker_id, parallel_config=2)
@@ -585,36 +580,7 @@ def test_backend_config_validate_turbomind(config, model, backend, worker_id):
         unset_device_env_variable()
 
 
-@pipeline_params(backends=BACKENDS_PT)
-def test_backend_config_validate_pytorch(config, model, backend, worker_id):
-    if 'gw' in worker_id:
-        set_device_env_variable(worker_id, parallel_config=2)
-    model_path = get_model_path_from_config(config, model)
-    with pytest.raises(AssertionError):
-        backend_config = backend(tp=0)
-        init_pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(SystemExit):
-        backend_config = backend(max_batch_size=0)
-        init_pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
-        backend_config = backend(cache_max_entry_count=0)
-        init_pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
-        backend_config = backend(num_cpu_blocks=-1)
-        init_pipeline(model_path, backend_config=backend_config)
-
-    with pytest.raises(AssertionError):
-        backend_config = backend(num_gpu_blocks=-1)
-        init_pipeline(model_path, backend_config=backend_config)
-
-    if 'gw' in worker_id:
-        unset_device_env_variable()
-
-
-@pipeline_params(models=PIPELINE_MODEL_QWEN35, backends=BACKENDS_TM)
+@pipeline_params(models=PIPELINE_MODEL_QWEN35)
 def test_backend_config_tp(config, model, backend, worker_id):
     with pytest.raises(AssertionError):
         if 'gw' in worker_id:

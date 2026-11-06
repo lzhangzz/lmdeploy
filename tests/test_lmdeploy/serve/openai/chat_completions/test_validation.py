@@ -17,10 +17,7 @@ class _SessionManager:
 
 def _server_context():
     return SimpleNamespace(
-        engine_config=SimpleNamespace(
-            logprobs_mode='raw_logprobs',
-            enable_return_routed_experts=False,
-        ),
+        engine_config=SimpleNamespace(),
         session_manager=_SessionManager(),
         response_parser_cls=SimpleNamespace(tool_parser_cls=object()),
     )
@@ -46,6 +43,7 @@ def _request(**kwargs):
         pytest.param({'max_tokens': 0}, 'max_tokens', id='zero-max-tokens'),
         pytest.param({'min_new_tokens': -1}, 'min_new_tokens', id='negative-min-new-tokens'),
         pytest.param({'logprobs': True, 'top_logprobs': 21}, 'top_logprobs', id='top-logprobs-above-range'),
+        pytest.param({'logit_bias': {'1': 1.0}}, 'logit_bias', id='logit-bias-unsupported'),
     ],
 )
 def test_chat_completions_rejects_invalid_request(request_kwargs, error_fragment):

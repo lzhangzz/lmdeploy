@@ -83,31 +83,6 @@ class SubCliLite:
         ArgumentHelper.trust_remote_code(parser)
 
     @staticmethod
-    def add_parser_smooth_quant():
-        """Add parser for smooth_quant command."""
-        parser = SubCliLite.subparsers.add_parser('smooth_quant',
-                                                  formatter_class=DefaultsAndTypesHelpFormatter,
-                                                  description=SubCliLite.smooth_quant.__doc__,
-                                                  help=SubCliLite.smooth_quant.__doc__)
-        parser.set_defaults(run=SubCliLite.smooth_quant)
-        parser.add_argument('model', type=str, help='The name or path of the model to be loaded')
-        parser.add_argument('--work-dir',
-                            type=str,
-                            default='./work_dir',
-                            help='The working directory for outputs. defaults to "./work_dir"')
-        parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
-        ArgumentHelper.calib_dataset(parser)
-        ArgumentHelper.calib_samples(parser)
-        ArgumentHelper.calib_seqlen(parser)
-        ArgumentHelper.calib_batchsize(parser)
-        ArgumentHelper.calib_search_scale(parser)
-        ArgumentHelper.dtype(parser)
-        ArgumentHelper.quant_dtype(parser)
-        ArgumentHelper.revision(parser)
-        ArgumentHelper.download_dir(parser)
-        ArgumentHelper.trust_remote_code(parser)
-
-    @staticmethod
     def auto_awq(args):
         """Perform weight quantization using AWQ algorithm."""
         from lmdeploy.lite.apis.auto_awq import auto_awq
@@ -129,16 +104,8 @@ class SubCliLite:
         calibrate(**kwargs)
 
     @staticmethod
-    def smooth_quant(args):
-        """Perform w8a8 quantization using SmoothQuant."""
-        from lmdeploy.lite.apis.smooth_quant import smooth_quant
-        kwargs = convert_args(args)
-        smooth_quant(**kwargs)
-
-    @staticmethod
     def add_parsers():
         """Add all parsers."""
         SubCliLite.add_parser_auto_awq()
         SubCliLite.add_parser_auto_gptq()
         SubCliLite.add_parser_calibrate()
-        SubCliLite.add_parser_smooth_quant()

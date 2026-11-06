@@ -6,7 +6,7 @@ import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
 
@@ -19,12 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Mount
 
-from lmdeploy.archs import get_task
-from lmdeploy.messages import (
-    PytorchEngineConfig,
-    SpeculativeConfig,
-    TurbomindEngineConfig,
-)
+from lmdeploy.archs import check_backend, check_backend_config, check_turbomind_support, get_task
+from lmdeploy.messages import SpeculativeConfig, TurbomindEngineConfig
 from lmdeploy.metrics.metrics_processor import metrics_processor
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.anthropic import create_anthropic_router
@@ -121,15 +117,11 @@ def register_to_proxy(context: ServerContext):
         return
     try:
         import requests
-        engine_config = context.engine_config
-        engine_role = engine_config.role.value if hasattr(
-            engine_config, 'role') else 1
         url = f'{context.proxy_url}/nodes/add'
         data = {
             'url': context.api_server_url,
             'status': {
                 'models': get_model_list(context),
-                'role': engine_role
             }
         }
         headers = {
@@ -192,8 +184,7 @@ def set_parsers(context: ServerContext,
     context.response_parser_cls = cls
 
 
-def mount_metrics(app: FastAPI,
-                  backend_config: PytorchEngineConfig | TurbomindEngineConfig):
+def mount_metrics(app: FastAPI, backend_config: TurbomindEngineConfig):
     if not getattr(backend_config, 'enable_metrics', False):
         return
 
@@ -208,8 +199,7 @@ def mount_metrics(app: FastAPI,
     app.routes.append(metrics_route)
 
 
-def create_lifespan_handler(backend_config: PytorchEngineConfig
-                            | TurbomindEngineConfig,
+def create_lifespan_handler(backend_config: TurbomindEngineConfig,
                             async_engine: AsyncEngine,
                             context: ServerContext):
     """Factory function to create a lifespan handler."""
@@ -256,9 +246,8 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
 
 def serve(model_path: str,
           model_name: str | None = None,
-          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: PytorchEngineConfig | TurbomindEngineConfig
-          | None = None,
+          backend: str = 'turbomind',
+          backend_config: TurbomindEngineConfig | None = None,
           chat_template_config: ChatTemplateConfig | None = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
@@ -301,10 +290,9 @@ def serve(model_path: str,
         model_name (str): the name of the served model. It can be accessed
             by the RESTful API `/v1/models`. If it is not specified,
             `model_path` will be adopted
-        backend (str): either `turbomind` or `pytorch` backend. Default to
-            `turbomind` backend.
-        backend_config (TurbomindEngineConfig | PytorchEngineConfig): beckend
-            config instance. Default to none.
+        backend (str): the inference backend. Only `turbomind` is supported.
+        backend_config (TurbomindEngineConfig): backend config instance.
+            Default to none.
         chat_template_config (ChatTemplateConfig): chat template configuration
             Default to None.
         server_name (str): host ip for serving
@@ -338,6 +326,8 @@ def serve(model_path: str,
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
+    check_backend(backend)
+    backend_config = check_backend_config(backend_config)
 
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
@@ -359,19 +349,13 @@ def serve(model_path: str,
         http_or_https = 'https'
 
     handle_torchrun()
-    _, pipeline_class = get_task(backend,
-                                 model_path,
+    check_turbomind_support(model_path, trust_remote_code=trust_remote_code)
+    _, pipeline_class = get_task(model_path,
                                  trust_remote_code=trust_remote_code,
                                  backend_config=backend_config)
-    if isinstance(backend_config, PytorchEngineConfig):
-        backend_config.enable_mp_engine = True
-        # router replay
-        if backend_config.enable_return_routed_experts:
-            backend_config.enable_transfer_obj_ref = True
     server_context.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
-        backend=backend,
         backend_config=backend_config,
         chat_template_config=chat_template_config,
         max_log_len=max_log_len,

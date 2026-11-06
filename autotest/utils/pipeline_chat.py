@@ -174,8 +174,6 @@ def run_pipeline_mllm_test(config, run_config, worker_id: str = '', is_smoke: bo
             if 'internvl' in model.lower() and 'internvl2-4b' not in model.lower():
                 internvl_vl_testcase(output_text, file)
                 internvl_vl_testcase(output_text, file, 'cn')
-            if 'minicpm' in model.lower():
-                MiniCPM_vl_testcase(output_text, file)
             if 'qwen' in model.lower():
                 Qwen_vl_testcase(output_text, file)
 
@@ -350,36 +348,6 @@ def internvl_vl_testcase(output_text, file, lang: str = 'en'):
             file.writelines(f'internvl-video2-{lang} result: {case_result}, reason: panda should in {response} \n')
             with assume:
                 assert case_result, f'reason: video2: panda should in {response}'
-
-
-def MiniCPM_vl_testcase(output_text, file):
-    with allure.step('minicpm-combined-images'):
-        response = get_response_from_output(output_text, 'minicpm-combined-images')
-        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
-        file.writelines(f'minicpm-combined-images result: {case_result}, reason:  panda should in {response} \n')
-        with assume:
-            assert case_result, f'reason: combined images: panda should in {response}'
-    with allure.step('minicpm-combined-images2'):
-        response = get_response_from_output(output_text, 'minicpm-combined-images2')
-        case_result = any(word in response.lower() for word in ['panda', '熊猫'])
-        file.writelines(f'minicpm-combined-images2 result: {case_result}, reason: panda should in {response} \n')
-        with assume:
-            assert case_result, f'reason: combined images2: panda should in {response}'
-    with allure.step('minicpm-fewshot'):
-        response = get_response_from_output(output_text, 'minicpm-fewshot')
-        case_result = any(word in response.lower() for word in ['2021', '14'])
-        file.writelines(f'minicpm-fewshot result: {case_result} reason: 2021 or 14 should in {response} \n')
-        with assume:
-            assert case_result, f'reason: fewshot: 2021 or 14 should in {response}'
-    with allure.step('minicpm-video'):
-        response = get_response_from_output(output_text, 'minicpm-video')
-        if _is_skipped_case_response(response):
-            file.writelines(f'minicpm-video result: skipped, reason: {response}\n')
-        else:
-            case_result = any(word in response.lower() for word in ['red panda', '熊猫'])
-            file.writelines(f'minicpm-video result: {case_result} reason: video: panda should in {response} \n')
-            with assume:
-                assert case_result, f'reason: video: panda should in {response}'
 
 
 def Qwen_vl_testcase(output_text, file):

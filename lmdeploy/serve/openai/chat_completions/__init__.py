@@ -3,8 +3,8 @@
 
 Exposes ``register`` for router assembly. Chat/shared Pydantic models live in
 the top-level :mod:`lmdeploy.serve.openai.protocol` module (they are shared
-across the codebase), so this package only contains the serving, validation,
-logprobs and logits-processor logic.
+across the codebase), so this package only contains the serving, validation
+and logprobs logic.
 """
 from __future__ import annotations
 

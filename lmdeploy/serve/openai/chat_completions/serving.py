@@ -4,12 +4,10 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncGenerator
-from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.chat_runner import (
     ChatRunner,
     ChatRunnerOptions,
@@ -17,7 +15,6 @@ from lmdeploy.serve.core.chat_runner import (
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.endpoints.common import validate_request
 from lmdeploy.serve.openai.errors import (
-    create_error_response,
     create_request_error_response,
     request_error_payload,
 )
@@ -37,7 +34,6 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from .fanout import fanout_chat_completions
-from .logits_processors import logit_bias_logits_processor
 from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
 from .validation import check_request
 
@@ -94,7 +90,6 @@ def register(router: APIRouter, server_context) -> None:
             }
 
           or ``{"type": "regex_schema", "regex_schema": "call me [A-Za-z]{1,10}"}``
-        - **logit_bias** (dict): Bias to logits. Only supported in pytorch engine.
         - **tools** (list): A list of tools the model may call. Currently, only
           internlm2 functions are supported as a tool. Use this to specify a
           list of functions for which the model can generate JSON inputs.
@@ -122,10 +117,6 @@ def register(router: APIRouter, server_context) -> None:
           0 and 1. Typical values are in the 0.01-0.2 range, comparably
           selective as setting `top_p` in the 0.99-0.8 range (use the
           opposite of normal `top_p` values)
-        - **repetition_ngram_size** (int): N-gram length for repetition early stop
-          (PyTorch engine). ``0`` disables.
-        - **repetition_ngram_threshold** (int): How many times that n-gram must
-          repeat to trigger early stop. ``0`` disables.
 
         Currently we do not support the following features:
 
@@ -177,29 +168,11 @@ def register(router: APIRouter, server_context) -> None:
                     })
                 resolved_input_ids = None  # image_data conversion takes over
 
-        migration_request = json_request.pop('migration_request', None)
-        with_cache = json_request.pop('with_cache', False)
-        preserve_cache = json_request.pop('preserve_cache', False)
-        if migration_request:
-            migration_request = MigrationRequest.model_validate(
-                migration_request)
-
         model_name = request.model
-        adapter_name = None
-        if model_name != server_context.async_engine.model_name:
-            adapter_name = model_name  # got a adapter name
         request_id = f'chatcmpl-{shortuuid.random()}'
         created_time = int(time.time())
 
         tokenizer = server_context.async_engine.tokenizer.model.model
-        logits_processors = None
-        if request.logit_bias is not None:
-            try:
-                logits_processors = [
-                    logit_bias_logits_processor(request.logit_bias, tokenizer)
-                ]
-            except Exception as e:
-                return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
         try:
             chat_runner = await ChatRunner.prepare(
@@ -208,14 +181,7 @@ def register(router: APIRouter, server_context) -> None:
                 ChatRunnerOptions(
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
-                    adapter_name=adapter_name,
-                    gen_config_kwargs=dict(
-                        logits_processors=logits_processors,
-                        random_seed=request.seed,
-                        migration_request=migration_request,
-                        with_cache=with_cache,
-                        preserve_cache=preserve_cache,
-                    ),
+                    gen_config_kwargs=dict(random_seed=request.seed),
                 ),
             )
         except RequestError as error:
@@ -232,7 +198,6 @@ def register(router: APIRouter, server_context) -> None:
                 finish_reason: str | None = None,
                 logprobs: ChoiceLogprobs | None = None,
                 output_token_logprobs: list[tuple[float, int]] | None = None,
-                routed_experts=None,
                 output_ids=None) -> dict:
             choice_data = ChatCompletionResponseStreamChoice(
                 index=index,
@@ -240,8 +205,7 @@ def register(router: APIRouter, server_context) -> None:
                 finish_reason=finish_reason,
                 logprobs=logprobs,
                 output_token_logprobs=output_token_logprobs,
-                output_ids=output_ids,
-                routed_experts=routed_experts)
+                output_ids=output_ids)
             choice_data = maybe_filter_parallel_tool_calls(
                 choice_data, request)
             response = ChatCompletionStreamResponse(
@@ -300,11 +264,7 @@ def register(router: APIRouter, server_context) -> None:
                         finish_reason=chunk.finish_reason,
                         logprobs=logprobs,
                         output_token_logprobs=output_token_logprobs,
-                        routed_experts=chunk.routed_experts,
                         output_ids=stream_output_ids)
-                    if chunk.cache_block_ids is not None and chunk.is_last_delta:
-                        response_json['cache_block_ids'] = chunk.cache_block_ids
-                        response_json['remote_token_ids'] = chunk.token_ids
                     yield f'data: {json.dumps(response_json)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
@@ -358,15 +318,9 @@ def register(router: APIRouter, server_context) -> None:
             output_token_logprobs=output_token_logprobs,
             finish_reason=res.finish_reason,
             output_ids=res.token_ids if request.return_token_ids else None,
-            routed_experts=res.routed_experts
-            if request.return_routed_experts else None,
         )
         choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         choices.append(choice_data)
-
-        if with_cache:
-            cache_block_ids = res.cache_block_ids[0]
-            remote_token_ids = [res.remote_token_ids[0][-1]]
 
         usage = UsageInfo.build(
             prompt_tokens=res.input_token_len,
@@ -381,9 +335,5 @@ def register(router: APIRouter, server_context) -> None:
             choices=choices,
             usage=usage,
         ).model_dump()
-
-        if with_cache:
-            response['cache_block_ids'] = cache_block_ids
-            response['remote_token_ids'] = remote_token_ids
 
         return response

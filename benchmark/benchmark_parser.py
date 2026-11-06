@@ -21,10 +21,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Function, Tool
 from lmdeploy.serve.parsers import ResponseParserManager
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.tool_parser import (
-    DeepSeekV32ToolParser,
     Glm47ToolParser,
     JsonToolParser,
-    KimiK2ToolParser,
     Qwen3CoderToolParser,
     ToolParser,
     ToolParserManager,
@@ -94,42 +92,6 @@ def _qwen3coder_tool_inner(function_name: str, arguments: dict[str, str]) -> tup
     return ''.join(parts), markers
 
 
-def _kimi_tool_inner(
-    parser_cls: type[KimiK2ToolParser],
-    function_name: str,
-    call_index: int,
-    arguments: dict[str, str],
-) -> tuple[str, list[str]]:
-    raw_id = f'functions.{function_name}:{call_index}'
-    inner = (
-        f'{parser_cls.call_begin}{raw_id}'
-        f'{parser_cls.argument_begin}{json.dumps(arguments, ensure_ascii=False)}'
-        f'{parser_cls.call_end}'
-    )
-    return inner, [parser_cls.call_begin, parser_cls.argument_begin, parser_cls.call_end]
-
-
-def _deepseek_tool_inner(
-    parser_cls: type[DeepSeekV32ToolParser],
-    function_name: str,
-    arguments: dict[str, str],
-) -> tuple[str, list[str]]:
-    token = parser_cls.dsml_token
-    invoke_start = f'<{token}invoke'
-    parameter_start = f'<{token}parameter'
-    invoke_open = f'{invoke_start} name="{function_name}">'
-    invoke_close = f'</{token}invoke>'
-    parts = [invoke_open, '\n']
-    markers = [invoke_start, parameter_start, invoke_close]
-    for name, value in arguments.items():
-        parameter_open = f'{parameter_start} name="{name}" string="true">'
-        parameter_close = f'</{token}parameter>'
-        parts.extend((parameter_open, value, parameter_close, '\n'))
-        markers.append(parameter_close)
-    parts.append(invoke_close)
-    return ''.join(parts), markers
-
-
 def _synthesize_tool_inner(
     parser_cls: type[ToolParser],
     function_name: str,
@@ -144,10 +106,6 @@ def _synthesize_tool_inner(
         return _glm47_tool_inner(function_name, arguments)
     if issubclass(parser_cls, Qwen3CoderToolParser):
         return _qwen3coder_tool_inner(function_name, arguments)
-    if issubclass(parser_cls, KimiK2ToolParser):
-        return _kimi_tool_inner(parser_cls, function_name, call_index, arguments)
-    if issubclass(parser_cls, DeepSeekV32ToolParser):
-        return _deepseek_tool_inner(parser_cls, function_name, arguments)
     raise ValueError(f'No benchmark payload generator for tool parser {parser_cls.__name__!r}.')
 
 

@@ -1,129 +1,69 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from typing import Literal
-
-from .messages import PytorchEngineConfig, TurbomindEngineConfig
+from .messages import TurbomindEngineConfig
 from .utils import get_logger
 
 logger = get_logger('lmdeploy')
 
 
-def autoget_backend(model_path: str, trust_remote_code: bool = False):
-    """Get backend type in auto backend mode.
+def check_backend(backend: str | None) -> None:
+    """Reject inference backends other than TurboMind."""
+    if backend not in (None, 'turbomind'):
+        raise ValueError(f'Unsupported backend {backend!r}. TurboMind is the only inference backend; '
+                         'the PyTorch engine has been removed.')
+
+
+def check_backend_config(backend_config: TurbomindEngineConfig | None) -> TurbomindEngineConfig:
+    """Return a TurboMind engine config, rejecting other config types."""
+    if backend_config is None:
+        return TurbomindEngineConfig()
+    if not isinstance(backend_config, TurbomindEngineConfig):
+        raise TypeError(f'backend_config must be a TurbomindEngineConfig, got {type(backend_config).__name__}. '
+                        'The PyTorch engine and PytorchEngineConfig have been removed.')
+    return backend_config
+
+
+def check_turbomind_support(model_path: str, trust_remote_code: bool = False) -> None:
+    """Raise a clear error unless TurboMind can run the model.
 
     Args:
-         model_path (str): the path of a model.
-            It could be one of the following options:
-                - i) A local directory path of a turbomind model which is
-                    converted by `lmdeploy convert` command or download from
-                    ii) and iii).
-                - ii) The model_id of a lmdeploy-quantized model hosted
-                    inside a model repo on huggingface.co, such as
-                    "lmdeploy/llama2-chat-70b-4bit", etc.
-                - iii) The model_id of a model hosted inside a model repo
-                    on huggingface.co, such as "internlm/internlm2-chat-7b",
-                    "Qwen/Qwen2.5-7B-Instruct"
-                    and so on.
-
-    Returns:
-        str: the backend type.
+        model_path (str): the local path of a model.
+        trust_remote_code (bool): whether to trust remote code from model repositories.
     """
-
     from lmdeploy import turbomind
 
-    turbomind_has = False
-    if turbomind.is_available():
-        from lmdeploy.turbomind.supported_models import is_supported as is_supported_turbomind
-        turbomind_has = is_supported_turbomind(model_path, trust_remote_code=trust_remote_code)
-        if not turbomind_has:
-            logger.warning(f'Fallback to pytorch engine because {model_path!r} not supported by turbomind engine.')
-    else:
-        logger.warning('Fallback to pytorch engine because turbomind is not built.')
+    if not turbomind.is_available():
+        raise RuntimeError('The TurboMind native extension is unavailable, so LMDeploy cannot run inference. '
+                           'Install a CUDA build of LMDeploy or build it from source.') from turbomind._import_error
 
-    return 'turbomind' if turbomind_has else 'pytorch'
+    from lmdeploy.turbomind.supported_models import is_supported
+    if not is_supported(model_path, trust_remote_code=trust_remote_code):
+        raise ValueError(f'{model_path!r} is not supported by the TurboMind engine. See the supported models list '
+                         'in the LMDeploy documentation.')
 
 
-def autoget_backend_config(
-    model_path: str,
-    backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None,
-    trust_remote_code: bool = False
-) -> tuple[Literal['turbomind', 'pytorch'], PytorchEngineConfig | TurbomindEngineConfig]:
-    """Get backend config automatically.
-
-    Args:
-        model_path (str): The input model path.
-        backend_config (TurbomindEngineConfig | PytorchEngineConfig): The
-            input backend config. Default to None.
-
-    Returns:
-        (PytorchEngineConfig | TurbomindEngineConfig): The auto-determined
-            backend engine config.
-    """
-    from dataclasses import asdict
-
-    if isinstance(backend_config, PytorchEngineConfig):
-        return 'pytorch', backend_config
-
-    backend = autoget_backend(model_path, trust_remote_code=trust_remote_code)
-    config = PytorchEngineConfig() if backend == 'pytorch' else TurbomindEngineConfig()
-    if backend_config is not None:
-        if type(backend_config) is type(config):
-            config = backend_config
-        else:
-            data = asdict(backend_config)
-            for k, v in data.items():
-                if v and hasattr(config, k):
-                    setattr(config, k, v)
-            # map attributes with different names
-            if type(backend_config) is TurbomindEngineConfig:
-                config.block_size = backend_config.cache_block_seq_len
-            else:
-                config.cache_block_seq_len = backend_config.block_size
-    return backend, config
-
-
-def check_vl_llm(backend: str, config: dict) -> bool:
+def check_vl_llm(config: dict) -> bool:
     """Check if the model is a vl model from model config."""
-    if 'language_config' in config and 'vision_config' in config and config['language_config'].get(
-            'architectures', [None])[0] == 'DeepseekV2ForCausalLM':
-        return True
-
     arch = config['architectures'][0]
     supported_archs = set([
-        'LlavaLlamaForCausalLM', 'LlavaMistralForCausalLM', 'CogVLMForCausalLM', 'InternVLChatModel', 'MiniCPMV',
-        'LlavaForConditionalGeneration', 'LlavaNextForConditionalGeneration', 'Phi3VForCausalLM',
-        'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration', 'Qwen3VLForConditionalGeneration',
-        'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
-        'Qwen3_5MoeForConditionalGeneration', 'Qwen3OmniMoeForConditionalGeneration', 'MolmoForCausalLM',
-        'Gemma3ForConditionalGeneration', 'Llama4ForConditionalGeneration', 'InternVLForConditionalGeneration',
-        'InternS1ForConditionalGeneration', 'InternS1ProForConditionalGeneration',
-        'InternS1_1_ForConditionalGeneration', 'Glm4vForConditionalGeneration',
+        'InternVLChatModel', 'Qwen2VLForConditionalGeneration', 'Qwen2_5_VLForConditionalGeneration',
+        'Qwen3VLForConditionalGeneration', 'Qwen3VLMoeForConditionalGeneration', 'Qwen3_5ForConditionalGeneration',
+        'Qwen3_5MoeForConditionalGeneration', 'InternVLForConditionalGeneration', 'InternS1ForConditionalGeneration',
         'InternS2MobiusForConditionalGeneration', 'InternS2MobiusForCausalLM',
         'InternS2PreviewForConditionalGeneration', 'InternS2PreviewForCausalLM',
-        'KimiK25ForConditionalGeneration', 'Kimi_K25ForConditionalGeneration',
     ])
-    turbomind_unsupported_archs = []
-    if arch == 'MultiModalityCausalLM' and 'language_config' in config:
-        return True
-    elif arch in ['ChatGLMModel', 'ChatGLMForConditionalGeneration'] and 'vision_config' in config:
-        return True
-    elif arch in turbomind_unsupported_archs and backend == 'turbomind':
-        return False
-    elif arch in supported_archs:
-        return True
-    return False
+    return arch in supported_archs
 
 
-def get_task(backend: str,
-             model_path: str,
+def get_task(model_path: str,
              trust_remote_code: bool = False,
-             backend_config: PytorchEngineConfig | TurbomindEngineConfig | None = None):
+             backend_config: TurbomindEngineConfig | None = None):
     """Get pipeline type and pipeline class from model config."""
     from lmdeploy.serve.core import AsyncEngine
 
     if backend_config and backend_config.language_model_only:
         return 'llm', AsyncEngine
     _, config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
-    if check_vl_llm(backend, config.to_dict()):
+    if check_vl_llm(config.to_dict()):
         from lmdeploy.serve.core import VLAsyncEngine
         return 'vlm', VLAsyncEngine
 

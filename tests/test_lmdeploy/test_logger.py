@@ -36,7 +36,7 @@ def _capture_request_logs(monkeypatch, log_level):
 def test_request_logger_log_inputs_hidden_at_info(monkeypatch):
     records = _capture_request_logs(monkeypatch, logging.INFO)
 
-    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], 'gen_config', 'default')
+    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], 'gen_config')
 
     assert not records
 
@@ -50,13 +50,13 @@ def test_request_logger_log_inputs_skips_formatting_at_info(monkeypatch):
 
     _capture_request_logs(monkeypatch, logging.INFO)
 
-    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], UnformattableConfig(), 'default')
+    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], UnformattableConfig())
 
 
 def test_request_logger_log_inputs_visible_at_request(monkeypatch):
     records = _capture_request_logs(monkeypatch, REQUEST_LOG_LEVEL)
 
-    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], 'gen_config', 'default')
+    RequestLogger(max_log_len=None).log_inputs(1, 'hello', [1, 2], 'gen_config')
 
     assert len(records) == 1
     assert records[0].levelno == REQUEST_LOG_LEVEL
@@ -66,7 +66,7 @@ def test_request_logger_log_inputs_visible_at_request(monkeypatch):
 def test_request_logger_log_inputs_handles_none_token_ids(monkeypatch):
     records = _capture_request_logs(monkeypatch, REQUEST_LOG_LEVEL)
 
-    RequestLogger(max_log_len=None).log_inputs(1, 'hello', None, 'gen_config', 'default')
+    RequestLogger(max_log_len=None).log_inputs(1, 'hello', None, 'gen_config')
 
     assert len(records) == 1
     assert 'input_tokens=0' in records[0].getMessage()

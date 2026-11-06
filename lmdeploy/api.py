@@ -1,19 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from typing_extensions import deprecated
 
 from .pipeline import Pipeline
 
 if TYPE_CHECKING:
-    from .messages import PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
+    from .messages import SpeculativeConfig, TurbomindEngineConfig
     from .model import ChatTemplateConfig
 
 
 def pipeline(model_path: str,
-             backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+             backend_config: TurbomindEngineConfig | None = None,
              chat_template_config: ChatTemplateConfig | None = None,
              log_level: str = 'WARNING',
              max_log_len: int | None = None,
@@ -62,10 +62,9 @@ def pipeline(model_path: str,
 
             # VLM
             from lmdeploy.vl import load_image
-            from lmdeploy import pipeline, TurbomindEngineConfig, ChatTemplateConfig
-            pipe = pipeline('liuhaotian/llava-v1.5-7b',
-                            backend_config=TurbomindEngineConfig(session_len=8192),
-                            chat_template_config=ChatTemplateConfig(model_name='vicuna'))
+            from lmdeploy import pipeline, TurbomindEngineConfig
+            pipe = pipeline('OpenGVLab/InternVL3_5-8B',
+                            backend_config=TurbomindEngineConfig(session_len=8192))
             im = load_image('https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/demo/resources/human-pose.jpg')
             response = pipe([('describe this image', [im])])
             print(response)
@@ -85,8 +84,8 @@ def pipeline(model_path: str,
 @deprecated('This function is no longer available. Please use CLI command "lmdeploy serve api_server" instead.')
 def serve(model_path: str,
           model_name: str | None = None,
-          backend: Literal['turbomind', 'pytorch'] = 'turbomind',
-          backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+          backend: str = 'turbomind',
+          backend_config: TurbomindEngineConfig | None = None,
           chat_template_config: ChatTemplateConfig | None = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,

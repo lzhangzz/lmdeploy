@@ -127,10 +127,7 @@ def check_request(
 
 
 def _get_model_list(server_context) -> list[str]:
-    model_names = [server_context.async_engine.model_name]
-    cfg = server_context.engine_config
-    model_names += getattr(cfg, 'adapters', None) or []
-    return model_names
+    return [server_context.async_engine.model_name]
 
 
 def validate_text_v1_request(request: ResponsesRequest) -> JSONResponse | None:

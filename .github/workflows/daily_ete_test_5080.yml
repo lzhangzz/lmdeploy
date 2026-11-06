@@ -15,9 +15,9 @@ on:
         default: 'main'
       backend:
         required: true
-        description: 'Set backend filter. Default is "["turbomind", "pytorch"]"'
+        description: 'Set backend filter. Default is "["turbomind"]"'
         type: string
-        default: "['turbomind', 'pytorch']"
+        default: "['turbomind']"
       model:
         required: true
         description: 'Set testcase module filter: llm, mllm. Default contains all models'
@@ -159,7 +159,7 @@ jobs:
     runs-on: [self-hosted, 5080-r1]
     timeout-minutes: 150
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
@@ -230,18 +230,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
             model: mllm
             function: chat
-          - backend: pytorch
-            model: mllm
-            function: chat
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
@@ -287,7 +284,7 @@ jobs:
           ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
       - name: Test lmdeploy - chat
         continue-on-error: true
-        if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
+        if: matrix.backend == 'turbomind' && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
           pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
@@ -329,7 +326,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
+        backend: ${{ fromJSON(inputs.backend || '["turbomind"]')}}
         model_path: ['meta-llama/Llama-3.2-3B-Instruct', 'Qwen/Qwen3-4B']
         include:
           - tp: 1
@@ -337,7 +334,6 @@ jobs:
             model_path: meta-llama/Llama-3.2-3B-Instruct
             case_info: ['chat_completions_v1', 'generate']
             generate_type: logprob
-            extra: '--logprobs-mode raw_logprobs'
           - tp: 1
             model: Qwen3-4B
             model_path: Qwen/Qwen3-4B
@@ -353,7 +349,7 @@ jobs:
         - /mnt/3090:/mnt/3090
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     env:
-      PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
+      PYTHONPATH: autotest/coverage_hook
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
       MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
       TEST_ENV: 5080
@@ -427,7 +423,7 @@ jobs:
         if:  matrix.generate_type == 'logprob' && contains(matrix.case_info, 'generate')
         timeout-minutes: 60
         run: |
-          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}} and not experts' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/interface/restful/test_restful_generate.py -n 20 -k '${{matrix.model_path}} and ${{matrix.backend}}' -m 'not not_${{matrix.backend}}' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true

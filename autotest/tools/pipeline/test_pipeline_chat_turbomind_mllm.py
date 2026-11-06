@@ -1,6 +1,5 @@
 import pytest
 from tools.common_case_config import (
-    TURBOMIND_FALLBACK_TEST_MLLM_GPU1,
     TURBOMIND_PR_TEST_MLLM_GPU1,
     TURBOMIND_PR_TEST_MLLM_GPU2,
 )
@@ -29,13 +28,6 @@ _MLLM_PARAMS = build_layout_params(
 
 @pytest.mark.parametrize('run_config', _MLLM_PARAMS)
 def test_pipeline_mllm_chat(config, run_config, worker_id):
-    run_pipeline_mllm_test(config, run_config, worker_id)
-
-
-@pytest.mark.other
-@layout_mark({'tp': 1})
-@pytest.mark.parametrize('run_config', TURBOMIND_FALLBACK_TEST_MLLM_GPU1)
-def test_pipeline_mllm_fallback_backend_tp1(config, run_config, worker_id):
     run_pipeline_mllm_test(config, run_config, worker_id)
 
 

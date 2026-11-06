@@ -2,16 +2,7 @@ import math
 
 import numpy as np
 
-from lmdeploy.vl import (
-    encode_audio_base64,
-    encode_image_base64,
-    encode_time_series_base64,
-    encode_video_base64,
-    load_audio,
-    load_image,
-    load_time_series,
-    load_video,
-)
+from lmdeploy.vl import encode_image_base64, encode_video_base64, load_image, load_video
 
 
 def test_image_encode_decode():
@@ -48,36 +39,6 @@ def test_video_encode_decode():
     assert np.mean(np.abs(vid1.astype(float) - vid2.astype(float))) < 2.0  # JPEG is lossy
     assert meta1['total_num_frames'] == gt_meta['total_num_frames']
     assert meta1['frames_indices'] == gt_meta['frames_indices']
-
-
-def test_time_series_encode_decode():
-    # url = "https://huggingface.co/internlm/Intern-S1-Pro/raw/main/0092638_seism.npy"
-    url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/0092638_seism.npy'
-
-    ts1 = load_time_series(url)
-    b64 = encode_time_series_base64(url)
-    ts2 = load_time_series(f'data:time_series/npy;base64,{b64}')
-
-    assert ts1.shape == ts2.shape
-    assert np.allclose(ts1, ts2)
-
-
-def test_audio_encode_decode():
-    import pytest
-    pytest.importorskip('librosa')
-    pytest.importorskip('soundfile')
-
-    sr = 16000
-    seconds = 0.25
-    t = np.linspace(0, seconds, int(sr * seconds), endpoint=False, dtype=np.float32)
-    audio = 0.1 * np.sin(2 * np.pi * 440 * t)
-
-    b64 = encode_audio_base64((audio, sr))
-    audio_out, sr_out = load_audio(f'data:audio/wav;base64,{b64}', sampling_rate=sr)
-
-    assert sr_out == sr
-    assert audio_out.shape == audio.shape
-    assert np.allclose(audio_out, audio, atol=1e-4)
 
 
 def test_image_modes():
@@ -145,5 +106,3 @@ def test_invalid_inputs():
         load_image('/non_existent/path/image.jpg')
     with pytest.raises(Exception):
         load_video('/non_existent/path/video.mp4')
-    with pytest.raises(Exception):
-        load_time_series('/non_existent/path/data.npy')

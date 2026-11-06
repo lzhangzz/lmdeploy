@@ -226,10 +226,7 @@ class CalibrationContext:
     def calibrate(self, data):
         """Forward pass through the model in inference mode with given data."""
 
-        if type(self.model).__name__ == 'ChatGLMForConditionalGeneration':
-            model = self.model.transformer
-        else:
-            model = self.model.model
+        model = self.model.model
         with torch.inference_mode():
             _ = model(data.to(self.device))
         torch.cuda.empty_cache()

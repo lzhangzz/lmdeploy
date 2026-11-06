@@ -1,7 +1,7 @@
 # 安装
 
 LMDeploy 是一个用于大型语言模型（LLMs）和视觉-语言模型（VLMs）压缩、部署和服务的 Python 库。
-其核心推理引擎包括 TurboMind 引擎和 PyTorch 引擎。前者由 C++ 和 CUDA 开发，致力于推理性能的优化，而后者纯 Python 开发，旨在降低开发者的门槛。
+其推理引擎 TurboMind 由 C++ 和 CUDA 开发，致力于推理性能的优化。
 
 LMDeploy 支持在 Linux 和 Windows 平台上部署 LLMs 和 VLMs。此外，它还与以下 NVIDIA GPU 兼容：
 
@@ -22,18 +22,12 @@ pip install lmdeploy
 
 ## 从源码安装
 
-默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 10 或更新版本，或 Windows 上的 Visual Studio 2022。
+LMDeploy 面向 NVIDIA CUDA 环境编译 TurboMind 引擎，从源码安装时总会编译原生扩展。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 10 或更新版本，或 Windows 上的 Visual Studio 2022。
 
 成功安装 CUDA 工具包后，您可以使用以下单行命令构建并安装 LMDeploy：
 
 ```shell
 pip install git+https://github.com/InternLM/lmdeploy.git
-```
-
-您还可以通过设置 `DISABLE_TURBOMIND` 环境变量，显式禁用 Turbomind 后端，以避免 CUDA 编译：
-
-```shell
-DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 ```
 
 如果您希望使用特定版本，而不是 LMDeploy 的 `main` 分支，可以在命令行中指定：
@@ -42,25 +36,4 @@ DISABLE_TURBOMIND=1 pip install git+https://github.com/InternLM/lmdeploy.git
 pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.11.0.zip
 ```
 
-如果您希望构建支持昇腾、寒武纪或沐熙的 LMDeploy，请使用相应的 `LMDEPLOY_TARGET_DEVICE` 环境变量进行安装。
-
-LMDeploy 也支持在 AMD GPU 的 ROCm 环境中安装。
-
-```shell
-#The recommended way is to use the official ROCm PyTorch Docker image with pre-installed dependencies:
-docker run -it \
-    --cap-add=SYS_PTRACE \
-    --security-opt seccomp=unconfined \
-    --device=/dev/kfd \
-    --device=/dev/dri \
-    --group-add video \
-    --ipc=host \
-    --network=host \
-    --shm-size 32G \
-    -v /root:/workspace \
-    rocm/pytorch:latest
-
-
-#Once inside the container, install LMDeploy with ROCm support:
-LMDEPLOY_TARGET_DEVICE=rocm pip install  git+https://github.com/InternLM/lmdeploy.git
-```
+LMDeploy 仅支持 NVIDIA CUDA GPU，不支持昇腾、寒武纪、沐曦以及 AMD ROCm 设备。

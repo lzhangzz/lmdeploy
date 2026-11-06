@@ -1,5 +1,4 @@
 # HF model id: Qwen/Qwen3.5-4B
-
 h:
 - model_type:
   - chat
@@ -8,9 +7,6 @@ h:
     tp: 1
   backends:
   - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
     communicators:
     - nccl
   test_coverage:

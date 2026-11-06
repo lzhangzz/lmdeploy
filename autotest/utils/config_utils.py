@@ -9,13 +9,10 @@ from typing import Any
 import utils.constant as constant
 import yaml
 
-from lmdeploy.utils import is_bf16_supported
-
 DepsProfileSelector = str | dict[str, str]
 
 SUFFIX_INNER_AWQ = '-inner-4bits'
 SUFFIX_INNER_GPTQ = '-inner-gptq'
-SUFFIX_INNER_W8A8 = '-inner-w8a8'
 
 _AUTOTEST_ROOT = os.path.join(os.path.dirname(__file__), '..')
 CONFIGS_DIR = os.path.join(_AUTOTEST_ROOT, 'configs')
@@ -26,11 +23,11 @@ ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
 INTERFACE_SUITES = frozenset({
-    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
 })
-GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
+GENERATE_SUITES = frozenset({'base', 'logprob'})
 INTERFACE_SUITE_ORDER = (
-    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
 )
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
@@ -40,7 +37,7 @@ def get_interface_backend_list(backends: list[str] | None = None) -> list[str]:
 
     Priority:
     1. explicit ``backends`` argument
-    2. env ``INTERFACE_BACKENDS`` (``pytorch``, ``turbomind``, or comma/JSON list)
+    2. env ``INTERFACE_BACKENDS`` (``turbomind``, or comma/JSON list)
     3. ``BACKEND_LIST``
     """
     if backends is not None:
@@ -358,7 +355,7 @@ def _normalize_entry_backends(
     """Normalize ``entry['backends']`` to ``{backend: [communicators...]}``.
 
     Supported yaml forms:
-    - legacy: ``backends: [turbomind, pytorch]``
+    - legacy: ``backends: [turbomind]``
     - redundant: ``backends: [{name: turbomind, communicators: [nccl, cuda-ipc]}]``
     """
     normalized: dict[str, list[str]] = {}
@@ -541,17 +538,15 @@ def _normalize_interface_backend_cfg(raw: Any) -> dict[str, Any]:
 
     .. code-block:: yaml
 
-        pytorch:
-        - suites: [base, logprob, experts, toolcall, reasoning]
+        turbomind:
+        - suites: [base, logprob, toolcall, reasoning]
           extra:
             tool-call-parser: qwen3coder
             reasoning-parser: default
         - suites: [anthropic]
-          extra:
-            logprobs-mode: raw_logprobs
 
     Also accepted:
-    - suite list shorthand: ``pytorch: [base, logprob]``
+    - suite list shorthand: ``turbomind: [base, logprob]``
     - single dict: ``{suites, extra}``
     - legacy nested ``anthropic: {extra: {...}}`` on a single dict
     """
@@ -626,9 +621,9 @@ def _normalize_interface_map(raw: Any) -> dict[str, dict[str, Any]]:
 
     Supported forms:
     - ``interface: [base, logprob]``
-    - ``interface: {pytorch: [base, logprob], turbomind: [base]}``
-    - ``interface: {pytorch: {suites: [...], extra: {...}}}``
-    - ``interface: {pytorch: [{suites, extra}, {suites: [anthropic], extra}]}``
+    - ``interface: {turbomind: [base, logprob]}``
+    - ``interface: {turbomind: {suites: [...], extra: {...}}}``
+    - ``interface: {turbomind: [{suites, extra}, {suites: [anthropic], extra}]}``
     """
     if not raw:
         return {}
@@ -688,10 +683,6 @@ def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]
     """
     suite_set = set(suites)
     defaults: dict[str, Any] = {}
-    if suite_set & {'logprob', 'experts'}:
-        defaults['logprobs-mode'] = 'raw_logprobs'
-    if suite_set & {'experts'}:
-        defaults['enable-return-routed-experts'] = True
     if suite_set & {'abort'}:
         defaults['enable-abort-handling'] = True
     return defaults
@@ -710,8 +701,7 @@ def build_interface_launch_extra(
     Same structure as tools/pipeline ``engine_config.extra``. Merge order
     (later wins):
 
-    1. suite defaults (``logprobs-mode``, ``enable-return-routed-experts``,
-       ``enable-abort-handling``)
+    1. suite defaults (``enable-abort-handling``)
     2. ``engine_config.extra`` (shared row launch)
     3. ``interface_extra`` if provided, else ``interface.<backend>.extra``
 
@@ -728,44 +718,10 @@ def build_interface_launch_extra(
     return merged
 
 
-ROUTED_EXPERTS_UNSUPPORTED_SKIP = (
-    'return_routed_experts not enabled in model interface config '
-    '(add experts suite or enable-return-routed-experts: true in yaml)')
-
-
 def iter_model_yaml_entries(model_id: str) -> list[dict[str, Any]]:
     """All matrix rows for *model_id* under the active ``TEST_ENV``."""
     env_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
     return [entry for mid, entry in _iter_per_model_entries(env_key) if mid == model_id]
-
-
-def model_enables_return_routed_experts(
-    model_id: str,
-    backend: str,
-    *,
-    required_suites: set[str] | frozenset[str] | None = None,
-) -> bool:
-    """True when yaml interface launch extra enables ``return_routed_experts``.
-
-    When *required_suites* is set (e.g. ``{'toolcall'}`` or ``{'experts'}``),
-    only matching interface profiles are considered.
-    """
-    if backend == 'turbomind':
-        return False
-    for entry in iter_model_yaml_entries(model_id):
-        for prof in get_interface_profiles(entry, backend):
-            suites = set(prof.get('suites') or [])
-            if required_suites and not (required_suites & suites):
-                continue
-            extra = build_interface_launch_extra(
-                entry,
-                backend,
-                suites=prof['suites'],
-                interface_extra=prof.get('extra'),
-            )
-            if extra.get('enable-return-routed-experts'):
-                return True
-    return False
 
 
 def derive_interface_server_extra(
@@ -778,7 +734,7 @@ def derive_interface_server_extra(
 ) -> str:
     """Format interface launch flags via ``get_cli_str`` (same as tools)."""
     entry = entry or {}
-    backend = backend or 'pytorch'
+    backend = backend or 'turbomind'
     extra = build_interface_launch_extra(
         entry,
         backend,
@@ -911,7 +867,7 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
     """Derive REST case groups from model profiles + interface suites.
 
     Directory-based suites (toolcall / reasoning) and anthropic protocol files are selected by path in CI; generate
-    logprob/experts stay in one file and are filtered by pytest marks.
+    logprob cases stay in one file and are filtered by pytest marks.
     """
     suite_set = set(suites)
     case_info: list[str] = []
@@ -941,17 +897,14 @@ def derive_generate_marker(suites: list[str] | set[str], backend: str) -> str:
     """Pytest ``-m`` expression for ``test_restful_generate.py``.
 
     Prefer marks over splitting generate into multiple files: only a few tests
-    are logprob/experts-specific, and one server process still covers the union.
+    are logprob-specific, and one server process still covers the union.
     """
     suite_set = set(suites)
     parts = [f'not not_{backend}']
-    if 'experts' in suite_set:
-        return ' and '.join(parts)
     if 'logprob' in suite_set:
-        parts.append('not experts')
         return ' and '.join(parts)
     # base-only generate coverage
-    parts.extend(['not logprob', 'not experts'])
+    parts.append('not logprob')
     return ' and '.join(parts)
 
 
@@ -1151,8 +1104,6 @@ def _is_kvint_enabled_in_entry(
     enabled = set(quant_cfg.get(backend) or [])
     if quant_policy in (4, 8):
         return f'kvint{quant_policy}' in enabled
-    if quant_policy == 42:
-        return 'kvint42' in enabled
     return False
 
 
@@ -1178,10 +1129,8 @@ def _extend_quant_models_from_entry(
             continue
         if 'awq' in enabled and not is_quantization_model(model_name):
             target.append(model_name + SUFFIX_INNER_AWQ)
-        if backend == 'turbomind' and 'gptq' in enabled:
+        if 'gptq' in enabled:
             target.append(model_name + SUFFIX_INNER_GPTQ)
-        if backend == 'pytorch' and 'w8a8' in enabled:
-            target.append(model_name + SUFFIX_INNER_W8A8)
 
 
 def _build_run_config_entry(
@@ -1203,9 +1152,6 @@ def _build_run_config_entry(
         if 'prefix_cache' in (entry.get(TEST_COVERAGE_KEY) or []):
             merged_extra['enable-prefix-caching'] = None
 
-    device = config.get('device', 'cuda')
-    dtype = 'float16' if not is_bf16_supported(device) else None
-
     run_config: dict[str, Any] = {
         'model': model_id,
         'backend': backend,
@@ -1214,10 +1160,6 @@ def _build_run_config_entry(
         'parallel_config': copy.deepcopy(parallel_config),
         'extra_params': merged_extra,
     }
-    if dtype and backend == 'pytorch' and 'dtype' not in run_config['extra_params']:
-        run_config['extra_params']['dtype'] = dtype
-    if device != 'cuda':
-        run_config['extra_params']['device'] = device
     if entry.get('gen_config'):
         run_config['gen_config'] = copy.deepcopy(entry['gen_config'])
     deps = _entry_deps_dict(entry)
@@ -1268,7 +1210,7 @@ def _get_func_config_list_per_model(
 
         for model in models_for_quant:
             qcfg = quant_cfg
-            for quant_policy in [0, 4, 8, 42]:
+            for quant_policy in [0, 4, 8]:
                 if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
                     continue
                 for communicator in backend_map[backend]:
@@ -1451,7 +1393,7 @@ def get_model_list(config: dict[str, Any],
                    extra: dict[str, Any] | None = None) -> list[str]:
     """Get filtered model list (same rules as legacy flat yaml).
 
-    Non-``func`` types use ``pytorch/turbomind_{profile}`` ∩ ``{func_type}_model`` semantics:
+    Non-``func`` types use ``turbomind_{profile}`` ∩ ``{func_type}_model`` semantics:
     the model must appear under ``func`` for the same slice **and** under the target function.
 
     Rows with entry-level ``deps`` are never included (regardless of ``DEPS_PROFILE``).
@@ -1487,11 +1429,11 @@ def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_poli
 def _base_model_name(model: str) -> str:
     """Simplify model name by removing quantization suffix for config
     matching."""
-    return model.replace('-inner-4bits', '').replace('-inner-w8a8', '').replace('-inner-gptq', '')
+    return model.replace('-inner-4bits', '').replace('-inner-gptq', '')
 
 
 def get_quantization_model_list(type: str) -> list[str]:
-    """Get quantization model list by specified quant type(awq/gptq/w8a8)"""
+    """Get quantization model list by specified quant type(awq/gptq)"""
     config = get_config()
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
@@ -1502,16 +1444,13 @@ def get_quantization_model_list(type: str) -> list[str]:
         layout = _parallel_layout(_entry_engine_config(entry))
         backend_map = _normalize_entry_backends(entry, config, layout)
         quant_cfg = _quant_cfg_for_entry(entry)
-        for backend in ('turbomind', 'pytorch'):
-            if backend not in backend_map:
-                continue
-            enabled = set(quant_cfg.get(backend) or [])
-            if type == 'awq' and 'awq' in enabled and not is_quantization_model(model_id):
-                quant_model_list.append(model_id)
-            elif type == 'gptq' and 'gptq' in enabled and backend == 'turbomind':
-                quant_model_list.append(model_id)
-            elif type == 'w8a8' and 'w8a8' in enabled and backend == 'pytorch':
-                quant_model_list.append(model_id)
+        if 'turbomind' not in backend_map:
+            continue
+        enabled = set(quant_cfg.get('turbomind') or [])
+        if type == 'awq' and 'awq' in enabled and not is_quantization_model(model_id):
+            quant_model_list.append(model_id)
+        elif type == 'gptq' and 'gptq' in enabled:
+            quant_model_list.append(model_id)
     return list(OrderedDict.fromkeys(quant_model_list))
 
 
@@ -1548,10 +1487,8 @@ def get_gpus_per_instance(parallel_config: dict[str, int] | None) -> int:
 
 
 def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> str | None:
-    """Get cuda/ascend visible devices env prefix by worker id & parallel
-    config."""
+    """Get cuda visible devices env prefix by worker id & parallel config."""
     para_conf = parallel_config or {}
-    device_type = os.environ.get('DEVICE', 'cuda')
 
     gpus_per_instance = get_gpus_per_instance(para_conf)
     if gpus_per_instance <= 0:
@@ -1561,7 +1498,7 @@ def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str
     if not cuda_id:
         return ''
 
-    return f'ASCEND_RT_VISIBLE_DEVICES={cuda_id}' if device_type == 'ascend' else f'CUDA_VISIBLE_DEVICES={cuda_id}'
+    return f'CUDA_VISIBLE_DEVICES={cuda_id}'
 
 
 def get_cuda_id_by_workerid(worker_id: str | None, gpus_per_instance: int = 1) -> str | None:
@@ -1602,14 +1539,8 @@ def is_pre_quantized_hf_model(model: str) -> bool:
 def _get_communicator_list(config: dict[str, Any],
                            backend: str,
                            parallel_config: dict[str, int] | None = None) -> list[str]:
-    """Get available communicator list by device and parallel config."""
+    """Get available communicator list by parallel config."""
     parallel_config = parallel_config or {}
-    device = config.get('device', None)
-
-    if device == 'ascend':
-        return ['nccl']
-    if backend == 'pytorch':
-        return ['nccl']
     if ('cp' in parallel_config or 'dp' in parallel_config or 'ep' in parallel_config):
         return ['nccl']
     if 'tp' in parallel_config and parallel_config['tp'] == 1:
@@ -1619,9 +1550,7 @@ def _get_communicator_list(config: dict[str, Any],
 
 
 def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> None:
-    """Set device environment variable based on the device type."""
-    device = os.environ.get('DEVICE', 'cuda')
-
+    """Set CUDA_VISIBLE_DEVICES based on the worker id."""
     gpus_per_instance = 1
     if parallel_config is not None:
         if isinstance(parallel_config, int):
@@ -1629,24 +1558,14 @@ def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, in
         elif isinstance(parallel_config, dict):
             gpus_per_instance = get_gpus_per_instance(parallel_config)
 
-    if device == 'ascend':
-        device_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
-        if device_id is not None:
-            os.environ['ASCEND_RT_VISIBLE_DEVICES'] = device_id
-    else:
-        cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
-        if cuda_id is not None:
-            os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
+    cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
+    if cuda_id is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
 
 
 def unset_device_env_variable():
-    device_type = os.environ.get('DEVICE', 'cuda')
-    if device_type == 'ascend':
-        if 'ASCEND_RT_VISIBLE_DEVICES' in os.environ:
-            del os.environ['ASCEND_RT_VISIBLE_DEVICES']
-    else:
-        if 'CUDA_VISIBLE_DEVICES' in os.environ:
-            del os.environ['CUDA_VISIBLE_DEVICES']
+    if 'CUDA_VISIBLE_DEVICES' in os.environ:
+        del os.environ['CUDA_VISIBLE_DEVICES']
 
 
 def is_model_in_list(config: dict[str, Any], parallel_config: dict[str, int], model: str) -> bool:
@@ -1657,8 +1576,6 @@ def is_model_in_list(config: dict[str, Any], parallel_config: dict[str, int], mo
 
 _MODEL_EVAL_CONFIG_RULES = (
     ('gpt', 'gpt'),
-    ('sdar', 'sdar'),
-    ('intern-s1-pro', 'intern-s1-pro'),
     ('qwen3.5', 'qwen3.5'),
 )
 
@@ -1674,8 +1591,6 @@ def _apply_eval_config_env_suffix(config: dict[str, Any], name: str) -> str:
     env_tag = str(config.get('env_tag') or _matrix_env_key(os.environ.get('TEST_ENV') or 'a100'))
     if env_tag == 'a100':
         return f'{name}-32k'
-    if env_tag == 'ascend':
-        return f'{name}-2batch'
     return name
 
 

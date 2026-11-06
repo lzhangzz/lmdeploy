@@ -1,5 +1,4 @@
 # HF model id: internlm/Intern-S1
-
 a100:
 - model_type:
   - chat
@@ -13,9 +12,6 @@ a100:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - func
@@ -24,8 +20,6 @@ a100:
   - quantization
   quantization:
     turbomind:
-    - kvint8
-    pytorch:
     - kvint8
 h:
 - model_type:
@@ -38,30 +32,12 @@ h:
     communicators:
     - nccl
     - cuda-ipc
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - benchmark
   - func
   - mllm_evaluate
   - prefix_cache
   interface:
-    pytorch:
-    - suites:
-      - base
-      - logprob
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        enable-return-routed-experts: true
-        tool-call-parser: intern-s1
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
     turbomind:
     - suites:
       - base
@@ -69,26 +45,10 @@ h:
       - toolcall
       - reasoning
       extra:
-        logprobs-mode: raw_logprobs
         tool-call-parser: intern-s1
         reasoning-parser: default
     - suites:
       - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
   quantization:
     turbomind:
     - kvint8
-    pytorch:
-    - kvint8
-ascend:
-- model_type: vl
-  engine_config:
-    tp: 16
-  backends:
-  - name: pytorch
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - func

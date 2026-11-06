@@ -59,12 +59,6 @@ _BASE_EVAL_PARAMS = (
         model_type='base_model',
         func_type='evaluate',
     )
-    + build_eval_stage_params(
-        'pytorch',
-        BASE_TP_LAYOUTS,
-        model_type='base_model',
-        func_type='evaluate',
-    )
 )
 
 

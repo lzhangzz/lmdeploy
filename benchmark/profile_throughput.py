@@ -11,7 +11,7 @@ from tqdm import tqdm
 from transformers import PreTrainedTokenizerBase
 
 from lmdeploy.cli.utils import ArgumentHelper, DefaultsAndTypesHelpFormatter, get_speculative_config
-from lmdeploy.messages import GenerationConfig, PytorchEngineConfig, SpeculativeConfig, TurbomindEngineConfig
+from lmdeploy.messages import GenerationConfig, SpeculativeConfig, TurbomindEngineConfig
 from lmdeploy.profiler import Profiler, Session
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
@@ -134,31 +134,20 @@ def sample_random_requests(
 class Engine:
 
     def __init__(self, model_path: str,
-                 engine_config: PytorchEngineConfig | TurbomindEngineConfig,
+                 engine_config: TurbomindEngineConfig,
                  speculative_config: SpeculativeConfig,
                  trust_remote_code: bool = False):
         self.tokenizer = Tokenizer(model_path)
-        if isinstance(engine_config, TurbomindEngineConfig):
-            from lmdeploy import turbomind
-            if not turbomind.is_available():
-                raise RuntimeError(
-                    'TurboMind was requested but its native module is unavailable.'
-                ) from turbomind._import_error
-            from lmdeploy.turbomind import TurboMind
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError('TurboMind native module is unavailable.') from turbomind._import_error
+        from lmdeploy.turbomind import TurboMind
 
-            tm_model = TurboMind.from_pretrained(
-                model_path, engine_config=engine_config, trust_remote_code=trust_remote_code
-            )
-            self.backend = 'turbomind'
-        elif isinstance(engine_config, PytorchEngineConfig):
-            from lmdeploy.pytorch.engine import Engine as PytorchEngine
-            tm_model = PytorchEngine.from_pretrained(model_path,
-                                                     engine_config=engine_config,
-                                                     speculative_config=speculative_config,
-                                                     trust_remote_code=trust_remote_code)
-            self.backend = 'pytorch'
-
-        self.tm_model = tm_model
+        self.tm_model = TurboMind.from_pretrained(model_path,
+                                                  engine_config=engine_config,
+                                                  trust_remote_code=trust_remote_code,
+                                                  speculative_config=speculative_config)
+        self.backend = 'turbomind'
         self.pbar = None
 
     async def _inference(self, req_queue: Queue, session_id: int, temperature: float, top_p: float, top_k: int,
@@ -263,11 +252,6 @@ def parse_args():
     parser.add_argument('--use-uvloop', action='store_true')
     parser.add_argument('--csv', type=str, help='Where to save the result.', default='./profile_throughput.csv')
     parser.add_argument('--seed', type=int, default=0, help='Seed used in sampling prompts from dataset')
-    parser.add_argument('--distributed-executor-backend',
-                        type=str,
-                        default=None,
-                        choices=['uni', 'mp', 'ray'],
-                        help='backend of executor backend')
     parser.add_argument('--dataset-name',
                         type=str,
                         default='sharegpt',
@@ -311,41 +295,23 @@ def parse_args():
     ArgumentHelper.top_k(parser)
     ArgumentHelper.backend(parser)
 
-    # pytorch engine args
-    pt_group = parser.add_argument_group('PyTorch engine arguments')
-    ArgumentHelper.device(pt_group)
-    ArgumentHelper.eager_mode(pt_group)
-    ArgumentHelper.dllm_block_length(pt_group)
-    ArgumentHelper.dllm_unmasking_strategy(pt_group)
-    ArgumentHelper.dllm_denoising_steps(pt_group)
-    ArgumentHelper.dllm_confidence_threshold(pt_group)
-    ArgumentHelper.max_prefill_token_num(pt_group)
-    ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
-
     # spec decode
     ArgumentHelper.add_spec_group(parser)
 
-    tp_act = ArgumentHelper.tp(pt_group)
-    cache_count_act = ArgumentHelper.cache_max_entry_count(pt_group)
-    cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-    prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-    quant_policy_act = ArgumentHelper.quant_policy(pt_group, default=0)
-    dtype_act = ArgumentHelper.dtype(pt_group)
-
     # turbomind engine args
-    tb_group = parser.add_argument_group('TurboMind engine argument')
-    tb_group._group_actions.append(tp_act)
-    tb_group._group_actions.append(cache_count_act)
-    tb_group._group_actions.append(cache_block_seq_len_act)
-    tb_group._group_actions.append(prefix_caching_act)
-    tb_group._group_actions.append(quant_policy_act)
-    tb_group._group_actions.append(dtype_act)
-
+    tb_group = parser.add_argument_group('TurboMind engine arguments')
+    ArgumentHelper.tp(tb_group)
     ArgumentHelper.dp(tb_group)
     ArgumentHelper.cp(tb_group)
+    ArgumentHelper.cache_max_entry_count(tb_group)
+    ArgumentHelper.cache_block_seq_len(tb_group)
+    ArgumentHelper.enable_prefix_caching(tb_group)
+    ArgumentHelper.quant_policy(tb_group, default=0)
+    ArgumentHelper.dtype(tb_group)
     ArgumentHelper.model_format(tb_group, default='hf')
     ArgumentHelper.num_tokens_per_iter(tb_group)
     ArgumentHelper.max_prefill_iters(tb_group)
+    ArgumentHelper.max_prefill_token_num(tb_group)
     ArgumentHelper.async_(tb_group)
     ArgumentHelper.communicator(tb_group)
 
@@ -357,42 +323,23 @@ def main():
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
-    if args.backend == 'turbomind':
-        engine_config = TurbomindEngineConfig(
-            max_batch_size=args.concurrency // args.dp,
-            tp=args.tp,
-            dp=args.dp,
-            cp=args.cp,
-            cache_max_entry_count=args.cache_max_entry_count,
-            cache_block_seq_len=args.cache_block_seq_len,
-            model_format=args.model_format,
-            quant_policy=args.quant_policy,
-            num_tokens_per_iter=args.num_tokens_per_iter,
-            max_prefill_iters=args.max_prefill_iters,
-            async_=args.async_,
-            enable_prefix_caching=args.enable_prefix_caching,
-            dtype=args.dtype,
-            communicator=args.communicator,
-        )
-    elif args.backend == 'pytorch':
-        engine_config = PytorchEngineConfig(
-            cache_max_entry_count=args.cache_max_entry_count,
-            block_size=args.cache_block_seq_len,
-            max_batch_size=args.concurrency,
-            tp=args.tp,
-            device_type=args.device,
-            eager_mode=args.eager_mode,
-            enable_prefix_caching=args.enable_prefix_caching,
-            quant_policy=args.quant_policy,
-            dtype=args.dtype,
-            distributed_executor_backend=args.distributed_executor_backend,
-            max_prefill_token_num=args.max_prefill_token_num,
-            piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
-            dllm_block_length=args.dllm_block_length,
-            dllm_unmasking_strategy=args.dllm_unmasking_strategy,
-            dllm_denoising_steps=args.dllm_denoising_steps,
-            dllm_confidence_threshold=args.dllm_confidence_threshold,
-        )
+    engine_config = TurbomindEngineConfig(
+        max_batch_size=args.concurrency // args.dp,
+        tp=args.tp,
+        dp=args.dp,
+        cp=args.cp,
+        cache_max_entry_count=args.cache_max_entry_count,
+        cache_block_seq_len=args.cache_block_seq_len,
+        model_format=args.model_format,
+        quant_policy=args.quant_policy,
+        num_tokens_per_iter=args.num_tokens_per_iter,
+        max_prefill_iters=args.max_prefill_iters,
+        max_prefill_token_num=args.max_prefill_token_num,
+        async_=args.async_,
+        enable_prefix_caching=args.enable_prefix_caching,
+        dtype=args.dtype,
+        communicator=args.communicator,
+    )
 
     if args.use_uvloop:
         import uvloop

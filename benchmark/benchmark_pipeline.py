@@ -6,7 +6,7 @@ import yaml
 
 
 def get_cmd(model_path, backend, engine_config, data_config):
-    assert backend in ['turbomind', 'pytorch']
+    assert backend == 'turbomind'
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     dataset_path = data_config.pop('dataset_path')

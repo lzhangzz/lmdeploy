@@ -150,7 +150,6 @@ hidden_states = [x.last_hidden_state for x in response]
 from transformers import AutoTokenizer
 from lmdeploy import pipeline
 
-
 model_repoid_or_path = 'internlm/internlm2_5-7b-chat'
 pipe = pipeline(model_repoid_or_path)
 tokenizer = AutoTokenizer.from_pretrained(model_repoid_or_path, trust_remote_code=True)
@@ -173,56 +172,6 @@ print(ppl)
 get_ppl 返回的是 cross entropy loss，没有在之后加 exp 操作
 ```
 
-### 使用 PyTorchEngine
-
-需要先安装 triton
-
-```shell
-pip install triton>=2.1.0
-```
-
-```python
-from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
-
-backend_config = PytorchEngineConfig(session_len=2048)
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = pipeline('internlm/internlm2_5-7b-chat',
-                backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': 'Hi, pls intro yourself'
-}], [{
-    'role': 'user',
-    'content': 'Shanghai is'
-}]]
-response = pipe(prompts, gen_config=gen_config)
-print(response)
-```
-
-### LoRA 模型推理
-
-```python
-from lmdeploy import pipeline, GenerationConfig, PytorchEngineConfig
-
-backend_config = PytorchEngineConfig(session_len=2048,
-                                     adapters=dict(lora_name_1='chenchi/lora-chatglm2-6b-guodegang'))
-gen_config = GenerationConfig(top_p=0.8,
-                              top_k=40,
-                              temperature=0.8,
-                              max_new_tokens=1024)
-pipe = pipeline('THUDM/chatglm2-6b',
-                backend_config=backend_config)
-prompts = [[{
-    'role': 'user',
-    'content': '您猜怎么着'
-}]]
-response = pipe(prompts, gen_config=gen_config, adapter_name='lora_name_1')
-print(response)
-```
-
 ### 释放 pipeline
 
 您可以通过调用其 `close()` 方法来显式释放 pipeline，或者，也可以使用 `with` 语句，如下所示：
@@ -239,7 +188,7 @@ with pipeline('internlm/internlm2_5-7b-chat') as pipe:
 
 - **RuntimeError: An attempt has been made to start a new process before the current process has finished its bootstrapping phase**.
 
-  如果你在使用 tp>1 和 pytorch 后端的时候，遇到了这个错误。请确保 python 脚本中有下面内容作为入口
+  如果遇到了这个错误，请确保 python 脚本中有下面内容作为入口
 
   ```python
   if __name__ == '__main__':
@@ -248,5 +197,3 @@ with pipeline('internlm/internlm2_5-7b-chat') as pipe:
   一般来说，在多线程或多进程上下文中，可能需要确保初始化代码只执行一次。这时候，`if __name__ == '__main__':` 可以帮助确保这些初始化代码只在主程序执行，而不会在每个新创建的进程或线程中重复执行。
 
 - 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)
-
-- 如果 lora 的权重有对应的对话模板，可以先注册对话模板到 lmdeploy，然后 adapter 名为对话模板名使用即可

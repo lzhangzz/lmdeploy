@@ -44,7 +44,6 @@ async def _parsed_stream(result_generator, response_parser):
                 input_token_len=res.input_token_len,
                 generate_token_len=res.generate_token_len,
                 cached_tokens=getattr(res, 'cached_tokens', 0),
-                routed_experts=getattr(res, 'routed_experts', None) if finish_reason is not None else None,
                 reasoning_tokens=getattr(response_parser, 'reasoning_tokens', None),
                 is_last_delta=is_last_delta,
             )

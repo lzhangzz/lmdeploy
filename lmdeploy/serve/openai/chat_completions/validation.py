@@ -13,30 +13,7 @@ def check_request(request: ChatCompletionRequest,
                   server_context,
                   json_request: dict | None = None) -> str:
     """Validate chat-completion options and fan-out compatibility."""
-    engine_config = server_context.engine_config
     session_manager = server_context.session_manager
-    try:
-        # Check logprobs settings
-        logprobs_mode = engine_config.logprobs_mode
-        logprobs = request.logprobs
-        top_logprobs = request.top_logprobs or 0
-        return_logprob = request.return_logprob
-        if logprobs_mode is None:
-            if logprobs or top_logprobs > 0:
-                return (
-                    f'Logprobs({logprobs})/top_logprobs({top_logprobs}) requested '
-                    'but not enabled logprobs_mode in engine configuration')
-            if return_logprob:
-                return (
-                    f'return_logprob({return_logprob}) requested '
-                    'but not enabled logprobs_mode in engine configuration.')
-        if logprobs_mode is not None and (top_logprobs < 0 or
-                                          (not logprobs and top_logprobs > 0)):
-            return (
-                f'Invalid logprobs({logprobs})/top_logprobs({top_logprobs}) requested '
-                'when logprobs_mode is enabled in engine configuration.')
-    except AttributeError:
-        pass
 
     if session_manager.has(request.session_id):
         return f'The session_id {request.session_id!r} is occupied.'
@@ -52,12 +29,8 @@ def check_request(request: ChatCompletionRequest,
     if request.n is not None and request.n > 1 and request.session_id not in (
             None, -1):
         return 'n > 1 cannot be used with an explicit session_id.'
-    if request.n is not None and request.n > 1 and json_request is not None:
-        if any(
-                json_request.get(key)
-                for key in ('migration_request', 'with_cache',
-                            'preserve_cache')):
-            return 'n > 1 is not supported with cache migration.'
+    if request.logit_bias:
+        return 'logit_bias is not supported by the TurboMind engine.'
     if request.top_p is not None and not (0 < request.top_p <= 1):
         return f'The top_p {request.top_p!r} must be in (0, 1].'
     if request.top_k is not None and request.top_k < 0:
@@ -103,13 +76,5 @@ def check_request(request: ChatCompletionRequest,
     if request.tool_choice != 'none' and request.tools:
         if parser_cls is None or parser_cls.tool_parser_cls is None:
             return 'Please launch the api_server with --tool-call-parser if you want to use tools.'
-
-    if request.return_routed_experts:
-        if not hasattr(engine_config, 'enable_return_routed_experts'):
-            return f'return_routed_experts is not supported in {type(engine_config).__name__}.'
-        if not engine_config.enable_return_routed_experts:
-            return (
-                'routed experts requested but not configured in engine configuration. '
-                'May start api_server with --enable-return-routed-experts flag.')
 
     return ''

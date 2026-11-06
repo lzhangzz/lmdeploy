@@ -1,7 +1,7 @@
 import os
 
 import pytest
-from utils.config_utils import get_tool_reasoning_model_list, model_enables_return_routed_experts
+from utils.config_utils import get_tool_reasoning_model_list
 from utils.constant import BACKEND_LIST, CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
@@ -49,18 +49,9 @@ def _apply_marks(cls):
     return cls
 
 
-_EXPERTS_CLASS_MARKS = [
-    pytest.mark.experts,
-]
-
-
-def _apply_experts_marks(cls):
-    """Experts toolcall cases; turbomind omits routed_experts
-    request/validation."""
-    cls = _apply_marks(cls)
-    for m in _EXPERTS_CLASS_MARKS:
-        cls = m(cls)
-    return cls
+def _apply_token_ids_marks(cls):
+    """Toolcall cases that request return_token_ids / input_ids."""
+    return pytest.mark.token_ids(_apply_marks(cls))
 
 
 def _apply_marks_mm(cls):
@@ -332,16 +323,6 @@ class _ToolCallTestBase:
             kwargs['tools'] = tools
         return kwargs
 
-    def _validate_experts(self) -> bool:
-        return model_enables_return_routed_experts(
-            self._model_case,
-            self._backend,
-            required_suites=frozenset({'toolcall'}),
-        )
-
-    def _experts_validation_kwargs(self) -> dict:
-        return {'validate_experts': self._validate_experts()}
-
     def _stream_tool_call(self, messages, tools=None, **create_kwargs):
         """Run a streaming tool-call request and return aggregated result."""
         client, model_name = self._get_client()
@@ -364,8 +345,7 @@ class _ToolCallTestBase:
         reference_payload=False,
         **payload_extra,
     ):
-        """Stream via HTTP with return_token_ids; routed_experts when
-        supported."""
+        """Stream via HTTP with return_token_ids."""
         if use_input_ids:
             try:
                 build_input_ids_and_prompt_tokens(messages, self._tokenizer_path, tools)
@@ -385,7 +365,6 @@ class _ToolCallTestBase:
                 use_input_ids=use_input_ids,
                 tokenizer_path=self._tokenizer_path,
                 reference_payload=reference_payload,
-                return_routed_experts=self._validate_experts(),
                 **payload_extra,
             )
         except HttpToolCallError as exc:
@@ -414,8 +393,6 @@ class _ToolCallTestBase:
             use_input_ids=use_input_ids,
             log_file=self._log_file,
             reference_payload=reference_payload,
-            return_routed_experts=self._validate_experts(),
-            validate_experts=self._validate_experts(),
         )
 
     def _run_concurrent_http_error_workers(self, num_workers=None, invalid_model_name=None):

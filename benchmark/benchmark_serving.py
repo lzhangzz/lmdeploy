@@ -187,7 +187,7 @@ def _append_specdecode_summary_csv(model_path: str,
 
 
 def get_launching_server_cmd(model_path, backend, server_config):
-    if backend in ['turbomind', 'pytorch']:
+    if backend == 'turbomind':
         cmd = ['lmdeploy', 'serve', 'api_server', model_path, '--backend', backend]
     elif backend == 'sglang':
         cmd = ['python3', '-m', 'sglang.launch_server', '--model-path', model_path]
@@ -211,13 +211,13 @@ def get_output_file(model_path, backend, server_config):
     """Generate the benchmark output filename."""
     model_name = server_config.get('model_name', None) or os.path.basename(model_path)
 
-    if backend not in ['turbomind', 'pytorch', 'sglang', 'vllm']:
+    if backend not in ['turbomind', 'sglang', 'vllm']:
         raise ValueError(f'Unknown backend: {backend}')
 
     if backend in ['sglang', 'vllm']:
         return f'benchmark_{model_name}_{backend}.csv'
 
-    # For turbomind/pytorch backends
+    # For the turbomind backend
     params = [
         ('bs', server_config['max_batch_size']),
         ('tp', server_config.get('tp', 1)),
@@ -235,7 +235,7 @@ def get_output_file(model_path, backend, server_config):
 
 
 def get_server_ip_port(backend: str, server_config: dict) -> tuple[str, int]:
-    if backend in ['turbomind', 'pytorch']:
+    if backend == 'turbomind':
         if server_config.get('proxy_url'):
             # If proxy_url is set, we use the proxy server's IP and port
             parts = server_config['proxy_url'].split(':')
@@ -277,7 +277,7 @@ def get_client_cmd(backend: str, server_ip: str, server_port: int, client_config
     client_config = client_config.copy()
     client_backend = client_config.pop('client_backend', None) or client_config.pop('backend', None)
     if client_backend is None:
-        client_backend = 'lmdeploy' if backend in ['turbomind', 'pytorch'] else backend
+        client_backend = 'lmdeploy' if backend == 'turbomind' else backend
     cmd = [
         'python3', f'{current_dir}/profile_restful_api.py', '--backend', client_backend, '--host', server_ip, '--port',
         str(server_port)

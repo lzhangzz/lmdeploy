@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_max_batch_size
 
 from .cli import CLI
@@ -8,7 +7,6 @@ from .utils import (
     DefaultsAndTypesHelpFormatter,
     convert_args,
     get_chat_template,
-    get_lora_adapters,
     get_speculative_config,
 )
 
@@ -44,12 +42,7 @@ class SubCliServe:
                             ' repo on huggingface.co, such as "internlm/internlm2_5-7b-chat",'
                             ' "internlm/Intern-S2-Preview" and so on')
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for serving')
-        parser.add_argument('--server-port',
-                            type=int,
-                            default=None,
-                            help='Server port. Effective default is 23333 when unset. '
-                            'In DP mode with --proxy-url, ports are auto-selected unless '
-                            'this flag is explicitly set.')
+        parser.add_argument('--server-port', type=int, default=23333, help='Server port')
         parser.add_argument('--allow-origins',
                             nargs='+',
                             type=str,
@@ -103,89 +96,37 @@ class SubCliServe:
         ArgumentHelper.download_dir(parser)
         ArgumentHelper.generation_config(parser)
 
-        # pytorch engine args
-        pt_group = parser.add_argument_group('PyTorch engine arguments')
-
-        ArgumentHelper.adapters(pt_group)
-        ArgumentHelper.device(pt_group)
-        ArgumentHelper.eager_mode(pt_group)
-        ArgumentHelper.empty_init(pt_group)
-        ArgumentHelper.logprobs_mode(pt_group)
-        ArgumentHelper.dllm_block_length(pt_group)
-        ArgumentHelper.dllm_unmasking_strategy(pt_group)
-        ArgumentHelper.dllm_denoising_steps(pt_group)
-        ArgumentHelper.dllm_confidence_threshold(pt_group)
-        ArgumentHelper.enable_return_routed_experts(pt_group)
-        ArgumentHelper.distributed_executor_backend(pt_group)
-        ArgumentHelper.kernel_block_size(pt_group)
-        ArgumentHelper.prefix_cache_state_budget(pt_group)
-        ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
-
-        # common engine args
-        language_model_only = ArgumentHelper.language_model_only(pt_group)
-        dtype_act = ArgumentHelper.dtype(pt_group)
-        tp_act = ArgumentHelper.tp(pt_group)
-        session_len_act = ArgumentHelper.session_len(pt_group)
-        max_batch_size_act = ArgumentHelper.max_batch_size(pt_group)
-        cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
-        ArgumentHelper.num_gpu_blocks(pt_group)
-        cache_block_seq_len_act = ArgumentHelper.cache_block_seq_len(pt_group)
-        prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
-        max_prefill_token_num_act = ArgumentHelper.max_prefill_token_num(pt_group)
-        quant_policy = ArgumentHelper.quant_policy(pt_group)
-        model_format = ArgumentHelper.model_format(pt_group)
-        hf_overrides = ArgumentHelper.hf_overrides(pt_group)
-        disable_metrics = ArgumentHelper.disable_metrics(pt_group)
-        dp = ArgumentHelper.dp(pt_group)
-        ep_act = ArgumentHelper.ep(pt_group)
-        ArgumentHelper.enable_microbatch(pt_group)
-        ArgumentHelper.enable_eplb(pt_group)
-        ArgumentHelper.role(pt_group)
-        ArgumentHelper.migration_backend(pt_group)
-        ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
-        ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
-        # multi-node serving args
-        node_rank_act = ArgumentHelper.node_rank(pt_group)
-        num_nodes_act = ArgumentHelper.num_nodes(pt_group)
-
-        # turbomind args
+        # engine args
         tb_group = parser.add_argument_group('TurboMind engine arguments')
-        # common engine args
-        tb_group._group_actions.append(dtype_act)
-        tb_group._group_actions.append(tp_act)
-        tb_group._group_actions.append(session_len_act)
-        tb_group._group_actions.append(max_batch_size_act)
-        tb_group._group_actions.append(cache_max_entry_act)
-        tb_group._group_actions.append(cache_block_seq_len_act)
-        tb_group._group_actions.append(prefix_caching_act)
-        tb_group._group_actions.append(max_prefill_token_num_act)
-        tb_group._group_actions.append(quant_policy)
-        tb_group._group_actions.append(model_format)
-        tb_group._group_actions.append(num_nodes_act)
-        tb_group._group_actions.append(node_rank_act)
-        tb_group._group_actions.append(hf_overrides)
-        tb_group._group_actions.append(disable_metrics)
-        tb_group._group_actions.append(dp)
-        tb_group._group_actions.append(ep_act)
-        tb_group._group_actions.append(language_model_only)
+        ArgumentHelper.language_model_only(tb_group)
+        ArgumentHelper.dtype(tb_group)
+        ArgumentHelper.tp(tb_group)
+        ArgumentHelper.dp(tb_group)
         ArgumentHelper.cp(tb_group)
+        ArgumentHelper.ep(tb_group)
+        ArgumentHelper.session_len(tb_group)
+        ArgumentHelper.max_batch_size(tb_group)
+        ArgumentHelper.cache_max_entry_count(tb_group)
+        ArgumentHelper.cache_block_seq_len(tb_group)
+        ArgumentHelper.enable_prefix_caching(tb_group)
+        ArgumentHelper.max_prefill_token_num(tb_group)
+        ArgumentHelper.quant_policy(tb_group)
+        ArgumentHelper.model_format(tb_group)
+        ArgumentHelper.hf_overrides(tb_group)
+        ArgumentHelper.disable_metrics(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.num_tokens_per_iter(tb_group)
         ArgumentHelper.max_prefill_iters(tb_group)
         ArgumentHelper.async_(tb_group)
         ArgumentHelper.communicator(tb_group)
         ArgumentHelper.moe_a2a_backend(tb_group)
+        # multi-node serving args
+        ArgumentHelper.num_nodes(tb_group)
+        ArgumentHelper.node_rank(tb_group)
         ArgumentHelper.dist_init_addr(tb_group)
-
-        # vlm args
-        vision_group = parser.add_argument_group('Vision model arguments')
-        ArgumentHelper.vision_max_batch_size(vision_group)
 
         # spec decode
         ArgumentHelper.add_spec_group(parser)
-
-        # kv transfer
-        ArgumentHelper.kv_transfer_config(pt_group)
 
     @staticmethod
     def add_parser_proxy():
@@ -197,13 +138,6 @@ class SubCliServe:
         parser.set_defaults(run=SubCliServe.proxy)
         parser.add_argument('--server-name', type=str, default='0.0.0.0', help='Host ip for proxy serving')
         parser.add_argument('--server-port', type=int, default=8000, help='Server port of the proxy')
-        parser.add_argument('--serving-strategy',
-                            type=str,
-                            choices=['Hybrid', 'DistServe'],
-                            default='Hybrid',
-                            help='the strategy to serve, Hybrid for colocating Prefill and Decode'
-                            'workloads into same engine, DistServe for Prefill-Decode Disaggregation')
-        parser.add_argument('--dummy-prefill', action='store_true', help='dummy prefill for performance profiler')
         parser.add_argument('--routing-strategy',
                             type=str,
                             choices=['random', 'min_expected_latency', 'min_observed_latency'],
@@ -214,15 +148,6 @@ class SubCliServe:
                             help='Whether to disable cache status of the '
                             'proxy. If set, the proxy will forget the status '
                             'of the previous time')
-
-        # For Disaggregation
-        parser.add_argument('--migration-protocol',
-                            type=str,
-                            choices=['RDMA', 'NVLINK'],
-                            default='RDMA',
-                            help='transport protocol of KV migration')
-        parser.add_argument('--link-type', type=str, choices=['RoCE', 'IB'], default='RoCE', help='RDMA Link Type')
-        parser.add_argument('--disable-gdr', action='store_true', help='with GPU Direct Memory Access')
         ArgumentHelper.api_keys(parser)
         ArgumentHelper.ssl(parser)
         ArgumentHelper.log_level(parser)
@@ -230,160 +155,65 @@ class SubCliServe:
     @staticmethod
     def api_server(args):
         """Serve LLMs with restful api using fastapi."""
-        from lmdeploy.archs import autoget_backend
+        from lmdeploy.messages import TurbomindEngineConfig
+        from lmdeploy.serve.openai.api_server import serve as run_api_server
 
-        max_batch_size = args.max_batch_size if args.max_batch_size \
-            else get_max_batch_size(args.device)
-        backend = args.backend
-        if backend != 'pytorch':
-            # set auto backend mode
-            backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
-
-        kv_transfer_config = getattr(args, 'kv_transfer_config', None)
-        if kv_transfer_config is not None and backend != 'pytorch':
-            raise ValueError('--kv-transfer-config is supported only by the PyTorch engine; '
-                             'set --backend pytorch to enable a KV connector')
-
-        if backend == 'pytorch':
-            from lmdeploy.messages import PytorchEngineConfig
-            adapters = get_lora_adapters(args.adapters)
-            backend_config = PytorchEngineConfig(
-                dtype=args.dtype,
-                tp=args.tp,
-                dp=args.dp,
-                ep=args.ep,
-                max_batch_size=max_batch_size,
-                cache_max_entry_count=args.cache_max_entry_count,
-                num_gpu_blocks=args.num_gpu_blocks,
-                block_size=args.cache_block_seq_len,
-                kernel_block_size=args.kernel_block_size,
-                session_len=args.session_len,
-                adapters=adapters,
-                enable_prefix_caching=args.enable_prefix_caching,
-                prefix_cache_state_budget=args.prefix_cache_state_budget,
-                prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
-                device_type=args.device,
-                quant_policy=args.quant_policy,
-                eager_mode=args.eager_mode,
-                empty_init=args.empty_init,
-                max_prefill_token_num=args.max_prefill_token_num,
-                piecewise_cudagraph_max_tokens=args.piecewise_cudagraph_max_tokens,
-                cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
-                enable_microbatch=args.enable_microbatch,
-                enable_eplb=args.enable_eplb,
-                enable_metrics=not args.disable_metrics,
-                role=EngineRole[args.role],
-                migration_backend=MigrationBackend[args.migration_backend],
-                model_format=args.model_format,
-                hf_overrides=args.hf_overrides,
-                language_model_only=args.language_model_only,
-                logprobs_mode=args.logprobs_mode,
-                dllm_block_length=args.dllm_block_length,
-                dllm_unmasking_strategy=args.dllm_unmasking_strategy,
-                dllm_denoising_steps=args.dllm_denoising_steps,
-                dllm_confidence_threshold=args.dllm_confidence_threshold,
-                enable_return_routed_experts=args.enable_return_routed_experts,
-                distributed_executor_backend=args.distributed_executor_backend,
-                kv_transfer_config=kv_transfer_config,
-            )
-        else:
-            from lmdeploy.messages import TurbomindEngineConfig
-            backend_config = TurbomindEngineConfig(dtype=args.dtype,
-                                                   tp=args.tp,
-                                                   dp=args.dp,
-                                                   cp=args.cp,
-                                                   ep=args.ep,
-                                                   nnodes=args.nnodes,
-                                                   node_rank=args.node_rank,
-                                                   dist_init_addr=args.dist_init_addr,
-                                                   max_batch_size=max_batch_size,
-                                                   session_len=args.session_len,
-                                                   model_format=args.model_format,
-                                                   quant_policy=args.quant_policy,
-                                                   rope_scaling_factor=args.rope_scaling_factor,
-                                                   cache_max_entry_count=args.cache_max_entry_count,
-                                                   cache_block_seq_len=args.cache_block_seq_len,
-                                                   enable_prefix_caching=args.enable_prefix_caching,
-                                                   max_prefill_token_num=args.max_prefill_token_num,
-                                                   num_tokens_per_iter=args.num_tokens_per_iter,
-                                                   max_prefill_iters=args.max_prefill_iters,
-                                                   async_=args.async_,
-                                                   communicator=args.communicator,
-                                                   moe_a2a_backend=args.moe_a2a_backend,
-                                                   language_model_only=args.language_model_only,
-                                                   enable_metrics=not args.disable_metrics,
-                                                   hf_overrides=args.hf_overrides)
+        max_batch_size = args.max_batch_size if args.max_batch_size else get_max_batch_size('cuda')
+        backend_config = TurbomindEngineConfig(dtype=args.dtype,
+                                               tp=args.tp,
+                                               dp=args.dp,
+                                               cp=args.cp,
+                                               ep=args.ep,
+                                               nnodes=args.nnodes,
+                                               node_rank=args.node_rank,
+                                               dist_init_addr=args.dist_init_addr,
+                                               max_batch_size=max_batch_size,
+                                               session_len=args.session_len,
+                                               model_format=args.model_format,
+                                               quant_policy=args.quant_policy,
+                                               rope_scaling_factor=args.rope_scaling_factor,
+                                               cache_max_entry_count=args.cache_max_entry_count,
+                                               cache_block_seq_len=args.cache_block_seq_len,
+                                               enable_prefix_caching=args.enable_prefix_caching,
+                                               max_prefill_token_num=args.max_prefill_token_num,
+                                               num_tokens_per_iter=args.num_tokens_per_iter,
+                                               max_prefill_iters=args.max_prefill_iters,
+                                               async_=args.async_,
+                                               communicator=args.communicator,
+                                               moe_a2a_backend=args.moe_a2a_backend,
+                                               language_model_only=args.language_model_only,
+                                               enable_metrics=not args.disable_metrics,
+                                               hf_overrides=args.hf_overrides)
         chat_template_config = get_chat_template(args.chat_template, args.model_path)
         speculative_config = get_speculative_config(args)
 
-        from lmdeploy.messages import VisionConfig
-        vision_config = VisionConfig(args.vision_max_batch_size)
-        if args.dp == 1 or backend == 'turbomind':
-            from lmdeploy.serve.openai.api_server import serve as run_api_server
-
-            run_api_server(
-                args.model_path,
-                model_name=args.model_name,
-                backend=backend,
-                backend_config=backend_config,
-                chat_template_config=chat_template_config,
-                vision_config=vision_config,
-                server_name=args.server_name,
-                server_port=args.server_port if args.server_port is not None else 23333,
-                allow_origins=args.allow_origins,
-                allow_credentials=args.allow_credentials,
-                allow_methods=args.allow_methods,
-                allow_headers=args.allow_headers,
-                allow_terminate_by_client=args.allow_terminate_by_client,
-                enable_abort_handling=args.enable_abort_handling,
-                log_level=args.log_level.upper(),
-                api_keys=args.api_keys,
-                ssl=args.ssl,
-                proxy_url=args.proxy_url,
-                max_log_len=args.max_log_len,
-                disable_fastapi_docs=args.disable_fastapi_docs,
-                max_concurrent_requests=args.max_concurrent_requests,
-                trust_remote_code=args.trust_remote_code,
-                reasoning_parser=args.reasoning_parser,
-                tool_call_parser=args.tool_call_parser,
-                speculative_config=speculative_config,
-                allowed_media_domains=args.allowed_media_domains,
-                generation_config=args.generation_config,
-            )
-        else:
-            from lmdeploy.serve.openai.launch_server import launch_server
-
-            launch_server(
-                args.nnodes,
-                args.node_rank,
-                args.model_path,
-                model_name=args.model_name,
-                backend=backend,
-                backend_config=backend_config,
-                chat_template_config=chat_template_config,
-                vision_config=vision_config,
-                server_name=args.server_name,
-                server_port=args.server_port,
-                allow_origins=args.allow_origins,
-                allow_credentials=args.allow_credentials,
-                allow_methods=args.allow_methods,
-                allow_headers=args.allow_headers,
-                allow_terminate_by_client=args.allow_terminate_by_client,
-                enable_abort_handling=args.enable_abort_handling,
-                log_level=args.log_level.upper(),
-                api_keys=args.api_keys,
-                ssl=args.ssl,
-                proxy_url=args.proxy_url,
-                max_log_len=args.max_log_len,
-                disable_fastapi_docs=args.disable_fastapi_docs,
-                max_concurrent_requests=args.max_concurrent_requests,
-                trust_remote_code=args.trust_remote_code,
-                reasoning_parser=args.reasoning_parser,
-                tool_call_parser=args.tool_call_parser,
-                speculative_config=speculative_config,
-                allowed_media_domains=args.allowed_media_domains,
-                generation_config=args.generation_config,
-            )
+        run_api_server(
+            args.model_path,
+            model_name=args.model_name,
+            backend_config=backend_config,
+            chat_template_config=chat_template_config,
+            server_name=args.server_name,
+            server_port=args.server_port,
+            allow_origins=args.allow_origins,
+            allow_credentials=args.allow_credentials,
+            allow_methods=args.allow_methods,
+            allow_headers=args.allow_headers,
+            allow_terminate_by_client=args.allow_terminate_by_client,
+            enable_abort_handling=args.enable_abort_handling,
+            log_level=args.log_level.upper(),
+            api_keys=args.api_keys,
+            ssl=args.ssl,
+            proxy_url=args.proxy_url,
+            max_log_len=args.max_log_len,
+            disable_fastapi_docs=args.disable_fastapi_docs,
+            max_concurrent_requests=args.max_concurrent_requests,
+            trust_remote_code=args.trust_remote_code,
+            reasoning_parser=args.reasoning_parser,
+            tool_call_parser=args.tool_call_parser,
+            speculative_config=speculative_config,
+            allowed_media_domains=args.allowed_media_domains,
+            generation_config=args.generation_config,
+        )
 
     @staticmethod
     def proxy(args):

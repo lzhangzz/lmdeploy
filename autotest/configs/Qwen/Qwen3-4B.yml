@@ -7,16 +7,11 @@ a100:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 h:
 - model_type: chat
@@ -26,16 +21,11 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 - model_type: base
   engine_config:
@@ -44,15 +34,9 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   interface:
-    pytorch:
-      suites:
-      - base
     turbomind:
       suites:
       - base
@@ -66,16 +50,11 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq
 '5080':
 - model_type:
@@ -89,14 +68,9 @@ h:
   - name: turbomind
     communicators:
     - nccl
-  - name: pytorch
-    communicators:
-    - nccl
   test_coverage:
   - func
   - quantization
   quantization:
     turbomind:
-    - awq
-    pytorch:
     - awq

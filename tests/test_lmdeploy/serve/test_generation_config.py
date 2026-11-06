@@ -20,7 +20,7 @@ _DEFAULTS = GenerationConfig()
 
 
 class _FakeEngineConfig:
-    logprobs_mode = None
+    pass
 
 
 class _FakeSessionManager:

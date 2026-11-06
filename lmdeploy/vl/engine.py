@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
+from lmdeploy.messages import TurbomindEngineConfig
 from lmdeploy.utils import is_bf16_supported
 from lmdeploy.vl.model.builder import load_vl_model
 
@@ -27,10 +27,6 @@ def _get_hf_config_mm_feature_dtype(hf_config) -> torch.dtype | None:
 
     configs = [hf_config, getattr(hf_config, 'text_config', None), getattr(hf_config, 'llm_config', None)]
 
-    # for qwen3-omni thinker
-    if hasattr(hf_config, 'thinker_config'):
-        configs.append(hf_config.thinker_config)
-
     for config in configs:
         if config is None:
             continue
@@ -49,13 +45,12 @@ def _resolve_mm_feature_dtype(hf_config, backend_config) -> torch.dtype | None:
     """
     dtype = _get_hf_config_mm_feature_dtype(hf_config)
     backend_dtype = getattr(backend_config, 'dtype', 'auto')
-    device_type = getattr(backend_config, 'device_type', 'cuda')
     if backend_dtype != 'auto':
         dtype = {
             'float16': torch.float16,
             'bfloat16': torch.bfloat16,
         }[backend_dtype]
-    if dtype == torch.bfloat16 and not is_bf16_supported(device_type):
+    if dtype == torch.bfloat16 and not is_bf16_supported():
         dtype = torch.float16
     return dtype
 
@@ -76,23 +71,17 @@ class ImageEncoder:
     def __init__(
         self,
         model_path: str,
-        backend: str,
-        vision_config: VisionConfig = None,
-        backend_config: TurbomindEngineConfig | PytorchEngineConfig | None = None,
+        backend_config: TurbomindEngineConfig | None = None,
         trust_remote_code: bool = False,
     ):
         self.model = load_vl_model(model_path,
-                                   backend,
+                                   'turbomind',
                                    backend_config=backend_config,
                                    trust_remote_code=trust_remote_code)
         self.mm_feature_dtype = _resolve_mm_feature_dtype(
             getattr(self.model, 'hf_config', None), backend_config)
         if self.model is not None and hasattr(self.model, 'set_mm_feature_dtype'):
             self.model.set_mm_feature_dtype(self.mm_feature_dtype)
-        if vision_config is None:
-            vision_config = VisionConfig()
-        self.vision_config = vision_config
-        self.max_batch_size = vision_config.max_batch_size
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._uses_new_preprocess = self._is_new_preprocess_api(self.model)
         torch.cuda.empty_cache()
@@ -121,47 +110,28 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def async_infer(self, messages: list[dict]) -> list[dict]:
-        """Get multimodal embedding.
-
-        Args:
-            messages (list[dict]): a list of message, which is the output
-            of `preprocess()`
-        """
-        future = asyncio.get_event_loop().run_in_executor(self.executor, self.model.forward, messages,
-                                                          self.max_batch_size)
-        future.add_done_callback(_raise_exception_on_finish)
-        outputs = await future
-        return outputs
-
-    async def wrap_for_pytorch(
+    async def wrap_for_turbomind(
         self,
         messages: list[dict],
         chat_template,
         tokenizer,
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
-    ) -> list[dict]:
-        """
+    ) -> dict:
+        """Pack preprocessed inputs for TurboMind's native vision encoder.
+
         Args:
             messages (list[dict]): a list of message, which is supposed to be
                 the output of `preprocess`
+            chat_template: the chat template
+            tokenizer: the tokenizer model
+            tools: the tools for the chat template
+            chat_template_kwargs: additional arguments for the chat template
 
         Returns:
-            list[dict]: a list of dicts passed to pytorch engine_instance's forward.
-                Each dict has the following structure::
-
-                    {
-                        'prompt': 'the prompt after applying chat template',
-                        'input_ids': [],
-                        'multimodal': {
-                            'pixel_values': torch.Tensor,
-                            ...
-                        },
-                    }
+            dict: ``prompt``, ``input_ids`` and the ``multimodal`` items consumed by the engine.
         """
-        has_input_ids = self.model.has_input_ids(messages)
-        if not has_input_ids:
+        if not self.model.has_input_ids(messages):
             result = self.model.to_pytorch(messages,
                                            chat_template,
                                            tokenizer,
@@ -173,48 +143,4 @@ class ImageEncoder:
         for i, message in enumerate(messages):
             if isinstance(message['content'], list):
                 messages[i]['preprocess'] = None
-        return result
-
-    async def wrap_for_turbomind(
-        self,
-        messages: list[dict],
-        chat_template,
-        tokenizer,
-        tools: list[object] | None = None,
-        chat_template_kwargs: dict | None = None,
-    ) -> dict:
-        """
-        Args:
-            messages (list[dict]): a list of message, which is supposed to be
-                the output of `async_infer`
-
-        Returns:
-            dict: a dict passed to turbomind engine_instance's forward.
-                The dict has the following structure::
-
-                    {
-                        'prompt': 'the prompt after applying chat template',
-                        'input_ids': [],
-                        'input_embeddings': list[torch.Tensor],
-                        'input_embedding_ranges': list[torch.Tensor],
-                        ...
-                    }
-        """
-        if self.model._turbomind_native_vision:
-            return await self.wrap_for_pytorch(messages,
-                                               chat_template,
-                                               tokenizer,
-                                               tools=tools,
-                                               chat_template_kwargs=chat_template_kwargs)
-
-        result = self.model.to_turbomind(messages,
-                                         chat_template,
-                                         tokenizer,
-                                         tools=tools,
-                                         chat_template_kwargs=chat_template_kwargs)
-        # clear data
-        for i, message in enumerate(messages):
-            if isinstance(message['content'], list):
-                messages[i]['preprocess'] = None
-                messages[i]['forward'] = None
         return result

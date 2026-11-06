@@ -183,39 +183,11 @@ def test_handler_rejects_explicit_session_id_for_multiple_choices(
     assert context.session_manager.sessions == {}
 
 
-def test_handler_rejects_cache_migration_for_multiple_choices(
-        chat_endpoint, fake_raw_request):
-    endpoint, context = chat_endpoint
-    fake_raw_request._payload = {'with_cache': True}
-    response = asyncio.run(endpoint(_request(n=2), fake_raw_request))
-    assert isinstance(response, JSONResponse)
-    assert response.status_code == 400
-    assert 'cache migration' in response.body.decode()
-    assert context.async_engine.call_count == 0
-
-
-def test_distserve_proxy_rejects_multiple_choices(monkeypatch):
-    from lmdeploy.pytorch.disagg.config import ServingStrategy
-    from lmdeploy.serve.proxy import proxy
-
-    async def model_exists(model):
-        return None
-
-    monkeypatch.setattr(proxy.node_manager, 'check_request_model',
-                        model_exists)
-    monkeypatch.setattr(proxy.node_manager, 'serving_strategy',
-                        ServingStrategy.DistServe)
-    response = asyncio.run(proxy.chat_completions_v1(_request(n=2)))
-    assert isinstance(response, JSONResponse)
-    assert response.status_code == 400
-    assert 'DistServe' in response.body.decode()
-
-
 def test_prompt_cache_usage_is_counted_once(chat_endpoint, fake_raw_request):
 
     class CachedEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -236,8 +208,6 @@ def test_prompt_cache_usage_is_counted_once(chat_endpoint, fake_raw_request):
                     finish_reason='stop',
                     logprobs=None,
                     cached_tokens=index,
-                    routed_experts=None,
-                    cache_block_ids=None,
                 )
 
             return generate()
@@ -255,7 +225,7 @@ def test_streaming_multiple_choices_preserves_each_inner_parser(
 
     class MultiChunkEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -277,8 +247,6 @@ def test_streaming_multiple_choices_preserves_each_inner_parser(
                         finish_reason=None,
                         logprobs=None,
                         cached_tokens=0,
-                        routed_experts=None,
-                        cache_block_ids=None,
                     )
                 yield SimpleNamespace(
                     response='',
@@ -288,8 +256,6 @@ def test_streaming_multiple_choices_preserves_each_inner_parser(
                     finish_reason='stop',
                     logprobs=None,
                     cached_tokens=0,
-                    routed_experts=None,
-                    cache_block_ids=None,
                 )
 
             return generate()
@@ -311,7 +277,7 @@ def test_fanout_error_cancels_siblings_and_cleans_sessions(
 
     class FailingEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -398,7 +364,7 @@ def test_streaming_cancelled_choice_fails_without_hanging(
 
     class CancelledChoiceEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -447,7 +413,7 @@ def test_streaming_generation_failure_cleans_all_sessions(
 
     class FailingEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -496,7 +462,7 @@ def test_stream_usage_is_omitted_when_a_choice_has_no_usage(
 
     class IncompleteUsageEngine(_PreprocessingEngine):
         model_name = 'fake-model'
-        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+        backend_config = SimpleNamespace()
 
         def __init__(self, original_engine):
             self.session_mgr = original_engine.session_mgr
@@ -517,8 +483,6 @@ def test_stream_usage_is_omitted_when_a_choice_has_no_usage(
                     finish_reason='stop' if index == 1 else None,
                     logprobs=None,
                     cached_tokens=0,
-                    routed_experts=None,
-                    cache_block_ids=None,
                 )
 
             return generate()

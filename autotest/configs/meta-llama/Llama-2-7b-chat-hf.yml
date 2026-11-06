@@ -1,14 +1,10 @@
 # HF model id: meta-llama/Llama-2-7b-chat-hf
-
 a100:
 - model_type: chat
   engine_config:
     tp: 1
   backends:
   - name: turbomind
-    communicators:
-    - nccl
-  - name: pytorch
     communicators:
     - nccl
   test_coverage:
@@ -19,8 +15,5 @@ a100:
   quantization:
     turbomind:
     - awq
-    pytorch:
-    - awq
-    - w8a8
   deps:
     transformers: 4.57.6
