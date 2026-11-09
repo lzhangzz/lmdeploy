@@ -15,8 +15,6 @@ void extend_to_u16(uint16_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
 
 void compact_to_u4(uint4_t* dst, const uint8_t* src, size_t n, cudaStream_t st = {});
 
-void transpose_u4(uint4_t* dst, const uint4_t* src, int s, int c, cudaStream_t st = {});
-
 void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t n, cudaStream_t st = {});
 
 template<class T>

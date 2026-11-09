@@ -23,7 +23,6 @@ add_library(core STATIC
         scope.cc
         buffer.cc
         layout.cc
-        data_format.cc
         tensor.cc
         module.cc
         registry.cc

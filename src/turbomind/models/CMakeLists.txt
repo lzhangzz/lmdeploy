@@ -66,7 +66,6 @@ target_link_libraries(models PUBLIC
         activation_kernels
         activation
         attention
-        decoding_kernels
         quantization_kernels
         cross_entropy_kernels
         unfused_attention_kernels

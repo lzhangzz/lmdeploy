@@ -139,11 +139,9 @@ add_library(gemm2_core
         kernel.cu
         registry.cu
         dispatch_cache.cu
-        gpu_metric.cu
         convert_v3.cu
         sm90_mixed_pack.cu
         cast.cu
-        unpack.cu
         context.cu
         tuner/cache_utils.cu
         tuner/measurer.cu

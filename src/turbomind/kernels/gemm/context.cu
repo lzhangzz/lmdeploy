@@ -8,7 +8,6 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
-#include "src/turbomind/utils/monotonic.h"
 #include <algorithm>
 #include <cub/block/block_reduce.cuh>
 #include <iostream>

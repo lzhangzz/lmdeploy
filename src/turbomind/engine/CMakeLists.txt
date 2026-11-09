@@ -8,7 +8,6 @@ add_library(engine STATIC
     cache_registry.cc
     gateway.cc
     request.cc
-    request_queue.cc
     scheduler.cc
     model_request.cc
     model_executor.cc
