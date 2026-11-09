@@ -22,7 +22,7 @@
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/models/context.h"
 #include "src/turbomind/models/ffn_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind {
 

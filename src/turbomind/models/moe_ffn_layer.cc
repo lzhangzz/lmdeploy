@@ -16,9 +16,9 @@
 #include "src/turbomind/comm/nccl/deepep/token_dispatcher.h"
 #endif
 
-#include "src/turbomind/models/llama/LlamaFfnLayer.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/llama/moe_ffn_layer.h"
+#include "src/turbomind/models/ffn_layer.h"
+#include "src/turbomind/models/linear.h"
+#include "src/turbomind/models/moe_ffn_layer.h"
 #include "src/turbomind/models/moe_weight.h"
 
 #include "src/turbomind/utils/anomaly_handler.h"

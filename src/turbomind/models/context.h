@@ -12,7 +12,7 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/core.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind {
 

@@ -115,11 +115,11 @@ Reading symbols from python3...
 (gdb) set directories /workdir/lmdeploy
 
 # Set a breakpoint using the relative path, e.g.
-(gdb) b src/turbomind/models/llama/BlockManager.cc:104
+(gdb) b src/turbomind/models/language_model.cc:176
 
 # When it shows
 # ```
-# No source file named src/turbomind/models/llama/BlockManager.cc.
+# No source file named src/turbomind/models/language_model.cc.
 # Make breakpoint pending on future shared library load? (y or [n])
 # ```
 # Just type `y` and press enter

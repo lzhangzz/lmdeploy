@@ -17,7 +17,7 @@
 
 // Modified from https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/layers/FfnLayer.h
 
-#include "src/turbomind/models/llama/LlamaFfnLayer.h"
+#include "src/turbomind/models/ffn_layer.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
 #include "src/turbomind/utils/anomaly_handler.h"

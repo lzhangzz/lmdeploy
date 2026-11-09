@@ -1,4 +1,4 @@
-#include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
+#include "src/turbomind/models/delta_net_layer.h"
 
 #include <cstdint>
 #include <cstdio>

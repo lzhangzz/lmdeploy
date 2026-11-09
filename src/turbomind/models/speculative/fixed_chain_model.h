@@ -1,9 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include "src/turbomind/models/attention_layer.h"
 #include "src/turbomind/models/context.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/speculative/fixed_chain_policy.h"
 #include "src/turbomind/models/speculative/fixed_chain_setup.h"
 #include "src/turbomind/models/speculative/speculative_model.h"

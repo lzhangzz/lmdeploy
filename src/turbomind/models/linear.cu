@@ -14,7 +14,7 @@
 #include "src/turbomind/kernels/quantization.h"
 
 #include "src/turbomind/models/linear_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/linear.h"
 
 #include "src/turbomind/utils/cuda_utils.h"
 

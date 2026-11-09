@@ -33,7 +33,7 @@
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/context.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
+#include "src/turbomind/models/linear.h"
 
 namespace turbomind {
 

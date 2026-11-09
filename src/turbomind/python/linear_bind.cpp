@@ -21,8 +21,8 @@
 #include "src/turbomind/kernels/gemm/moe_utils_v2.h"
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/quantization.h"
+#include "src/turbomind/models/linear.h"
 #include "src/turbomind/models/linear_weight.h"
-#include "src/turbomind/models/llama/LlamaLinear.h"
 #include "src/turbomind/models/moe_weight.h"
 
 namespace py = pybind11;

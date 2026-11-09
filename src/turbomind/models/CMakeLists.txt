@@ -41,12 +41,12 @@ add_library(models STATIC
         internvit/internvit_block_weight.cc
         internvit/internvit_weight.cc
         internvit/internvit.cc
-        llama/LlamaLinear.cu
-        llama/LlamaFfnLayer.cc
-        llama/moe_ffn_layer.cc
-        llama/unified_decoder.cc
-        llama/unified_attention_layer.cc
-        llama/GatedDeltaNetLayer.cc)
+        linear.cu
+        ffn_layer.cc
+        moe_ffn_layer.cc
+        decoder.cc
+        attention_layer.cc
+        delta_net_layer.cc)
 set_property(TARGET models PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET models PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(models PUBLIC

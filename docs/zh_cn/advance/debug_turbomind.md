@@ -115,11 +115,11 @@ Reading symbols from python3...
 (gdb) set directories /workdir/lmdeploy
 
 # 使用相对路径设置断点，例如
-(gdb) b src/turbomind/models/llama/BlockManager.cc:104
+(gdb) b src/turbomind/models/language_model.cc:176
 
 # 当出现
 # ```
-# No source file named src/turbomind/models/llama/BlockManager.cc.
+# No source file named src/turbomind/models/language_model.cc.
 # Make breakpoint pending on future shared library load? (y or [n])
 # ```
 # 输入 y 并回车
