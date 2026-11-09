@@ -2,8 +2,8 @@
 
 #pragma once
 
+#include "src/turbomind/kernels/attention/rope_params.h"
 #include "src/turbomind/kernels/core/array_ops.h"
-#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 

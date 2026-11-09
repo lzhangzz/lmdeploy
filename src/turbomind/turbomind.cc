@@ -16,9 +16,9 @@
 #include "src/turbomind/engine/gateway.h"
 #include "src/turbomind/engine/model_request.h"
 
+#include "src/turbomind/engine/engine_param.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/models/speculative/registry.h"

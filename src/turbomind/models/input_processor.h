@@ -1,7 +1,7 @@
 #pragma once
 
 #include "src/turbomind/engine/batch.h"
-#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/engine/engine_param.h"
 
 namespace turbomind {
 

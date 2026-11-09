@@ -3,8 +3,8 @@
 #include "src/turbomind/models/attention_weight.h"
 
 #include "src/turbomind/core/registry.h"
+#include "src/turbomind/kernels/attention/rope_params.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/models/llama/llama_rope.h"
 
 namespace turbomind {
 

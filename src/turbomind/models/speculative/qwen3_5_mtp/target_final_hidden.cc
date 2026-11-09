@@ -4,7 +4,7 @@
 
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/context.h"
 
 namespace turbomind {
 

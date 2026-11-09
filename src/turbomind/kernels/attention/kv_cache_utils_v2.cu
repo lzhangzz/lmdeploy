@@ -4,11 +4,11 @@
 
 #include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/attention/quant_policy.h"
 #include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/attention/rotary_embedding.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/thread_map.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {

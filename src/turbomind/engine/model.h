@@ -5,12 +5,12 @@
 #include <tuple>
 
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/engine/engine_param.h"
 #include "src/turbomind/generation/generation.h"
 #include "src/turbomind/models/batch_status.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/input_processor.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/output_processor.h"
 #include "src/turbomind/models/vision_model.h"
 

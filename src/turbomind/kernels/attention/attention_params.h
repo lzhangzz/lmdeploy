@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-#include "src/turbomind/models/llama/llama_rope.h"
+#include "src/turbomind/kernels/attention/rope_params.h"
 
 namespace turbomind {
 

@@ -36,10 +36,15 @@ set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET memory_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(memory_utils PUBLIC cuda_utils)
 
+add_library(tensor_compare STATIC tensor_compare.cu)
+set_property(TARGET tensor_compare PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET tensor_compare PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(tensor_compare PUBLIC cuda_utils)
+
 add_library(anomaly_handler STATIC anomaly_handler.cu)
 set_property(TARGET anomaly_handler PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET anomaly_handler PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(anomaly_handler PUBLIC cuda_utils)
+target_link_libraries(anomaly_handler PUBLIC cuda_utils tensor_compare)
 
 add_library(parser STATIC parser.cc)
 set_property(TARGET parser PROPERTY POSITION_INDEPENDENT_CODE  ON)

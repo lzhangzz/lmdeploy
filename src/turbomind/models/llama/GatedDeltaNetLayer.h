@@ -8,11 +8,11 @@
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/cache_registry.h"
+#include "src/turbomind/engine/engine_param.h"
 #include "src/turbomind/kernels/linear_attn/delta_rule.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 

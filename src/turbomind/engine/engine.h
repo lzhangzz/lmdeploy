@@ -6,9 +6,9 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/gateway.h"
 
+#include "src/turbomind/engine/engine_param.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
 

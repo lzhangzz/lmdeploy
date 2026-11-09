@@ -5,9 +5,9 @@
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/padded_row_allgather.h"
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/engine/engine_param.h"
 #include "src/turbomind/kernels/core/math.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/context.h"
 
 namespace turbomind {
 

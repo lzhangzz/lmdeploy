@@ -3,8 +3,8 @@
 
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/engine/batch.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/engine/engine_param.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/vision_model_weight.h"
 
 #include <array>

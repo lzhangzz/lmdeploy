@@ -47,7 +47,6 @@ add_library(models STATIC
         llama/unified_decoder.cc
         llama/unified_attention_layer.cc
         llama/llama_kernels.cu
-        llama/llama_utils.cu
         llama/mla_utils.cu
         llama/GatedDeltaNetLayer.cc
         llama/gated_delta_net_kernels.cu)

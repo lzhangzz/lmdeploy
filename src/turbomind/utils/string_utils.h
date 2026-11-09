@@ -81,4 +81,31 @@ inline std::string arr2str(T* arr, size_t size)
     ss << ")";
     return ss.str();
 }
+
+namespace detail {
+
+template<typename T>
+std::string to_string(T x)
+{
+    return std::to_string(x);
+}
+
+inline std::string to_string(std::string x)
+{
+    return x;
+}
+
+}  // namespace detail
+
+template<typename... Args>
+std::string Concat(std::string key, Args&&... args)
+{
+    std::vector<std::string> args_str{detail::to_string((Args &&) args)...};
+    for (const auto& s : args_str) {
+        key.append("_");
+        key.append(s);
+    }
+    return key;
+}
+
 }  // namespace turbomind

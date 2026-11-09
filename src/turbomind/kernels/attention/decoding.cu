@@ -3,8 +3,8 @@
 #include "decoding.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/scope.h"
+#include "src/turbomind/kernels/attention/quant_policy.h"
 #include "src/turbomind/kernels/attention/registry.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {

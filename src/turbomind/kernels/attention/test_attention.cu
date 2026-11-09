@@ -6,8 +6,8 @@
 #include "kv_cache_utils_v2.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/attention/attention_params.h"
+#include "src/turbomind/kernels/attention/quant_policy.h"
 #include "src/turbomind/kernels/attention/reference.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "test_utils.h"
 #include <algorithm>

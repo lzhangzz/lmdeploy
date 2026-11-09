@@ -9,7 +9,7 @@
 #include <cutlass/fast_math.h>
 
 #include "src/turbomind/core/data_type.h"
-#include "src/turbomind/models/llama/llama_rope.h"
+#include "src/turbomind/kernels/attention/rope_params.h"
 
 namespace turbomind::verification_attention {
 

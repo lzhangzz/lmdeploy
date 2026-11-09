@@ -1,10 +1,10 @@
 #pragma once
 
 #include "src/turbomind/comm/device_comm.h"
+#include "src/turbomind/engine/engine_param.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
-#include "src/turbomind/models/llama/context.h"
-#include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 

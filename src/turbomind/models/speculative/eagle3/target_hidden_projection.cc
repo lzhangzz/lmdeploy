@@ -6,9 +6,9 @@
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/core/math.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/models/llama/LlamaLinear.h"
-#include "src/turbomind/models/llama/context.h"
 
 namespace turbomind {
 

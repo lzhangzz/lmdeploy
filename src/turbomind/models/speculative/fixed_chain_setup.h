@@ -2,7 +2,7 @@
 #pragma once
 
 #include "src/turbomind/core/buffer.h"
-#include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/context.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
 #include <vector>

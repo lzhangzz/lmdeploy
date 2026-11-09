@@ -20,9 +20,9 @@
 #include "src/turbomind/models/llama/LlamaFfnLayer.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/kernels/activation.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/nvtx_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 namespace turbomind {
 

@@ -12,7 +12,6 @@
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
-#include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
@@ -20,6 +19,7 @@
 #include "src/turbomind/models/speculative/hidden_state_tap.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
+#include "src/turbomind/utils/string_utils.h"
 
 #include "src/turbomind/engine/request.h"
 
