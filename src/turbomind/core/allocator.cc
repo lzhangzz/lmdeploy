@@ -65,11 +65,6 @@ public:
         return stream_;
     }
 
-    void trim(size_t bytes_to_keep)
-    {
-        TM_CUDA_CHECK(cudaMemPoolTrimTo(pool_, bytes_to_keep));
-    }
-
 private:
     cudaMemPool_t pool_;
     Stream        stream_;

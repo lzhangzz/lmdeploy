@@ -53,17 +53,6 @@ TM_DEVICE void* map_to_cta(void* ptr, int cta_id)
     return ret;
 }
 
-TM_DEVICE void st_shared_cluster(uint32_t ptr, int value)
-{
-    asm volatile("st.shared::cluster.s32 [%0], %1;\n" ::"r"(ptr), "r"(value));
-}
-
-template<class T, class M>
-constexpr int member_offset(M T::*member)
-{
-    return reinterpret_cast<std::size_t>(&(reinterpret_cast<T*>(0)->*member));
-}
-
 template<Order order,
          class Cluster,
          int  striped_m,

@@ -379,12 +379,6 @@ struct Sm90FusedGdrFwd {
     static_assert(OSharedStageStride<__nv_bfloat16, kContextParallelGdrBlockDv>() == 4096);
     static_assert(OSharedStageStride<__nv_bfloat16, kContextParallelGdrBlockDv>() % 1024 == 0);
 
-    static inline bool CanUseFusedGdrFwd(const Problem& problem)
-    {
-        return problem.arch == 900 && problem.input_dtype == kBfloat16 && problem.batch == problem.sequence_num
-               && problem.hv % problem.hq == 0 && problem.head_dim == kHeadDim && problem.chunk_size == kChunkSize;
-    }
-
     static __device__ __forceinline__ void AcquireAndPrefetchDataTmaDescriptors(const CUtensorMap* desc, int tid)
     {
         if (tid < 32) {
@@ -392,14 +386,6 @@ struct Sm90FusedGdrFwd {
                 cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(&desc[idx]));
                 cute::prefetch_tma_descriptor(&desc[idx]);
             }
-        }
-    }
-
-    static __device__ __forceinline__ void AcquireAndPrefetchStateTmaDescriptor(const CUtensorMap* desc, int tid)
-    {
-        if (tid == 0) {
-            cute::tma_descriptor_fence_acquire(reinterpret_cast<const cute::TmaDescriptor*>(desc));
-            cute::prefetch_tma_descriptor(desc);
         }
     }
 

@@ -47,11 +47,6 @@ inline int Sm90DirectFusedBlockDv(const Problem& problem)
     return 32;
 }
 
-inline int Sm90RecurrentPipelineStages(int)
-{
-    return 1;
-}
-
 inline int FusedChunkGdrBlockDv(const Problem& problem, bool context_parallel)
 {
     if (context_parallel && problem.chunk_size == kGdrSelectorChunk32) {

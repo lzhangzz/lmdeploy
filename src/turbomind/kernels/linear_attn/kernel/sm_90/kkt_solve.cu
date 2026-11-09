@@ -138,13 +138,6 @@ struct Sm90KktSolve {
         return sizeof(SharedStorage);
     }
 
-    static __device__ __forceinline__ int DenseTmaCoord(int batch_id, int total_tokens, int head_span, int coord)
-    {
-        return static_cast<int>(
-            (static_cast<int64_t>(batch_id) * static_cast<int64_t>(total_tokens) * static_cast<int64_t>(head_span))
-            + static_cast<int64_t>(coord));
-    }
-
     static __device__ __forceinline__ int CeilDiv(int value, int divisor)
     {
         return (value + divisor - 1) / divisor;

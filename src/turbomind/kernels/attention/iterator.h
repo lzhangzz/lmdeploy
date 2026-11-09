@@ -68,16 +68,6 @@ struct BaseGmemIterator {
     }
 };
 
-template<class T, class Layout>
-struct BaseSmemIterator {
-    static constexpr int kElemSize = sizeof(T);
-
-    using Accessor = SmemAccessor<T, Layout>;
-    T* smem_;
-
-    __device__ explicit BaseSmemIterator(T* smem): smem_{smem} {}
-};
-
 template<class Iterator0, class Iterator1>
 struct CombinedIterator {
     Iterator0 iterator0_;

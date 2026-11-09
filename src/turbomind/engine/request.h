@@ -446,11 +446,6 @@ public:
         max_fwd_tokens_ -= row.query_count;
     }
 
-    int remaining_tokens() const noexcept
-    {
-        return max_fwd_tokens_;
-    }
-
 private:
     int max_fwd_tokens_{};
 };

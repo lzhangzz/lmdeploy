@@ -17,11 +17,6 @@ namespace turbomind::gemm {
 
 class Family;
 
-struct KernelMetric {
-    int64_t mio_cost;
-    int64_t mma_cost;
-};
-
 class Kernel {
 public:
     explicit Kernel(const Family& family);
@@ -69,16 +64,6 @@ public:
     const KernelInfo& info() const noexcept
     {
         return info_;
-    }
-
-    int3 cta_tile_size() const noexcept
-    {
-        return desc_.cta_tile;
-    }
-
-    int3 warp_tile_size() const noexcept
-    {
-        return desc_.mma_tile;
     }
 
     int chunk_size_k() const noexcept

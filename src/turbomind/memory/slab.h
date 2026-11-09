@@ -74,10 +74,6 @@ public:
     {
         return free_list_.size() == static_cast<size_t>(object_count_);
     }
-    bool is_partial() const noexcept
-    {
-        return !is_full() && !is_empty();
-    }
     size_t n_free() const noexcept
     {
         return free_list_.size();

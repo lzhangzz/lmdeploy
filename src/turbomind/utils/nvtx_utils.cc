@@ -22,40 +22,6 @@
 #endif
 
 namespace ft_nvtx {
-std::string getScope()
-{
-    return scope;
-}
-void addScope(std::string name)
-{
-    scope = scope + name + "/";
-    return;
-}
-void setScope(std::string name)
-{
-    scope = name + "/";
-    return;
-}
-void resetScope()
-{
-    scope = "";
-    return;
-}
-void setDeviceDomain(int deviceId)
-{
-    domain = deviceId;
-    return;
-}
-void resetDeviceDomain()
-{
-    domain = 0;
-    return;
-}
-int getDeviceDomain()
-{
-    return domain;
-}
-
 bool isEnableNvtx()
 {
     if (!has_read_nvtx_env) {
@@ -69,15 +35,14 @@ bool isEnableNvtx()
 void ftNvtxRangePush(std::string_view name)
 {
 #ifdef USE_NVTX
-    auto registered_name = getScope();
-    registered_name.append(name.data(), name.size());
+    const std::string registered_name{name};
 
     nvtxStringHandle_t name_id = nvtxDomainRegisterStringA(nullptr, registered_name.c_str());
     nvtxEventAttributes_t attributes = {0};
     attributes.messageType           = NVTX_MESSAGE_TYPE_REGISTERED;
     attributes.message.registered    = name_id;
     attributes.payloadType           = NVTX_PAYLOAD_TYPE_INT32;
-    attributes.payload.iValue        = getDeviceDomain();
+    attributes.payload.iValue        = 0;
     nvtxRangePushEx(&attributes);
 #else
     (void)name;

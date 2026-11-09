@@ -176,18 +176,6 @@ constexpr bool operator&(const DispatchPolicy& a, const DispatchPolicy& b)
 class Kernel;
 class Context;
 
-struct Tape {
-    int   ctas;
-    int   max_num;
-    int   max_ctas;
-    char* buffer;
-    int4* gemm_shapes;
-    int4* tiled_shapes;
-    int4* tile_offsets;
-    int2* iter_k_ranges;
-    int*  tile_ids;
-};
-
 struct Operation {
     DispatchPolicy dispatch;
     Epilogue       epilogue;

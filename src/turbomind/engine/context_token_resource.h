@@ -24,11 +24,6 @@ public:
         max_context_tokens_ -= Charge(s, row);
     }
 
-    int remaining_tokens() const noexcept
-    {
-        return max_context_tokens_;
-    }
-
 private:
     static int ContextLen(const Sequence& s) noexcept
     {

@@ -219,13 +219,6 @@ public:
 
     ~LogicalBlockPool();
 
-    void ResetBlockSize(int block_size)
-    {
-        TM_CHECK_GT(block_size, 0);
-        TM_CHECK_EQ(live_, 0);
-        block_size_ = block_size;
-    }
-
     int block_size() const noexcept
     {
         return block_size_;

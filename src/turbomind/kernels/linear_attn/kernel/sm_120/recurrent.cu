@@ -67,12 +67,6 @@ struct Sm120GdrRecurrent {
     static_assert(kRecurrentBarrierStateConvert + cutlass::arch::NamedBarrier::ReservedNamedBarrierCount
                   < cutlass::arch::NamedBarrier::HardwareMaxNumNamedBarriers);
 
-    static CUTE_HOST_DEVICE constexpr auto StateSmemLayout()
-    {
-        return cute::Layout<cute::Shape<cute::Int<kHeadDim>, cute::Int<BlockDv>>,
-                            cute::Stride<cute::Int<BlockDv>, cute::_1>>{};
-    }
-
     struct __align__(1024) SharedStorage
     {
         __align__(1024) float        state[kRecurrentStages][kHeadDim][BlockDv];
@@ -204,37 +198,6 @@ struct Sm120GdrRecurrent {
     static __device__ __forceinline__ constexpr int StateTmaBytes()
     {
         return kHeadDim * BlockDv * static_cast<int>(sizeof(StateT));
-    }
-
-    static __device__ __forceinline__ void UnpackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)
-    {
-        if constexpr (!std::is_same_v<StateT, float>) {
-            static_assert(std::is_same_v<StateT, __nv_bfloat16>);
-            static_assert(BlockDv % 2 == 0);
-            constexpr int kPairs = kHeadDim * BlockDv / 2;
-            static_assert((kPairs & (kPairs - 1)) == 0);
-            static_assert(alignof(decltype(state_stage)) >= alignof(__nv_bfloat162));
-            auto* overlay = reinterpret_cast<__nv_bfloat162*>(&state_stage[0][0]);
-            // The compact bf16 TMA payload aliases the low half of the float tile;
-            // expand high-to-low so each phase overwrites only pairs already read.
-            for (int begin = kPairs / 2; begin > 0; begin >>= 1) {
-                for (int linear = begin + tid; linear < 2 * begin; linear += threads) {
-                    const int    element    = 2 * linear;
-                    const int    dk         = element / BlockDv;
-                    const int    dv         = element - dk * BlockDv;
-                    const float2 pair       = __bfloat1622float2(overlay[linear]);
-                    state_stage[dk][dv]     = pair.x;
-                    state_stage[dk][dv + 1] = pair.y;
-                }
-                cutlass::arch::NamedBarrier::sync(threads, kRecurrentBarrierStateConvert);
-            }
-            if (tid == 0) {
-                const float2 pair = __bfloat1622float2(overlay[0]);
-                state_stage[0][0] = pair.x;
-                state_stage[0][1] = pair.y;
-            }
-            cutlass::arch::NamedBarrier::sync(threads, kRecurrentBarrierStateConvert);
-        }
     }
 
     static __device__ __forceinline__ void PackStateTma(float (&state_stage)[kHeadDim][BlockDv], int tid, int threads)

@@ -51,8 +51,6 @@ public:
     // (max_mn_tiles, max_k_tiles) -> max_splits
 
     // CTA Swizzling
-    // - GemmScheduler: return get_log_tile
-    // - DynamicScheduler: bypass
 
     // Cost estimation
     //

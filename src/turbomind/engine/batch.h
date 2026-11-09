@@ -89,12 +89,6 @@ struct BatchData {
     {
         return Buffer{&self, 1, kCPU};
     }
-
-    void Notify()
-    {
-        next.Record(core::Context::stream());
-        promise.set_value(next);
-    }
 };
 
 }  // namespace turbomind

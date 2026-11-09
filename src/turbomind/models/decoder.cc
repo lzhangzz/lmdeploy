@@ -407,10 +407,6 @@ void Decoder::Forward(int                             phase,
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);
 
         layer_attention_input = local_hidden_states;
-
-        // if (layer == layer_num_ - 1) {
-        //     args.at("batch").data<BatchData*>()[0]->Notify();
-        // }
     }
 
     // Token indices selected for decoding

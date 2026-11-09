@@ -130,12 +130,6 @@ public:
             NCCLCHECK(ncclGetLsaDevicePointer(window_, 0, i, &nvl_window_ptrs_[i]));
     }
 
-    void* get_sym_ptr(void* ptr, const int& dst_rank_idx) const
-    {
-        const auto offset = static_cast<uint8_t*>(ptr) - static_cast<uint8_t*>(mapped_window_ptr_);
-        return static_cast<uint8_t*>(nvl_window_ptrs_[dst_rank_idx]) + offset;
-    }
-
     ~NCCLSymmetricMemoryContext()
     {
         // Deregister window

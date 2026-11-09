@@ -188,37 +188,6 @@ struct FastRoPE {
         }
     }
 
-    template<typename T>
-    __device__ void fill_coefficients(Array<T, N>& cs, float timestep) const
-    {
-        if (param_.mrope_mode == MropeMode::kNone) {
-            PRAGMA_UNROLL
-            for (int i = 0; i < N; i += 2) {
-                fill_coefficient_pair(cs, i, timestep);
-            }
-        }
-        else if (param_.mrope_mode == MropeMode::kChunked) {
-            fill_mrope_coefficients<MropeMode::kChunked>(cs, timestep);
-        }
-        else if (param_.mrope_mode == MropeMode::kInterleaved) {
-            fill_mrope_coefficients<MropeMode::kInterleaved>(cs, timestep);
-        }
-    }
-
-    template<typename T>
-    __device__ void apply_coefficients(Array<T, N>& x, const Array<T, N>& cs) const
-    {
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            T tmp0 = cs[i] * x[i] - cs[i + 1] * x[i + 1];
-            T tmp1 = cs[i] * x[i + 1] + cs[i + 1] * x[i];
-            if (is_valid_) {
-                x[i]     = tmp0;
-                x[i + 1] = tmp1;
-            }
-        }
-    }
-
     __device__ __forceinline__ MropeCoord get_mrope_coord(float timestep) const
     {
         if (timestep < *param_.mrope.length) {
@@ -291,18 +260,6 @@ struct FastRoPE {
         }
     }
 
-    template<typename T>
-    __device__ __forceinline__ void
-    fill_coefficient_pair(Array<T, N>& cs, int i, float timestep) const
-    {
-        float c, s;
-        sincosf(timestep * inv_freq_[i / 2], &s, &c);
-        s *= attention_scaling_;
-        c *= attention_scaling_;
-        cs[i]     = (T)c;
-        cs[i + 1] = (T)s;
-    }
-
     template<MropeMode mode, typename T>
     __device__ __forceinline__ void apply_mrope_impl(Array<T, N>& x, float timestep, int token_idx) const
     {
@@ -327,7 +284,6 @@ struct FastRoPE {
         }
     }
 
-
     template<MropeMode mode, typename T>
     __device__ __forceinline__ void apply_mrope_impl(
         Array<T, N>& x, Array<T, N>& y, float timestep) const
@@ -338,19 +294,6 @@ struct FastRoPE {
             const int pair_idx = (i + idx_) >> 1;
             const int ts       = select_mrope_timestep<mode>(pair_idx, coord);
             rotate_pair(x, y, i, (float)ts);
-        }
-    }
-
-    template<MropeMode mode, typename T>
-    __device__ __forceinline__ void
-    fill_mrope_coefficients(Array<T, N>& cs, float timestep) const
-    {
-        const MropeCoord coord = get_mrope_coord(timestep);
-        PRAGMA_UNROLL
-        for (int i = 0; i < N; i += 2) {
-            const int pair_idx = (i + idx_) >> 1;
-            const int ts       = select_mrope_timestep<mode>(pair_idx, coord);
-            fill_coefficient_pair(cs, i, (float)ts);
         }
     }
 };
@@ -400,21 +343,6 @@ struct RotaryEmbedding {
         }
     }
 };
-template<class C, class T>
-__device__ void ApplyRotaryEmbedding(Array<T, 4>& x, float base, int dims, int ti, int di)
-{
-    PRAGMA_UNROLL
-    for (int d1 = 0; d1 < 2; ++d1) {
-        int    d        = d1 * 8 + di;
-        float  inv_freq = ti / powf(base, d / (float)dims);
-        float2 cs;
-        sincosf(inv_freq, &cs.y, &cs.x);
-        C x1          = (C)cs.x * (C)x[d1 * 2 + 0] - (C)cs.y * (C)x[d1 * 2 + 1];
-        C x2          = (C)cs.x * (C)x[d1 * 2 + 1] + (C)cs.y * (C)x[d1 * 2 + 0];
-        x[d1 * 2 + 0] = (T)x1;
-        x[d1 * 2 + 1] = (T)x2;
-    }
-}
 
 template<int N, int C = 8>
 struct RoPE {

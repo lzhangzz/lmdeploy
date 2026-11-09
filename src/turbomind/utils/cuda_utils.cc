@@ -58,35 +58,5 @@ int getSMCount()
     return sm_count;
 }
 
-std::string getDeviceName()
-{
-    int device{-1};
-    TM_CUDA_CHECK(cudaGetDevice(&device));
-    cudaDeviceProp props;
-    TM_CUDA_CHECK(cudaGetDeviceProperties(&props, device));
-    return std::string(props.name);
-}
-
-int getDevice()
-{
-    int current_dev_id = 0;
-    TM_CUDA_CHECK(cudaGetDevice(&current_dev_id));
-    return current_dev_id;
-}
-
-int getDeviceCount()
-{
-    int count = 0;
-    TM_CUDA_CHECK(cudaGetDeviceCount(&count));
-    return count;
-}
-
-void trim_default_mempool(int device_id)
-{
-    cudaMemPool_t mempool;
-    TM_CUDA_CHECK(cudaDeviceGetDefaultMemPool(&mempool, device_id));
-    TM_CUDA_CHECK(cudaMemPoolTrimTo(mempool, 0));
-}
-
 /* ************************** end of common utils ************************** */
 }  // namespace turbomind

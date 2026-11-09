@@ -189,15 +189,6 @@ void Activation(Tensor&             gate_up,  //
                 const Tensor&       bias,
                 const Buffer_<int>& group_ids,
                 ActivationType      type,
-                cudaStream_t        stream)
-{
-    Activation(gate_up, bias, group_ids, type, nullptr, stream);
-}
-
-void Activation(Tensor&             gate_up,  //
-                const Tensor&       bias,
-                const Buffer_<int>& group_ids,
-                ActivationType      type,
                 const int*          num_valid_tokens,
                 cudaStream_t        stream)
 {

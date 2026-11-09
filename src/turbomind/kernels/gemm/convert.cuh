@@ -210,37 +210,6 @@ __global__ void convert_kernel(typename Kernel::Param param)
     kernel(param, smem_buf);
 }
 
-constexpr bool is_AB(Op_Tag op)
-{
-    if (op == OPERAND_A || op == OPERAND_B) {
-        return true;
-    }
-    else {
-        return false;
-    }
-}
-
-constexpr bool is_UV(Op_Tag op)
-{
-    return !is_AB(op);
-}
-
-template<class Dtype>
-constexpr int unit_size(basic_type<Dtype>)
-{
-    return 1;
-}
-
-constexpr int unit_size(basic_type<uint8_t>)
-{
-    return 4;
-}
-
-constexpr int unit_size(basic_type<uint4_t>)
-{
-    return 8;
-}
-
 // MMA     : H_16816, H_1688, H_884, H_SIMT
 // Operand : A, B, U, V
 // Order   : row, col

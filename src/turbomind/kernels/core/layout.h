@@ -38,12 +38,6 @@ struct Identity {
     {
         return apply(offset);
     }
-
-    template<int D>
-    __device__ int AdvanceS(int offset, int s0, int s1)
-    {
-        return offset;
-    }
 };
 
 template<int S_, int C_, int S0_ = -1, int C0_ = -1, class Swizzle_ = Identity>

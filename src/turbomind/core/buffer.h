@@ -320,13 +320,6 @@ void Copy(const Buffer& a, Ref<Buffer> b_, const Stream& stream);
 
 void Copy(const Buffer& a, Ref<Buffer> b_);
 
-// Static type checking
-template<class T>
-inline void Copy_(const Buffer_<T>& a, ssize_t n, Buffer_<T>& b_)
-{
-    Copy((const Buffer&)a, n, (Buffer&)b_);
-}
-
 namespace detail {
 
 void* Copy(const void* a, ssize_t n, void* b, const Stream& stream);
@@ -345,24 +338,9 @@ inline T* Copy(const T* a, ssize_t n, T* b)
     return (T*)detail::Copy((const void*)a, sizeof(T) * n, (void*)b, Context::stream());
 }
 
-struct CopyT {
-    template<class... Args>
-    auto operator()(Args&&... args) const
-    {
-        return Copy(((Args &&) args)...);
-    }
-};
-
 void Clear(Ref<Buffer> b_, const Stream& stream);
 
 void Clear(Ref<Buffer> b_);
-
-template<class T>
-std::vector<T> to_vector(const Buffer_<T>& b)
-{
-    TM_CHECK(b.device().type == kCPU || b.device().type == kCPUpinned);
-    return std::vector<T>(b.begin(), b.end());
-}
 
 // clang-format off
 template<class Archive>

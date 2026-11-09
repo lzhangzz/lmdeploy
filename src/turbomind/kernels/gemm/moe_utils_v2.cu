@@ -1334,67 +1334,6 @@ void invokeMoeDispatch(Ref<Tensor>   out_,
     }
 }
 
-template<class T>
-__global__ void MoeDispatchScalesNonaligned(
-    T* dst, const T* src, int dst_stride, int src_stride, const int* f2n, const int* num_valid_tokens, int dim)
-{
-    const int bi = blockIdx.x;
-    if (num_valid_tokens && bi >= __ldg(num_valid_tokens)) {
-        return;
-    }
-
-    const int ti = f2n[bi];
-
-    if (threadIdx.x < dim) {
-        dst[threadIdx.x * dst_stride + bi] = src[threadIdx.x * src_stride + ti];
-    }
-}
-
-void invokeMoeDispatchScales(Ref<Tensor>   out_,
-                             const Tensor& src,
-                             const int*    f2n,
-                             int           num_worst_tokens,
-                             const int*    num_valid_tokens,
-                             cudaStream_t  st)
-{
-    using T                 = float;
-    constexpr int alignment = 16 / sizeof(T);
-
-    const int dim = src.shape(0);
-
-    // Keep the scale layout aligned to num_worst_tokens; num_valid_tokens limits rows that read f2n.
-    const int size         = num_worst_tokens;
-    const int aligned_size = round_up<int>(size, alignment);
-
-    auto& out = out_.get();
-
-    if (!out) {
-        out = Tensor_<T>{{{dim, size}, {aligned_size, 1}}, kDEVICE};
-    }
-    else {
-        TM_CHECK(std::make_tuple(dim, size) == out.shapes(0, 1));
-        TM_CHECK(out.stride(1) == 1);
-        TM_CHECK(out.stride(0) % alignment == 0);
-    }
-
-    TM_CHECK_LE(dim, 1024);
-    if (size == 0) {
-        return;
-    }
-    const int threads = round_up<int>(dim, WARP_SIZE);
-    const int blocks  = size;
-
-    MoeDispatchScalesNonaligned<<<blocks, threads, 0, st>>>((T*)out.raw_data(),  //
-                                                            (const T*)src.raw_data(),
-                                                            out.stride(0),
-                                                            src.stride(0),
-                                                            f2n,
-                                                            num_valid_tokens,
-                                                            dim);
-
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
 template<int vec_size, int exp_k, bool has_bias, int block_dim, class T>
 __global__ void MoeReduceKernel(T*           dst,         // [  n, d]  write-only
                                 const T*     src,         // [e*n, d]
@@ -1614,47 +1553,6 @@ std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, s
         it = std::sample(r.cbegin(), r.cend(), it, exp_per_tok, g);
     }
     return idxs;
-}
-
-std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g)
-{
-    assert(exp_per_tok <= expert_num);
-    std::vector<int> idxs((size_t)token_num * exp_per_tok);
-    std::vector<int> q;
-
-    std::vector<int> r(expert_num);
-    std::iota(r.begin(), r.end(), 0);
-
-    auto it = idxs.begin();
-    for (int i = 0; i < token_num; ++i) {
-        if ((int)q.size() < exp_per_tok) {
-            const int k = q.size();
-            // prepend the experts: [xxx] -> [yyy | xxx]
-            q.insert(q.begin(), r.cbegin(), r.cend());
-            // move duplicated experts to the front: [yyy | xxx] -> [xxx' | yyy' | xxx]
-            int p = 0;
-            std::for_each(q.cend() - k, q.cend(), [&](auto x) { std::swap(q[p++], q[x]); });
-            // shuffle unique experts yyy'
-            std::shuffle(q.begin() + p, q.end() - k, g);
-        }
-        it = std::copy(q.end() - exp_per_tok, q.end(), it);
-        // remove used experts [xxx' | yyy' | xxx ] -> [xxx' | zzz]
-        q.resize(q.size() - exp_per_tok);
-        // alias [xxx] <- [xxx' | zzz]
-    }
-    assert(it == idxs.end());
-
-    // shuffle to decorrelate adjacent tokens
-    r.resize(token_num);
-    std::iota(r.begin(), r.end(), 0);
-    std::shuffle(r.begin(), r.end(), g);
-    std::vector<int> ret(idxs.size());
-    it = ret.begin();
-    for (const auto& i : r) {
-        it = std::copy_n(idxs.begin() + i * exp_per_tok, exp_per_tok, it);
-    }
-    assert(it == ret.end());
-    return ret;
 }
 
 template<int max_expert_num, int items_per_thread, int access_size>

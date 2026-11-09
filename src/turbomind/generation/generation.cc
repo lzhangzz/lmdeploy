@@ -19,7 +19,7 @@
 
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
 
-#include "src/turbomind/kernels/batch_kernels.h"  // invokePadLastTokenIds
+#include "src/turbomind/kernels/batch_kernels.h"
 
 namespace turbomind {
 

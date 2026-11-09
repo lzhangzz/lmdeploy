@@ -38,9 +38,6 @@ public:
     /// Returns nullptr if type name is not registered.
     std::unique_ptr<Module> create(const std::string& type, const ModuleConfig& config) const;
 
-    /// Check if a type name is registered.
-    bool has_type(const std::string& name) const;
-
 private:
     ModuleRegistry() = default;
     std::map<std::string, Factory> factories_;

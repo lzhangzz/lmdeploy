@@ -72,8 +72,6 @@ public:
     virtual Stream stream() const noexcept;
 
     virtual Device device() const noexcept = 0;
-
-    virtual void trim(size_t bytes_to_keep){};
 };
 
 class Allocator {

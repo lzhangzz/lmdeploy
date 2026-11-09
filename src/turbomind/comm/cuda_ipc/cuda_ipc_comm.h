@@ -230,25 +230,4 @@ private:
     size_t  copy_threshold_{INT64_MAX};
 };
 
-struct Rank {
-    int                     rank;
-    int                     peers;
-    __host__ __device__ int get_next_peer(int i)
-    {
-        return i + rank < peers ? i + rank : i + rank - peers;
-    }
-    __host__ __device__ int get_prev_peer(int i)
-    {
-        return get_next_peer(peers - 1 - i);
-    }
-    __host__ __device__ int get_peer_rank(int p)  // rank of `p`
-    {
-        return p < rank ? p : p + 1;
-    }
-    __host__ __device__ int inverse_peer(int p)  // peer idx of `rank` on peer `p`
-    {
-        return p < rank ? rank - 1 : rank;
-    }
-};
-
 }  // namespace turbomind::comm

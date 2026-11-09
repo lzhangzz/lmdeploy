@@ -47,17 +47,6 @@ inline __device__ Array<T, N> binary_op_vv(const Array<T, N>& a, const Array<T, 
 }
 
 template<typename T, int N, typename Op>
-inline __device__ Array<T, N> binary_op_sv(const T& a, const Array<T, N>& b, Op op)
-{
-    Array<T, N> c;
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        c[i] = op(a, b[i]);
-    }
-    return c;
-}
-
-template<typename T, int N, typename Op>
 inline __device__ Array<T, N> binary_op_vs(const Array<T, N>& a, const T& b, Op op)
 {
     Array<T, N> c;
@@ -203,56 +192,6 @@ inline __device__ void Store(T* dst, const Array<T, N>& src)
 }
 
 template<typename T, int N>
-inline __device__ void Stcs(T* __restrict__ dst, const Array<T, N>& src)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        __stcs((uint4*)dst, (const uint4&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        __stcs((uint2*)dst, (const uint2&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
-        __stcs((uint*)dst, (const uint&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
-        __stcs((uint16_t*)dst, (const uint16_t&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
-        __stcs((uint8_t*)dst, (const uint8_t&)src);
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<typename T, int N>
-inline __device__ void Stcg(T* __restrict__ dst, const Array<T, N>& src)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        __stcg((uint4*)dst, (const uint4&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        __stcg((uint2*)dst, (const uint2&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint1)) {
-        __stcg((uint*)dst, (const uint&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
-        __stcg((uint16_t*)dst, (const uint16_t&)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
-        __stcg((uint8_t*)dst, (const uint8_t&)src);
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<typename T, int N>
 inline __device__ void Ldg(Array<T, N>& dst, const T* src)
 {
     static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
@@ -271,56 +210,6 @@ inline __device__ void Ldg(Array<T, N>& dst, const T* src)
     }
     else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
         (uint8_t&)dst = __ldg((const uint8_t*)src);
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<typename T, int N>
-inline __device__ void Ldcs(Array<T, N>& dst, const T* src)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        (uint4&)dst = __ldcs((const uint4*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        (uint2&)dst = __ldcs((const uint2*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
-        (uint&)dst = __ldcs((const uint*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
-        (uint16_t&)dst = __ldcs((const uint16_t*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
-        (uint8_t&)dst = __ldcs((const uint8_t*)src);
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<typename T, int N>
-inline __device__ void Ldcg(Array<T, N>& dst, const T* src)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        (uint4&)dst = __ldcg((const uint4*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        (uint2&)dst = __ldcg((const uint2*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
-        (uint&)dst = __ldcg((const uint*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint16_t)) {
-        (uint16_t&)dst = __ldcg((const uint16_t*)src);
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint8_t)) {
-        (uint8_t&)dst = __ldcg((const uint8_t*)src);
     }
     else {
         static_assert(!std::is_same_v<T, T>);
@@ -362,81 +251,6 @@ template<typename T, int N>
 inline __device__ void Lds(Array<T, N>& dst, const T* src)
 {
     Load(dst, src);
-}
-
-template<typename T, int N>
-inline __device__ void LdShared(Array<T, N>& dst, uint32_t uintptr)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        uint4& p = (uint4&)dst;
-        // clang-format off
-        asm volatile("ld.shared.v4.b32 {%0,%1,%2,%3}, [%4];\n" : "=r"(p.x), "=r"(p.y), "=r"(p.z), "=r"(p.w) : "r"(uintptr));
-        // clang-format on
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        uint2& p = (uint2&)dst;
-        asm volatile("ld.shared.v2.b32 {%0,%1}, [%2];\n" : "=r"(p.x), "=r"(p.y) : "r"(uintptr));
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
-        uint& p = (uint&)dst;
-        asm volatile("ld.shared.b32 %0, [%1];\n" : "=r"(p) : "r"(uintptr));
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<typename T, int N>
-inline __device__ void StShared(uint32_t uintptr, Array<T, N>& src)
-{
-    static_assert(sizeof(Array<T, N>) <= sizeof(uint4));
-    if constexpr (sizeof(Array<T, N>) == sizeof(uint4)) {
-        uint4& p = (uint4&)src;
-        // clang-format off
-        asm volatile("st.shared.v4.b32 [%0], {%1,%2,%3,%4};\n" :: "r"(uintptr), "r"(p.x), "r"(p.y), "r"(p.z), "r"(p.w) );
-        // clang-format on
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint2)) {
-        uint2& p = (uint2&)src;
-        asm volatile("st.shared.v2.b32 [%0], {%1,%2};\n" ::"r"(uintptr), "r"(p.x), "r"(p.y));
-    }
-    else if constexpr (sizeof(Array<T, N>) == sizeof(uint)) {
-        uint& p = (uint&)src;
-        asm volatile("st.shared.b32  [%0], %1;\n" ::"r"(uintptr), "r"(p));
-    }
-    else {
-        static_assert(!std::is_same_v<T, T>);
-    }
-}
-
-template<int kWarpCount, typename T, int N>
-inline __device__ Array<T, N> blockSum(Array<T, N> val, T* smem_red, int warp_id, int lane_id)
-{
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        PRAGMA_UNROLL
-        for (int mask = WARP_SIZE >> 1; mask >= 1; mask >>= 1) {
-            val[i] += __shfl_xor_sync((uint32_t)-1, val[i], mask);
-        }
-        if (lane_id == 0) {
-            smem_red[i * kWarpCount + warp_id] = val[i];
-        }
-    }
-
-    __syncthreads();
-
-    PRAGMA_UNROLL
-    for (int i = 0; i < N; ++i) {
-        val[i] = lane_id < kWarpCount ? smem_red[i * kWarpCount + lane_id] : T{};
-        PRAGMA_UNROLL
-        for (int mask = kWarpCount >> 1; mask >= 1; mask >>= 1) {
-            val[i] += __shfl_xor_sync((uint32_t)-1, val[i], mask);
-        }
-        val[i] = __shfl_sync((uint32_t)-1, val[i], 0);
-    }
-
-    return val;
 }
 
 template<class T, int N>
@@ -492,20 +306,4 @@ __inline__ __device__ uint32_t transpose_m8n8_b16(uint32_t a)
     return transpose_m8n8_b16_warp_shuffle(a);
 #endif
 }
-
-__inline__ __device__ Array<uint32_t, 2> transpose_m8n8_b32(const Array<uint32_t, 2>& x)
-{
-    uint32_t lo = __byte_perm(x[0], x[1], 0x5410);
-    uint32_t hi = __byte_perm(x[0], x[1], 0x7632);
-
-    lo = transpose_m8n8_b16(lo);
-    hi = transpose_m8n8_b16(hi);
-
-    Array<uint32_t, 2> y;
-    y[0] = __byte_perm(lo, hi, 0x5410);
-    y[1] = __byte_perm(lo, hi, 0x7632);
-
-    return y;
-}
-
 }  // namespace turbomind

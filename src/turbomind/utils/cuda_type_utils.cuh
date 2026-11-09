@@ -80,19 +80,6 @@ struct TypeConverter<__nv_bfloat16> {
 #endif  // ENABLE_BF16
 
 // Defined math operations (bfloat16 fallback to fp32 when it is not supported)
-template<typename T>
-inline __device__ T hadd2(T a, T b)
-{
-    return __hadd2(a, b);
-}
-
-#if ENABLE_BF16
-template<>
-inline __device__ __nv_bfloat162 hadd2(__nv_bfloat162 a, __nv_bfloat162 b)
-{
-    return bf16hadd2(a, b);
-}
-#endif  // ENABLE_BF16
 
 template<typename T>
 inline __device__ T add(T a, T b)
@@ -165,48 +152,6 @@ inline __device__ __nv_bfloat16 add(__nv_bfloat16 a, __nv_bfloat16 b, __nv_bfloa
 #endif  // ENABLE_BF16
 
 template<typename T>
-inline __device__ T hsub2(T a, T b)
-{
-    return __hsub2(a, b);
-}
-
-#if ENABLE_BF16
-template<>
-inline __device__ __nv_bfloat162 hsub2(__nv_bfloat162 a, __nv_bfloat162 b)
-{
-    return bf16hsub2(a, b);
-}
-#endif  // ENABLE_BF16
-
-template<typename T>
-inline __device__ T hmul2(T a, T b)
-{
-    return __hmul2(a, b);
-}
-
-#if ENABLE_BF16
-template<>
-inline __device__ __nv_bfloat162 hmul2(__nv_bfloat162 a, __nv_bfloat162 b)
-{
-    return bf16hmul2(a, b);
-}
-#endif  // ENABLE_BF16
-
-template<typename T>
-inline __device__ T hmul2(T a, T b, T c)
-{
-    return a * b * c;
-}
-
-#if ENABLE_BF16
-template<>
-inline __device__ __nv_bfloat162 hmul2(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bfloat162 c)
-{
-    return bf16hmul2(a, b, c);
-}
-#endif  // ENABLE_BF16
-
-template<typename T>
 inline __device__ T mul(T a, T b, T c)
 {
     return a * b * c;
@@ -255,20 +200,6 @@ template<>
 inline __device__ __nv_bfloat16 fma(__nv_bfloat16 a, __nv_bfloat16 b, __nv_bfloat16 c)
 {
     return bf16hfma(a, b, c);
-}
-#endif  // ENABLE_BF16
-
-template<typename T>
-inline __device__ T hexp2(T a)
-{
-    return h2exp(a);
-}
-
-#if ENABLE_BF16
-template<>
-inline __device__ __nv_bfloat162 hexp2(__nv_bfloat162 a)
-{
-    return bf16exp2(a);
 }
 #endif  // ENABLE_BF16
 
@@ -470,79 +401,6 @@ __device__ inline __nv_bfloat162 cuda_cast<__nv_bfloat162, half2>(half2 val)
 }
 
 #endif  // ENABLE BF16
-
-template<typename T>
-__device__ inline T cuda_abs(T val);
-template<>
-__device__ inline float cuda_abs(float val)
-{
-    return fabs(val);
-}
-template<>
-__device__ inline half cuda_abs(half val)
-{
-    return __habs(val);
-}
-template<>
-__device__ inline half2 cuda_abs(half2 val)
-{
-    return __habs2(val);
-}
-
-#ifdef ENABLE_BF16
-
-#if __CUDA_ARCH__ >= 800 || !defined(__CUDA_ARCH__)
-template<>
-__device__ inline __nv_bfloat16 cuda_abs(__nv_bfloat16 val)
-{
-    return __habs(val);
-}
-template<>
-__device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val)
-{
-    return __habs2(val);
-}
-#else
-template<>
-__device__ inline __nv_bfloat16 cuda_abs(__nv_bfloat16 val)
-{
-    return fabs(cuda_cast<float>(val));
-}
-template<>
-__device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val)
-{
-    return make_bfloat162(fabs(cuda_cast<float>(val.x)), fabs(cuda_cast<float>(val.y)));
-}
-#endif
-
-#endif  // ENABLE_FP16
-
-// Unary maximum: compute the max of a vector type
-template<typename To, typename Ti>
-__device__ inline To cuda_max(Ti val)
-{
-    return cuda_cast<To>(val);
-};
-
-template<>
-__device__ inline half cuda_max(half2 val)
-{
-    return (val.x > val.y) ? val.x : val.y;
-}
-#ifdef ENABLE_BF16
-template<>
-__device__ inline __nv_bfloat16 cuda_max(__nv_bfloat162 val)
-{
-    return (val.x > val.y) ? val.x : val.y;
-}
-#endif
-
-// Binary maximum: compute the max of two scalar types
-template<typename T>
-__device__ inline T cuda_max(T val1, T val2)
-{
-    return (val1 > val2) ? val1 : val2;
-}
 
 #ifdef ENABLE_FP8
 template<>

@@ -20,16 +20,7 @@
 #include <string_view>
 
 namespace ft_nvtx {
-static std::string scope;
-std::string        getScope();
-void               addScope(std::string name);
-void               setScope(std::string name);
-void               resetScope();
-static int         domain = 0;
-void               setDeviceDomain(int deviceId);
-int                getDeviceDomain();
-void               resetDeviceDomain();
-bool               isEnableNvtx();
+bool isEnableNvtx();
 
 static bool has_read_nvtx_env = false;
 static bool is_enable_ft_nvtx = false;
@@ -62,17 +53,3 @@ private:
 };
 
 }  // namespace turbomind
-
-#define PUSH_RANGE(name)                                                                                               \
-    {                                                                                                                  \
-        if (ft_nvtx::isEnableNvtx()) {                                                                                 \
-            ft_nvtx::ftNvtxRangePush(name);                                                                            \
-        }                                                                                                              \
-    }
-
-#define POP_RANGE                                                                                                      \
-    {                                                                                                                  \
-        if (ft_nvtx::isEnableNvtx()) {                                                                                 \
-            ft_nvtx::ftNvtxRangePop();                                                                                 \
-        }                                                                                                              \
-    }

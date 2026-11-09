@@ -29,9 +29,6 @@ template<typename T> struct SiluActivation;
 template<typename T> struct IdentityActivation;
 // clang-format on
 
-template<template<typename T> class Activation>
-void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
-
 // Apply sigmoid gating: attn[i] *= sigmoid(gate[i])
 // attn:        [num_tokens, dim], contiguous
 // gate_base:   pointer to first gate element in QKV buffer

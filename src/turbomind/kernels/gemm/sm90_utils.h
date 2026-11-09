@@ -35,20 +35,6 @@ __device__ __forceinline__ void replace_tma_global_stride(CUtensorMap* desc, uin
 
 }  // namespace detail
 
-inline __device__ cute::GmmaDescriptor make_smem_desc(void* smem_ptr, int layout_type)
-{
-    auto uint_ptr = cast_smem_ptr_to_uint(smem_ptr);
-
-    cute::GmmaDescriptor desc{};
-    desc.bitfield.start_address_       = uint_ptr >> 4;
-    desc.bitfield.layout_type_         = layout_type;
-    desc.bitfield.leading_byte_offset_ = 0;
-    desc.bitfield.stride_byte_offset_  = 1024 >> 4;
-    desc.bitfield.base_offset_         = 0;
-
-    return desc;
-}
-
 template<int Stages, int Step>
 struct SmemDescIterV2 {
     union {
@@ -91,19 +77,6 @@ struct SmemDescIterV2 {
     }
 };
 
-template<class MMA_Atom, size_t... Is>
-inline __device__ void
-wgmma_impl(uint64_t desc_a, uint64_t desc_b, float* frag_C, bool clear, std::index_sequence<Is...>)
-{
-    return MMA_Atom::fma(desc_a, desc_b, frag_C[Is]..., clear ? GMMA::ScaleOut::Zero : GMMA::ScaleOut::One);
-}
-
-template<class MMA_Atom, int N>
-inline __device__ void wgmma(uint64_t desc_a, uint64_t desc_b, float (&frag_C)[N], bool clear)
-{
-    return wgmma_impl<MMA_Atom>(desc_a, desc_b, frag_C, clear, std::make_index_sequence<N>{});
-}
-
 inline __device__ void warpgroup_fence_operand(float& reg)
 {
     asm volatile("" : "+f"(reg)::"memory");
@@ -134,12 +107,6 @@ inline __device__ void warpgroup_fence_operand(float (&x)[N][K])
             warpgroup_fence_operand(x[n][k]);
         }
     }
-}
-
-template<class Func, size_t... Is>
-__device__ void for_(std::index_sequence<Is...>, Func func)
-{
-    return (func(constant<Is>{}), ...);
 }
 
 namespace arch {

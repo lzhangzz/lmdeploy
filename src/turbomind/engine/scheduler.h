@@ -115,11 +115,6 @@ public:
         return alloc_;
     }
 
-    bool prefix_enabled() const noexcept
-    {
-        return enable_prefix_caching_;
-    }
-
     // True if any multimodal span overlaps [lo, hi). Pure; used by SetupPartialSiblings to
     // gate the 'auto' prompt-boundary publish. Public so it can be unit-tested.
     static bool HasMultimodalOverlap(const Sequence& s, int lo, int hi);

@@ -54,68 +54,6 @@ struct LDSM_x1 {
     }
 };
 
-template<class T, bool trans>
-struct SmemCopy_MMA_16816_A {
-    static constexpr int M = 16;
-    static constexpr int K = 16;
-
-    static constexpr int kFragNum = 1;
-
-    using Frag = Array<T, 8>;
-
-    __device__ static int2 get_offset(int thread_idx)  // -> (m, k)
-    {
-        const int lane_id = thread_idx % WARP_SIZE;
-
-        const int c = lane_id / 16 * 8;
-        const int s = lane_id % 16;
-
-        return trans ? int2{c, s} : int2{s, c};
-    }
-
-    template<class S, class D>
-    __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
-    {
-        LDSM_x4<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
-    }
-
-    __device__ static int2 unique(int thread_idx, int pack_idx)
-    {
-        return {pack_idx * WARP_SIZE + thread_idx % WARP_SIZE, 0};
-    }
-};
-
-template<class T, bool trans>
-struct SmemCopy_MMA_16816_B {
-    static constexpr int M = 16;
-    static constexpr int K = 16;
-
-    static constexpr int kFragNum = 1;
-
-    using Frag = Array<T, 8>;
-
-    __device__ static int2 get_offset(int thread_idx)
-    {
-        const int lane_id = thread_idx % WARP_SIZE;
-
-        const int c = lane_id / 8 * 8 % 16;
-        const int s = lane_id % 8 + lane_id / 16 * 8;
-
-        return trans ? int2{c, s} : int2{s, c};
-    }
-
-    template<class S, class D>
-    __device__ static void copy(S&& src_ptr, D&& dst_ptr, bool)
-    {
-        LDSM_x4<trans>::apply((S &&) src_ptr, (D &&) dst_ptr);
-    }
-
-    __device__ static int2 unique(int thread_idx, int pack_idx)
-    {
-        return {pack_idx * WARP_SIZE + thread_idx % WARP_SIZE, 0};
-    }
-};
-
 template<class T, int M_, int K_, Order mat_order, Order thr_order>
 struct LDSM_SM75_8x8 {
     static constexpr int M = M_;

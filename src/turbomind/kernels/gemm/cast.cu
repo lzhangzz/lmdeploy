@@ -98,16 +98,6 @@ void invokeCast(To* dst, const Ti* src, size_t n, cudaStream_t st)
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-void extend_to_u8(uint8_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
-{
-    TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
-}
-
-void compact_to_u4(uint4_t* dst, const uint8_t* src, size_t n, cudaStream_t st)
-{
-    TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
-}
-
 void extend_to_u16(uint16_t* dst, const uint4_t* src, size_t n, cudaStream_t st)
 {
     TM_SCOPE_CALL(invokeCast<8>(dst, src, n, st));
@@ -164,59 +154,6 @@ void fuse_scales_and_zeros(half* fused, const half* scales, half* zeros, size_t 
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-template<int VecSize, class T>
-__global__ void
-interleave_output_dims_kernel(T* __restrict__ fused, const T* __restrict__ a, const T* __restrict__ b, int m, int k)
-{
-    using Vec1 = Array<T, VecSize>;
-
-    const int ki = blockIdx.y;
-
-    auto p_a = reinterpret_cast<const Vec1*>(a + ki * m);
-    auto p_b = reinterpret_cast<const Vec1*>(b + ki * m);
-
-    using Vec2 = Array<T, VecSize * 2>;
-
-    auto p_f = reinterpret_cast<Vec2*>(fused + ki * m * 2);
-
-    m /= VecSize;
-
-    const int tidx = threadIdx.x + blockIdx.x * blockDim.x;
-
-    for (int64_t mi = tidx; mi < m; mi += blockDim.x * gridDim.x) {
-        Vec1 va;
-        Vec1 vb;
-        Ldg(va, (const T*)&p_a[mi]);
-        Ldg(vb, (const T*)&p_b[mi]);
-        Vec2 vc;
-        PRAGMA_UNROLL
-        for (int i = 0; i < VecSize; ++i) {
-            vc[i * 2]     = va[i];
-            vc[i * 2 + 1] = vb[i];
-        }
-        Store((T*)&p_f[mi], vc);
-    }
-}
-
-template<class T>
-void interleave_output_dims_impl(T* fused, const T* a, const T* b, int m, int k, cudaStream_t st)
-{
-    constexpr int kVecSize = std::min(8, 128 / (bitsof<T> * 2));
-
-    constexpr int block = 256;
-    const dim3    grid(1, k);  // x is a grid stride loop
-
-    interleave_output_dims_kernel<kVecSize><<<grid, block, 0, st>>>(fused, a, b, m, k);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
-template void
-interleave_output_dims_impl(uint8_t* fused, const uint8_t* a, const uint8_t* b, int m, int k, cudaStream_t st);
-template void
-interleave_output_dims_impl(uint16_t* fused, const uint16_t* a, const uint16_t* b, int m, int k, cudaStream_t st);
-template void
-interleave_output_dims_impl(uint32_t* fused, const uint32_t* a, const uint32_t* b, int m, int k, cudaStream_t st);
-
 __global__ void adjust_ue8m0_scale_for_half_kernel(uint8_t* data, int n)
 {
     int64_t idx = threadIdx.x + (int64_t)blockDim.x * blockIdx.x;
@@ -233,37 +170,4 @@ void AdjustUe8m0ScaleForHalf(uint8_t* data, int n, cudaStream_t st)
     adjust_ue8m0_scale_for_half_kernel<<<grid, block, 0, st>>>(data, n);
     TM_CUDA_CHECK(cudaGetLastError());
 }
-
-template<class T0, class T1>
-__global__ void BlockscaleToGroupscale_Kernel(T1* dst, const T0* src, int64_t n, int block_size)
-{
-    int64_t idx = threadIdx.x + (int64_t)blockIdx.x * blockDim.x;
-    if (idx < n) {
-        dst[idx] = (T1)src[idx / block_size];
-    }
-}
-
-Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int block_size)
-{
-    Tensor ret{{scales.shape(0), scales.shape(1) * block_size}, data_type, kDEVICE};
-
-    auto stream = core::Context::stream().handle();
-
-    auto invoke_dst = [&](auto t1) {
-        using T1        = decltype(t1);
-        auto invoke_src = [&](auto t0) {
-            using T0 = decltype(t0);
-            BlockscaleToGroupscale_Kernel<<<(ret.size() + 511) / 512, 512, 0, stream>>>(
-                ret.data<T1>(), scales.data<T0>(), ret.size(), block_size);
-        };
-        TM_DISPATCH_DTYPES(scales.dtype(), invoke_src, half_t, bfloat16_t, float);
-    };
-
-    TM_DISPATCH_DTYPES(data_type, invoke_dst, half_t, bfloat16_t);
-
-    TM_CUDA_CHECK(cudaGetLastError());
-
-    return ret;
-}
-
 }  // namespace turbomind

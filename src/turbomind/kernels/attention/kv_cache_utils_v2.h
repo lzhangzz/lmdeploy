@@ -114,8 +114,4 @@ void invokeFlattenKV_v2_(const AttentionParams<T>& params, int sum_k_len)
                        params.quant_policy,
                        params.stream);
 }
-
-size_t
-get_cache_block_size(DataType dtype, DataType kvtype, int layer_num, int head_num, int head_dim, int block_seq_len);
-
 }  // namespace turbomind

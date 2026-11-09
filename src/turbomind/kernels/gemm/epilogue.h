@@ -15,38 +15,6 @@
 
 namespace turbomind::gemm {
 
-template<class Tc>
-struct ChannelCombination_v3 {
-    const Tc* __restrict__ scale_bias_ptr;
-
-    template<class T, int V, int S, int C, int delta_c, int delta_s, class Pred>
-    __device__ void operator()(Array<T, V> (&x)[S][C], int2 cs0, pair<delta_c, delta_s>, Pred& pred) const
-    {
-        __align__(16) Array<Tc, 2> scale_bias[S];
-
-        if (scale_bias_ptr) {
-            constexpr int ds  = sizeof(Tc) * delta_s;
-            auto          ptr = reinterpret_cast<const char*>(scale_bias_ptr + cs0.y);
-            PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
-                if (pred(s, 0)) {
-                    Ldg(scale_bias[s], reinterpret_cast<const Tc*>(ptr));
-                }
-                ptr += ds;
-            }
-            PRAGMA_UNROLL
-            for (int s = 0; s < S; ++s) {
-                auto tmp = cast<T>(scale_bias[s]);
-                PRAGMA_UNROLL
-                for (int c = 0; c < C; ++c) {
-                    using namespace ops;
-                    x[s][c] = x[s][c] * tmp[0] + tmp[1];
-                }
-            }
-        }
-    }
-};
-
 template<bool     scale_S,
          bool     scale_C,
          Striding mode_S,

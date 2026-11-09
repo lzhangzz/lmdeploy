@@ -69,18 +69,6 @@ struct GmmaMxFp4Fp8TraitsBase {
         return cute::composition(packed_tv, layout_a_mk);
     }
 
-    // Thread-major native E4M3 RS image used by the one-time folded pack.
-    CUTE_HOST_DEVICE static constexpr auto folded_layout_a_mk()
-    {
-        WgTiledMma mma;
-        auto       layout_a_tv = mma.get_layoutA_TV();
-        auto       layout_a_mk = cute::get<0>(mma.get_layoutA_MK());
-        auto       thread_major_tv =
-            cute::make_layout(cute::make_shape(cute::size<0>(layout_a_tv), cute::size<1>(layout_a_tv)),
-                              cute::make_stride(cute::size<1>(layout_a_tv), cute::_1{}));
-        return cute::composition(thread_major_tv, layout_a_mk);
-    }
-
     static constexpr typename cute::MMA_Traits<MmaAtom>::Shape_MNK OpShape{};
     static constexpr int                                           kOpM             = cute::get<0>(OpShape);
     static constexpr int                                           kOpN             = cute::get<1>(OpShape);

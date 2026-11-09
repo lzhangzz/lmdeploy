@@ -58,7 +58,6 @@ struct LanguageModel::Impl {
                          Buffer              model_tp_gather_buffer,
                          Tensor              logits);
 
-    bool has_embedding() const;
     bool has_head() const;
     Tensor Embed(const Buffer_<int>& input_ids, Tensor out, const TensorMap& env);
     LanguageModel::DecoderOutputs RunDecoder(int phase, const LanguageModel::DecoderInputs& in, TensorMap& env);
@@ -239,11 +238,6 @@ Tensor LanguageModel::Impl::PostEmbedding(const Tensor&       features,
     return logits;
 }
 
-bool LanguageModel::Impl::has_embedding() const
-{
-    return !weights_.decoder_only;
-}
-
 bool LanguageModel::Impl::has_head() const
 {
     return !weights_.decoder_only;
@@ -339,16 +333,6 @@ LanguageModel::LanguageModel(CacheRegistry&     registry,
                              int                phases)
 {
     impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
-}
-
-bool LanguageModel::has_embedding() const
-{
-    return TM_CHECK_NOTNULL(impl_)->has_embedding();
-}
-
-bool LanguageModel::has_head() const
-{
-    return TM_CHECK_NOTNULL(impl_)->has_head();
 }
 
 Tensor LanguageModel::Embed(const Buffer_<int>& input_ids, Tensor out, const TensorMap& env)

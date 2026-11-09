@@ -15,20 +15,6 @@
 
 namespace turbomind {
 
-__global__ void padLastTokenIds(int* token_ids, const int* context_length, int max_context_len, int batch_size)
-{
-    for (int bi = threadIdx.x; bi < batch_size; bi += blockDim.x) {
-        token_ids[(max_context_len - 1) * batch_size + bi] = token_ids[(context_length[bi] - 1) * batch_size + bi];
-    }
-}
-
-void invokePadLastTokenIds(
-    int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream)
-{
-    padLastTokenIds<<<1, 512, 0, stream>>>(token_ids, context_length, max_context_len, batch_size);
-    TM_CUDA_CHECK(cudaGetLastError());
-}
-
 template<typename T, int vec_size>
 __global__ void castFloat2D(const T* input, float* output, int channels)
 {

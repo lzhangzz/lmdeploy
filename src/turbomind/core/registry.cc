@@ -26,10 +26,4 @@ std::unique_ptr<Module> ModuleRegistry::create(const std::string& type, const Mo
     }
     return it->second(config);
 }
-
-bool ModuleRegistry::has_type(const std::string& name) const
-{
-    return factories_.count(name) > 0;
-}
-
 }  // namespace turbomind::core

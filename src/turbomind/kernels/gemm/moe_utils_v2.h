@@ -65,14 +65,6 @@ void invokeMoeDispatch(Ref<Tensor>   out_,  //
                        const int*    num_valid_tokens,
                        cudaStream_t  st);
 
-// Same num_worst_tokens / num_valid_tokens contract as invokeMoeDispatch
-void invokeMoeDispatchScales(Ref<Tensor>   out_,  //
-                             const Tensor& src,
-                             const int*    f2n,
-                             int           num_worst_tokens,
-                             const int*    num_valid_tokens,
-                             cudaStream_t  st);
-
 // dst is write-only. dst_scales ([tokens] gate logits) scales the shared-base
 // term only and is inert without shared_src (TM_CHECK'd). shared_src /
 // shared_begin / shared_end describe the rank-owned rows of the dense shared
@@ -143,7 +135,4 @@ void invokeMoeGate_NoAuxTC(int*         f2n,
 
 // Sample `e` from `E` experts uniformly for every token
 std::vector<int> SampleUniform(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
-
-std::vector<int> SampleBalanced(int token_num, int expert_num, int exp_per_tok, std::mt19937& g);
-
 }  // namespace turbomind

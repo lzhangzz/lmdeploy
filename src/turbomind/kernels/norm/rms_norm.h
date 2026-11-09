@@ -28,17 +28,6 @@ void invokeRMSNormConcat(Tensor&       out,
                          bool          right_zero_centered,
                          cudaStream_t  stream);
 
-template<class T>
-void invokeBiasResidualRMSNorm(T*           residual,
-                               T*           hidden_states,
-                               const T*     weights,
-                               const T*     bias,
-                               int          dims,
-                               int          num,
-                               float        eps,
-                               bool         zero_centered,
-                               cudaStream_t st);
-
 void invokeResidualBiasRMSNorm(void*        hidden_states,
                                void*        residual,
                                const void*  weights,
@@ -49,8 +38,6 @@ void invokeResidualBiasRMSNorm(void*        hidden_states,
                                float        eps,
                                bool         zero_centered,
                                cudaStream_t st);
-
-void ApplyBias(Tensor& x, const Tensor& bias, const Buffer_<int>& offsets, float scale, cudaStream_t st);
 
 // x = x + bias
 void ApplyBias(Tensor& x, const Tensor& bias, cudaStream_t st);

@@ -226,8 +226,6 @@ std::vector<LaunchSpec> Context::Populate(const Kernel& kernel, const PopulatePa
         // (float)mma_cost
         //           << "\n";
 
-        // metrics.emplace_back(splits, KernelMetric{mio_cost, mma_cost});
-
         LaunchSpec spec{};
         spec.kernel    = const_cast<Kernel*>(&kernel);
         spec.splits    = splits;

@@ -36,9 +36,6 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
-    bool has_embedding() const;
-    bool has_head() const;
-
     Tensor Embed(const Buffer_<int>& input_ids, Tensor out, const TensorMap& env);
 
     struct DecoderInputs {

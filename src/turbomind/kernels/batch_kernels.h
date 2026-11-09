@@ -9,14 +9,6 @@
 #include <cuda_runtime.h>
 namespace turbomind {
 
-// ABCDe            ABCDe     e
-// ABCDEFGHIJk      ABCDEFGHIJk
-// ABCDEFGHi    ->  ABCDEFGHi i
-// ABCDEFGh         ABCDEFGh  h
-// ABCd             ABCd      d
-void invokePadLastTokenIds(
-    int* token_ids, const int* context_length, int max_context_len, int batch_size, cudaStream_t stream);
-
 void invokeCastFloat2D(const core::Tensor& src, core::Tensor& dst, cudaStream_t stream);
 
 void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st);
