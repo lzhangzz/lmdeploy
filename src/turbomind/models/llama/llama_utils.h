@@ -60,10 +60,4 @@ std::string Concat(std::string key, Args&&... args)
     return key;
 }
 
-size_t curandStateGetSize();
-
-bool isDebug();
-
-int64_t& gSequenceIds(int batch_idx);
-
 }  // namespace turbomind

@@ -8,7 +8,6 @@
 #include <vector>
 
 #include <cuda_fp16.h>
-#include <curand_kernel.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/host_vector.h>
@@ -132,31 +131,5 @@ template void Compare(__nv_bfloat16* ptr, size_t size, std::string key, CmpMode 
 
 template void CheckNan(const float* ptr, size_t size, std::string key, cudaStream_t stream);
 template void CheckNan(const half* ptr, size_t size, std::string key, cudaStream_t stream);
-
-size_t curandStateGetSize()
-{
-    return sizeof(curandState_t);
-}
-
-bool isDebug()
-{
-    static const bool is_debug = [] {
-        const auto level = std::getenv("TM_DEBUG_LEVEL");
-        if (level && level == std::string("DEBUG")) {
-            return true;
-        }
-        return false;
-    }();
-    return is_debug;
-}
-
-int64_t& gSequenceIds(int batch_idx)
-{
-    thread_local std::vector<int64_t> ids{};
-    if (batch_idx >= ids.size()) {
-        ids.resize(batch_idx + 1, -1);
-    }
-    return ids.at(batch_idx);
-}
 
 }  // namespace turbomind
