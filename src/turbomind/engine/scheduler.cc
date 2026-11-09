@@ -1533,9 +1533,9 @@ void Scheduler::LogProfile(const PerformanceCounter& counter) const
 #if TM_SCHED_PROFILE
     // TODO: Gate TP rank
 
-    fmt::memory_buffer buf;
+    std::string buf;
 
-    fmt::format_to(std::back_inserter(buf),
+    std::format_to(std::back_inserter(buf),
                    "\n[sched] total {:.2f}, plan {:.2f}, required {:.2f}, replay {:.2f}, commit {:.2f}",
                    counter.dist(0, 5),
                    counter.dist(0, 1),
@@ -1544,20 +1544,20 @@ void Scheduler::LogProfile(const PerformanceCounter& counter) const
                    counter.dist(4, 5));
 
     if (counter.passes[10]) {
-        fmt::format_to(std::back_inserter(buf),
+        std::format_to(std::back_inserter(buf),
                        "\n[sched]   optional {:.2f}, replay {:.2f}",
                        counter.dist(10, 11),
                        counter.dist(11, 12));
     }
 
-    fmt::format_to(std::back_inserter(buf),
+    std::format_to(std::back_inserter(buf),
                    "\n[sched]   sort {:.2f}, scratch {:.2f}, loop {:.2f}, ~scratch {:.2f}",
                    counter.dist(20, 21),
                    counter.dist(21, 22),
                    counter.dist(22, 23),
                    counter.dist(23, 24));
 
-    TM_LOG_WARN("sched stats:{}", fmt::to_string(buf));
+    TM_LOG_WARN("sched stats:{}", buf);
 #endif
 }
 
@@ -1575,21 +1575,21 @@ void LogAccept(const Sequence& s, int bs)
         std::string mtail, clast, ctail;
         if (matched < (int)s.block_ids.size() && s.block_ids[matched]->partial) {
             const LogicalBlock& y = *s.block_ids[matched]->partial;
-            mtail                 = fmt::format(", partial@{}", y.offset + y.size);  // matched-side partial reuse
+            mtail                 = std::format(", partial@{}", y.offset + y.size);  // matched-side partial reuse
         }
         if (all - matched > 0 && prompt % bs) {
-            clast = fmt::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
+            clast = std::format(", last {}/{}", prompt - full * bs, bs);  // created-side partial tail
         }
         if (s.prompt_boundary_pos > 0) {
             const int j = (s.prompt_boundary_pos - 1) / bs;  // block holding B (matches PlanPromptBoundary)
             if (j >= 0 && j < (int)s.block_ids.size() && s.block_ids[j]->partial) {
                 const LogicalBlock& ft = *s.block_ids[j]->partial;
                 if (ft.offset + ft.size == s.prompt_boundary_pos) {
-                    ctail = fmt::format(", partial_to@{}", ft.offset + ft.size);  // created-side publish node end
+                    ctail = std::format(", partial_to@{}", ft.offset + ft.size);  // created-side publish node end
                 }
             }
         }
-        return fmt::format("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
+        return std::format("req {} (uid {}) matched [0,{}) ({} blk){} | created [{},{}) ({} blk{}){}",
                            s.req->id,
                            s.req->unique_id,
                            M,
@@ -1613,7 +1613,7 @@ void LogResume(const Sequence& s)
         const int           end   = begin + row.query_count;
         const int           total = s.seq_len + s.inflight_new_tokens;
         const int           pct   = total > 0 ? 100 * row.history_len / total : 0;
-        return fmt::format("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
+        return std::format("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
                            s.req->id,
                            s.req->unique_id,
                            row.history_len,
@@ -1635,7 +1635,7 @@ void LogDeferred(const Sequence& s, const SubmittedRow& candidate, int bs, const
         const int end   = begin + candidate.query_count;
         const int b0    = std::max(begin, c.block * bs);
         const int b1    = std::min(end, (c.block + 1) * bs);
-        return fmt::format("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
+        return std::format("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
                            s.req->id,
                            s.req->unique_id,
                            b0,
@@ -1656,16 +1656,16 @@ void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p)
         std::string         body;
         auto                add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
         if (p.reusable_blocks > 0) {
-            add(fmt::format("prefix [{},{}) ({} blk)", p.start, p.end, p.reusable_blocks));
+            add(std::format("prefix [{},{}) ({} blk)", p.start, p.end, p.reusable_blocks));
         }
         if (p.forked) {
             const int b0 = (end - 1) / bs * bs;
-            add(fmt::format("boundary [{},{}) ({} tok)", b0, end, end - b0));
+            add(std::format("boundary [{},{}) ({} tok)", b0, end, end - b0));
         }
         if (p.ckpt) {
-            add(fmt::format("ckpt@{}", s.last_ckpt_pos));
+            add(std::format("ckpt@{}", s.last_ckpt_pos));
         }
-        return fmt::format("req {} (uid {}) published {}", s.req->id, s.req->unique_id, body);
+        return std::format("req {} (uid {}) published {}", s.req->id, s.req->unique_id, body);
     };
     TM_LOG(kCacheLogLevel, msg());
 }
@@ -1676,9 +1676,9 @@ void LogFinalized(const Sequence& s, int bs, const GenStat& g)
         return;
     }  // terminal_ckpt implies indexed > 0
     auto msg = [&] {
-        std::string tail = (g.last_size < bs) ? fmt::format(", last {}/{}", g.last_size, bs) : "";
+        std::string tail = (g.last_size < bs) ? std::format(", last {}/{}", g.last_size, bs) : "";
         std::string ckpt = g.terminal_ckpt ? (g.demoted ? ", terminal ckpt (demoted)" : ", terminal ckpt") : "";
-        return fmt::format("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
+        return std::format("req {} (uid {}) finalized gen [{},{}) ({} blk{}){}",
                            s.req->id,
                            s.req->unique_id,
                            g.first_offset,
@@ -1709,7 +1709,7 @@ void LogCollision(const Sequence& s, CollisionSite site, int begin, int end)
                 note  = ", stop";
                 break;
         }
-        return fmt::format("req {} (uid {}) collision at {}: tok [{},{}) → private{}",
+        return std::format("req {} (uid {}) collision at {}: tok [{},{}) → private{}",
                            s.req->id,
                            s.req->unique_id,
                            where,

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <format>
 #include <string_view>
 #include <thread>
 #ifndef _WIN32
@@ -20,7 +21,6 @@
 #endif
 
 #include <blockingconcurrentqueue.h>
-#include <fmt/color.h>
 
 namespace turbomind::core {
 
@@ -47,7 +47,7 @@ static std::string Timestamp()
         return "0000.00:00:00.000000";
     }
 #endif
-    return fmt::format("{:02}{:02}.{:02}:{:02}:{:02}.{:06}",
+    return std::format("{:02}{:02}.{:02}:{:02}:{:02}.{:06}",
                        tm->tm_mon + 1,
                        tm->tm_mday,
                        tm->tm_hour,
@@ -74,21 +74,21 @@ static const char* Basename(const char* file)
 // ---------------------------------------------------------------------------
 // Color palette per log level
 // ---------------------------------------------------------------------------
-static fmt::text_style StyleFor(Logger::Level level)
+static std::string_view StyleFor(Logger::Level level)
 {
     switch (level) {
         case Logger::Level::kTrace:
-            return fmt::fg(fmt::color::gray);
+            return "\x1b[38;2;128;128;128m";
         case Logger::Level::kDebug:
-            return fmt::fg(fmt::color::cyan);
+            return "\x1b[38;2;000;255;255m";
         case Logger::Level::kInfo:
             return {};
         case Logger::Level::kWarning:
-            return fmt::fg(fmt::color::yellow);
+            return "\x1b[38;2;255;255;000m";
         case Logger::Level::kError:
-            return fmt::fg(fmt::color::red) | fmt::emphasis::bold;
+            return "\x1b[1m\x1b[38;2;255;000;000m";
         case Logger::Level::kFatal:
-            return fmt::fg(fmt::color::red) | fmt::emphasis::bold;
+            return "\x1b[1m\x1b[38;2;255;000;000m";
         default:
             return {};
     }
@@ -113,13 +113,19 @@ static bool UseColor()
     return kUseColor;
 }
 
+static void WriteStderr(std::string_view msg)
+{
+    std::fwrite(msg.data(), 1, msg.size(), stderr);
+}
+
 static void PrintStyled(Logger::Level level, std::string_view msg)
 {
-    if (UseColor()) {
-        fmt::print(stderr, StyleFor(level), "{}", msg);
+    const std::string_view style = UseColor() ? StyleFor(level) : std::string_view{};
+    if (style.empty()) {
+        WriteStderr(msg);
     }
     else {
-        fmt::print(stderr, "{}", msg);
+        WriteStderr(std::format("{}{}\x1b[0m", style, msg));
     }
 }
 
@@ -212,7 +218,7 @@ Logger::Logger()
         }
         else {
             PrintStyled(Level::kWarning,
-                        fmt::format("[TM][WARN] Invalid TM_LOG_LEVEL='{}'. Using default level.\n", level_env));
+                        std::format("[TM][WARN] Invalid TM_LOG_LEVEL='{}'. Using default level.\n", level_env));
         }
     }
 }
@@ -244,9 +250,9 @@ std::string Logger::LevelName(Level level)
 
 std::string Logger::Prefix(Level level, const char* file, int line)
 {
-    std::string s = fmt::format("[TM][{}][{}]", LevelName(level), Timestamp());
+    std::string s = std::format("[TM][{}][{}]", LevelName(level), Timestamp());
     if (file != nullptr) {
-        s += fmt::format("[{}:{}]", Basename(file), line);
+        s += std::format("[{}:{}]", Basename(file), line);
     }
     s += " ";
     return s;
@@ -300,7 +306,7 @@ static void OnFatalSignal(int signum)
 {
     auto trace = Context::scope_trace();
     if (!trace.empty()) {
-        fmt::print(stderr, "{}", trace);
+        WriteStderr(trace);
     }
     AsyncLogWorker::Instance().OnSignal();
     ::signal(signum, SIG_DFL);

@@ -22,7 +22,7 @@ pip install lmdeploy
 
 ## 从源码安装
 
-LMDeploy 面向 NVIDIA CUDA 环境编译 TurboMind 引擎，从源码安装时总会编译原生扩展。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 10 或更新版本，或 Windows 上的 Visual Studio 2022。
+LMDeploy 面向 NVIDIA CUDA 环境编译 TurboMind 引擎，从源码安装时总会编译原生扩展。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20 的 `std::format`，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 13 或更新版本，或 Windows 上的 Visual Studio 2022。
 
 成功安装 CUDA 工具包后，您可以使用以下单行命令构建并安装 LMDeploy：
 

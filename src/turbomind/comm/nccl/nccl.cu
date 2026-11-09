@@ -21,7 +21,7 @@
 
 #define NCCLCHECK(e)                                                                                                   \
     if (auto ec = e; ec != ncclSuccess) {                                                                              \
-        auto msg = fmt::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
+        auto msg = std::format("NCCL error {}:{} '{}'", __FILE__, __LINE__, ncclGetErrorString(ec));                   \
         throw std::runtime_error(msg.c_str());                                                                         \
     }
 

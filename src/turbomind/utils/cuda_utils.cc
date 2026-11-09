@@ -25,7 +25,7 @@ namespace turbomind {
 void ReportCudaError(cudaError_t ec, const char* file, int line)
 {
     core::Scope _("TM_CUDA_CHECK", file, line);
-    core::Logger::Instance().LogFatalImpl(file, line, fmt::format("CUDA error: {}", cudaGetErrorString(ec)));
+    core::Logger::Instance().LogFatalImpl(file, line, std::format("CUDA error: {}", cudaGetErrorString(ec)));
 }
 
 void ReportCuDrvError(CUresult ec, const char* file, int line)
@@ -33,7 +33,7 @@ void ReportCuDrvError(CUresult ec, const char* file, int line)
     core::Scope _("TM_CUDRV_CHECK", file, line);
     const char* str{};
     cuGetErrorString(ec, &str);
-    core::Logger::Instance().LogFatalImpl(file, line, fmt::format("CUDA Driver error: {}", str ? str : "Unknown"));
+    core::Logger::Instance().LogFatalImpl(file, line, std::format("CUDA Driver error: {}", str ? str : "Unknown"));
 }
 
 /* ***************************** common utils ****************************** */

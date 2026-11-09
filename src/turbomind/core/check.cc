@@ -53,7 +53,7 @@ void CheckErrorStream::Report()
 void ReportNullError(const char* file, int line, const char* expr)
 {
     Scope _("TM_CHECK_NOTNULL", file, line);
-    Logger::Instance().LogFatalImpl(file, line, fmt::format("'{}' Must be non NULL", expr));
+    Logger::Instance().LogFatalImpl(file, line, std::format("'{}' Must be non NULL", expr));
 }
 
 }  // namespace turbomind::core

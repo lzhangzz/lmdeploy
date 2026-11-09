@@ -22,7 +22,7 @@ pip install lmdeploy
 
 ## Install from source
 
-LMDeploy builds the TurboMind engine with NVIDIA CUDA support. A source installation always compiles the native extension. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a C++20-capable host compiler supported by your CUDA Toolkit, such as GCC 10 or newer on Linux or Visual Studio 2022 on Windows.
+LMDeploy builds the TurboMind engine with NVIDIA CUDA support. A source installation always compiles the native extension. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a host compiler with C++20 `std::format` support that your CUDA Toolkit also supports, such as GCC 13 or newer on Linux or Visual Studio 2022 on Windows.
 
 Once the CUDA toolkit is successfully set up, you can build and install LMDeploy with a single command:
 

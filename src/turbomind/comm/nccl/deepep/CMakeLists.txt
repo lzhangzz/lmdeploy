@@ -11,7 +11,7 @@ FetchContent_Declare(
     deepep
     GIT_REPOSITORY https://github.com/deepseek-ai/DeepEP.git
     GIT_TAG dd758caf451848bd150e1046af3d0a73e5fff38d
-    GIT_SUBMODULES ""
+    GIT_SUBMODULES third-party/fmt
     GIT_PROGRESS TRUE
     PATCH_COMMAND
         ${CMAKE_COMMAND}
@@ -77,12 +77,12 @@ target_include_directories(token_dispatcher
     PUBLIC ${PROJECT_SOURCE_DIR}
     PRIVATE
         ${deepep_SOURCE_DIR}
+        ${deepep_SOURCE_DIR}/third-party/fmt/include
         ${deepep_SOURCE_DIR}/deep_ep/include
         ${NCCL_INCLUDE_DIRS})
 target_link_libraries(token_dispatcher PRIVATE
     core
     host_comm
-    fmt::fmt
     CUDA::cudart
     CUDA::cuda_driver
     # Keep the real NCCL before the weak compatibility fallbacks. The anchor in

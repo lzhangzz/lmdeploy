@@ -1,6 +1,6 @@
 
 #include <filesystem>
-#include <fmt/format.h>
+#include <format>
 #include <ostream>
 #include <stack>
 #include <string>
@@ -137,7 +137,7 @@ struct ContextStorage {
         }
         std::ostringstream oss;
         oss << std::hex << std::this_thread::get_id();
-        std::string s = fmt::format("*** stacktrace of thread 0x{} ***\n", oss.str());
+        std::string s = std::format("*** stacktrace of thread 0x{} ***\n", oss.str());
         for (size_t i = 0; i < scope_.size(); ++i) {
             const int r    = static_cast<int>(scope_.size()) - i - 1;
             auto      name = StripNamespace(scope_[r].name);
@@ -149,7 +149,7 @@ struct ContextStorage {
                     name.resize(p);
                 }
             }
-            s += fmt::format("  [{:>2}] {} @ {}:{}\n", i, name, StripPathPrefix(scope_[r].file), scope_[r].line);
+            s += std::format("  [{:>2}] {} @ {}:{}\n", i, name, StripPathPrefix(scope_[r].file), scope_[r].line);
         }
         return s;
     }

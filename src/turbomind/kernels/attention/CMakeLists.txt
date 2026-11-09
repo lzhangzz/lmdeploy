@@ -37,7 +37,6 @@ if (BUILD_TEST)
         unfused_attention_kernels
         core
         cuda_utils
-        fmt::fmt
         cublas)
 
     add_executable(test_quant test_quant.cu test_utils.cu)

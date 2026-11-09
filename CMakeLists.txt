@@ -21,6 +21,10 @@ if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.0")
     message(FATAL_ERROR "TurboMind C++20 requires CUDA 12.0 or newer")
 endif()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "13")
+    message(FATAL_ERROR "TurboMind requires std::format, which needs GCC 13 or newer")
+endif()
+
 if (MSVC)
     # use standard conformant preprocessor
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
@@ -29,12 +33,6 @@ if (MSVC)
     # C++20 enables MSVC's strict template lookup, which rejects NVCC-generated
     # CuTe code. Preserve the previous lookup mode only for the CUDA host pass.
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:twoPhase-")
-    # nvcc's front-end has a known bug (fixed in NVCC 13.1) where the fmt 11.x
-    # literal-encoding probe (fmt/base.h:is_utf8_enabled) always returns false,
-    # causing a static_assert failure.  Disable fmt's Unicode check project-wide;
-    # without /utf-8 the MSVC host compiler also sees use_utf8=false, so all TUs
-    # agree and there is no ODR inconsistency.
-    add_compile_definitions(FMT_UNICODE=0)
 endif ()
 
 find_package(CUDAToolkit REQUIRED)
@@ -54,19 +52,6 @@ option(BUILD_FAST_MATH "Build in fast math mode" ON)
 set(NVCC_THREADS 8 CACHE STRING "NVCC threads for compiling target architectures in parallel (0 = all CPUs)")
 
 include(FetchContent)
-
-FetchContent_Declare(
-  fmt
-  GIT_REPOSITORY https://github.com/fmtlib/fmt.git
-  GIT_TAG        11.1.4
-  GIT_SHALLOW    ON
-  GIT_PROGRESS   TRUE
-  USES_TERMINAL_DOWNLOAD TRUE
-  EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(fmt)
-set_target_properties(fmt PROPERTIES POSITION_INDEPENDENT_CODE ON)
-include_directories(${fmt_SOURCE_DIR}/include)
 
 if (BUILD_TEST)
   FetchContent_Declare(
@@ -286,11 +271,8 @@ set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall")
 
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
-# Suppress nvcc warning 128 (loop not reachable) in fmt headers - nvcc false positive
-# Suppress nvcc warning 27 (character value out of range) from fmt/format.h's
-# fractional_part_rounding_thresholds which uses U32 string literals with values
-# exceeding 0x10FFFF - harmless, pending fix in fmtlib (PR #4719)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=27 --diag-suppress=2417")
+# Suppress nvcc warning 128 (loop not reachable) - nvcc false positive
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress=128 --diag-suppress=2417")
 
 string(REPLACE "-O2" "" CMAKE_CXX_FLAGS_RELEASE         "${CMAKE_CXX_FLAGS_RELEASE}")
 string(REPLACE "-O2" "" CMAKE_CUDA_FLAGS_RELEASE        "${CMAKE_CUDA_FLAGS_RELEASE}")

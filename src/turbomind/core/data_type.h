@@ -6,7 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <fmt/format.h>
+#include <format>
+#include <string_view>
 #include <type_traits>
 
 // forward declarations for CUDA floating point types
@@ -273,9 +274,9 @@ inline std::ostream& operator<<(std::ostream& os, DataType type) {
 }  // namespace turbomind
 
 template <>
-struct fmt::formatter<turbomind::DataType>: formatter<string_view> {
-    auto format(turbomind::DataType type, format_context& ctx) const {
-        return formatter<string_view>::format(turbomind::to_string(type), ctx);
+struct std::formatter<turbomind::DataType>: std::formatter<std::string_view> {
+    auto format(turbomind::DataType type, std::format_context& ctx) const {
+        return std::formatter<std::string_view>::format(turbomind::to_string(type), ctx);
     }
 };
 

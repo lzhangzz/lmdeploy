@@ -1,6 +1,6 @@
 #include "src/turbomind/memory/stats.h"
 
-#include <fmt/format.h>
+#include <format>
 #include <iterator>
 
 namespace turbomind {
@@ -16,7 +16,7 @@ std::string human_bytes(size_t n)
         v /= 1024.0;
         ++i;
     }
-    return fmt::format("{:.2f}{}", v, kU[i]);
+    return std::format("{:.2f}{}", v, kU[i]);
 }
 
 float pct(size_t used, size_t total)
@@ -28,9 +28,9 @@ float pct(size_t used, size_t total)
 
 std::string FormatMemoryStats(const MemoryStats& s)
 {
-    fmt::memory_buffer buf;
+    std::string buf;
 
-    fmt::format_to(std::back_inserter(buf),
+    std::format_to(std::back_inserter(buf),
                    "[cache] region={} live={} ({:.2f}%) live_alloc={} | pages {}/{} used ({:.2f}%) page_size={}",
                    human_bytes(s.region_bytes),
                    human_bytes(s.live_bytes),
@@ -41,15 +41,15 @@ std::string FormatMemoryStats(const MemoryStats& s)
                    pct(s.page.used_pages, s.page.pages),
                    human_bytes(s.page.page_size));
 
-    fmt::format_to(std::back_inserter(buf), "\n[cache]   free pages by order:");
+    std::format_to(std::back_inserter(buf), "\n[cache]   free pages by order:");
     for (int k = 0; k <= s.page.max_order; ++k) {
         if (s.page.free_blocks_by_order[k]) {
-            fmt::format_to(std::back_inserter(buf), " o{}={}", k, s.page.free_blocks_by_order[k]);
+            std::format_to(std::back_inserter(buf), " o{}={}", k, s.page.free_blocks_by_order[k]);
         }
     }
 
     for (const SlabStats& sl : s.slabs) {
-        fmt::format_to(std::back_inserter(buf),
+        std::format_to(std::back_inserter(buf),
                        "\n[cache]   slab obj={} slab={} cap={} slabs={}(F{}/P{}/E{}) obj {}/{} used ({:.2f}%)",
                        human_bytes(sl.object_size),
                        human_bytes(sl.slab_size),
@@ -63,7 +63,7 @@ std::string FormatMemoryStats(const MemoryStats& s)
                        pct(sl.used_objects, sl.total_objects));
     }
 
-    return fmt::to_string(buf);
+    return buf;
 }
 
 }  // namespace turbomind

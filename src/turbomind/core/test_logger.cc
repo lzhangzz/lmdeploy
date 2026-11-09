@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <cstdio>
+#include <format>
 #include <functional>
 #include <string>
 #include <thread>
@@ -313,7 +315,7 @@ TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger]
     std::vector<std::string> markers;
     markers.reserve(kMsgCount);
     for (int i = 0; i < kMsgCount; ++i) {
-        markers.push_back(fmt::format("drain-test-msg-{:03d}-Ax9B{}", i, i));
+        markers.push_back(std::format("drain-test-msg-{:03d}-Ax9B{}", i, i));
     }
 
     int pipefd[2];
@@ -337,7 +339,7 @@ TEST_CASE("Logger: async signal handler drains queue on fatal signal", "[logger]
         std::thread worker([&] {
             auto& log = Logger::Instance();
             if (!log.is_async()) {
-                fmt::print(stderr, "CHILD-ERROR: not in async mode\n");
+                std::fputs("CHILD-ERROR: not in async mode\n", stderr);
                 ::_exit(2);
             }
 

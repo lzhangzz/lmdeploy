@@ -19,7 +19,7 @@ find_package(CUDAToolkit REQUIRED)
 add_library(cuda_utils STATIC cuda_utils.cc)
 set_property(TARGET cuda_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cuda_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(cuda_utils PUBLIC fmt::fmt CUDA::cudart CUDA::cuda_driver)
+target_link_libraries(cuda_utils PUBLIC CUDA::cudart CUDA::cuda_driver)
 
 
 add_library(nvtx_utils STATIC nvtx_utils.cc)

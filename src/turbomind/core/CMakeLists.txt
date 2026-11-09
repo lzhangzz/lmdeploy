@@ -29,7 +29,7 @@ add_library(core STATIC
         copy.cc
         logger.cc)
 
-target_link_libraries(core PUBLIC cuda_utils CUDA::cudart CUDA::cuda_driver fmt::fmt concurrentqueue nvidia::cutlass::cutlass)
+target_link_libraries(core PUBLIC cuda_utils CUDA::cudart CUDA::cuda_driver concurrentqueue nvidia::cutlass::cutlass)
 
 set_property(TARGET core PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET core PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

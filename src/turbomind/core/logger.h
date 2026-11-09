@@ -2,9 +2,8 @@
 
 #pragma once
 
-#include <fmt/format.h>
-
 #include <cstdlib>
+#include <format>
 #include <string>
 #include <utility>
 
@@ -50,10 +49,10 @@ public:
     }
 
     template<typename... Args>
-    void Log(Level level, fmt::format_string<Args...> fmt_str, Args&&... args)
+    void Log(Level level, std::format_string<Args...> fmt_str, Args&&... args)
     {
         if (level_ <= level) {
-            Enqueue(level, nullptr, 0, fmt::format(fmt_str, std::forward<Args>(args)...));
+            Enqueue(level, nullptr, 0, std::format(fmt_str, std::forward<Args>(args)...));
         }
     }
 
@@ -72,17 +71,17 @@ public:
     }
 
     template<typename... Args>
-    void Log(Level level, SourceLocation loc, fmt::format_string<Args...> fmt_str, Args&&... args)
+    void Log(Level level, SourceLocation loc, std::format_string<Args...> fmt_str, Args&&... args)
     {
         if (level_ <= level) {
-            Enqueue(level, loc.file, loc.line, fmt::format(fmt_str, std::forward<Args>(args)...));
+            Enqueue(level, loc.file, loc.line, std::format(fmt_str, std::forward<Args>(args)...));
         }
     }
 
     template<typename... Args>
-    [[noreturn]] void LogFatal(SourceLocation loc, fmt::format_string<Args...> fmt_str, Args&&... args)
+    [[noreturn]] void LogFatal(SourceLocation loc, std::format_string<Args...> fmt_str, Args&&... args)
     {
-        LogFatalTraced(loc.file, loc.line, fmt::format(fmt_str, std::forward<Args>(args)...));
+        LogFatalTraced(loc.file, loc.line, std::format(fmt_str, std::forward<Args>(args)...));
     }
 
     [[noreturn]] void LogFatalImpl(const char* file, int line, std::string message);

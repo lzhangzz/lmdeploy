@@ -90,6 +90,5 @@ if(BUILD_TEST)
             attention
             core
             cuda_utils
-            fmt::fmt
             CUDA::cudart)
 endif()
