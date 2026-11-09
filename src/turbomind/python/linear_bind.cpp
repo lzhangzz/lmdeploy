@@ -171,15 +171,15 @@ void bind_linear(py::module_& m)
         return std::make_unique<gemm::Workspace>(reinterpret_cast<cudaStream_t>(stream));
     }));
 
-    py::class_<LlamaLinear, std::shared_ptr<LlamaLinear>>(m, "LlamaLinear")
+    py::class_<Linear, std::shared_ptr<Linear>>(m, "Linear")
         .def(py::init<>())
         .def(
             "get_weight_plan",
-            [](LlamaLinear& self, const gemm::WeightQuery& query) { return self.gemm().GetWeightPlan(query); },
+            [](Linear& self, const gemm::WeightQuery& query) { return self.gemm().GetWeightPlan(query); },
             py::arg("query"))
         .def(
             "get_exec_plan",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                gemm::Workspace&              workspace,
                const LinearWeight&           weight,
                std::shared_ptr<core::Tensor> input,
@@ -196,7 +196,7 @@ void bind_linear(py::module_& m)
             py::arg("offsets") = py::none())
         .def(
             "_get_output_spec",
-            [](const LlamaLinear&            self,
+            [](const Linear&                 self,
                const LinearWeight&           weight,
                std::shared_ptr<core::Tensor> input,
                std::shared_ptr<core::Tensor> indices) {
@@ -207,7 +207,7 @@ void bind_linear(py::module_& m)
             py::arg("indices") = py::none())
         .def(
             "forward_dense",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
@@ -231,7 +231,7 @@ void bind_linear(py::module_& m)
             py::arg("output_scales") = py::none())
         .def(
             "forward_moe",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                gemm::Workspace&              workspace,
                const gemm::ExecPlan&         plan,
                std::shared_ptr<core::Tensor> input,
@@ -261,7 +261,7 @@ void bind_linear(py::module_& m)
             py::arg("output_scales") = py::none())
         .def(
             "tune",
-            [](LlamaLinear&                  self,
+            [](Linear&                       self,
                gemm::Workspace&              workspace,
                std::shared_ptr<core::Tensor> input,
                LinearWeight&                 weight,
@@ -289,14 +289,14 @@ void bind_linear(py::module_& m)
             py::arg("output_scales") = py::none())
         .def(
             "import_records",
-            [](LlamaLinear& self, const std::string& path) {
+            [](Linear& self, const std::string& path) {
                 std::ifstream ifs(path, std::ios::binary);
                 return self.Import(ifs);
             },
             py::arg("path"))
         .def(
             "export_records",
-            [](LlamaLinear& self, const std::string& path) {
+            [](Linear& self, const std::string& path) {
                 std::ofstream ofs(path, std::ios::binary);
                 return self.Export(ofs);
             },

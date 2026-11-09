@@ -12,7 +12,7 @@ namespace turbomind {
 class Context;
 class EngineParam;
 class LinearWeight;
-class LlamaLinear;
+class Linear;
 
 /// EAGLE3's tap: captures residuals of the configured target layers, projects
 /// the concatenated rows through the eagle fc, and reunites the result across
@@ -58,7 +58,7 @@ private:
     DataType              data_type_;
     int                   hidden_units_;
     int                   target_layer_count_;
-    LlamaLinear&          linear_;
+    Linear&               linear_;
     const LinearWeight&   projection_weight_;
     std::vector<int>      target_layer_ids_;
     std::vector<int>      tap_ordinal_by_completed_layer_;

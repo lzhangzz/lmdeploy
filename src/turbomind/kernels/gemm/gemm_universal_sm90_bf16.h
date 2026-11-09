@@ -4,7 +4,7 @@
  * SM90 dense BF16 GEMM — CuTe cooperative mainloop (PipelineTmaAsync + TiledMma).
  *
  * Operand swap (API vs GMMA):
- *   LlamaLinear / KernelImpl: A = activations (M_batch, K), B = weights (K, N_out)
+ *   Linear / KernelImpl: A = activations (M_batch, K), B = weights (K, N_out)
  *     → host TMA: act as (M,K) row-major; weight transposed to (N,K).
  *   GMMA TileShape = (OUT, BATCH, K) = (TILE_N, TILE_M, TILE_K)
  *     → GMMA-A SMEM = weight  (OUT × K), K-major SoT (SmemLayoutAtomA)

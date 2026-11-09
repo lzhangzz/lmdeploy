@@ -57,11 +57,11 @@ auto get_lc_state_size(const DeltaNetWeight& weights, int tp)
     return std::make_pair(num_v_heads * key_head_dim * value_head_dim, conv_dim * d_conv);
 }
 
-GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
-                                       CacheRegistry&               registry,
-                                       const EngineParam&           engine,
-                                       const Context&               context,
-                                       int                          phases):
+DeltaNetLayer::DeltaNetLayer(std::vector<DeltaNetWeight*> weights,
+                             CacheRegistry&               registry,
+                             const EngineParam&           engine,
+                             const Context&               context,
+                             int                          phases):
     tp_size_{engine.attn_tp_size * engine.attn_cp_size},
     recurrent_state_dtype_{engine.state_dtype},
     gdr_cp_level_{GetCPLevel()},
@@ -213,14 +213,14 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     TM_CUDA_CHECK(cudaEventCreateWithFlags(&ev_after_, cudaEventDisableTiming));
 }
 
-GatedDeltaNetLayer::~GatedDeltaNetLayer()
+DeltaNetLayer::~DeltaNetLayer()
 {
     cudaStreamDestroy(aux_stream_);
     cudaEventDestroy(ev_before_);
     cudaEventDestroy(ev_after_);
 }
 
-void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
+void DeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kSetup) {
         Setup(phase, env);
@@ -317,7 +317,7 @@ void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
+void DeltaNetLayer::Setup(int phase, TensorMap& env)
 {
     auto&              data     = data_.at(phase);
     Buffer_<Sequence*> requests = env.at("requests").buffer();
@@ -514,7 +514,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
     copy(conv_state_offsets_buf_, layer_num_, data.conv_state_offsets);
 }
 
-void GatedDeltaNetLayer::Forward(ForwardParam param)
+void DeltaNetLayer::Forward(ForwardParam param)
 {
     TM_FUNCTION_SCOPE();
 
@@ -730,7 +730,7 @@ void GatedDeltaNetLayer::Forward(ForwardParam param)
     TM_SCOPE_CALL(linear_.Forward(attn_out, *weights.out_proj, param.output));
 }
 
-void GatedDeltaNetLayer::CommitAcceptedState(int phase, const Buffer_<int>& accept_len)
+void DeltaNetLayer::CommitAcceptedState(int phase, const Buffer_<int>& accept_len)
 {
     Data& data = data_.at(phase);
     if (data.speculative_request_count == 0) {
@@ -807,7 +807,7 @@ void GatedDeltaNetLayer::CommitAcceptedState(int phase, const Buffer_<int>& acce
     data.commit_lengths         = {};
 }
 
-size_t GatedDeltaNetLayer::SpeculativeStateJournalBytes(int request_count, int verify_positions) const
+size_t DeltaNetLayer::SpeculativeStateJournalBytes(int request_count, int verify_positions) const
 {
     const size_t rows           = size_t(layer_num_) * request_count * verify_positions;
     const size_t input_elements = size_t(conv_dim_) + size_t(num_k_heads_ + num_v_heads_) * 128;

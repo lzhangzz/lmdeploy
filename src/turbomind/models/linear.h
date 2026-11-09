@@ -11,7 +11,7 @@
 
 namespace turbomind {
 
-class LlamaLinear {
+class Linear {
 public:
     // Opaque, non-copyable, non-movable RAII token. While alive, this linear
     // runs on the workspace passed to With(); destruction restores the
@@ -26,16 +26,16 @@ public:
         WorkspaceScope& operator=(WorkspaceScope&&) = delete;
 
     private:
-        WorkspaceScope(LlamaLinear& linear, gemm::Workspace& workspace);
-        friend class LlamaLinear;
-        LlamaLinear*     linear_;
+        WorkspaceScope(Linear& linear, gemm::Workspace& workspace);
+        friend class Linear;
+        Linear*          linear_;
         gemm::Workspace* prev_;
     };
 
     // Bind this linear to `workspace` for the enclosing scope.
     [[nodiscard]] WorkspaceScope With(gemm::Workspace& workspace);
 
-    explicit LlamaLinear();
+    explicit Linear();
 
     void Forward(const Tensor&       input,  //
                  const LinearWeight& weight,

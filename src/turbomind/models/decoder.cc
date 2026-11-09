@@ -27,7 +27,7 @@
 
 namespace turbomind {
 
-void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
+void Decoder::Run(BatchOp op, int phase, TensorMap& env)
 {
     attn_layer_->Run(op, phase, env);
     if (linear_attn_layer_) {
@@ -35,11 +35,11 @@ void UnifiedDecoder::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
-                               const EngineParam& engine,
-                               const Context&     ctx,
-                               int                phases,
-                               const ModelWeight& model_weight):
+Decoder::Decoder(CacheRegistry&     registry,
+                 const EngineParam& engine,
+                 const Context&     ctx,
+                 int                phases,
+                 const ModelWeight& model_weight):
     layer_num_(model_weight.num_layer),
     hidden_units_(model_weight.hidden_units),
     output_norm_zero_centered_(model_weight.norm->zero_centered_),
@@ -97,39 +97,39 @@ UnifiedDecoder::UnifiedDecoder(CacheRegistry&     registry,
     }
 
     if (!ffn_weights.empty()) {
-        ffn_layer_ = std::make_unique<LlamaFfnLayer>(ctx);
+        ffn_layer_ = std::make_unique<FfnLayer>(ctx);
     }
 
     if (!attn_weights.empty()) {
-        attn_layer_ = std::make_unique<UnifiedAttentionLayer>(attn_weights,  //
-                                                              registry,
-                                                              engine,
-                                                              ctx,
-                                                              phases);
+        attn_layer_ = std::make_unique<AttentionLayer>(attn_weights,  //
+                                                       registry,
+                                                       engine,
+                                                       ctx,
+                                                       phases);
     }
 
     if (!gdn_weights.empty()) {
-        linear_attn_layer_ = std::make_unique<GatedDeltaNetLayer>(gdn_weights,  //
-                                                                  registry,
-                                                                  engine,
-                                                                  ctx,
-                                                                  phases);
+        linear_attn_layer_ = std::make_unique<DeltaNetLayer>(gdn_weights,  //
+                                                             registry,
+                                                             engine,
+                                                             ctx,
+                                                             phases);
     }
 
     TM_CHECK(!(moe_weights.empty() && engine.ep_size > 1)) << "Dense model is not supported with ep_size > 1";
 }
 
-void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
-                                              Tensor&       residual,
-                                              const Tensor& bias,
-                                              const Tensor& weight,
-                                              float         eps,
-                                              bool          zero_centered,
-                                              int           token_num,
-                                              int           group0,
-                                              int           group1,
-                                              const int*    local_token_nums,
-                                              int           local_token_nums_count)
+void Decoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
+                                       Tensor&       residual,
+                                       const Tensor& bias,
+                                       const Tensor& weight,
+                                       float         eps,
+                                       bool          zero_centered,
+                                       int           token_num,
+                                       int           group0,
+                                       int           group1,
+                                       const int*    local_token_nums,
+                                       int           local_token_nums_count)
 {
     const auto dtype = hidden_states.dtype();
 
@@ -181,10 +181,10 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(int                     phase,
-                             TensorMap&              args,
-                             const std::vector<WeightType*>& weights,
-                             const Tensor&           selected_hidden_buffer)
+void Decoder::Forward(int                             phase,
+                      TensorMap&                      args,
+                      const std::vector<WeightType*>& weights,
+                      const Tensor&                   selected_hidden_buffer)
 {
     TM_FUNCTION_SCOPE();
     /**

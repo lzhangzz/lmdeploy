@@ -42,7 +42,7 @@ struct ModelExecutor::Impl {
     // reference.
     Model& model_;
 
-    LlamaLinear& linear_;
+    Linear& linear_;
 
     const int device_id_;
 

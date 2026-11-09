@@ -51,7 +51,7 @@ private:
                               const TensorMap&   env);
 
     const Qwen35MtpWeight& spec_weights_;
-    LlamaLinear&           linear_;
+    Linear&                linear_;
 
     const int hidden_units_;
     const int model_tp_rank_;

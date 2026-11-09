@@ -45,7 +45,7 @@ QwenVitWorkspacePlan PlanWorkspace(core::ssize_t available_elements,
 struct QwenVit::Impl {
     const QwenVitWeight&        weights_;
     const core::QwenVitConfig&  config_;
-    LlamaLinear&                linear_;
+    Linear&                     linear_;
     const comm::HostComm&       h_tp_group;
     comm::DeviceCommImpl* const d_comm_;
     const int                   tp_group_;
@@ -91,7 +91,7 @@ struct QwenVit::Impl {
         Buffer_<int> mrope_delta_host;
         Buffer_<int> mrope_offsets_host;
 
-        // mrope outputs - owned here so UnifiedAttentionLayer can safely borrow() across env clears.
+        // mrope outputs - owned here so AttentionLayer can safely borrow() across env clears.
         Buffer_<int> mrope_segs_dev;          // device-side segment scratch, grown alongside host
         Tensor_<int> mrope_position_ids;      // (max_forward_token_num, 3), flat current-forward table
         Tensor_<int> mrope_length;            // (bsz,)
@@ -603,7 +603,7 @@ struct QwenVit::Impl {
         }
     }
 
-    // Build the mrope tensors consumed by `UnifiedAttentionLayer` and publish them to env.
+    // Build the mrope tensors consumed by `AttentionLayer` and publish them to env.
     //
     // Per-forward layout: one flat row in `(max_forward_token_num, 3)` for each current token.
     // Prefill slots with multimodal_inputs get their active range written by

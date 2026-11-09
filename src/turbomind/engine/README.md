@@ -91,7 +91,7 @@ Logical block is scheduler-owned metadata for a fixed token interval. It records
 
 ### cache-geometry
 
-`cache_block_seq_len` is the physical number of rank-local tokens stored in one KV cache object. With context-parallel size `attn_cp_size`, the corresponding scheduler `logical_block_size` is `cache_block_seq_len * attn_cp_size` global token positions. Logical-block offsets, capacities, prefix-trie segmentation, block counts, and read-only boundaries use this global capacity; `UnifiedAttentionLayer` object sizing and block iteration continue to use the physical rank-local length. Each CP rank stores the positions assigned to it from the same global logical interval, so one logical block still maps to one cache object on each rank.
+`cache_block_seq_len` is the physical number of rank-local tokens stored in one KV cache object. With context-parallel size `attn_cp_size`, the corresponding scheduler `logical_block_size` is `cache_block_seq_len * attn_cp_size` global token positions. Logical-block offsets, capacities, prefix-trie segmentation, block counts, and read-only boundaries use this global capacity; `AttentionLayer` object sizing and block iteration continue to use the physical rank-local length. Each CP rank stores the positions assigned to it from the same global logical interval, so one logical block still maps to one cache object on each rank.
 
 ### cache-object
 
@@ -724,7 +724,7 @@ Cache metadata is generic. `CacheBlockPool` owns `CacheBlock` slot storage (stab
 
 ### cache-content
 
-Cache contents are module-specific within registered byte ranges. `UnifiedAttentionLayer` owns KV byte-range semantics. Target and draft KV occupy disjoint ranges in one prefix object, so whole-object allocation, copies, and eviction preserve both ranges together. `GatedDeltaNetLayer` owns recurrent and convolution state byte-range semantics. Future modules that register category bytes must define their own resumability and content-update rules.
+Cache contents are module-specific within registered byte ranges. `AttentionLayer` owns KV byte-range semantics. Target and draft KV occupy disjoint ranges in one prefix object, so whole-object allocation, copies, and eviction preserve both ranges together. `DeltaNetLayer` owns recurrent and convolution state byte-range semantics. Future modules that register category bytes must define their own resumability and content-update rules.
 
 A GDN speculative transition journal is transient executor storage, not cache
 content. Only the exact accepted convolution and recurrent state is written to
@@ -740,11 +740,11 @@ A valid cache allocation is sufficient to keep an indexed prefix node alive, but
 
 ### category-registration
 
-Modules register anonymous byte requirements with the prefix or checkpoint category during construction and keep only byte offsets or base part ids (per registration channel). Each category registers one composite `ObjectAllocator` object id after all modules have registered. A category exposes two registration channels: an accumulation channel (grows part 0, returns a within-part byte offset) and a composite channel (appends parts 1..N, returns the base part id). Slab classes in `ObjectAllocator` are deduped by aligned size, and two same-aligned-size simple categories would share an object id (out of scope: prefix is the only simple category). Modules own the content semantics of their registered byte ranges. The `CacheRegistry` only maps categories to object ids and byte offsets; cache block slot reservation, validity, resume selection, and release are scheduler policy. When a module sizes its composite parts to equal another category's aligned object size (e.g. `GatedDeltaNetLayer` block-sizing recurrent parts to the prefix object), they share one slab class and become interchangeable at slot granularity under the already category-agnostic eviction sweep; page-granular reclamation (`slab.h`, `kMaxEmptySlabs == 0`) is the pre-existing baseline that also applies when sizes differ.
+Modules register anonymous byte requirements with the prefix or checkpoint category during construction and keep only byte offsets or base part ids (per registration channel). Each category registers one composite `ObjectAllocator` object id after all modules have registered. A category exposes two registration channels: an accumulation channel (grows part 0, returns a within-part byte offset) and a composite channel (appends parts 1..N, returns the base part id). Slab classes in `ObjectAllocator` are deduped by aligned size, and two same-aligned-size simple categories would share an object id (out of scope: prefix is the only simple category). Modules own the content semantics of their registered byte ranges. The `CacheRegistry` only maps categories to object ids and byte offsets; cache block slot reservation, validity, resume selection, and release are scheduler policy. When a module sizes its composite parts to equal another category's aligned object size (e.g. `DeltaNetLayer` block-sizing recurrent parts to the prefix object), they share one slab class and become interchangeable at slot granularity under the already category-agnostic eviction sweep; page-granular reclamation (`slab.h`, `kMaxEmptySlabs == 0`) is the pre-existing baseline that also applies when sizes differ.
 
 ### unified-attention
 
-`UnifiedAttentionLayer` registers its KV byte requirement with the prefix category during construction and stores the returned byte offset. Target and draft decoders resolve only their own registered byte offsets while sharing the same logical prefix cache block. During setup each layer resolves committed prefix cache blocks from logical blocks and prepares KV pointer metadata. Reserving logical-block cache slots and validating contiguous prefix coverage is scheduler planning, not module work. Physical KV layout and iteration use `cache_block_seq_len`, while pointer counts and read-only store boundaries use `logical_block_size`. It skips KV cache stores for positions in read-only leading blocks (`< readonly_block_num * logical_block_size`) and supplies those positions from the already-valid blocks during reads (`concepts.cache-geometry`).
+`AttentionLayer` registers its KV byte requirement with the prefix category during construction and stores the returned byte offset. Target and draft decoders resolve only their own registered byte offsets while sharing the same logical prefix cache block. During setup each layer resolves committed prefix cache blocks from logical blocks and prepares KV pointer metadata. Reserving logical-block cache slots and validating contiguous prefix coverage is scheduler planning, not module work. Physical KV layout and iteration use `cache_block_seq_len`, while pointer counts and read-only store boundaries use `logical_block_size`. It skips KV cache stores for positions in read-only leading blocks (`< readonly_block_num * logical_block_size`) and supplies those positions from the already-valid blocks during reads (`concepts.cache-geometry`).
 
 `ProcessKV_v2` remains the sole multi-query K/V transformation and store
 owner. The standalone verification kernel consumes the same `block::Layout`
@@ -755,14 +755,14 @@ Verification split indices are local to the verification query partition.
 
 ### gated-deltanet
 
-`GatedDeltaNetLayer` does not partition its token recurrence across CP ranks.
+`DeltaNetLayer` does not partition its token recurrence across CP ranks.
 It folds attention CP into GDN tensor parallelism: rank-local weights,
 convolution state, and recurrent state use
 `attn_tp_size * attn_cp_size`, with shards selected by `model_tp_rank`.
 Scheduler checkpoint operations publish and restore these rank-local shards
 in lockstep at the same global position.
 
-`GatedDeltaNetLayer` registers its recurrent/convolution state byte requirement
+`DeltaNetLayer` registers its recurrent/convolution state byte requirement
 with the checkpoint category during construction and stores the relevant
 offsets (per-layer convolution element offsets within part 0, computed by the
 module, and the base part id `rec_base` for recurrent parts). During setup it
@@ -805,7 +805,7 @@ stream after its consumers are enqueued.
 The recurrent state is a rounded-up two-dimensional
 `(L_b layers × H_b v_heads)` block grid: one uniform composite part
 (`block_bytes_`) per block, with convolution state unchanged.
-`GatedDeltaNetLayer` resolves a per-(layer-group, batch, head-group) recurrent
+`DeltaNetLayer` resolves a per-(layer-group, batch, head-group) recurrent
 base (composite part
 `rec_base + (L/L_b)*ng + (h/H_b)`, shared by all `L_b` layers of the
 block-row), plus a per-layer in-block element offset

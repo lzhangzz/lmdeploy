@@ -33,13 +33,13 @@ struct Communicators {
 
 // Execution context for the model
 struct Context {
-    core::Stream                 core_stream;
-    core::Allocator              allocator;
-    cudaStream_t                 stream;
-    std::unique_ptr<LlamaLinear> linear;
-    cudaDeviceProp               device_prop;
-    Communicators                comm;  // initialize later
-    std::unique_ptr<int>         is_warm_up;
+    core::Stream            core_stream;
+    core::Allocator         allocator;
+    cudaStream_t            stream;
+    std::unique_ptr<Linear> linear;
+    cudaDeviceProp          device_prop;
+    Communicators           comm;  // initialize later
+    std::unique_ptr<int>    is_warm_up;
 
     Context(int device_id):
         core_stream{core::Stream::create()},
@@ -49,7 +49,7 @@ struct Context {
         is_warm_up{std::make_unique<int>()}
     {
         core::ContextGuard guard{core_stream};
-        linear = std::make_unique<LlamaLinear>();
+        linear = std::make_unique<Linear>();
         TM_CUDA_CHECK(cudaGetDeviceProperties(&device_prop, device_id));
     }
 };

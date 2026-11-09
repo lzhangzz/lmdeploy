@@ -16,7 +16,7 @@
 
 namespace turbomind {
 
-class GatedDeltaNetLayer {
+class DeltaNetLayer {
 public:
     struct ForwardParam {
         int                   phase;
@@ -26,13 +26,13 @@ public:
         // int                   layer_id;
     };
 
-    GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
-                       CacheRegistry&               registry,
-                       const EngineParam&           engine,
-                       const Context&               context,
-                       int                          phases);
+    DeltaNetLayer(std::vector<DeltaNetWeight*> weights,
+                  CacheRegistry&               registry,
+                  const EngineParam&           engine,
+                  const Context&               context,
+                  int                          phases);
 
-    ~GatedDeltaNetLayer();
+    ~DeltaNetLayer();
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -51,9 +51,9 @@ private:
 
     const linear_attn::delta_rule::ContextParallelLevel gdr_cp_level_;
 
-    LlamaLinear& linear_;
+    Linear& linear_;
 
-    // Per-phase batch data (mirrors UnifiedAttentionLayer pattern)
+    // Per-phase batch data (mirrors AttentionLayer pattern)
     struct Data {
         std::vector<int>                             input_lens;
         int                                          batch_size{};

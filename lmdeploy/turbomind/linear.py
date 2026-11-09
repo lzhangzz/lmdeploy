@@ -137,7 +137,7 @@ class Linear:
         self._workspaces = {}
         self._context = None
         with self._activate():
-            self._impl = _tm.LlamaLinear()
+            self._impl = _tm.Linear()
 
     def __del__(self):
         """Release the native executor when its last reference is dropped."""

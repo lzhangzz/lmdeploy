@@ -39,8 +39,8 @@ public:
 protected:
     Tensor_<float> Gate(const Tensor& input, const LinearWeight& gate);
 
-    LlamaLinear&  linear_;
-    LlamaFfnLayer ffn_;  // dense executor for the shared expert
+    Linear&  linear_;
+    FfnLayer ffn_;  // dense executor for the shared expert
 };
 
 Tensor_<float> MoeFfnLayerImpl::Gate(const Tensor& input, const LinearWeight& gate)

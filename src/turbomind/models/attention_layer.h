@@ -56,7 +56,7 @@ struct AttentionForwardMetadata {
     Buffer_<int> k_offsets;
 };
 
-class UnifiedAttentionLayer {
+class AttentionLayer {
 public:
     using WeightType = AttentionWeight;
 
@@ -71,13 +71,13 @@ public:
         int               layer_id;
     };
 
-    ~UnifiedAttentionLayer();
+    ~AttentionLayer();
 
-    UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
-                          CacheRegistry&                registry,
-                          const EngineParam&            engine,
-                          const Context&                context,
-                          int                           phases);
+    AttentionLayer(std::vector<AttentionWeight*> weights,
+                   CacheRegistry&                registry,
+                   const EngineParam&            engine,
+                   const Context&                context,
+                   int                           phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -103,10 +103,10 @@ private:
     const Context&         context_;
     int&                   is_warm_up_;
 
-    LlamaLinear& linear_;
-    const int    arch_{};
-    const int    sm_count_{};
-    const bool   direct_verification_supported_{};
+    Linear&    linear_;
+    const int  arch_{};
+    const int  sm_count_{};
+    const bool direct_verification_supported_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;

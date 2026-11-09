@@ -119,7 +119,7 @@ struct AttentionData {
     // int dbg_size;
 };
 
-UnifiedAttentionLayer::~UnifiedAttentionLayer()
+AttentionLayer::~AttentionLayer()
 {
 
     TM_CUDA_CHECK(cudaEventDestroy(aux_event_));
@@ -130,11 +130,11 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
     aux_stream_             = {};
 }
 
-UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
-                                             CacheRegistry&                registry,
-                                             const EngineParam&            engine,
-                                             const Context&                context,
-                                             int                           phases):
+AttentionLayer::AttentionLayer(std::vector<AttentionWeight*> weights,
+                               CacheRegistry&                registry,
+                               const EngineParam&            engine,
+                               const Context&                context,
+                               int                           phases):
     quant_policy_{engine.quant_policy},
     rope_{weights.at(0)->rope},
     engine_param_{engine},
@@ -260,7 +260,7 @@ static void init_dynamic_ntk(Sequence& cache, const core::RopeConfig& rope)
     }
 }
 
-void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
+void AttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 {
     if (op == BatchOp::kAdd) {
         Buffer_<Sequence*> rc = env.at("requests").buffer();
@@ -309,7 +309,7 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
     }
 }
 
-void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
+void AttentionLayer::Setup(int phase, TensorMap& env)
 {
     // const auto& rc  = env.at("batch").data<BatchData*>()[0]->rc;  // active requests
     Buffer_<Sequence*> rc = env.at("requests").buffer();
@@ -430,7 +430,7 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
     }
 }
 
-void UnifiedAttentionLayer::SetForwardMetadata(int phase, const AttentionForwardMetadata& metadata)
+void AttentionLayer::SetForwardMetadata(int phase, const AttentionForwardMetadata& metadata)
 {
     auto& d = *data_[phase];
 
@@ -460,7 +460,7 @@ void UnifiedAttentionLayer::SetForwardMetadata(int phase, const AttentionForward
     d.k_offsets = metadata.k_offsets.borrow();
 }
 
-void UnifiedAttentionLayer::Forward(ForwardParam p)
+void AttentionLayer::Forward(ForwardParam p)
 {
     TM_FUNCTION_SCOPE();
 
@@ -539,7 +539,7 @@ void UnifiedAttentionLayer::Forward(ForwardParam p)
 }
 
 template<class T>
-Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
+Tensor AttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p, const WeightType& weights)
 {
     TM_FUNCTION_SCOPE();
     const int tp_size           = weights.tp_size;
@@ -834,7 +834,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
     return attn;
 }
 
-Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const WeightType& w)
+Tensor AttentionLayer::forward_mla(const Tensor& hidden_state, const WeightType& w)
 {
     TM_FUNCTION_SCOPE();
 
@@ -893,7 +893,7 @@ Tensor UnifiedAttentionLayer::forward_mla(const Tensor& hidden_state, const Weig
     return qkv;
 }
 
-void UnifiedAttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
+void AttentionLayer::qk_norm(Tensor& qkv, const WeightType& weights)
 {
     if (!(weights.q_norm || weights.k_norm)) {
         return;

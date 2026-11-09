@@ -14,15 +14,15 @@ class ModelWeight;
 class DecoderLayerWeight;
 class CacheRegistry;
 
-class UnifiedDecoder {
+class Decoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(CacheRegistry&     registry,
-                   const EngineParam& engine,
-                   const Context&     ctx,
-                   int                phases,
-                   const ModelWeight& model_weight);
+    Decoder(CacheRegistry&     registry,
+            const EngineParam& engine,
+            const Context&     ctx,
+            int                phases,
+            const ModelWeight& model_weight);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
@@ -80,10 +80,10 @@ private:
 
     int& is_warm_up_;
 
-    std::unique_ptr<UnifiedAttentionLayer> attn_layer_;
-    std::unique_ptr<GatedDeltaNetLayer>    linear_attn_layer_;
-    std::unique_ptr<LlamaFfnLayer>         ffn_layer_;
-    std::unique_ptr<MoeFfnLayer>           moe_ffn_layer_;
+    std::unique_ptr<AttentionLayer> attn_layer_;
+    std::unique_ptr<DeltaNetLayer>  linear_attn_layer_;
+    std::unique_ptr<FfnLayer>       ffn_layer_;
+    std::unique_ptr<MoeFfnLayer>    moe_ffn_layer_;
 
     void AllreduceResidualRMSnorm(Tensor&       hidden_states,
                                   Tensor&       residual,

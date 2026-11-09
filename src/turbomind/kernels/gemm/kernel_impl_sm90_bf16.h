@@ -280,7 +280,7 @@ public:
 
         using LayoutC = typename Gemm::LayoutC;
         // Fused SiLU: scheduler walks full weight N; C TMA / output are half-width.
-        // LlamaLinear: Ddesc.cols = weight.output_dim (full), ld = output.stride (half).
+        // Linear: Ddesc.cols = weight.output_dim (full), ld = output.stride (half).
         MatrixLayout Cdesc_tma = Ddesc;
         if (fuse_silu) {
             TM_CHECK_EQ(Cdesc_tma.cols % 2, 0);

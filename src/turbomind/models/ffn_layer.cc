@@ -26,7 +26,7 @@
 
 namespace turbomind {
 
-void LlamaFfnLayer::forward(ForwardParam param)
+void FfnLayer::forward(ForwardParam param)
 {
     TM_FUNCTION_SCOPE();
 

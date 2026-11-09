@@ -26,9 +26,9 @@
 
 namespace turbomind {
 
-class LlamaFfnLayer {
+class FfnLayer {
 public:
-    LlamaFfnLayer(const Context& ctx): linear_(*ctx.linear) {}
+    FfnLayer(const Context& ctx): linear_(*ctx.linear) {}
 
     struct ForwardParam {
         Tensor           input;
@@ -40,7 +40,7 @@ public:
     void forward(ForwardParam param);
 
 private:
-    LlamaLinear& linear_;
+    Linear& linear_;
 };
 
 }  // namespace turbomind

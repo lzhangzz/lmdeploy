@@ -27,7 +27,7 @@ namespace turbomind {
 struct LanguageModel::Impl {
     const Communicators& comm_;
     const ModelWeight&   weights_;
-    LlamaLinear&         linear_;
+    Linear&              linear_;
 
     const int  tp_size_;
     const int  tp_rank_;
@@ -36,7 +36,7 @@ struct LanguageModel::Impl {
     // Max chunk size for compute / output full logits
     int max_logits_len_ = 0;
 
-    std::unique_ptr<UnifiedDecoder> unified_decoder_;
+    std::unique_ptr<Decoder> unified_decoder_;
 
     void Run(BatchOp op, int phase, TensorMap& env)
     {
@@ -86,7 +86,7 @@ LanguageModel::Impl::Impl(CacheRegistry&     registry,
     const int max_logits_rows =
         engine.max_batch_size * (engine.spec_method.empty() ? 1 : engine.spec_num_draft_tokens + 1);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, engine, ctx, phases, weights_);
+    unified_decoder_ = std::make_unique<Decoder>(registry, engine, ctx, phases, weights_);
 
     if (has_head()) {
         TM_CHECK_GT(weights_.vocab_size_padded, 0) << "a model without a head has no logits length";

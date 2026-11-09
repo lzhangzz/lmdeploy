@@ -13,7 +13,7 @@
 #include "src/turbomind/kernels/gemm/weight_plan.h"
 
 namespace turbomind {
-class LlamaLinear;
+class Linear;
 }
 
 namespace turbomind::gemm {
@@ -61,7 +61,7 @@ public:
     [[nodiscard]] std::vector<int> GetTuningSeq() const;
 
 private:
-    friend class ::turbomind::LlamaLinear;
+    friend class ::turbomind::Linear;
 
     std::optional<ExecPlan> GetExecPlan(const Arguments& args);
     std::optional<ExecPlan> Tune(const Arguments& args);

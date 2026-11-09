@@ -53,7 +53,7 @@ struct InternVit::Impl {
     const InternVitWeight&       weights_;
     const core::InternVitConfig& config_;
     const comm::HostComm&        h_tp_group;
-    LlamaLinear&                 linear_;
+    Linear&                      linear_;
     comm::DeviceCommImpl* const  d_comm_;
     const int                    tp_group_;
     const int                    tp_size_;
