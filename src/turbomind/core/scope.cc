@@ -46,16 +46,6 @@ Scope::~Scope()
     Context::pop_scope();
 }
 
-std::string Scope::trace()
-{
-    return Context::scope_trace();
-}
-
-int Scope::depth()
-{
-    return Context::scope_depth();
-}
-
 std::string StripFunctionSignature(std::string_view name)
 {
     std::string s{name};

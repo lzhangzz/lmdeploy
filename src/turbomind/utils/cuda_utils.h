@@ -99,24 +99,6 @@ void ReportCuDrvError(CUresult ec, const char* file, int line);
         }                                                                                                              \
     } while (0)
 
-template<typename T>
-void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr);
-
-void printMatrix(unsigned long long* ptr, int m, int k, int stride, bool is_device_ptr);
-void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr);
-void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr);
-
-template<typename T>
-void check_max_val(const T* result, const int size);
-
-template<typename T>
-void check_abs_mean_val(const T* result, const int size);
-
-#define PRINT_FUNC_NAME_()                                                                                             \
-    do {                                                                                                               \
-        std::cout << "[TM][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
-    } while (0)
-
 /* ***************************** common utils ****************************** */
 
 int getSMVersion();

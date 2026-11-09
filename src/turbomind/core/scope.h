@@ -15,9 +15,6 @@ public:
 
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
-
-    static std::string trace();
-    static int         depth();
 };
 
 // Strip return type, parameter list, and template args from __PRETTY_FUNCTION__

@@ -22,14 +22,6 @@
 #include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/kernels/gemm/utils.h"
 
-template<class T>
-__device__ void print_type(T)
-{
-    if (threadIdx.x == 0) {
-        printf("%s\n", __PRETTY_FUNCTION__);
-    }
-}
-
 namespace turbomind::gemm {
 
 template<int M_, int K_, int Pack_M, class Operand_, class Td, class Converter>
