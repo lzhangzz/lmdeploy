@@ -154,7 +154,6 @@ class RequestHandlePool:
     return it after completion. The manager supports:
     - Pool-based handle allocation and deallocation
     - Lazy initialization of the async queue (required for asyncio.Queue)
-    - Handle rebuilding after engine wakeup (e.g., turbomind backend)
     - Complete pool cleanup
 
     Args:

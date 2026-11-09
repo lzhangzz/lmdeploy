@@ -4,13 +4,12 @@ from __future__ import annotations
 import os
 from http import HTTPStatus
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 
 from lmdeploy.serve.openai.errors import create_error_response
-from lmdeploy.serve.openai.protocol import AbortRequest, UpdateParamsRequest
-from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.serve.openai.protocol import AbortRequest
 
 
 def register(router: APIRouter, server_context) -> None:
@@ -27,8 +26,7 @@ def register(router: APIRouter, server_context) -> None:
         data = monitor.snapshot()
         if data['status'] == 'unhealthy':
             data = await monitor.refresh_snapshot()
-        status_code = HTTPStatus.OK if data['status'] in (
-            'healthy', 'sleeping') else HTTPStatus.SERVICE_UNAVAILABLE
+        status_code = HTTPStatus.OK if data['status'] == 'healthy' else HTTPStatus.SERVICE_UNAVAILABLE
         return JSONResponse(jsonable_encoder(data), status_code=status_code)
 
     @router.get('/terminate')
@@ -43,43 +41,6 @@ def register(router: APIRouter, server_context) -> None:
             )
         os.kill(os.getpid(), signal.SIGTERM)
         return Response(status_code=200)
-
-    @router.post('/update_weights',
-                 dependencies=[Depends(validate_json_request)])
-    def update_params(request: UpdateParamsRequest,
-                      raw_request: Request = None):
-        """Update weights for the model."""
-        server_context.async_engine.engine.update_params(request)
-        return JSONResponse(content=None)
-
-    @router.post('/sleep', dependencies=[Depends(validate_json_request)])
-    async def sleep(raw_request: Request = None):
-        level = raw_request.query_params.get('level', '1')
-        try:
-            level = int(level)
-        except (TypeError, ValueError):
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                'The "level" query parameter must be an integer.')
-        if level not in (1, 2):
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                'The "level" query parameter must be 1 or 2.')
-        async_engine = server_context.async_engine
-        await async_engine.sleep(level)
-        return Response(status_code=200)
-
-    @router.post('/wakeup', dependencies=[Depends(validate_json_request)])
-    async def wakeup(raw_request: Request = None):
-        tags = raw_request.query_params.getlist('tags')
-        tags = tags or None
-        server_context.async_engine.wakeup(tags)
-        return Response(status_code=200)
-
-    @router.get('/is_sleeping')
-    async def is_sleeping():
-        is_sleeping = server_context.async_engine.is_sleeping
-        return JSONResponse(content={'is_sleeping': is_sleeping})
 
     @router.post('/abort_request')
     async def abort_request(request: AbortRequest,

@@ -111,7 +111,6 @@ Documentation
    advance/metrics.md
    advance/context_parallel.md
    advance/spec_decoding.md
-   advance/update_weights.md
 
 .. toctree::
    :maxdepth: 1

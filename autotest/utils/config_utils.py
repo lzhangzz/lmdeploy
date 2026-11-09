@@ -23,11 +23,11 @@ ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
 INTERFACE_SUITES = frozenset({
-    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'abort',
 })
 GENERATE_SUITES = frozenset({'base', 'logprob'})
 INTERFACE_SUITE_ORDER = (
-    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'anthropic', 'toolcall', 'reasoning', 'abort',
 )
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
@@ -468,7 +468,7 @@ def _profiles_compatible_for_merge(
     combined = set(suites_a) | set(suites_b)
     if 'anthropic' in combined and combined & {'toolcall', 'reasoning'}:
         return False
-    if combined & {'sleep', 'abort'} and len(combined) > 1:
+    if 'abort' in combined and len(combined) > 1:
         return False
     return True
 
@@ -753,7 +753,6 @@ _RESTFUL_CHAT_PROTOCOL_CASES = frozenset({
 })
 _RESTFUL_BASE_PROTOCOL_CASES = frozenset({'completions_v1'})
 _TOOL_REASONING_PROTOCOL_CASES = frozenset({'toolcall', 'reasoning'})
-_SLEEP_PROTOCOL_CASES = frozenset({'sleep_wakeup'})
 _ABORT_PROTOCOL_CASES = frozenset({'abort_request'})
 
 
@@ -824,16 +823,6 @@ def get_tool_reasoning_model_list(
     )
 
 
-def get_sleep_wakeup_model_list(
-    deps_profile: DepsProfileSelector | None = None,
-) -> list[str]:
-    """Models with yaml ``sleep`` interface suite."""
-    return _interface_protocol_model_list(
-        _SLEEP_PROTOCOL_CASES,
-        deps_profile=deps_profile,
-    )
-
-
 def get_abort_request_model_list(
     deps_profile: DepsProfileSelector | None = None,
 ) -> list[str]:
@@ -854,7 +843,6 @@ def get_restful_protocol_model_candidates(
         *get_restful_chat_model_list(deps_profile=deps_profile),
         *get_restful_base_model_list(deps_profile=deps_profile),
         *get_tool_reasoning_model_list(deps_profile=deps_profile),
-        *get_sleep_wakeup_model_list(deps_profile=deps_profile),
         *get_abort_request_model_list(deps_profile=deps_profile),
     ):
         if model_id not in seen:
@@ -886,8 +874,6 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
         case_info.append('toolcall')
     if 'reasoning' in suite_set:
         case_info.append('reasoning')
-    if 'sleep' in suite_set:
-        case_info.append('sleep_wakeup')
     if 'abort' in suite_set:
         case_info.append('abort_request')
     return case_info

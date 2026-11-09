@@ -258,7 +258,7 @@ class PytorchCheckpoint(Checkpoint):
 def create_checkpoint(model_path: str, *, mappings=()) -> Checkpoint:
     """Pick the right :class:`Checkpoint` subclass for ``model_path``.
 
-    Precedence matches the legacy ``create_loader``:
+    Checkpoint formats are tried in this order:
 
     1. ``model.safetensors.index.json``  -> SafetensorsCheckpoint (sharded)
     2. ``model*.safetensors``            -> SafetensorsCheckpoint (single-file or unsharded)

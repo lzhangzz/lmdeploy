@@ -275,8 +275,6 @@ class TurbomindEngineConfig:
             stage
         async_: enable async execution, default to 1 (enabled)
         devices: the used devices
-        empty_init: Whether to load the model weights, you should set
-            it to True if you want to update weights after create the pipeline
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules.
         communicator: collective communicator, It can be one of the following values,
@@ -327,7 +325,6 @@ class TurbomindEngineConfig:
     max_prefill_iters: int = 1
     async_: int = 1
     devices: list[int] | None = None
-    empty_init: bool = False
     language_model_only: bool = False
     communicator: str = 'nccl'
     moe_a2a_backend: str = 'auto'

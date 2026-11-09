@@ -11,8 +11,8 @@ class ModelLoader:
     """Coordinates loading a model's weights into the TurboMind runtime.
 
     Holds the model, model_comm handle, and model_path. Extracts GPU topology handles from model_comm and binds them
-    onto the model at construction time. Provides export() and export_iter() to load checkpoint weights and commit them
-    to the C++ runtime.
+    onto the model at construction time. Provides export() to load checkpoint weights and commit them to the C++
+    runtime.
     """
 
     def __init__(self,
@@ -106,15 +106,4 @@ class ModelLoader:
             self._export_one(
                 self.draft_model,
                 self.draft_model_path)
-        torch.cuda.empty_cache()
-
-    def export_iter(self):
-        self._export_one(
-            self.model, self.model_path)
-        yield -1
-        if self.draft_model is not None:
-            self._export_one(
-                self.draft_model,
-                self.draft_model_path)
-            yield -1
         torch.cuda.empty_cache()

@@ -8,10 +8,8 @@ import os.path as osp
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from multiprocessing.reduction import ForkingPickler
 from typing import Any
 
-import pybase64
 import torch
 
 from lmdeploy._guided_decoding import compile_response_format
@@ -23,7 +21,6 @@ from lmdeploy.messages import (
     SpeculativeConfig,
     TurbomindEngineConfig,
 )
-from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
@@ -173,11 +170,10 @@ class TurboMind:
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self._grammar_compiler = None
-        if not _engine_config.empty_init:
-            with torch.cuda.device(self.devices[0]):
-                model_loader.export()
-            self._process_weights()
-            self._create_engine()
+        with torch.cuda.device(self.devices[0]):
+            model_loader.export()
+        self._process_weights()
+        self._create_engine()
 
         self.session_len = _engine_config.session_len
         self.health_executor = ThreadPoolExecutor(max_workers=1)
@@ -340,53 +336,6 @@ class TurboMind:
             raise ValueError(f'{type(self.source_model).__name__} does not support TurboMind multimodal inputs.')
         return parser(multimodal)
 
-    async def sleep(self, level: int = 1):
-        """Sleep the model."""
-        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            for _ in e.map(self.model_comm.sleep, range(self.gpu_count), [level] * self.gpu_count):
-                pass
-
-    def wakeup(self, tags: list[str] | None = None):
-        """Wakeup the model."""
-        if tags is None:
-            tags = ['weights', 'kv_cache']
-        with ThreadPoolExecutor(max_workers=self.gpu_count) as e:
-            for _ in e.map(self.model_comm.wakeup, range(self.gpu_count), [tags] * self.gpu_count):
-                pass
-
-    def update_params(self, request: UpdateParamsRequest):
-        """Update params.
-
-        When using the this function, you need to set empty_init=True when creating the engine.
-
-        For each request, the serialized_named_tensors should be the full weights of a decoder layer or the misc weights
-        (embedding, norm, lm_haed). You should set finished=True when you call this function for the last time.
-        """
-
-        def _construct(item):
-            """ Deserialize torch.Tensor
-            Args:
-                item (tuple[Callable, tuple]): the return of reduce_tensor
-            """
-            func, args = item
-            args = list(args)
-            args[6] = torch.cuda.current_device()  # device id.
-            return func(*args).clone()
-
-        with torch.cuda.device(self.devices[0]):
-            if isinstance(request.serialized_named_tensors, str):
-                weights = ForkingPickler.loads(pybase64.b64decode(request.serialized_named_tensors))
-                weights = {k: _construct(v) for k, v in weights}
-            else:
-                weights = request.serialized_named_tensors
-            self._update_params_que.put(weights)
-            next(self._export_iter)
-
-        if request.finished:
-            self._process_weights()
-            if self._engine_created is False:
-                self._create_engine()
-
     @classmethod
     def from_pretrained(cls,
                         pretrained_model_name_or_path: str,
@@ -423,8 +372,6 @@ class TurboMind:
                    **kwargs)
 
     def close(self):
-        if hasattr(self, '_export_iter'):
-            del self._export_iter
         if self.model_comm is not None:
             self.model_comm = None
         self._engine_created = False
@@ -458,10 +405,6 @@ class TurboMind:
                         schedule_metrics=None)
 
         if not self._engine_created:
-            if self.engine_config.empty_init:
-                return dict(alive=True,
-                            message='TurboMind engine is waiting for weights in empty-init mode.',
-                            schedule_metrics=None)
             return dict(alive=False,
                         message='TurboMind engine has not been created.',
                         schedule_metrics=None)
@@ -682,8 +625,7 @@ class TurboMindInstance:
         self.cuda_stream_id = cuda_stream_id
 
         # create model instances
-        lazy_init = self.tm_model.engine_config.empty_init
-        self._model_inst = None if lazy_init else self._create_model_instance()
+        self.model_inst = self._create_model_instance()
 
         self.lock = None
         # error code map from csrc (refer to `struct Request` in src/turbomind/engine/request.h)
@@ -701,12 +643,6 @@ class TurboMindInstance:
             11: ResponseType.OUT_OF_MEMORY,
             -1: ResponseType.INTERNAL_ENGINE_ERROR,
         }
-
-    @property
-    def model_inst(self):
-        if self._model_inst is None:
-            self._model_inst = self._create_model_instance()
-        return self._model_inst
 
     def _create_model_instance(self):
         model_inst = self.tm_model.model_comm.create_request()

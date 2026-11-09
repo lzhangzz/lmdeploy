@@ -498,12 +498,6 @@ class GenerateResponse(BaseModel):
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
-class UpdateParamsRequest(BaseModel):
-    """Update weights request."""
-    serialized_named_tensors: str | list[str] | dict
-    finished: bool = False
-
-
 # /generate input
 class GenerateReqInput(BaseModel):
     session_id: int | None = -1

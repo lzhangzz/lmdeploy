@@ -9,7 +9,6 @@ class _FakeAsyncEngine:
     def __init__(self, results):
         self.results = list(results)
         self.calls = 0
-        self.is_sleeping = False
 
     async def health_probe(self, scheduler_stall_timeout: float) -> dict:
         self.calls += 1
@@ -45,7 +44,6 @@ async def _run_concurrent_refresh_snapshot_serializes_probes():
 
         def __init__(self):
             self.calls = 0
-            self.is_sleeping = False
 
         async def health_probe(self, scheduler_stall_timeout: float) -> dict:
             self.calls += 1
@@ -79,7 +77,6 @@ async def _run_late_health_probe_result_is_reused():
 
         def __init__(self):
             self.calls = 0
-            self.is_sleeping = False
 
         async def health_probe(self, scheduler_stall_timeout: float) -> dict:
             self.calls += 1
@@ -99,12 +96,6 @@ async def _run_late_health_probe_result_is_reused():
     assert engine.calls == 1
     assert monitor.snapshot()['status'] == 'unhealthy'
 
-    engine.is_sleeping = True
-    await monitor.probe_once()
-    assert monitor.snapshot() == dict(status='sleeping', message='Engine is sleeping.')
-    assert engine.calls == 1
-
-    engine.is_sleeping = False
     allow_probe_to_finish.set()
     await probe_finished.wait()
     await monitor.probe_once()

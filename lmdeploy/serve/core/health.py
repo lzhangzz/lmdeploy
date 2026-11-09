@@ -108,9 +108,6 @@ class EngineHealthMonitor:
         if self.async_engine is None:
             result = dict(status='unhealthy',
                           message='Async engine is not initialized.')
-        elif self.async_engine.is_sleeping:
-            result = dict(status='sleeping',
-                          message='Engine is sleeping.')
         else:
             health_probe_task = self._health_probe_task
             if health_probe_task is not None and not health_probe_task.done():
@@ -138,7 +135,7 @@ class EngineHealthMonitor:
                 self._health_probe_task = None
 
         status = result['status']
-        if status in ('healthy', 'sleeping'):
+        if status == 'healthy':
             self._last_success_time = probe_time
         self._snapshot = dict(status=status, message=result['message'])
 

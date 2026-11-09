@@ -111,16 +111,6 @@ struct TurboMind::Impl {
 
     void WarmUp(int index);
 
-    void Sleep(int index, int level)
-    {
-        // Sleep/wakeup is broken — disabled
-    }
-
-    void WakeUp(int index, const std::vector<std::string>& tags)
-    {
-        // Sleep/wakeup is broken — disabled
-    }
-
     void HandleMissingParams()
     {
         if (!engine_param_.max_context_token_num) {
@@ -552,16 +542,6 @@ void TurboMind::ProcessWeights(int index)
 void TurboMind::CreateEngine(int index)
 {
     return impl_->CreateEngine(index);
-}
-
-void TurboMind::Sleep(int index, int level)
-{
-    return impl_->Sleep(index, level);
-}
-
-void TurboMind::WakeUp(int index, const vector<string>& tags)
-{
-    return impl_->WakeUp(index, tags);
 }
 
 shared_ptr<ScheduleMetrics> TurboMind::GetScheduleMetrics(int index)

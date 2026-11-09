@@ -42,7 +42,8 @@ The Python vision adapters for these VLMs were removed as well, so `lmdeploy lit
 - KV-cache quantization policies other than int4 and int8: `quant_policy` accepts only `0`, `4` and `8`. FP8 KV cache (`16`, `17`) and TurboQuant (`42`) were removed.
 - Speculative decoding methods `deepseek_mtp`, `qwen3_5_mtp` and `dflash` (`--speculative-dflash-block-size`). TurboMind supports `mtp` (Qwen3.5 family) and `eagle3`; see [speculative decoding](../advance/spec_decoding.md).
 - Structured output combined with speculative decoding. TurboMind does not apply grammar masks to speculative tokens, so `response_format` has no effect while speculative decoding is enabled.
-- Online weight updates over IPC, NCCL groups or checkpoint-engine: `/update_weights_from_ipc`, `/init_weights_update_group`, `/update_weights_from_distributed` and `/destroy_weights_update_group`. `/update_weights` remains, without `load_format='flattened_bucket'`.
+- Online weight updates: `/update_weights`, `/update_weights_from_ipc`, `/init_weights_update_group`, `/update_weights_from_distributed`, `/destroy_weights_update_group`, `TurbomindEngineConfig.empty_init` and `lmdeploy.utils.serialize_state_dict`.
+- Engine sleep and wakeup: `/sleep`, `/wakeup` and `/is_sleeping`.
 - The `/pooling` endpoint.
 - Audio and time-series message content (`audio`, `audio_url`, `time_series`, `time_series_url`). Requests that contain them are rejected. `lmdeploy.vl.load_audio`, `load_time_series`, `encode_audio_base64` and `encode_time_series_base64` were removed.
 - Chat templates for models TurboMind cannot run: `cogvlm`, `llava-v1`, `llava-chatml`, `chatglm`, `deepseek-vl`, `deepseek-vl2`, `deepseek-v4`, `deepseek-v32` and `deepseek-v3.2`. The `mistral` template name was removed; `mixtral` remains.
@@ -61,4 +62,3 @@ The corresponding HTTP request fields were removed from the OpenAI-compatible an
 ## Other behavior changes
 
 - `benchmark/profile_throughput.py` now passes `--speculative-algorithm` and related options to TurboMind. They were previously ignored for TurboMind.
-- `lmdeploy.utils.serialize_state_dict` serializes only `name -> tensor` mappings; the flattened-bucket format was removed together with `FlattenedTensorBucket`.

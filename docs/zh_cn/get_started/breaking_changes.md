@@ -42,7 +42,8 @@ LMDeploy 现在只提供一个推理引擎 [TurboMind](../inference/turbomind.md
 - int4 和 int8 以外的 KV cache 量化策略：`quant_policy` 只接受 `0`、`4` 和 `8`。FP8 KV cache（`16`、`17`）和 TurboQuant（`42`）已移除。
 - 投机解码方法 `deepseek_mtp`、`qwen3_5_mtp` 和 `dflash`（`--speculative-dflash-block-size`）。TurboMind 支持 `mtp`（Qwen3.5 系列）和 `eagle3`，参见[投机解码](../advance/spec_decoding.md)。
 - 投机解码与结构化输出的组合。TurboMind 不会对投机 token 应用语法掩码，因此启用投机解码时 `response_format` 不会生效。
-- 通过 IPC、NCCL 通信组或 checkpoint-engine 进行的在线权重更新：`/update_weights_from_ipc`、`/init_weights_update_group`、`/update_weights_from_distributed` 和 `/destroy_weights_update_group`。`/update_weights` 仍然保留，但不再支持 `load_format='flattened_bucket'`。
+- 在线权重更新：`/update_weights`、`/update_weights_from_ipc`、`/init_weights_update_group`、`/update_weights_from_distributed`、`/destroy_weights_update_group`、`TurbomindEngineConfig.empty_init` 和 `lmdeploy.utils.serialize_state_dict`。
+- 引擎休眠与唤醒：`/sleep`、`/wakeup` 和 `/is_sleeping`。
 - `/pooling` 接口。
 - 音频和时序数据消息内容（`audio`、`audio_url`、`time_series`、`time_series_url`）。包含这些内容的请求会被拒绝。`lmdeploy.vl.load_audio`、`load_time_series`、`encode_audio_base64` 和 `encode_time_series_base64` 已移除。
 - TurboMind 无法运行的模型所对应的对话模板：`cogvlm`、`llava-v1`、`llava-chatml`、`chatglm`、`deepseek-vl`、`deepseek-vl2`、`deepseek-v4`、`deepseek-v32` 和 `deepseek-v3.2`。`mistral` 模板名称已移除，`mixtral` 仍然保留。
@@ -61,4 +62,3 @@ OpenAI 兼容接口和 `/generate` 的请求结构中也移除了对应字段。
 ## 其他行为变化
 
 - `benchmark/profile_throughput.py` 现在会把 `--speculative-algorithm` 等投机解码参数传给 TurboMind，此前这些参数在 TurboMind 下会被忽略。
-- `lmdeploy.utils.serialize_state_dict` 只序列化 `名称 -> 张量` 的映射；扁平化桶格式随 `FlattenedTensorBucket` 一并移除。

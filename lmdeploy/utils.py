@@ -492,29 +492,3 @@ def is_bf16_supported(device_type: str = 'cuda'):
     cuda_version = torch.version.cuda
     return (cuda_version is not None and int(cuda_version.split('.')[0]) >= 11
             and torch.cuda.get_device_properties(device).major >= 8)
-
-
-def serialize_state_dict(state_dict: dict) -> str:
-    """Serialize state dict to str.
-
-    The consumer should use it on same node. As the producer and consumer may
-    have different GPU visibility, we use reduce_tensor instead of ForkingPickler.dumps
-    to fix the device_id when loading the serialized tensor.
-
-    Args:
-        state_dict (dict[str, torch.Tensor]): state dict to serialize.
-    Returns:
-        str: serialized state dict.
-    """
-    from io import BytesIO
-    from multiprocessing.reduction import ForkingPickler
-
-    import pybase64
-    from torch.multiprocessing.reductions import reduce_tensor
-
-    data = [(k, reduce_tensor(v)) for k, v in state_dict.items()]
-
-    buf = BytesIO()
-    ForkingPickler(buf).dump(data)
-    buf.seek(0)
-    return pybase64.b64encode(buf.read()).decode('utf-8')

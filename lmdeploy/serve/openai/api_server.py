@@ -34,7 +34,6 @@ from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import get_model_list
 from lmdeploy.serve.utils.server_utils import (
     AuthenticationMiddleware,
-    EngineSleepingMiddleware,
     protocol_error_response,
 )
 from lmdeploy.utils import get_logger
@@ -397,13 +396,6 @@ def serve(model_path: str,
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
-
-    def is_engine_sleeping() -> bool:
-        eng = server_context.async_engine
-        return eng is not None and eng.is_sleeping
-
-    app.add_middleware(EngineSleepingMiddleware,
-                       is_sleeping=is_engine_sleeping)
 
     # set the maximum number of concurrent requests
     if max_concurrent_requests is not None:

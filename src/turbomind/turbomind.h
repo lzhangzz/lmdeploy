@@ -42,10 +42,6 @@ public:
 
     void CreateEngine(int index);
 
-    void Sleep(int index, int level);
-
-    void WakeUp(int index, const std::vector<std::string>& tags);
-
     bool is_dummy_node() const noexcept;
 
     std::shared_ptr<ScheduleMetrics> GetScheduleMetrics(int index);

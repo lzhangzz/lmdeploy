@@ -5,7 +5,7 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 
 from lmdeploy.serve.openai.api_server import validation_exception_handler
-from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware, EngineSleepingMiddleware
+from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
 
 
 def _scope(path: str, *, authorization: str | None = None):
@@ -66,16 +66,6 @@ def test_authentication_errors_use_stable_protocol_codes():
             'message': 'Unauthorized.',
         },
     }
-
-
-def test_sleeping_engine_protects_anthropic_inference_route():
-    middleware = EngineSleepingMiddleware(_unused_app, is_sleeping=lambda: True)
-
-    status_code, body = asyncio.run(
-        _call_middleware(middleware, '/v1/messages'))
-    assert status_code == 503
-    assert body['error']['type'] == 'overloaded_error'
-    assert 'sleeping' in body['error']['message']
 
 
 def test_validation_errors_use_route_protocol_envelope():

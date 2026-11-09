@@ -139,8 +139,6 @@ class AsyncEngine:
                                             **kwargs)
         self.backend_config = self.engine.engine_config
         self.speculative_config = speculative_config
-        self.is_sleeping = backend_config.empty_init
-        self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
@@ -270,12 +268,6 @@ class AsyncEngine:
 
     async def health_probe(self, scheduler_stall_timeout: float) -> dict:
         """Probe backend health and validate scheduler progress."""
-        if self.is_sleeping:
-            return self._make_health_result(
-                status='sleeping',
-                message='Engine is sleeping.',
-            )
-
         backend_status = await self.engine.get_health_status()
         if not backend_status['alive']:
             return self._make_health_result(
@@ -324,40 +316,6 @@ class AsyncEngine:
         self.epoch += 1
         await self.session_mgr.async_abort_all()
         logger.info('stopped all sessions')
-
-    async def sleep(self, level: int = 1):
-        """Sleep the model.
-
-        Args:
-            level (int): The sleep level. Level 1 sleep will offload the model
-                weights and discard the kv cache. Level 2 sleep will
-                discard both the model weights and the kv cache.
-        """
-        self.is_sleeping = True
-        self.sleeping_tags = {'weights', 'kv_cache'}
-        await self.stop_all_session()
-        await self.engine.sleep(level)
-
-    def wakeup(self, tags: list[str] | None = None):
-        """Wake up the model.
-
-        Args:
-            tags: An optional list of tags to reallocate the engine memory
-                for specific memory allocations. Values must be in
-                `("weights", "kv_cache")`. If None, all memory is reallocated.
-                wake_up should be called with all tags (or None) before the
-                engine is used again.
-        """
-        tags = tags or list(self.sleeping_tags)
-        if any(tag not in self.sleeping_tags for tag in tags):
-            logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
-            return
-        self.engine.wakeup(tags)
-        # sleep/wakeup resets the TurboMind gateway, therefore we need to rebuild instances
-        if 'kv_cache' in tags:
-            self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
-        self.sleeping_tags = self.sleeping_tags - set(tags)
-        self.is_sleeping = bool(self.sleeping_tags)
 
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
