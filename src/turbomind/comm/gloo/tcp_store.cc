@@ -51,8 +51,8 @@ enum class QueryType : uint8_t
 struct Buffer {
     std::vector<char> buffer;
 
-    template<typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
-    void append(T val)
+    template<typename T>
+    requires std::is_trivially_copyable_v<T> void append(T val)
     {
         char* ptr = (char*)&val;
         buffer.insert(buffer.end(), ptr, ptr + sizeof(T));

@@ -165,7 +165,7 @@ private:
 
     moodycamel::BlockingConcurrentQueue<LogRecord> queue_;
     std::thread                                    thread_;
-    std::atomic_flag                               stopped_ = ATOMIC_FLAG_INIT;
+    std::atomic_flag                               stopped_;
 
     std::atomic<bool> signal_shutdown_{false};
     std::atomic<bool> signal_drain_done_{false};

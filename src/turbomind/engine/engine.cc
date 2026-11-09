@@ -163,7 +163,7 @@ struct Engine::Impl {
 
     // int session_len_trunc_;
 
-    shared_ptr<ScheduleMetrics> metrics_;
+    std::atomic<shared_ptr<ScheduleMetrics>> metrics_;
 
     int64_t  scheduler_tick_{};
     uint64_t prefix_query_tokens_{};
@@ -1066,12 +1066,12 @@ void Engine::Impl::UpdateScheduleMetrics(bool advance_scheduler)
         prefix_query_tokens_ ? static_cast<double>(prefix_hit_tokens_) / prefix_query_tokens_ : 0.;
     m->scheduler_tick = scheduler_tick_;
 
-    std::atomic_store_explicit(&metrics_, std::move(m), std::memory_order_release);
+    metrics_.store(std::move(m), std::memory_order_release);
 }
 
 shared_ptr<ScheduleMetrics> Engine::GetScheduleMetrics()
 {
-    return std::atomic_load_explicit(&impl_->metrics_, std::memory_order_acquire);
+    return impl_->metrics_.load(std::memory_order_acquire);
 }
 
 }  // namespace turbomind

@@ -4,37 +4,21 @@
 #include "src/turbomind/memory/stats.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <numeric>
 #include <vector>
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>
-#endif
-
 namespace turbomind {
 
-#if defined(__GNUC__) || defined(__clang__)
 inline int ceil_log2(int x)
 {
     if (x <= 1)
         return 0;
-    return 32 - __builtin_clz(static_cast<unsigned>(x - 1));
+    return static_cast<int>(std::bit_width(static_cast<unsigned>(x - 1)));
 }
-#elif defined(_MSC_VER)
-inline int ceil_log2(int x)
-{
-    if (x <= 1)
-        return 0;
-    unsigned long index;
-    _BitScanReverse(&index, static_cast<unsigned long>(x - 1));
-    return static_cast<int>(index) + 1;
-}
-#else
-#error "ceil_log2: unsupported compiler, no leading-zero-count intrinsic available"
-#endif
 
 inline int ceil_pow2(int x)
 {

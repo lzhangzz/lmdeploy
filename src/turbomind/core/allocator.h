@@ -50,14 +50,7 @@ struct Device {
     Device(): Device{kCPU} {}
     Device(DeviceType type_): type{type_}, id{-1} {}
     Device(DeviceType type_, int device_): type{type_}, id{device_} {}
-    friend bool operator==(const Device& a, const Device& b)
-    {
-        return a.type == b.type && a.id == b.id;
-    }
-    friend bool operator!=(const Device& a, const Device& b)
-    {
-        return !(a == b);
-    }
+    friend bool operator==(const Device& a, const Device& b) = default;
 };
 
 class AllocatorImpl {
@@ -98,11 +91,6 @@ public:
     friend bool operator==(const Allocator& a, const Allocator& b)
     {
         return a.impl_ == b.impl_;
-    }
-
-    friend bool operator!=(const Allocator& a, const Allocator& b)
-    {
-        return !(a == b);
     }
 
     template<class T, class... Args>

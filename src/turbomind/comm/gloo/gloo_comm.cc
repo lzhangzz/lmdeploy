@@ -1,6 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <algorithm>
+#include <compare>
 #include <mutex>
 
 #include <gloo/allgather.h>
@@ -130,15 +131,7 @@ struct GlooCommImpl: public HostCommImpl {
         int color;
         int rank;
 
-        bool operator<(const SplitInfo& other) const
-        {
-            return (color < other.color) || (color == other.color && rank < other.rank);
-        }
-
-        bool operator==(const SplitInfo& other) const
-        {
-            return (color == other.color) && (rank == other.rank);
-        }
+        auto operator<=>(const SplitInfo& other) const = default;
     };
 
     GlooCommImpl(std::shared_ptr<Store> store, int n_ranks, int rank):

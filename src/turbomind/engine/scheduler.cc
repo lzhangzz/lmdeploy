@@ -127,7 +127,7 @@ public:
                   Replay&                          replay)
     {
         CacheBlock* b = *iter_;
-        if (b->valid() || planned.count(b)) {
+        if (b->valid() || planned.contains(b)) {
             ++iter_;
             return true;
         }

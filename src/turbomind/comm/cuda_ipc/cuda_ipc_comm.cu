@@ -229,7 +229,7 @@ void CudaIpcCommImpl::Register(void* ptr, size_t size)
     // register for all groups
     auto& symm = groups_.at(0).symmetric;
 
-    if (symm.find(ptr) != symm.end()) {
+    if (symm.contains(ptr)) {
         TM_LOG_WARN("Rank {}: Duplicated registration on ({}, {})", global_rank_, ptr, size);
         return;
     }

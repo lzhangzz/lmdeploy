@@ -22,10 +22,6 @@ struct Fingerprint {
         }
         return a.words == b.words;
     }
-    friend bool operator!=(const Fingerprint& a, const Fingerprint& b) noexcept
-    {
-        return !(a == b);
-    }
 };
 
 }  // namespace turbomind

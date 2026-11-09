@@ -417,7 +417,7 @@ void TurboMind::Impl::WarmUp(int index)
         const int max_fwd_token_num = engine_param_.max_forward_token_num;
 
         // remove bs that is too large
-        bss.erase(std::remove_if(bss.begin(), bss.end(), [&](auto x) { return x > max_fwd_token_num; }), bss.end());
+        std::erase_if(bss, [&](auto x) { return x > max_fwd_token_num; });
 
         if (bss.empty() || bss.back() < max_fwd_token_num) {
             bss.push_back(max_fwd_token_num);

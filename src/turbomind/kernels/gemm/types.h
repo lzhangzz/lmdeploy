@@ -59,6 +59,11 @@ typedef enum Op_Tag
     OPERAND_D = 0x060,
 } Op_Tag;
 
+constexpr int operator|(MMA_Tag a, Op_Tag b)
+{
+    return static_cast<int>(a) | static_cast<int>(b);
+}
+
 constexpr MMA_Tag get_mma_tag(Pack pack)
 {
     return static_cast<MMA_Tag>(pack & 0xf00);

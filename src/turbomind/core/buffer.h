@@ -132,34 +132,17 @@ public:
         return Buffer{const_cast<void*>(raw_data()), size_, dtype_, device_};
     }
 
-    friend bool operator==(const Buffer& a, const Buffer& b);
-
-    friend bool operator!=(const Buffer& a, const Buffer& b);
+    friend bool operator==(const Buffer& a, const Buffer& b) = default;
 
     friend std::ostream& operator<<(std::ostream& os, const Buffer& b);
 
 protected:
-    auto as_tuple() const
-    {
-        return std::tie(data_, base_, size_, dtype_, device_);
-    }
-
     shared_ptr<void> data_;
     ssize_t          base_;
     ssize_t          size_;
     Device           device_;
     DataType         dtype_;
 };
-
-inline bool operator==(const Buffer& a, const Buffer& b)
-{
-    return a.as_tuple() == b.as_tuple();
-}
-
-inline bool operator!=(const Buffer& a, const Buffer& b)
-{
-    return !(a == b);
-}
 
 inline Buffer empty_like(const Buffer& buffer)
 {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -359,7 +360,7 @@ private:
 };
 
 // clang-format off
-template<class Archive, class T, std::enable_if_t<std::is_same_v<Tensor, T>, int> = 0>
+template<class Archive, std::same_as<Tensor> T>
 void save(Archive& ar, const T& tensor)
 {
     TM_CHECK(tensor.size() == 0 || tensor.is_contiguous());

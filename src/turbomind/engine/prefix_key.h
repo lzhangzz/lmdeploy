@@ -55,10 +55,7 @@ struct PrefixKey {
         return hash || length;
     }
 
-    friend bool operator==(const PrefixKey& a, const PrefixKey& b) noexcept
-    {
-        return a.length == b.length && a.hash == b.hash;
-    }
+    friend bool operator==(const PrefixKey& a, const PrefixKey& b) noexcept = default;
 };
 
 // PrefixKey::hash is already a cumulative hash; using it directly lets the

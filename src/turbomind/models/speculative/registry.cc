@@ -19,7 +19,7 @@ void SpeculativeModelRegistry::Register(std::string name, Factory factory)
 
 bool SpeculativeModelRegistry::Contains(std::string_view name) const
 {
-    return factories_.find(name) != factories_.end();
+    return factories_.contains(name);
 }
 
 std::unique_ptr<SpeculativeModel>

@@ -24,10 +24,6 @@ inline bool operator==(object_alloc_t x, object_alloc_t y) noexcept
 {
     return x.a == y.a;
 }
-inline bool operator!=(object_alloc_t x, object_alloc_t y) noexcept
-{
-    return x.a != y.a;
-}
 inline bool operator<(object_alloc_t x, object_alloc_t y) noexcept
 {
     return std::less<const Allocation*>{}(x.a, y.a);

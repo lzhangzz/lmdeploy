@@ -149,11 +149,6 @@ public:
         return a.shape_ == b.shape_ && a.stride_ == b.stride_;
     }
 
-    friend bool operator!=(const Layout& a, const Layout& b)
-    {
-        return !(a == b);
-    }
-
 private:
     int wrap(int dim) const noexcept
     {

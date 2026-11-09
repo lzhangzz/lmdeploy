@@ -175,7 +175,7 @@ public:
 
     void Register(void* ptr, size_t size) override
     {
-        if (!handles_.at(0).count(ptr)) {
+        if (!handles_.at(0).contains(ptr)) {
             for (size_t i = 0; i < handles_.size(); ++i) {
                 Register(i, ptr, size);
             }
@@ -187,7 +187,7 @@ public:
 
     void Deregister(void* ptr) override
     {
-        if (handles_.at(0).count(ptr)) {
+        if (handles_.at(0).contains(ptr)) {
             for (size_t i = 0; i < handles_.size(); ++i) {
                 Deregister(i, ptr);
             }

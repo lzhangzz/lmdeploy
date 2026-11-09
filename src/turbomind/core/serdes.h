@@ -8,31 +8,23 @@
 
 namespace turbomind::core {
 
-template<template<class...> typename F, class SFINAE, class... Args>
-struct is_detected: std::false_type {
+template<class Archive, class T>
+inline constexpr bool has_save_v = requires
+{
+    save(std::declval<Archive&>(), std::declval<T>());
 };
 
-template<template<class... Args> typename F, class... Args>
-struct is_detected<F, std::void_t<F<Args...>>, Args...>: std::true_type {
+template<class Archive, class T>
+inline constexpr bool has_load_v = requires
+{
+    load(std::declval<Archive&>(), std::declval<T>());
 };
 
 template<class Archive, class T>
-using save_t = decltype(save(std::declval<Archive&>(), std::declval<T>()));
-
-template<class Archive, class T>
-inline constexpr bool has_save_v = is_detected<save_t, void, Archive, T>::value;
-
-template<class Archive, class T>
-using load_t = decltype(load(std::declval<Archive&>(), std::declval<T>()));
-
-template<class Archive, class T>
-inline constexpr bool has_load_v = is_detected<load_t, void, Archive, T>::value;
-
-template<class Archive, class T>
-using serdes_t = decltype(serdes(std::declval<Archive&>(), std::declval<T>()));
-
-template<class Archive, class T>
-inline constexpr bool has_serdes_v = is_detected<serdes_t, void, Archive, T>::value;
+inline constexpr bool has_serdes_v = requires
+{
+    serdes(std::declval<Archive&>(), std::declval<T>());
+};
 
 template<typename T>
 class ArrayWrapper {

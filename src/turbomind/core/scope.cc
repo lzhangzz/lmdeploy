@@ -60,7 +60,7 @@ std::string StripFunctionSignature(std::string_view name)
         again = 0;
         for (auto q : {" const", " volatile"}) {
             auto n = std::strlen(q);
-            if (s.size() >= n && !s.compare(s.size() - n, n, q))
+            if (s.ends_with(q))
                 s.resize(s.size() - n), again = 1;
         }
     }

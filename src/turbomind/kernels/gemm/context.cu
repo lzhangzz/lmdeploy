@@ -129,7 +129,7 @@ std::vector<Kernel*> Context::Filter(const std::vector<Kernel*>& kernels) const
     const auto pred = [&](auto k) {  //
         return k.second > max_batch_size;
     };
-    feasible.erase(std::remove_if(feasible.begin(), feasible.end(), pred), feasible.end());
+    std::erase_if(feasible, pred);
 
     std::vector<Kernel*> ret;
     for (auto& [k, bsz] : feasible) {

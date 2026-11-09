@@ -75,12 +75,7 @@ struct BlockConfig {
     int head_num() const { return head_num_; }
     int block_len() const { return block_len_; }
     bool is_share_kv() const { return share_kv_; }
-    auto as_tuple() const noexcept {
-        return std::tie(head_dim_, head_num_, block_len_, t_bits_, q_bits_, share_kv_);
-    }
-    friend bool operator==(const BlockConfig& a, const BlockConfig& b) {
-        return a.as_tuple() == b.as_tuple();
-    }
+    friend bool operator==(const BlockConfig& a, const BlockConfig& b) = default;
 };
 // clang-format on
 }  // namespace

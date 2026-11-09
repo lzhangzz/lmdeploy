@@ -87,11 +87,6 @@ public:
         return a.impl_ == b.impl_;
     }
 
-    friend bool operator!=(const Stream& a, const Stream& b)
-    {
-        return !(a == b);
-    }
-
     friend std::ostream& operator<<(std::ostream& os, const Stream& s)
     {
         os << s.impl_;

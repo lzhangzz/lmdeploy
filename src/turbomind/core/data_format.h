@@ -75,9 +75,4 @@ inline bool operator==(const DataFormat& a, const DataFormat& b) noexcept
            && a.zeros.dtype == b.zeros.dtype;
 }
 
-inline bool operator!=(const DataFormat& a, const DataFormat& b) noexcept
-{
-    return !(a == b);
-}
-
 }  // namespace turbomind
