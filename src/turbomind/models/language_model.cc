@@ -15,7 +15,6 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/engine_param.h"
 #include "src/turbomind/kernels/gpt_kernels.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/models/model_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"

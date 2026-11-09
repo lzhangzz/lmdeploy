@@ -58,4 +58,7 @@ void ApplyBias(Tensor& x, const Tensor& bias, cudaStream_t st);
 // out = x + bias
 void ApplyBias(Tensor& out, Tensor& x, const Tensor& bias, cudaStream_t st);
 
+// RMSNorm * SiLU-gate (fused output normalization)
+void invokeRMSNormGated(Ref<Tensor> hidden, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream);
+
 }  // namespace turbomind

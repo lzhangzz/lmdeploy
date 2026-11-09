@@ -6,12 +6,12 @@
 
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/scope.h"
+#include "src/turbomind/kernels/batch_kernels.h"
 #include "src/turbomind/kernels/core/math.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
 #include "src/turbomind/models/delta_net_weight.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/moe_ffn_layer.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"

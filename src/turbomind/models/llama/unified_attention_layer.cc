@@ -42,12 +42,12 @@
 
 #include "src/turbomind/macro.h"
 
+#include "src/turbomind/kernels/activation_kernels.h"
 #include "src/turbomind/kernels/attention/block.h"
+#include "src/turbomind/kernels/attention/mla_utils.h"
 #include "src/turbomind/kernels/attention/rope_params.h"
 #include "src/turbomind/memory/object.h"
 #include "src/turbomind/models/attention_weight.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
-#include "src/turbomind/models/llama/mla_utils.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/utils/string_utils.h"
 

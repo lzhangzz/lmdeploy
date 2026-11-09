@@ -8,6 +8,7 @@ add_library(attention STATIC
             decoding.cu
             kv_cache_utils_v2.cu
             cp_utils.cu
+            mla_utils.cu
             registry.cu
             )
 set_property(TARGET attention PROPERTY POSITION_INDEPENDENT_CODE ON)

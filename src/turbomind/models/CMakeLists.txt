@@ -46,19 +46,19 @@ add_library(models STATIC
         llama/moe_ffn_layer.cc
         llama/unified_decoder.cc
         llama/unified_attention_layer.cc
-        llama/llama_kernels.cu
-        llama/mla_utils.cu
-        llama/GatedDeltaNetLayer.cc
-        llama/gated_delta_net_kernels.cu)
+        llama/GatedDeltaNetLayer.cc)
 set_property(TARGET models PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET models PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(models PUBLIC
         linear_attn
+        conv1d
+        batch_kernels
         generation
         core
         memory
         gemm2
         rms_norm
+        l2_norm
         layer_norm
         CUDA::cublas
         CUDA::cudart
@@ -83,12 +83,6 @@ target_compile_options(models PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads=${NVCC_THREADS}>)
 
 if(BUILD_TEST)
-    add_executable(bench_conv1d_silu
-            llama/bench_conv1d_silu.cc)
-    target_link_libraries(bench_conv1d_silu PRIVATE
-            models
-            CUDA::cudart)
-
     add_executable(test_mrope_position_ids
             qwenvit/test_mrope_position_ids.cu)
     set_property(TARGET test_mrope_position_ids PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

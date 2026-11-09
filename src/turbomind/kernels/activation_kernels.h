@@ -32,4 +32,11 @@ template<typename T> struct IdentityActivation;
 template<template<typename T> class Activation>
 void invokeGenericActivation_v3(Ref<Tensor> inter_, const Tensor& gate, cudaStream_t stream);
 
+// Apply sigmoid gating: attn[i] *= sigmoid(gate[i])
+// attn:        [num_tokens, dim], contiguous
+// gate_base:   pointer to first gate element in QKV buffer
+// gate_stride: stride between tokens in QKV buffer (elements)
+void invokeSigmoidGateMultiply(
+    void* attn, const void* gate_base, int dim, int gate_stride, int num_tokens, DataType dtype, cudaStream_t stream);
+
 }  // namespace turbomind

@@ -5,6 +5,11 @@ set_property(TARGET rms_norm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET rms_norm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(rms_norm PUBLIC core)
 
+add_library(l2_norm l2_norm.cu)
+set_property(TARGET l2_norm PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET l2_norm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(l2_norm PUBLIC core)
+
 add_library(layer_norm layer_norm.cu)
 set_property(TARGET layer_norm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET layer_norm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

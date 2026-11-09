@@ -31,13 +31,6 @@ inline void PrefixSum(const int* src, int n, int* dst, cudaStream_t st)
 void invokeAppendOneTokenAndAdvanceSequence(
     int* const* token_ids_ptrs, const int* selected_tokens, int* sequence_length, int batch_size, cudaStream_t stream);
 
-// Apply sigmoid gating: attn[i] *= sigmoid(gate[i])
-// attn:        [num_tokens, dim], contiguous
-// gate_base:   pointer to first gate element in QKV buffer
-// gate_stride: stride between tokens in QKV buffer (elements)
-void invokeSigmoidGateMultiply(
-    void* attn, const void* gate_base, int dim, int gate_stride, int num_tokens, DataType dtype, cudaStream_t stream);
-
 // Upper bound for attention DP size supported by `invokeBuildTokenMask` (per-rank token bases
 // are passed to the kernel by value).
 inline constexpr int kMaxAttnDPSize = 64;

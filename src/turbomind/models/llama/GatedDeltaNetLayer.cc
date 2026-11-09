@@ -14,8 +14,11 @@
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/engine/block.h"
+#include "src/turbomind/kernels/conv1d/conv1d_silu.h"
 #include "src/turbomind/kernels/copy/copy.h"
-#include "src/turbomind/models/llama/gated_delta_net_kernels.h"
+#include "src/turbomind/kernels/linear_attn/gdn_gating.h"
+#include "src/turbomind/kernels/norm/l2_norm.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {

@@ -15,7 +15,7 @@
 #include "src/turbomind/kernels/sampling_topk_kernels.h"  // InitializeRandomStates
 #include "src/turbomind/kernels/speculative_sequence_kernels.h"
 
-#include "src/turbomind/models/llama/llama_kernels.h"
+#include "src/turbomind/kernels/batch_kernels.h"
 #include "src/turbomind/models/speculative/speculative_model.h"
 #include "src/turbomind/utils/cuda_utils.h"
 

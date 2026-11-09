@@ -105,6 +105,15 @@ set_property(TARGET speculative_sequence_kernels
 target_link_libraries(speculative_sequence_kernels PRIVATE
     core)
 
+add_library(batch_kernels STATIC
+    batch_kernels.cu)
+set_property(TARGET batch_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET batch_kernels
+    PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(batch_kernels PRIVATE
+    core)
+
 add_library(apply_token_bitmask_inplace_cuda STATIC apply_token_bitmask_inplace_cuda.cu)
 set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -114,3 +123,4 @@ add_subdirectory(gemm)
 add_subdirectory(norm)
 add_subdirectory(copy)
 add_subdirectory(linear_attn)
+add_subdirectory(conv1d)

@@ -645,4 +645,74 @@ void ApplyBias(Tensor& data, const Tensor& bias, const Buffer_<int>& offsets, fl
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
+// =============================================================================
+// RMSNorm * SiLU-Gate (fused output normalization)
+// =============================================================================
+template<typename T>
+__global__ void rms_norm_gated_kernel(
+    T* hidden, const T* gate, const T* weight, float eps, int N, int head_dim, int gate_stride, int num_heads)
+{
+    const int row = blockIdx.x;
+    if (row >= N)
+        return;
+
+    T*        h         = hidden + row * head_dim;
+    const int token_idx = row / num_heads;
+    const int head_idx  = row % num_heads;
+    const T*  g         = gate + token_idx * gate_stride + head_idx * head_dim;
+
+    __shared__ float smem[32];
+    float            sum_sq = 0.0f;
+    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        float val = static_cast<float>(h[d]);
+        sum_sq += val * val;
+    }
+    for (int mask = 16; mask > 0; mask >>= 1)
+        sum_sq += __shfl_xor_sync(0xffffffff, sum_sq, mask);
+    if ((threadIdx.x & 31) == 0)
+        smem[threadIdx.x >> 5] = sum_sq;
+    __syncthreads();
+    if (threadIdx.x >> 5 == 0) {
+        sum_sq = (threadIdx.x < (blockDim.x + 31) / 32) ? smem[threadIdx.x] : 0.0f;
+        for (int mask = 16; mask > 0; mask >>= 1)
+            sum_sq += __shfl_xor_sync(0xffffffff, sum_sq, mask);
+        if (threadIdx.x == 0)
+            smem[0] = sum_sq;
+    }
+    __syncthreads();
+    sum_sq = smem[0];
+
+    float inv_rms = rsqrtf(sum_sq / (float)head_dim + eps);
+    for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        float h_val  = static_cast<float>(h[d]) * inv_rms * static_cast<float>(weight[d]);
+        float g_val  = static_cast<float>(g[d]);
+        float silu_g = g_val / (1.0f + expf(-g_val));
+        h[d]         = static_cast<T>(h_val * silu_g);
+    }
+}
+
+void invokeRMSNormGated(Ref<Tensor> hidden_, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream)
+{
+    auto& hidden = hidden_.get();
+
+    const int N           = hidden.shape(0);
+    const int head_dim    = hidden.shape(1);
+    const int token_num   = gate.shape(0);
+    const int gate_stride = gate.stride(0);
+    const int num_heads   = N / token_num;
+
+    if (N == 0)
+        return;
+
+    const int threads = std::min(256, head_dim);
+
+    auto invoke = [&](auto t) {
+        using T = decltype(t);
+        rms_norm_gated_kernel<<<N, threads, 0, stream>>>(
+            hidden.data<T>(), gate.data<T>(), weight.data<T>(), eps, N, head_dim, gate_stride, num_heads);
+    };
+    TM_DISPATCH_PRIMARY_DTYPES(hidden.dtype(), invoke);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
+
 }  // namespace turbomind

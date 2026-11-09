@@ -6,10 +6,10 @@
 
 #include <pybind11/pybind11.h>
 
+#include "src/turbomind/kernels/batch_kernels.h"
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/speculative_sampling_kernels.h"
-#include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/python/eagle3_component_bindings.h"
 #include "src/turbomind/python/eagle3_dlpack_internal.h"
 #include "src/turbomind/utils/cuda_utils.h"

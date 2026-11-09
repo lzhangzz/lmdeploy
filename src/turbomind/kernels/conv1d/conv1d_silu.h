@@ -62,21 +62,4 @@ inline void invokeFusedConv1dSiLU(Ref<Tensor>           out,
                           stream);
 }
 
-// =============================================================================
-// Helper kernels
-// =============================================================================
-
-void ComputeBetaG(core::Tensor&       beta,
-                  core::Tensor&       g,
-                  const core::Tensor& b,
-                  const core::Tensor& a,
-                  const core::Tensor& A_log,
-                  const core::Tensor& dt_bias,
-                  cudaStream_t        stream);
-
-void invokeL2NormalizeQK(core::Tensor& q, core::Tensor& k, float epsilon, cudaStream_t stream);
-
-// RMSNorm * SiLU-gate (fused output normalization)
-void invokeRMSNormGated(Ref<Tensor> hidden, const Tensor& gate, const Tensor& weight, float eps, cudaStream_t stream);
-
 }  // namespace turbomind

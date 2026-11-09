@@ -39,5 +39,6 @@ target_link_libraries(generation PUBLIC
     memory_utils
     CUDA::cudart)
 target_link_libraries(generation PRIVATE
+    batch_kernels
     speculative_sampling_kernels
     speculative_sequence_kernels)

@@ -9,8 +9,8 @@
 #include <cuda_runtime.h>
 
 #include "src/turbomind/core/core.h"
+#include "src/turbomind/kernels/conv1d/conv1d_silu.h"
 #include "src/turbomind/kernels/gemm/test/test_utils.h"
-#include "src/turbomind/models/llama/gated_delta_net_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 using namespace turbomind;
