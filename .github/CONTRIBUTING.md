@@ -183,10 +183,9 @@ If the documents are modified/added, we should check the rendering result. We co
 
 ```shell
 pip install -r requirements/docs.txt
-cd docs/zh_cn/
-# or docs/en
+cd docs/en
 make html
-# check file in ./docs/zh_cn/_build/html/index.html
+# check file in ./docs/en/_build/html/index.html
 ```
 
 ### Code style
