@@ -3,7 +3,7 @@
 LMDeploy is a python library for compressing, deploying, and serving Large Language Models(LLMs) and Vision-Language Models(VLMs).
 Its inference engine, TurboMind, is developed in C++ and CUDA and strives for ultimate optimization of inference performance.
 
-It supports LLMs and VLMs deployment on both Linux and Windows platforms. Furthermore, it is compatible with the following NVIDIA GPUs:
+It supports LLMs and VLMs deployment on Linux. Furthermore, it is compatible with the following NVIDIA GPUs:
 
 - Volta(sm70): V100
 - Turing(sm75): 20 series, T4
@@ -22,7 +22,7 @@ pip install lmdeploy
 
 ## Install from source
 
-LMDeploy builds the TurboMind engine with NVIDIA CUDA support. A source installation always compiles the native extension. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a host compiler with C++20 `std::format` support that your CUDA Toolkit also supports, such as GCC 13 or newer on Linux or Visual Studio 2022 on Windows.
+LMDeploy builds the TurboMind engine with NVIDIA CUDA support. A source installation always compiles the native extension. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a host compiler with C++20 `std::format` support that your CUDA Toolkit also supports, such as GCC 13 or newer.
 
 Once the CUDA toolkit is successfully set up, you can build and install LMDeploy with a single command:
 
