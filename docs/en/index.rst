@@ -87,7 +87,6 @@ Documentation
 
    quantization/w4a16.md
    quantization/kv_quant.md
-   quantization/llm_compressor.md
 
 .. _benchmark:
 .. toctree::

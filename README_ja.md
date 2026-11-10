@@ -29,7 +29,6 @@ ______________________________________________________________________
 - \[2026/11\] LMDeploy は TurboMind 専用になりました。PyTorch エンジン、CUDA 以外のプラットフォーム（Ascend、MACA、Cambricon、ROCm）、LoRA アダプター、報酬モデル、W8A8/SmoothQuant、PD 分離デプロイ（DistServe）は削除されました。詳細は[破壊的変更](docs/en/get_started/breaking_changes.md)を参照してください。
 - \[2026/04\] PyPI で LMDeploy のストレージ枠が拡張され、wheel のアップロードが再開されました。`v0.12.3` はすでに PyPI で公開されており、`pip install lmdeploy` で直接インストールできます。
 - \[2026/02\] [Qwen3.5](https://huggingface.co/collections/Qwen/qwen35) をサポート
-- \[2026/02\] [vllm-project/llm-compressor](https://github.com/vllm-project/llm-compressor) の 4 ビット対称／非対称量子化をサポート。詳細な手順は[こちら](docs/en/quantization/llm_compressor.md)を参照してください
 
 </details>
 

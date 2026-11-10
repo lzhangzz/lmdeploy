@@ -11,9 +11,9 @@ Currently, Turbomind support loading three types of model:
 
 ## Usage
 
-### 1) A lmdeploy-quantized model
+### 1) A pre-quantized model
 
-For models quantized by `lmdeploy.lite` such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), etc.
+For already-quantized checkpoints such as [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit), etc.
 
 ```
 repo_id=lmdeploy/llama2-chat-70b-4bit

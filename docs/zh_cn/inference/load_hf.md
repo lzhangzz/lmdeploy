@@ -11,9 +11,9 @@
 
 ## 使用方式
 
-### 1) 通过 lmdeploy 量化的模型
+### 1) 已量化的模型
 
-对于通过 `lmdeploy.lite` 量化的模型，TurboMind 可以直接加载，比如 [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit).
+对于已经量化好的模型权重，TurboMind 可以直接加载，比如 [llama2-70b-4bit](https://huggingface.co/lmdeploy/llama2-chat-70b-4bit).
 
 ```
 repo_id=lmdeploy/llama2-chat-70b-4bit

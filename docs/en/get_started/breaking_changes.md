@@ -26,12 +26,13 @@ The following models were only available through the PyTorch engine, or are no l
 - Reward models
 - Audio input (Qwen3-Omni) and time-series input (Intern-S1-Pro)
 
-The Python vision adapters for these VLMs were removed as well, so `lmdeploy lite` can no longer load or quantize them. The Qwen3-VL preprocessor is kept because the Qwen3.5 adapter builds on it.
+The Qwen3-VL preprocessor is kept because the Qwen3.5 adapter builds on it.
 
 ## Features removed
 
 - LoRA adapters (`adapters`, `--adapters`, `adapter_name`).
 - W8A8 / SmoothQuant: the `lmdeploy lite smooth_quant` command, its Python API and W8A8 checkpoints.
+- The whole `lmdeploy lite` quantization toolchain: the CLI, the `lmdeploy.lite` package, `requirements/lite.txt`, the `lite` extra, the autotest quantization job and `examples/lite/`. This covers AWQ/GPTQ checkpoint production for every architecture it supported, including Phi-3, ChatGLM, Mistral, Mini-Gemini and the vision models removed above. W4A16 **inference** is unaffected: TurboMind still loads awq/gptq/fp8/mxfp4 checkpoints. To produce one, use upstream `llm-compressor` (or AWQ/AutoGPTQ); this repository no longer documents or ships that step.
 - PD disaggregation (DistServe): `--role`, `--migration-backend`, `--kv-transfer-config` and the proxy `--serving-strategy` option, plus the `/distserve/*` endpoints.
 - Ray-based distributed execution (`--distributed-executor-backend`).
 - Diffusion LLM decoding (`--dllm-*`).
@@ -48,7 +49,6 @@ The Python vision adapters for these VLMs were removed as well, so `lmdeploy lit
 - Audio and time-series message content (`audio`, `audio_url`, `time_series`, `time_series_url`). Requests that contain them are rejected. `lmdeploy.vl.load_audio`, `load_time_series`, `encode_audio_base64` and `encode_time_series_base64` were removed.
 - Chat templates for models TurboMind cannot run: `cogvlm`, `llava-v1`, `llava-chatml`, `chatglm`, `deepseek-vl`, `deepseek-vl2`, `deepseek-v4`, `deepseek-v32` and `deepseek-v3.2`. The `mistral` template name was removed; `mixtral` remains.
 - Reasoning parsers `deepseek-v3`, `deepseek-v32`, `deepseek-v3.2` and `deepseek-v4`, and tool parsers `deepseek-v32`, `deepseek-v4`, `kimi_k2` and `kimi-k2`.
-- `lmdeploy lite` support for Phi-3, ChatGLM, Mistral and Mini-Gemini checkpoints.
 - `VisionConfig`, the `vision_config` argument and `--vision-max-batch-size`. TurboMind runs vision encoders natively, so passing `vision_config` now raises a `TypeError`.
 - `ChatGLMTokenizer` and `ChatGLM4Tokenizer` in `lmdeploy.tokenizer`.
 - PyTorch-engine-only options such as `--eager-mode`, `--block-size`, `--num-gpu-blocks`, `--cudagraph-capture-batch-sizes`, `--enable-microbatch`, `--enable-eplb`, `--quant-dtype` and `--device`.

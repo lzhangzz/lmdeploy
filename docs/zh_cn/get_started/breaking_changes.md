@@ -26,12 +26,13 @@ LMDeploy 现在只提供一个推理引擎 [TurboMind](../inference/turbomind.md
 - 奖励模型
 - 音频输入（Qwen3-Omni）和时序数据输入（Intern-S1-Pro）
 
-上述 VLM 的 Python 视觉适配代码也已删除，因此 `lmdeploy lite` 无法再加载或量化这些模型。Qwen3-VL 的预处理器仍然保留，因为 Qwen3.5 的适配代码基于它实现。
+Qwen3-VL 的预处理器仍然保留，因为 Qwen3.5 的适配代码基于它实现。
 
 ## 移除的功能
 
 - LoRA 适配器（`adapters`、`--adapters`、`adapter_name`）。
 - W8A8 / SmoothQuant：`lmdeploy lite smooth_quant` 命令、对应的 Python 接口以及 W8A8 模型。
+- 整个 `lmdeploy lite` 量化工具链：CLI、`lmdeploy.lite` 包、`requirements/lite.txt`、`lite` 安装项、autotest 量化任务以及 `examples/lite/`。这包括其支持的所有架构的 AWQ/GPTQ 权重生成，如 Phi-3、ChatGLM、Mistral、Mini-Gemini 以及上文移除的视觉模型。W4A16 **推理**不受影响：TurboMind 仍可加载 awq/gptq/fp8/mxfp4 权重。需要生成量化权重时，请使用上游 `llm-compressor`（或 AWQ、AutoGPTQ）；本仓库不再提供或说明这一步。
 - PD 分离部署（DistServe）：`--role`、`--migration-backend`、`--kv-transfer-config`、代理服务的 `--serving-strategy` 选项，以及 `/distserve/*` 接口。
 - 基于 Ray 的分布式执行（`--distributed-executor-backend`）。
 - 扩散语言模型解码（`--dllm-*`）。
@@ -48,7 +49,6 @@ LMDeploy 现在只提供一个推理引擎 [TurboMind](../inference/turbomind.md
 - 音频和时序数据消息内容（`audio`、`audio_url`、`time_series`、`time_series_url`）。包含这些内容的请求会被拒绝。`lmdeploy.vl.load_audio`、`load_time_series`、`encode_audio_base64` 和 `encode_time_series_base64` 已移除。
 - TurboMind 无法运行的模型所对应的对话模板：`cogvlm`、`llava-v1`、`llava-chatml`、`chatglm`、`deepseek-vl`、`deepseek-vl2`、`deepseek-v4`、`deepseek-v32` 和 `deepseek-v3.2`。`mistral` 模板名称已移除，`mixtral` 仍然保留。
 - reasoning parser `deepseek-v3`、`deepseek-v32`、`deepseek-v3.2` 和 `deepseek-v4`，以及 tool parser `deepseek-v32`、`deepseek-v4`、`kimi_k2` 和 `kimi-k2`。
-- `lmdeploy lite` 对 Phi-3、ChatGLM、Mistral 和 Mini-Gemini 模型的支持。
 - `VisionConfig`、`vision_config` 参数和 `--vision-max-batch-size`。TurboMind 原生运行视觉编码器，传入 `vision_config` 现在会抛出 `TypeError`。
 - `lmdeploy.tokenizer` 中的 `ChatGLMTokenizer` 和 `ChatGLM4Tokenizer`。
 - 仅 PyTorch 引擎使用的选项，例如 `--eager-mode`、`--block-size`、`--num-gpu-blocks`、`--cudagraph-capture-batch-sizes`、`--enable-microbatch`、`--enable-eplb`、`--quant-dtype` 和 `--device`。
