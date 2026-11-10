@@ -356,57 +356,6 @@ class ArgumentHelper:
         return parser.add_argument('--stream-output', action='store_true', help='Indicator for streaming output or not')
 
     @staticmethod
-    def calib_dataset(parser):
-        """Add argument calib_dataset to parser."""
-
-        return parser.add_argument(
-            '--calib-dataset',
-            type=str,
-            default='wikitext2',
-            choices=['wikitext2', 'c4', 'pileval', 'gsm8k', 'neuralmagic_calibration', 'open-platypus', 'openwebtext'],
-            help='The calibration dataset name.')
-
-    @staticmethod
-    def calib_samples(parser):
-        """Add argument calib_samples to parser."""
-
-        return parser.add_argument('--calib-samples',
-                                   type=int,
-                                   default=128,
-                                   help='The number of samples for calibration. '
-                                        'Define 0 to indicate the data free quantization.')
-
-    @staticmethod
-    def calib_seqlen(parser):
-        """Add argument calib_seqlen to parser."""
-
-        return parser.add_argument('--calib-seqlen', type=int, default=2048, help='The sequence length for calibration')
-
-    @staticmethod
-    def calib_batchsize(parser):
-        """Add argument batch_size to parser."""
-
-        return parser.add_argument(
-            '--batch-size',
-            type=int,
-            default=1,
-            help=\
-            'The batch size for running the calib samples. Low GPU mem requires small batch_size. Large batch_size reduces the calibration time while costs more VRAM'  # noqa
-        )
-
-    @staticmethod
-    def calib_search_scale(parser):
-        """Add argument search_scale to parser."""
-
-        return parser.add_argument(
-            '--search-scale',
-            action='store_true',
-            default=False,
-            help=\
-            'Whether search scale ratio. Default to be disabled, which means only smooth quant with 0.5 ratio will be applied'  # noqa
-        )
-
-    @staticmethod
     def chat_template(parser):
         """Add chat template config to parser."""
 
@@ -470,15 +419,6 @@ class ArgumentHelper:
                                    default=0.8,
                                    help='The percentage of free gpu memory occupied by the k/v '
                                    'cache, excluding weights ')
-
-    @staticmethod
-    def work_dir(parser):
-        """Add argument work_dir to parser."""
-
-        return parser.add_argument('--work-dir',
-                                   type=str,
-                                   default='./work_dir',
-                                   help='The working directory to save results')
 
     @staticmethod
     def cache_block_seq_len(parser):

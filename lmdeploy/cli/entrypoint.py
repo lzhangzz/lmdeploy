@@ -3,7 +3,6 @@ import os
 import sys
 
 from .cli import CLI
-from .lite import SubCliLite
 from .serve import SubCliServe
 
 
@@ -12,7 +11,6 @@ def run():
     args = sys.argv[1:]
     CLI.add_parsers()
     SubCliServe.add_parsers()
-    SubCliLite.add_parsers()
     parser = CLI.parser
     args = parser.parse_args()
 
@@ -44,7 +42,5 @@ def run():
             command = args.command
             if command == 'serve':
                 SubCliServe.parser.print_help()
-            elif command == 'lite':
-                SubCliLite.parser.print_help()
             else:
                 parser.print_help()
