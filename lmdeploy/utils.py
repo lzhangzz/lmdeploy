@@ -71,7 +71,7 @@ class ColorFormatter(logging.Formatter):
     def format(self, record: LogRecord):
         """format."""
         if not can_colorize():
-            # windows does not support ASNI color
+            # no tty, NO_COLOR/TERM=dumb, or colors not forced
             return super().format(record)
         levelname = record.levelname
         level_color = self._LEVELNAME_COLOR_MAP.get(levelname, self._RESET_COLOR)

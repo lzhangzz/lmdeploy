@@ -113,20 +113,16 @@ class CLI:
 
         def get_gpu_topo():
             import subprocess
-            import sys
-            if sys.platform.startswith('linux'):
-                try:
-                    res = subprocess.run(['nvidia-smi', 'topo', '-m'],
-                                         capture_output=True,
-                                         text=True,
-                                         check=True)
-                    if res.returncode == 0:
-                        return '\n' + res.stdout
-                    else:
-                        return None
-                except FileNotFoundError:
+            try:
+                res = subprocess.run(['nvidia-smi', 'topo', '-m'],
+                                     capture_output=True,
+                                     text=True,
+                                     check=True)
+                if res.returncode == 0:
+                    return '\n' + res.stdout
+                else:
                     return None
-            else:
+            except FileNotFoundError:
                 return None
 
         gpu_topo = get_gpu_topo()

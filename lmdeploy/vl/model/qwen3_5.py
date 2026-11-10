@@ -12,7 +12,7 @@ _INTERN_S2_ARCHS = [
 
 def check_transformers():
     try:
-        # import config instead of model to avoid import error on windows
+        # import the config module, not the model, so the check stays cheap
         from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config  # noqa: F401
         from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeConfig  # noqa: F401
     except ImportError:
