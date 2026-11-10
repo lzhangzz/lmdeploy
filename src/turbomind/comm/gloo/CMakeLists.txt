@@ -2,10 +2,19 @@
 cmake_minimum_required(VERSION 3.25)
 
 include(FetchContent)
+
+set(_gloo_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/gloo-cstdint.patch")
+set(_patch_script "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
+
 FetchContent_Declare(
   gloo
   GIT_REPOSITORY https://github.com/pytorch/gloo.git
   GIT_TAG c7b7b022c124d9643957d9bd55f57ac59fce8fa2 # pytorch-v2.8.0-rc4
+  PATCH_COMMAND
+    ${CMAKE_COMMAND}
+    -DSOURCE_DIR=<SOURCE_DIR>
+    -DPATCH_FILE=${_gloo_patch}
+    -P ${_patch_script}
 )
 
 # some settings of gloo,
@@ -23,7 +32,6 @@ target_include_directories(gloo PUBLIC
 )
 
 target_compile_options(gloo PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/W0>
     $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:-w>
 )
 

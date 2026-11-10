@@ -1,0 +1,10 @@
+diff --git a/gloo/types.h b/gloo/types.h
+--- a/gloo/types.h
++++ b/gloo/types.h
+@@ -5,6 +5,7 @@
+ #pragma once
+ 
++#include <cstdint>
+ #include <iostream>
+ 
+ #ifdef __CUDA_ARCH__
