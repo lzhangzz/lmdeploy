@@ -3,7 +3,7 @@
 from argparse import Namespace
 
 import torch
-from transformers import AutoConfig, AutoModel, AutoTokenizer, CLIPImageProcessor
+from transformers import AutoConfig, AutoTokenizer, CLIPImageProcessor
 
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.model.base import VISION_MODELS, VisionModel
@@ -78,11 +78,10 @@ class InternVLVisionModel(VisionModel):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
-        super().__init__(model_path, with_llm, hf_config, backend, trust_remote_code=trust_remote_code)
+        super().__init__(model_path, hf_config, backend, trust_remote_code=trust_remote_code)
         self.image_token = '<IMG_CONTEXT>'
         tokenizer = AutoTokenizer.from_pretrained(model_path,
                                                   trust_remote_code=trust_remote_code,
@@ -121,16 +120,6 @@ class InternVLVisionModel(VisionModel):
         patch_size = self.vision_config.patch_size
         downsample_ratio = self.hf_config.downsample_ratio
         self.image_tokens_per_patch = int((force_image_size // patch_size)**2 * (downsample_ratio**2))
-
-    def build_model(self, trust_remote_code: bool = False):
-        """Load the whole VLM for quantization."""
-        # transformers below 4.37.0 may raise error about flash_attn
-        self.config.llm_config.attn_implementation = 'eager'
-        self.vl_model = AutoModel.from_pretrained(self.model_path,
-                                                  config=self.config,
-                                                  device_map='cpu',
-                                                  dtype=torch.half,
-                                                  trust_remote_code=trust_remote_code).eval()
 
     def _preprocess_v1_5(self, image, params=None):
         image_res = {'low': 6, 'medium': 12, 'high': 24}

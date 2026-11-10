@@ -33,11 +33,10 @@ class InternVL3VisionModel(InternVLVisionModel):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
-        super().__init__(model_path, with_llm, hf_config, backend, trust_remote_code=trust_remote_code)
+        super().__init__(model_path, hf_config, backend, trust_remote_code=trust_remote_code)
         self.arch = self.hf_config.architectures[0]
 
     def build_preprocessor(self, trust_remote_code: bool = False):
@@ -47,9 +46,6 @@ class InternVL3VisionModel(InternVLVisionModel):
         self.image_token_id = tokenizer.context_image_token_id
         self.image_tokens_per_patch = self.processor.image_seq_length
         self.tokenizer_init_kwargs = tokenizer.init_kwargs
-
-    def build_model(self, trust_remote_code: bool = False):
-        raise NotImplementedError
 
     def preprocess(self, messages: list[dict]) -> list[dict]:
         """Refers to `super.preprocess() for spec."""

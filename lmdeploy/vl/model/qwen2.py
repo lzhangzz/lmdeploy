@@ -30,19 +30,6 @@ class Qwen2VLModel(VisionModel):
         messages.append(dict(role='preprocess', content=outputs))
         return messages
 
-    def build_model(self, trust_remote_code: bool = False):
-        arch = self.hf_config.architectures[0]
-        if arch == 'Qwen2VLForConditionalGeneration':
-            from transformers import Qwen2VLForConditionalGeneration as AutoModelCls
-        elif arch == 'Qwen2_5_VLForConditionalGeneration':
-            from transformers import Qwen2_5_VLForConditionalGeneration as AutoModelCls
-        else:
-            raise ValueError(f'Unsupported arch={arch}')
-
-        self.vl_model = AutoModelCls.from_pretrained(self.model_path,
-                                                     device_map='cpu',
-                                                     trust_remote_code=trust_remote_code)
-
     def proc_messages(self, messages, chat_template, tools=None, chat_template_kwargs=None):
         """Apply chat template to get the prompt."""
         chat_template_kwargs = chat_template_kwargs or {}

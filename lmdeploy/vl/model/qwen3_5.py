@@ -33,22 +33,3 @@ class Qwen3_5Model(Qwen3VLModel):
     def build_preprocessor(self, trust_remote_code: bool = False):
         check_transformers()
         super().build_preprocessor(trust_remote_code=trust_remote_code)
-
-    def build_model(self, trust_remote_code: bool = False):
-        check_transformers()
-        arch = self.hf_config.architectures[0]
-        if arch == 'Qwen3_5ForConditionalGeneration':
-            from transformers import Qwen3_5ForConditionalGeneration as AutoModelCls
-        elif arch == 'Qwen3_5MoeForConditionalGeneration':
-            from transformers import Qwen3_5MoeForConditionalGeneration as AutoModelCls
-        elif arch in _INTERN_S2_ARCHS:
-            from transformers import AutoModelForImageTextToText as AutoModelCls
-        else:
-            raise ValueError(f'Unsupported arch={arch}')
-
-        if arch in ['Qwen3_5ForConditionalGeneration', 'Qwen3_5MoeForConditionalGeneration']:
-            self.vl_model = AutoModelCls.from_pretrained(self.model_path, device_map='cpu')
-        else:
-            self.vl_model = AutoModelCls.from_pretrained(self.model_path,
-                                                         device_map='cpu',
-                                                         trust_remote_code=trust_remote_code)

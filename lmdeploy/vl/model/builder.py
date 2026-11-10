@@ -17,7 +17,6 @@ logger = get_logger('lmdeploy')
 
 def load_vl_model(model_path: str,
                   backend: str,
-                  with_llm: bool = False,
                   backend_config: TurbomindEngineConfig | None = None,
                   trust_remote_code: bool = False):
     """Load visual model.
@@ -25,8 +24,6 @@ def load_vl_model(model_path: str,
     Args:
         model_path(str): the path or repo_id from model hub of the model
         backend(str): 'turbomind' for inference, or None outside inference
-        with_llm(bool): load LLM model or not. Set it to False for VLM
-            inference scenarios and True for VLM quantization
         backend_config: the config of the inference engine
     """
     if not os.path.exists(model_path):
@@ -36,7 +33,6 @@ def load_vl_model(model_path: str,
 
     _, hf_config = get_model_arch(model_path, trust_remote_code=trust_remote_code)
     kwargs = dict(model_path=model_path,
-                  with_llm=with_llm,
                   hf_config=hf_config,
                   backend=backend,
                   trust_remote_code=trust_remote_code)
@@ -46,11 +42,9 @@ def load_vl_model(model_path: str,
             if module.match(hf_config):
                 logger.info(f'matching vision model: {name}')
                 model = module(**kwargs)
+                # TurboMind runs the visual encoder natively, so only the
+                # preprocessor is needed on the Python side.
                 model.build_preprocessor(trust_remote_code=trust_remote_code)
-                # TurboMind runs the visual encoder natively, so the Python
-                # model is only loaded for VLM quantization.
-                if with_llm:
-                    model.build_model(trust_remote_code=trust_remote_code)
                 return model
         except Exception as e:
             logger.error(f'build vision model {name} failed, {e}')

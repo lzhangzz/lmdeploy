@@ -43,13 +43,11 @@ class VisionModel(ABC):
 
     def __init__(self,
                  model_path: str,
-                 with_llm: bool = False,
                  hf_config: AutoConfig = None,
                  backend: str = '',
                  trust_remote_code: bool = False):
         """init."""
         self.model_path = model_path
-        self.with_llm = with_llm
         self.backend = backend
         self.mm_feature_dtype: torch.dtype | None = None
         if hf_config is None:
@@ -96,13 +94,6 @@ class VisionModel(ABC):
 
         NOTE: When the derived class implements this method, try not to
         introduce the upper stream model repo as a thirdparty package
-        """
-        raise NotImplementedError()
-
-    def build_model(self, trust_remote_code: bool = False):
-        """Load the whole VLM model.
-
-        Only used when `with_llm=True`.
         """
         raise NotImplementedError()
 
