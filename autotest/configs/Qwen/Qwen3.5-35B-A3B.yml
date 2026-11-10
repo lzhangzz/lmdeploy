@@ -49,7 +49,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  - quantization
   interface:
     turbomind:
     - suites:
@@ -66,6 +65,3 @@ h:
       - abort
       extra:
         enable-abort-handling: true
-  quantization:
-    turbomind:
-    - awq

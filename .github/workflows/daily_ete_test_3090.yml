@@ -37,7 +37,7 @@ on:
         required: true
         description: 'regression functions'
         type: string
-        default: "['quant', 'tools', 'restful']"
+        default: "['tools', 'restful']"
       docker_tag:
         required: true
         description: 'Docker tag'
@@ -153,70 +153,10 @@ jobs:
           mkdir ${{env.REPORT_DIR}} -p
           echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
 
-  test_quantization:
-    needs: download_pkgs
-    if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'quant') )}}
-    runs-on: [self-hosted, 3090-r1]
-    timeout-minutes: 150
-    env:
-      PYTHONPATH: autotest/coverage_hook
-      MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
-      MODELSCOPE_MODULES_CACHE: /nvme/qa_test_models/modelscope_modules
-      TEST_ENV: 3090
-      DEPS_PROFILE: ''
-    container:
-      image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}
-      options: "--gpus=all --ipc=host --user root -e PIP_CACHE_DIR=/root/.cache/pip -e NVIDIA_DISABLE_REQUIRE=1 --pull never"
-      volumes:
-        - /nvme/github-actions/pip-cache:/root/.cache/pip
-        - /nvme/qa_test_models:/nvme/qa_test_models
-        - /data1:/data1
-        - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
-    steps:
-      - name: Copy repository and Artifacts
-        run: |
-          cp -r ${{env.TEST_CODE_PATH}}/. .
-          mkdir ${{env.REPORT_DIR}} -p
-          echo "starttime=$(date +%s)" > ${{env.REPORT_DIR}}/status.txt
-      - name: Install lmdeploy - dependency
-        run: |
-          python3 -m pip install matplotlib
-          python3 -m pip install -r requirements/lite.txt
-      - name: Install lmdeploy
-        run: |
-          python3 -m pip uninstall lmdeploy -y && python3 -m pip install lmdeploy-*.whl --no-deps
-          python3 -m pip install -r requirements/test.txt
-      - name: Check env
-        run: |
-          python3 -m pip list
-          lmdeploy check_env
-          rm -rf allure-results
-          # remove tmp log in testcase
-          mkdir ${{env.REPORT_DIR}}/.pytest_cache -p && rm autotest/.pytest_cache -f
-          ln -s ${{env.REPORT_DIR}}/.pytest_cache autotest
-      - name: Test lmdeploy - quantization
-        continue-on-error: true
-        run: |
-          pytest autotest/tools/quantization/test_quantization_awq.py -m 'not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
-          for f in .coverage .coverage.*; do
-            [ -e "$f" ] || continue
-            mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
-          done
-      - name: Clear workfile
-        if: always()
-        run: |
-          echo "status=done" >> ${{env.REPORT_DIR}}/status.txt
-          chmod -R 777 $REPORT_DIR
-          export workdir=$(pwd)
-          cd ..
-          rm -rf $workdir
-          mkdir $workdir
-          chmod -R 777 $workdir
-
   test_tools:
-    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
+    if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'tools'))}}
     runs-on: [self-hosted, 3090-r1]
-    needs: test_quantization
+    needs: download_pkgs
     timeout-minutes: 300
     strategy:
       fail-fast: false
@@ -302,9 +242,9 @@ jobs:
           chmod -R 777 $workdir
 
   test_restful:
-    if: ${{!cancelled() && !contains(needs.test_quantization.result, 'fail') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
+    if: ${{!cancelled() && contains(needs.download_pkgs.result, 'success') && (github.event_name == 'schedule' || contains(fromJSON(github.event.inputs.regression_func), 'restful'))}}
     runs-on: [self-hosted, 3090-r1]
-    needs: test_quantization
+    needs: download_pkgs
     strategy:
       fail-fast: false
       matrix:
@@ -412,7 +352,7 @@ jobs:
   get_coverage_report:
     if: ${{!cancelled()}}
     runs-on: [self-hosted, 3090-r1]
-    needs: [test_quantization, test_tools, test_restful]
+    needs: [test_tools, test_restful]
     timeout-minutes: 5
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'latest-cu12.8' }}

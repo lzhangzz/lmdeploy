@@ -11,9 +11,6 @@ import yaml
 
 DepsProfileSelector = str | dict[str, str]
 
-SUFFIX_INNER_AWQ = '-inner-4bits'
-SUFFIX_INNER_GPTQ = '-inner-gptq'
-
 _AUTOTEST_ROOT = os.path.join(os.path.dirname(__file__), '..')
 CONFIGS_DIR = os.path.join(_AUTOTEST_ROOT, 'configs')
 ENV_PATHS_YML = os.path.join(_AUTOTEST_ROOT, 'env_paths.yml')
@@ -100,14 +97,6 @@ def get_model_path_from_config(config: dict[str, Any], model_id: str) -> str:
     if config['model_path_layout'] == 'hf_hub':
         return model_id
     return os.path.join(config['model_path'], model_id)
-
-
-def get_model_work_path(config: dict[str, Any]) -> str:
-    """Base directory for join-layout artifacts (e.g. quantized model
-    output)."""
-    if config['model_path_layout'] == 'hf_hub':
-        return config['model_work_path']
-    return config['model_path']
 
 
 def resolve_extra_params(extra_params: dict[str, Any], config: dict[str, Any]) -> None:
@@ -1103,22 +1092,6 @@ def _is_fp8_enabled_in_entry(
     return 'fp8' in enabled
 
 
-def _extend_quant_models_from_entry(
-    backend: str,
-    base_models: list[str],
-    quant_cfg: dict[str, list[str]],
-    target: list[str],
-) -> None:
-    enabled = set(quant_cfg.get(backend) or [])
-    for model_name in base_models:
-        if model_name not in target:
-            continue
-        if 'awq' in enabled and not is_quantization_model(model_name):
-            target.append(model_name + SUFFIX_INNER_AWQ)
-        if 'gptq' in enabled:
-            target.append(model_name + SUFFIX_INNER_GPTQ)
-
-
 def _build_run_config_entry(
     model_id: str,
     entry: dict[str, Any],
@@ -1188,49 +1161,43 @@ def _get_func_config_list_per_model(
             continue
 
         quant_cfg = _quant_cfg_for_entry(entry)
-        base_model = model_id
-        models_for_quant = [base_model]
-        if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
-            _extend_quant_models_from_entry(backend, [base_model], quant_cfg, models_for_quant)
         launch_extra_sig = _entry_launch_extra_sig(entry)
 
-        for model in models_for_quant:
-            qcfg = quant_cfg
-            for quant_policy in [0, 4, 8]:
-                if not _is_kvint_enabled_in_entry(backend, _base_model_name(model), quant_policy, qcfg):
+        for quant_policy in [0, 4, 8]:
+            if not _is_kvint_enabled_in_entry(backend, model_id, quant_policy, quant_cfg):
+                continue
+            for communicator in backend_map[backend]:
+                sig = (model_id, communicator, quant_policy, launch_extra_sig, '')
+                if sig in seen:
                     continue
-                for communicator in backend_map[backend]:
-                    sig = (model, communicator, quant_policy, launch_extra_sig, '')
-                    if sig in seen:
-                        continue
-                    seen.add(sig)
-                    run_config = _build_run_config_entry(
-                        model,
-                        entry,
-                        backend,
-                        communicator,
-                        parallel_config,
-                        quant_policy,
-                        config,
-                        func_type,
-                        extra,
-                    )
-                    run_configs.append(run_config)
+                seen.add(sig)
+                run_config = _build_run_config_entry(
+                    model_id,
+                    entry,
+                    backend,
+                    communicator,
+                    parallel_config,
+                    quant_policy,
+                    config,
+                    func_type,
+                    extra,
+                )
+                run_configs.append(run_config)
 
-                    # Runtime fp8 (--model-format fp8) is a separate case at
-                    # quant_policy 0, mirroring legacy flat-yaml fp8_model_list.
-                    if (
-                        quant_policy == 0
-                        and _is_fp8_enabled_in_entry(backend, qcfg)
-                        and 'fp8' not in model.lower()
-                        and run_config.get('extra_params', {}).get('model-format') is None
-                    ):
-                        fp8_sig = (model, communicator, quant_policy, launch_extra_sig, 'fp8')
-                        if fp8_sig not in seen:
-                            seen.add(fp8_sig)
-                            fp8_config = copy.deepcopy(run_config)
-                            fp8_config['extra_params']['model-format'] = 'fp8'
-                            run_configs.append(fp8_config)
+                # Runtime fp8 (--model-format fp8) is a separate case at
+                # quant_policy 0, mirroring legacy flat-yaml fp8_model_list.
+                if (
+                    quant_policy == 0
+                    and _is_fp8_enabled_in_entry(backend, quant_cfg)
+                    and 'fp8' not in model_id.lower()
+                    and run_config.get('extra_params', {}).get('model-format') is None
+                ):
+                    fp8_sig = (model_id, communicator, quant_policy, launch_extra_sig, 'fp8')
+                    if fp8_sig not in seen:
+                        seen.add(fp8_sig)
+                        fp8_config = copy.deepcopy(run_config)
+                        fp8_config['extra_params']['model-format'] = 'fp8'
+                        run_configs.append(fp8_config)
     return run_configs
 
 
@@ -1315,11 +1282,10 @@ def get_parallel_config(config: dict[str, Any], model_name: str) -> list[dict[st
     match."""
     env_key = _model_matrix_env_key(config)
     deps_profile = get_deps_profile_selector()
-    base_model = _base_model_name(model_name)
     layouts: list[dict[str, int]] = []
     seen: set[tuple] = set()
     for mid, entry in _iter_per_model_entries(env_key, deps_profile):
-        if _base_model_name(mid) != base_model:
+        if mid != model_name:
             continue
         funcs = entry.get(TEST_COVERAGE_KEY) or []
         if funcs == ['prefix_cache']:
@@ -1350,7 +1316,6 @@ def _model_ids_for_entries(
     env_key = _model_matrix_env_key(config)
     deps_profile = EMPTY_DEPS_SELECTOR
     models: list[str] = []
-    extended: list[str] = []
     for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
         if not _entry_matches_profile(entry, model_type):
             continue
@@ -1363,12 +1328,7 @@ def _model_ids_for_entries(
             continue
         if model_id not in models:
             models.append(model_id)
-            extended.append(model_id)
-        if 'quantization' in (entry.get(TEST_COVERAGE_KEY) or []):
-            _extend_quant_models_from_entry(
-                backend, [model_id], _quant_cfg_for_entry(entry), extended,
-            )
-    return list(OrderedDict.fromkeys(extended))
+    return models
 
 
 def get_model_list(config: dict[str, Any],
@@ -1392,52 +1352,7 @@ def get_model_list(config: dict[str, Any],
 
     chat_models = _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', None)
     typed_models = _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
-    chat_bases = {_base_model_name(m) for m in chat_models}
-    return [m for m in typed_models if _base_model_name(m) in chat_bases]
-
-
-def _is_kvint_model(config: dict[str, Any], backend: str, model: str, quant_policy: int) -> bool:
-    """Check KV quant policy support via per-model ``quantization`` blocks."""
-    if quant_policy == 0:
-        return True
-    env_key = _model_matrix_env_key(config)
-    deps_profile = get_deps_profile_selector()
-    base = _base_model_name(model)
-    for mid, entry in _iter_per_model_entries(env_key, deps_profile):
-        if _base_model_name(mid) != base:
-            continue
-        layout = _parallel_layout(_entry_engine_config(entry))
-        if backend not in _normalize_entry_backends(entry, config, layout):
-            continue
-        return _is_kvint_enabled_in_entry(backend, base, quant_policy, _quant_cfg_for_entry(entry))
-    return False
-
-def _base_model_name(model: str) -> str:
-    """Simplify model name by removing quantization suffix for config
-    matching."""
-    return model.replace('-inner-4bits', '').replace('-inner-gptq', '')
-
-
-def get_quantization_model_list(type: str) -> list[str]:
-    """Get quantization model list by specified quant type(awq/gptq)"""
-    config = get_config()
-    env_key = _model_matrix_env_key(config)
-    deps_profile = get_deps_profile_selector()
-    quant_model_list: list[str] = []
-    for model_id, entry in _iter_per_model_entries(env_key, deps_profile):
-        if 'quantization' not in (entry.get(TEST_COVERAGE_KEY) or []):
-            continue
-        layout = _parallel_layout(_entry_engine_config(entry))
-        backend_map = _normalize_entry_backends(entry, config, layout)
-        quant_cfg = _quant_cfg_for_entry(entry)
-        if 'turbomind' not in backend_map:
-            continue
-        enabled = set(quant_cfg.get('turbomind') or [])
-        if type == 'awq' and 'awq' in enabled and not is_quantization_model(model_id):
-            quant_model_list.append(model_id)
-        elif type == 'gptq' and 'gptq' in enabled:
-            quant_model_list.append(model_id)
-    return list(OrderedDict.fromkeys(quant_model_list))
+    return [m for m in typed_models if m in chat_models]
 
 
 def _apply_hf_hub_env(config: dict[str, Any]) -> None:

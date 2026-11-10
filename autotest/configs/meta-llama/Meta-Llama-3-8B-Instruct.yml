@@ -9,10 +9,8 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8
 h:
@@ -25,9 +23,7 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8

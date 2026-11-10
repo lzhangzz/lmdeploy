@@ -9,10 +9,6 @@ a100:
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
 h:
 - model_type: chat
   engine_config:
@@ -23,16 +19,12 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
   interface:
     turbomind:
       suites:
       - base
       - logprob
       - anthropic
-  quantization:
-    turbomind:
-    - awq
 '3090':
 - model_type: chat
   engine_config:
@@ -45,10 +37,6 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
 '5080':
 - model_type: chat
   engine_config:
@@ -61,7 +49,3 @@ h:
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq

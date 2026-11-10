@@ -93,13 +93,11 @@ Available keys:
 - `longtext_evaluate`
 - `mllm_evaluate`
 - `prefix_cache`
-- `quantization`
 
 Rules:
 
 - Keep MTP (speculative decoding) on its own row with `speculative-algorithm` in `engine_config.extra`; use `func` and/or `evaluate` in `test_coverage`.
 - Use `prefix_cache` in `test_coverage`; do not add `enable-prefix-caching` manually to `engine_config.extra`.
-- Use `quantization` in `test_coverage` only for runtime weight-quant rows (`awq`, `gptq`).
 
 ## `interface` (REST interface coverage)
 
@@ -192,20 +190,19 @@ Notes:
 
 ## `quantization`
 
-Backend-scoped format:
+Backend-scoped format. Only KV-cache quantization is left:
 
 ```yaml
 quantization:
-  turbomind: [awq, kvint4, kvint8]
+  turbomind: [kvint4, kvint8]
 ```
 
-Supported flags: `awq`, `gptq`, `kvint4`, `kvint8`, `fp8`.
+Supported flags: `kvint4`, `kvint8`.
 
-For pre-quantized checkpoints (`AWQ`, `GPTQ`, `Int4` in model id):
-
-- Do not include `quantization` in `test_coverage`.
-- Do not include runtime weight flags (`awq`, `gptq`, `fp8`) in `quantization`.
-- KV flags can still exist.
+There is no runtime weight quantization (`awq`, `gptq`) any more: the
+`lmdeploy lite` toolchain that produced those checkpoints has been removed.
+Pre-quantized checkpoints (`AWQ`, `GPTQ`, `Int4`, `mxfp4` in the model id or
+`model-format`) need no `quantization` block; KV flags may still be present.
 
 ## `engine_config.extra` vs `gen_config`
 

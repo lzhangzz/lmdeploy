@@ -11,10 +11,6 @@
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq
 '5080':
 - model_type: chat
   engine_config:
@@ -27,7 +23,3 @@
     - nccl
   test_coverage:
   - func
-  - quantization
-  quantization:
-    turbomind:
-    - awq

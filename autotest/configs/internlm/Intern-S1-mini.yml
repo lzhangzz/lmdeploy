@@ -15,7 +15,6 @@ a100:
   - longtext_benchmark
   - mllm_evaluate
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
     - kvint4

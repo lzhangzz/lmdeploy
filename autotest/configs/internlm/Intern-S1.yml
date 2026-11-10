@@ -17,7 +17,6 @@ a100:
   - func
   - mllm_evaluate
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
     - kvint8

@@ -14,10 +14,8 @@ a100:
   - evaluate
   - func
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8
   gen_config:
@@ -34,9 +32,7 @@ h:
   - benchmark
   - func
   - prefix_cache
-  - quantization
   quantization:
     turbomind:
-    - awq
     - kvint4
     - kvint8

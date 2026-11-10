@@ -20,7 +20,6 @@ h:
   paths:
     model_path_layout: hf_hub
     model_path: /mnt/shared-storage-gpfs2/gpfs2-shared-public/huggingface/hub
-    model_work_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/model
     resource_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/resource
     log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/log
     server_log_path: /mnt/shared-storage-user/llmrazor-share/qa-llm-cicd/cicd-autotest/eval_resource/server_log

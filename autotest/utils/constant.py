@@ -138,9 +138,6 @@ MLLM_EVAL_CONFIGS = {
 
 BACKEND_LIST = ['turbomind']
 
-SUFFIX_INNER_AWQ = '-inner-4bits'
-SUFFIX_INNER_GPTQ = '-inner-gptq'
-
 EVAL_RUN_CONFIG = {
     'model': 'Qwen/Qwen2.5-32B-Instruct',
     'backend': 'turbomind',

@@ -11,9 +11,5 @@ a100:
   - benchmark
   - func
   - prefix_cache
-  - quantization
-  quantization:
-    turbomind:
-    - awq
   deps:
     transformers: 4.57.6

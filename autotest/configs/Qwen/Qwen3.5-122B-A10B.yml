@@ -16,7 +16,6 @@ h:
   - func
   - longtext_benchmark
   - mllm_evaluate
-  - quantization
   interface:
     turbomind:
     - suites:
@@ -33,6 +32,3 @@ h:
       - abort
       extra:
         enable-abort-handling: true
-  quantization:
-    turbomind:
-    - awq

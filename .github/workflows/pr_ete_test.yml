@@ -49,7 +49,6 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip install --upgrade -r requirements/runtime_cuda.txt
-          python3 -m pip install -r requirements/lite.txt
           python3 -m pip install -r requirements/test.txt
           python3 -m pip install -e .
       - name: Check env
