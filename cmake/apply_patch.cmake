@@ -17,7 +17,7 @@ if (apply_check EQUAL 0)
         OUTPUT_VARIABLE apply_output
         ERROR_VARIABLE apply_error)
     if (NOT apply_result EQUAL 0)
-        message(FATAL_ERROR "Failed to apply DeepEP patch:\n${apply_output}\n${apply_error}")
+        message(FATAL_ERROR "Failed to apply patch:\n${apply_output}\n${apply_error}")
     endif ()
 else ()
     execute_process(
@@ -28,7 +28,7 @@ else ()
         ERROR_QUIET)
     if (NOT reverse_check EQUAL 0)
         message(FATAL_ERROR
-            "DeepEP ${SOURCE_DIR} is incompatible with the TurboMind patch.\n"
+            "${SOURCE_DIR} is incompatible with the local patch ${PATCH_FILE}.\n"
             "${apply_stdout}\n${apply_stderr}")
     endif ()
 endif ()

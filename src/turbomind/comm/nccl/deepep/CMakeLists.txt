@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.25)
 include(FetchContent)
 
 set(_deepep_patch "${CMAKE_CURRENT_SOURCE_DIR}/patches/deepep-cpp-wrapper.patch")
-set(_deepep_patch_script "${CMAKE_CURRENT_SOURCE_DIR}/patches/apply_patch.cmake")
+set(_deepep_patch_script "${PROJECT_SOURCE_DIR}/cmake/apply_patch.cmake")
 
 FetchContent_Declare(
     deepep
