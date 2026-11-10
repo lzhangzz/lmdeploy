@@ -25,16 +25,6 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
     message(FATAL_ERROR "TurboMind requires std::format, which needs GCC 13 or newer")
 endif()
 
-if (MSVC)
-    # use standard conformant preprocessor
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:preprocessor -Xcompiler=/Zc:__cplusplus")
-    # C++20 enables MSVC's strict template lookup, which rejects NVCC-generated
-    # CuTe code. Preserve the previous lookup mode only for the CUDA host pass.
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/Zc:twoPhase-")
-endif ()
-
 find_package(CUDAToolkit REQUIRED)
 
 if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "11")
@@ -107,16 +97,10 @@ if(NOT xgrammar_POPULATED)
   FetchContent_Populate(xgrammar)
 
   file(WRITE ${xgrammar_SOURCE_DIR}/config.cmake "set(XGRAMMAR_BUILD_PYTHON_BINDINGS OFF)\n")
-  if(NOT MSVC)
-    file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
-  endif()
+  file(APPEND ${xgrammar_SOURCE_DIR}/config.cmake "set(CMAKE_CXX_FLAGS \"-Wno-error\")\n")
 
   # Bring the populated content into the build
   add_subdirectory(${xgrammar_SOURCE_DIR} ${xgrammar_BINARY_DIR})
-  if(TARGET xgrammar)
-    target_compile_options(xgrammar PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
-    target_compile_options(xgrammar PRIVATE $<$<C_COMPILER_ID:MSVC>:/utf-8>)
-  endif()
 endif()
 
 # the environment variable
@@ -193,13 +177,6 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
   set(ARCH "x86_64")
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64")
   set(ARCH "x86_64")
-elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
-  # cmake reports AMD64 on Windows, but we might be building for 32-bit.
-  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(ARCH "x86_64")
-  else()
-    set(ARCH "x86")
-  endif()
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86")
   set(ARCH "x86")
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "i386")
@@ -249,9 +226,6 @@ if(ARCH STREQUAL "x86_64")
     if(${CMAKE_CUDA_COMPILER_VERSION} VERSION_GREATER_EQUAL "12.8")
       list(APPEND CMAKE_CUDA_ARCHITECTURES 100a-real) # B200
     endif()
-    if (MSVC)
-      list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES 80-real 90a-real 100a-real)
-    endif ()
   endif ()
 elseif(ARCH STREQUAL "aarch64")
   if (NOT CMAKE_CUDA_ARCHITECTURES)
@@ -313,31 +287,6 @@ endif()
 
 
 set(PYTHON_PATH "python" CACHE STRING "Python path")
-
-# turn off warnings on windows
-if (MSVC)
-  foreach(
-    flag_var
-    CMAKE_CXX_FLAGS
-    CMAKE_CXX_FLAGS_DEBUG
-    CMAKE_CXX_FLAGS_RELEASE
-    CMAKE_CXX_FLAGS_MINSIZEREL
-    CMAKE_CXX_FLAGS_RELWITHDEBINFO
-    CMAKE_C_FLAGS
-    CMAKE_C_FLAGS_DEBUG
-    CMAKE_C_FLAGS_RELEASE
-    CMAKE_C_FLAGS_MINSIZEREL
-    CMAKE_C_FLAGS_RELWITHDEBINFO
-    CMAKE_CUDA_FLAGS
-    CMAKE_CUDA_FLAGS_DEBUG
-    CMAKE_CUDA_FLAGS_RELEASE
-    CMAKE_CUDA_FLAGS_MINSIZEREL
-    CMAKE_CUDA_FLAGS_RELWITHDEBINFO)
-    string(REGEX REPLACE "-Wall" " /W0 " ${flag_var} "${${flag_var}}")
-  endforeach()
-  # avoid min/max macro in "windows.h" conflict with std::min/std::max
-  add_definitions(-DNOMINMAX=1)
-endif()
 
 include_directories(
   ${COMMON_HEADER_DIRS}
