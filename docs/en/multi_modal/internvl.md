@@ -13,26 +13,16 @@ The next chapter demonstrates how to deploy an InternVL model using LMDeploy, wi
 
 ## Installation
 
-Please install LMDeploy by following the [installation guide](../get_started/installation.md), and install other packages that InternVL2 needs
+Please install LMDeploy by following the [installation guide](../get_started/installation.md), and install other packages that InternVL needs:
 
 ```shell
 pip install timm
-# It is recommended to find the whl package that matches the environment from the releases on https://github.com/Dao-AILab/flash-attention.
-pip install flash-attn
 ```
 
-Or, you can build a docker image to set up the inference environment. If the CUDA version on your host machine is `>=12.4`, you can run:
+Or, you can build a docker image to set up the inference environment:
 
 ```
 docker build --build-arg CUDA_VERSION=cu12 -t openmmlab/lmdeploy:internvl . -f ./docker/InternVL_Dockerfile
-```
-
-Otherwise, you can go with:
-
-```shell
-git clone https://github.com/InternLM/lmdeploy.git
-cd lmdeploy
-docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:internvl . -f ./docker/InternVL_Dockerfile
 ```
 
 ## Offline inference

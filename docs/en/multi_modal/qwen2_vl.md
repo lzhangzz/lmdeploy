@@ -16,18 +16,12 @@ Please install LMDeploy by following the [installation guide](../get_started/ins
 pip install qwen_vl_utils
 ```
 
-Or, you can build a docker image to set up the inference environment. If the CUDA version on your host machine is `>=12.4`, you can run:
+Or, you can build a docker image to set up the inference environment:
 
 ```
 git clone https://github.com/InternLM/lmdeploy.git
 cd lmdeploy
 docker build --build-arg CUDA_VERSION=cu12 -t openmmlab/lmdeploy:qwen2vl . -f ./docker/Qwen2VL_Dockerfile
-```
-
-Otherwise, you can go with:
-
-```shell
-docker build --build-arg CUDA_VERSION=cu11 -t openmmlab/lmdeploy:qwen2vl . -f ./docker/Qwen2VL_Dockerfile
 ```
 
 ## Offline inference

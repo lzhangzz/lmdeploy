@@ -34,7 +34,7 @@ __version__ = locals()['__version__']
 # -- Project information -----------------------------------------------------
 
 project = 'lmdeploy'
-copyright = '2021-2024, OpenMMLab'
+copyright = '2021-2026, OpenMMLab'
 author = 'LMDeploy Authors'
 
 # The short X.Y version
@@ -163,15 +163,6 @@ html_theme_options = {
     'use_repository_button': True,
     'use_download_button': True,
     'use_sidenotes': True,
-    # 'show_toc_level': 2,
-    # "icon_links": [
-    #     {
-    #         "name": "切换至简体中文",
-    #         "url": "https://lmdeploy.readthedocs.io/en/latest",
-    #         "icon": "https://img.shields.io/badge/Doc-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-blue", # noqa: E501
-    #         "type": "url",
-    #     },
-    # ],
 }
 
 # Add any paths that contain custom static files (such as style sheets) here,

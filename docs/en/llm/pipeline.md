@@ -16,29 +16,21 @@ response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
 print(response)
 ```
 
-In this example, the pipeline by default allocates a predetermined percentage of GPU memory for storing k/v cache. The ratio is dictated by the parameter `TurbomindEngineConfig.cache_max_entry_count`.
+In this example, the pipeline by default allocates a predetermined percentage of GPU memory for storing k/v cache. The ratio is dictated by the parameter `TurbomindEngineConfig.cache_max_entry_count`: it is the proportion of **free** GPU memory reserved for the k/v cache after the model weights are loaded, defaulting to 0.8. The k/v cache memory is allocated once and reused, which is why a built pipeline consumes a substantial amount of GPU memory. If you encounter an Out Of Memory (OOM) error, decrease the ratio:
 
-There have been alterations to the strategy for setting the k/v cache ratio throughout the evolution of LMDeploy. The following are the change histories:
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
 
-1. `v0.2.0 <= lmdeploy <= v0.2.1`
+# decrease the ratio of the k/v cache occupation to 20%
+backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
 
-   `TurbomindEngineConfig.cache_max_entry_count` defaults to 0.5, indicating 50% GPU **total memory** allocated for k/v cache. Out Of Memory (OOM) errors may occur if a 7B model is deployed on a GPU with memory less than 40G. If you encounter an OOM error, please decrease the ratio of the k/v cache occupation as follows:
+pipe = pipeline('internlm/internlm2_5-7b-chat',
+                backend_config=backend_config)
+response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+print(response)
+```
 
-   ```python
-   from lmdeploy import pipeline, TurbomindEngineConfig
-
-   # decrease the ratio of the k/v cache occupation to 20%
-   backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
-
-   pipe = pipeline('internlm/internlm2_5-7b-chat',
-                   backend_config=backend_config)
-   response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
-   print(response)
-   ```
-
-2. `lmdeploy > v0.2.1`
-
-   The allocation strategy for k/v cache is changed to reserve space from the **GPU free memory** proportionally. The ratio `TurbomindEngineConfig.cache_max_entry_count` has been adjusted to 0.8 by default. If OOM error happens, similar to the method mentioned above, please consider reducing the ratio value to decrease the memory usage of the k/v cache.
+See [Engine configuration](#engine-configuration) for the rest of the cache knobs.
 
 ### Set tensor parallelism
 
@@ -178,6 +170,126 @@ from lmdeploy import pipeline
 with pipeline('internlm/internlm2_5-7b-chat') as pipe:
     response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
     print(response)
+```
+
+## Engine configuration
+
+Every knob below is a field of `TurbomindEngineConfig`. The list is not
+exhaustive; the remaining fields are documented in the class docstring under
+the [pipeline API](../api/pipeline.rst).
+
+### k/v cache size
+
+k/v cache memory is determined by `cache_block_seq_len` and
+`cache_max_entry_count`. TurboMind implements Paged Attention, so the cache is
+managed in blocks.
+
+`cache_block_seq_len` is the number of token positions in one k/v block,
+defaulting to 64. The memory of a block follows from the model geometry:
+
+```
+cache_block_seq_len * num_layer * kv_head_num * size_per_head * 2 * sizeof(kv_data_type)
+```
+
+For llama2-7b storing k/v as `half`, one block is
+`64 * 32 * 32 * 128 * 2 * sizeof(half) = 32MB`.
+
+With context parallelism the formula still describes the physical per-rank
+block; the scheduler's block spans `cache_block_seq_len * cp` global tokens,
+because those tokens are interleaved across the CP ranks.
+
+`cache_max_entry_count` takes two forms:
+
+- A fraction in (0, 1) is the proportion of **free** GPU memory reserved for
+  k/v blocks; the default is 0.8. On an A100-80G running a 13B model, which
+  leaves 54G free, the blocks get `(80 - 26) * 0.8 = 43.2G`.
+- An integer greater than 0 is an absolute block count.
+
+`cache_chunk_size` controls how many blocks are allocated at a time when more
+are needed:
+
+- An integer greater than 0 allocates that many blocks.
+- `-1` allocates `cache_max_entry_count` blocks.
+- `0` allocates `sqrt(cache_max_entry_count)` blocks.
+
+### Prefix caching
+
+`enable_prefix_caching` turns on reuse of the k/v blocks of a prompt prefix
+that several requests share, typically a system prompt. The longer the shared
+prefix, the larger the saving. The default is `False`.
+
+Because a full k/v block is the smallest unit of reuse, the threshold for a
+prefix hit is `cache_block_seq_len` tokens, or `cache_block_seq_len * cp` with
+context parallelism.
+
+### Partial-block boundary reuse
+
+Two mode knobs control whether partial-block prefix nodes are published at the
+prompt and generation boundaries: `cache_prompt` and `cache_generation`. Both
+require `enable_prefix_caching`. A published node carries the partial block's
+k/v and, on a recurrent/hybrid model (e.g. one with GatedDeltaNet layers), a
+recurrent-state checkpoint. The node costs extra VRAM and copy bandwidth, so
+prefer the default `'auto'` unless the reuse clearly pays off.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+backend_config = TurbomindEngineConfig(
+    enable_prefix_caching=True,
+    cache_prompt='all',
+    cache_generation='all',
+)
+pipe = pipeline('your-model', backend_config=backend_config)
+```
+
+- `cache_prompt`: partial prompt-boundary publication mode, `'all'` or
+  `'auto'` (default `'auto'`). `'all'` publishes a reusable prompt-boundary
+  node at `B = prompt_len - cache_prompt_boundary_skip` whenever `B` is
+  mid-block (and arms a recurrent-state checkpoint clamp when `B` is
+  block-aligned), so a duplicate prompt skips prefill. `'auto'` does that only
+  when the partial block holds image tokens (reusing vision-encoded KV) and is
+  inert for text-only prompts. Costs one extra prefill forward for the
+  producing request and (when `B` is mid-block) one partial cache block.
+- `cache_prompt_boundary_skip`: number of trailing prompt tokens treated as
+  the volatile generation-prompt suffix (e.g. a chat template's `<think>\n`)
+  and excluded from the reusable prompt-boundary node, moving it to
+  `prompt_len - cache_prompt_boundary_skip`. Applies when `cache_prompt` is
+  `'all'` or `'auto'`. Default 1 (exclude only the last token). Increase it
+  for thinking models whose chat template appends a multi-token suffix that
+  the next turn drops from history.
+- `cache_generation`: generated-block caching mode, `'all'`, `'auto'`
+  (default), or `'none'`. `'all'` indexes full generated blocks and the
+  terminal partial block, and adopts the terminal recurrent frontier
+  checkpoint (exact multi-turn resume). `'auto'` indexes full generated blocks
+  only. `'none'` indexes no generated blocks. Costs one partial cache block
+  when `'all'` indexes a terminal partial block. Full-block checkpoints at block
+  boundaries are always published regardless of this setting.
+
+### KV cache quantization
+
+`quant_policy=4` stores the k/v cache as int4, `quant_policy=8` as int8; the
+default `0` stores it in the model dtype. See
+[KV cache quantization](../quantization/kv_quant.md).
+
+### Long context
+
+`rope_scaling_factor` (default `0`, disabled) enables the Dynamic NTK option
+of RoPE, which lets the model handle text longer than its training window. Set
+it to a value greater than 1 together with a matching `session_len`. See
+[Context length extrapolation](../advance/long_context.md).
+
+`use_logn_attn` turns on LogN attention scaling; the default is `False`.
+
+### Recurrent state dtype
+
+For models with GatedDeltaNet layers, TurboMind stores the recurrent state in
+the model activation dtype. Set `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1` before
+starting LMDeploy to store it in FP32 instead; the convolution state stays in
+the activation dtype. FP32 improves numerical precision at twice the
+recurrent-state memory.
+
+```bash
+LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 lmdeploy serve api_server <model-path>
 ```
 
 ## FAQs

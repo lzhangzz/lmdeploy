@@ -8,53 +8,17 @@ First, complete the local compilation according to the commands in [Install from
 
 ## Configure Python debug environment
 
-Since many large companies currently use Centos 7 for online production environments, we will use Centos 7 as an example to illustrate the process.
+Turbomind is loaded into the process of a Python interpreter. Without that interpreter's debug symbols, every frame inside CPython shows up in `gdb` as a bare address, which makes it hard to tell whether a hang or a crash originates in Python, in the extension, or in a kernel.
 
-### Obtain `glibc` and `python3` versions
+Install `gdb` and the symbols through your distribution's package manager. The exact package names differ, and the symbols must match the interpreter that actually runs lmdeploy:
 
-```bash
-rpm -qa | grep glibc
-rpm -qa | grep python3
-```
+- **Debian / Ubuntu**: `sudo apt install gdb python3-dbg libc6-dbg`
+- **RHEL / Fedora / CentOS Stream / Rocky / Alma**: enable the matching debuginfo repository (e.g. `sudo dnf install dnf-plugins-core && sudo dnf debuginfo-install python3 glibc`), which resolves the exact builds that are installed
+- **Arch**: install `gdb`, then the `python` and `glibc` debug packages from the `debug` repository
 
-The result should be similar to this:
+Note that the distribution's `python3-dbg` does not cover an interpreter installed some other way, such as a conda environment. If lmdeploy runs under such an interpreter, either debug with the distribution's `python3` or accept a less informative stack.
 
-```
-[username@hostname workdir]# rpm -qa | grep glibc
-glibc-2.17-325.el7_9.x86_64
-glibc-common-2.17-325.el7_9.x86_64
-glibc-headers-2.17-325.el7_9.x86_64
-glibc-devel-2.17-325.el7_9.x86_64
-
-[username@hostname workdir]# rpm -qa | grep python3
-python3-pip-9.0.3-8.el7.noarch
-python3-rpm-macros-3-34.el7.noarch
-python3-rpm-generators-6-2.el7.noarch
-python3-setuptools-39.2.0-10.el7.noarch
-python3-3.6.8-21.el7_9.x86_64
-python3-devel-3.6.8-21.el7_9.x86_64
-python3.6.4-sre-1.el6.x86_64
-```
-
-Based on the information above, we can see that the version of `glibc` is `2.17-325.el7_9.x86_64` and the version of `python3` is `3.6.8-21.el7_9.x86_64`.
-
-### Download and install `debuginfo` library
-
-Download `glibc-debuginfo-common-2.17-325.el7.x86_64.rpm`, `glibc-debuginfo-2.17-325.el7.x86_64.rpm`, and `python3-debuginfo-3.6.8-21.el7.x86_64.rpm` from http://debuginfo.centos.org/7/x86_64.
-
-```bash
-rpm -ivh glibc-debuginfo-common-2.17-325.el7.x86_64.rpm
-rpm -ivh glibc-debuginfo-2.17-325.el7.x86_64.rpm
-rpm -ivh python3-debuginfo-3.6.8-21.el7.x86_64.rpm
-```
-
-### Upgrade GDB
-
-```bash
-sudo yum install devtoolset-10 -y
-echo "source scl_source enable devtoolset-10" >> ~/.bashrc
-source ~/.bashrc
-```
+A recent `gdb` (version 10 or later) is recommended, since it copes better with the C++20 symbols produced by the current build.
 
 ### Verification
 
@@ -62,32 +26,14 @@ source ~/.bashrc
 gdb python3
 ```
 
-The output should be similar to this:
+The banner should not contain `(no debugging symbols found)`, and an interpreter function should resolve to a source location:
 
 ```
-[username@hostname workdir]# gdb python3
-GNU gdb (GDB) Red Hat Enterprise Linux 9.2-10.el7
-Copyright (C) 2020 Free Software Foundation, Inc.
-License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
-This is free software: you are free to change and redistribute it.
-There is NO WARRANTY, to the extent permitted by law.
-Type "show copying" and "show warranty" for details.
-This GDB was configured as "x86_64-redhat-linux-gnu".
-Type "show configuration" for configuration details.
-For bug reporting instructions, please see:
-<http://www.gnu.org/software/gdb/bugs/>.
-Find the GDB manual and other documentation resources online at:
-   <http://www.gnu.org/software/gdb/documentation/>.
-
-For help, type "help".
-Type "apropos word" to search for commands related to "word"...
-Reading symbols from python3...
-(gdb)
+(gdb) info line PyEval_EvalFrameDefault
+Line 1234 of "Python/ceval.c" starts at address 0x... and ends at 0x....
 ```
 
-If it shows `Reading symbols from python3`, the configuration has been successful.
-
-For other operating systems, please refer to [DebuggingWithGdb](https://wiki.python.org/moin/DebuggingWithGdb).
+For background on debugging CPython itself, see [DebuggingWithGdb](https://wiki.python.org/moin/DebuggingWithGdb).
 
 ## Set up symbolic links
 
@@ -115,7 +61,11 @@ Reading symbols from python3...
 (gdb) set directories /workdir/lmdeploy
 
 # Set a breakpoint using the relative path, e.g.
-(gdb) b src/turbomind/models/language_model.cc:176
+(gdb) b src/turbomind/models/language_model.cc:175
+
+# Or better, break on a function name so the breakpoint survives edits
+# that shift line numbers
+(gdb) b LanguageModel::Impl::PostEmbedding
 
 # When it shows
 # ```

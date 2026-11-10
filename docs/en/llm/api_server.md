@@ -231,10 +231,56 @@ if __name__ == '__main__':
 ## FAQ
 
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
-   modified by passing `--session_len` to api_server.
+   modified by passing `--session-len` to api_server.
 
 2. When OOM appeared at the server side, please reduce the `cache_max_entry_count` of `backend_config` when launching the service.
+   For the pipeline interface, the same parameter lives on `TurbomindEngineConfig`:
+
+   ```python
+   from lmdeploy import pipeline, TurbomindEngineConfig
+
+   backend_config = TurbomindEngineConfig(cache_max_entry_count=0.2)
+
+   pipe = pipeline('internlm/internlm2_5-7b-chat',
+                   backend_config=backend_config)
+   response = pipe(['Hi, pls intro yourself', 'Shanghai is'])
+   print(response)
+   ```
+
+   When the server is launched from the CLI, pass `--cache-max-entry-count` instead. The parameter is explained under
+   [Engine configuration](pipeline.md#engine-configuration).
 
 3. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
 
 4. To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).
+
+5. `ModuleNotFoundError: No module named '_turbomind'`.
+
+   `_turbomind` is the compiled TurboMind extension. `pip install lmdeploy` ships one; a source install builds it. If the
+   import fails anyway, check two things.
+
+   First, do not run from the root of the lmdeploy source tree. Python then imports the `lmdeploy` package from the
+   checkout rather than the installed one, and the checkout contains no built extension. Run from another directory.
+
+   Second, the extension is built for the interpreter that compiled it. If several Python environments are installed,
+   make sure the one running the command is the one it was built against. When configuring CMake by hand, pass
+   `-DPYTHON_EXECUTABLE=/path/to/python3` and rebuild.
+
+6. `libnccl.so.2 not found`.
+
+   Make sure lmdeploy is installed through `pip install lmdeploy[all]`; the `all` extra pulls in the matching NCCL
+   package (`nvidia-nccl-cu12` or `nvidia-nccl-cu13`, `>=2.30.4`). If the library is present but not on the loader
+   path, add it:
+
+   ```shell
+   # Get the location of the NCCL package, e.g. nvidia-nccl-cu12
+   pip show nvidia-nccl-cu12 | grep Location
+   # insert the path of "libnccl.so.2" to LD_LIBRARY_PATH
+   export LD_LIBRARY_PATH={Location}/nvidia/nccl/lib:$LD_LIBRARY_PATH
+   ```
+
+7. Image and video URL fetch timeout.
+
+   The API server fetches `image_url` and `video_url` media over HTTP. The timeouts are configurable through the
+   environment variables `LMDEPLOY_IMAGE_FETCH_TIMEOUT` (default 10 seconds) and `LMDEPLOY_VIDEO_FETCH_TIMEOUT`
+   (default 30 seconds), read in `lmdeploy/vl/media/connection.py`.

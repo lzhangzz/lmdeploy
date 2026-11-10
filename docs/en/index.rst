@@ -29,7 +29,7 @@ LMDeploy has the following core features:
 
 * **Effortless Distribution Server**: Leveraging the request distribution service, LMDeploy facilitates an easy and efficient deployment of multi-model services across multiple machines and cards.
 
-* **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/inference/turbomind_config.html>`_ to be used simultaneously.
+* **Excellent Compatibility**: LMDeploy supports `KV Cache Quant <https://lmdeploy.readthedocs.io/en/latest/quantization/kv_quant.html>`_, `AWQ <https://lmdeploy.readthedocs.io/en/latest/quantization/w4a16.html>`_ and `Automatic Prefix Caching <https://lmdeploy.readthedocs.io/en/latest/llm/pipeline.html>`_ to be used simultaneously.
 
 Documentation
 -------------
@@ -110,6 +110,9 @@ Documentation
    advance/metrics.md
    advance/context_parallel.md
    advance/spec_decoding.md
+   advance/cute_dsl_cpp_dynamic_loading.md
+   advance/tilelang_cpp_dynamic_loading.md
+   advance/triton_cpp_dynamic_loading.md
 
 .. toctree::
    :maxdepth: 1
@@ -124,4 +127,3 @@ Indices and tables
 
 * :ref:`genindex`
 * :ref:`search`
-* :ref:`routingtable`

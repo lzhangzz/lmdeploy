@@ -13,8 +13,8 @@ The next chapter demonstrates how to deploy a Qwen-VL model using LMDeploy, with
 Please install LMDeploy by following the [installation guide](../get_started/installation.md), and install other packages that Qwen2.5-VL needs
 
 ```shell
-# Qwen2.5-VL requires the latest transformers (transformers >= 4.49.0)
-pip install git+https://github.com/huggingface/transformers
+# Qwen2.5-VL requires transformers >= 4.56.0, which lmdeploy already depends on
+pip install "transformers>=4.56.0"
 # It's highly recommended to use `[decord]` feature for faster video loading.
 pip install qwen-vl-utils[decord]==0.0.8
 ```

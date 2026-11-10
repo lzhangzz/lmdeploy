@@ -9,6 +9,8 @@ It supports LLMs and VLMs deployment on Linux. Furthermore, it is compatible wit
 - Turing(sm75): 20 series, T4
 - Ampere(sm80,sm86): 30 series, A10, A16, A30, A100
 - Ada Lovelace(sm89): 40 series
+- Hopper(sm90): H100, H200
+- Blackwell(sm100, sm120): B200, 50 series
 
 ## Install with pip (Recommend)
 
@@ -33,7 +35,7 @@ pip install git+https://github.com/InternLM/lmdeploy.git
 If you prefer a specific version instead of the `main` branch of LMDeploy, you can specify it in your command:
 
 ```shell
-pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.11.0.zip
+pip install https://github.com/InternLM/lmdeploy/archive/refs/tags/v0.13.0.zip
 ```
 
 LMDeploy only supports NVIDIA CUDA GPUs. Ascend, Cambricon, MACA and AMD ROCm devices are not supported.
