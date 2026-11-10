@@ -16,9 +16,7 @@
 #include <format>
 #include <string_view>
 #include <thread>
-#ifndef _WIN32
 #include <unistd.h>
-#endif
 
 #include <blockingconcurrentqueue.h>
 
@@ -36,17 +34,10 @@ static std::string Timestamp()
     auto us =
         std::chrono::duration_cast<std::chrono::microseconds>(now - std::chrono::system_clock::from_time_t(t)).count();
     std::tm tm_buf;
-#ifdef _WIN32
-    if (::localtime_s(&tm_buf, &t) != 0) {
-        return "0000.00:00:00.000000";
-    }
-    std::tm* tm = &tm_buf;
-#else
     std::tm* tm = ::localtime_r(&t, &tm_buf);
     if (tm == nullptr) {
         return "0000.00:00:00.000000";
     }
-#endif
     return std::format("{:02}{:02}.{:02}:{:02}:{:02}.{:06}",
                        tm->tm_mon + 1,
                        tm->tm_mday,
@@ -62,12 +53,6 @@ static std::string Timestamp()
 static const char* Basename(const char* file)
 {
     const char* last_sep = std::strrchr(file, '/');
-#ifdef _WIN32
-    const char* last_bs = std::strrchr(file, '\\');
-    if (last_bs && (!last_sep || last_bs > last_sep)) {
-        last_sep = last_bs;
-    }
-#endif
     return last_sep ? last_sep + 1 : file;
 }
 
@@ -104,11 +89,7 @@ static bool UseColor()
         if (env != nullptr) {
             return std::string_view{env} != "0";
         }
-#ifndef _WIN32
         return ::isatty(STDERR_FILENO) != 0;
-#else
-        return true;
-#endif
     }();
     return kUseColor;
 }

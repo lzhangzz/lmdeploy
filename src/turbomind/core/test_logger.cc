@@ -12,13 +12,10 @@
 #include <thread>
 #include <vector>
 
-// POSIX headers needed for: pipe/fork/dup2 (stderr capture), setenv/unsetenv (env
-// var tests), waitpid/SIGABRT (signal handling test).  All guarded behind #ifndef
-// _WIN32 along with the test cases that use them.
-#ifndef _WIN32
+// Headers needed for: pipe/fork/dup2 (stderr capture), setenv/unsetenv (env var
+// tests), waitpid/SIGABRT (signal handling test).
 #include <sys/wait.h>
 #include <unistd.h>
-#endif
 
 using turbomind::core::Logger;
 
@@ -46,7 +43,6 @@ TEST_CASE("Logger: SetLevel / GetLevel round-trip", "[logger]")
 // ---------------------------------------------------------------------------
 // POSIX-specific tests (stderr capture, env vars, signal handling)
 // ---------------------------------------------------------------------------
-#ifndef _WIN32
 
 // Tests run in sync mode (TM_LOG_ASYNC=0) so log output is written inline and
 // CaptureStderr sees complete output when fn() returns.
@@ -504,4 +500,3 @@ TEST_CASE("Logger: TM_LOG_COLOR=0 disables ANSI escape codes", "[logger][color]"
     REQUIRE(child_output.find("\x1b[") == std::string::npos);
 }
 
-#endif  // _WIN32

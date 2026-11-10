@@ -17,8 +17,8 @@ public:
     Scope& operator=(const Scope&) = delete;
 };
 
-// Strip return type, parameter list, and template args from __PRETTY_FUNCTION__
-// or __FUNCSIG__, leaving "QualifiedName()". For named scopes this is not called.
+// Strip return type, parameter list, and template args from __PRETTY_FUNCTION__,
+// leaving "QualifiedName()". For named scopes this is not called.
 std::string StripFunctionSignature(std::string_view name);
 
 }  // namespace turbomind::core

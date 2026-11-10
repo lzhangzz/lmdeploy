@@ -7,17 +7,10 @@
 
 namespace turbomind::core {
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#define TM_LIKELY(expr) (expr)
-#define TM_UNLIKELY(expr) (expr)
-#define TM_NOINLINE
-#define TM_UNREACHABLE __assume(0)
-#else
 #define TM_LIKELY(expr) (__builtin_expect(bool(expr), 1))
 #define TM_UNLIKELY(expr) (__builtin_expect(bool(expr), 0))
 #define TM_NOINLINE __attribute__((noinline))
 #define TM_UNREACHABLE __builtin_unreachable()
-#endif
 
 #define TM_DISABLE_CHECK_STREAM 0
 #define TM_DISABLE_CHECK_OP 0
@@ -28,17 +21,10 @@ public:
 
     CheckErrorStream(const char* file, int line, const char* expr, std::string* str);
 
-#if defined(_MSC_VER) && !defined(__clang__)
-#pragma warning(push)
-#pragma warning(disable : 4722)  // MSVC warns dtor never return
-#endif
     ~CheckErrorStream()
     {
         Report();
     }
-#if defined(_MSC_VER) && !defined(__clang__)
-#pragma warning(pop)
-#endif
 
     template<class T>
     CheckErrorStream& operator<<(const T& msg)
