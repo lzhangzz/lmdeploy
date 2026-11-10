@@ -138,7 +138,7 @@ ext_modules = [
         name='lmdeploy.turbomind._turbomind',
         cmake_depends_on=['pybind11'],
         source_dir=str(Path(__file__).parent.absolute()),
-        cmake_generator=None if os.name == 'nt' else 'Ninja',
+        cmake_generator='Ninja',
         cmake_build_type=os.getenv('CMAKE_BUILD_TYPE', 'Release'),
         cmake_configure_options=[
             f'-DPython3_ROOT_DIR={Path(sys.prefix)}',
@@ -146,14 +146,14 @@ ext_modules = [
             '-DBUILD_SHARED_LIBS:BOOL=OFF',
             # Select the bindings implementation
             '-DBUILD_PY_FFI=ON',
-            '-DBUILD_MULTI_GPU=' + ('OFF' if os.name == 'nt' else 'ON'),
-            '-DUSE_NVTX=' + ('OFF' if os.name == 'nt' else 'ON'),
+            '-DBUILD_MULTI_GPU=ON',
+            '-DUSE_NVTX=ON',
         ],
     ),
 ]
-cuda_version = None if os.name == 'nt' else get_cuda_version()
-extra_deps = [] if os.name == 'nt' else get_turbomind_deps(cuda_version)
-extra_setup_deps = [] if os.name == 'nt' else get_extra_setup_deps(cuda_version)
+cuda_version = get_cuda_version()
+extra_deps = get_turbomind_deps(cuda_version)
+extra_setup_deps = get_extra_setup_deps(cuda_version)
 cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
 
 if __name__ == '__main__':
