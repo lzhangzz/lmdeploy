@@ -50,6 +50,14 @@ else()
       "\$ORIGIN/../../nvidia/curand/lib")
 endif()
 
+if(ENABLE_TILELANG)
+  # Exposes the FlashQLA kernel registration binding (linear_attn/python_bind.cpp).
+  target_compile_definitions(${PROJECT_NAME} PRIVATE TM_ENABLE_FLASHQLA=1)
+  list(APPEND _INSTALL_CUDA_RPATH
+      "\$ORIGIN/../../tvm_ffi/lib"
+      "${TVM_FFI_ROOT}/lib")
+endif()
+
 # Use the final RPATH when building so installation can target the in-tree module itself.
 set_target_properties(_turbomind PROPERTIES
     BUILD_WITH_INSTALL_RPATH ON

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import torch
 
+from ..kernels.tilelang.flashqla import GdnSpec
 from ._base import Builder, ParallelGroup, SplitSide
 from .linear import dequant_mixed, transform_output_dim
 
@@ -72,6 +73,26 @@ class DeltaNetBuilder(Builder):
         super().__init__(config, ctx)
         self.tp = tp
         self.config.tp_size = tp.size
+        self._require_kernels()
+
+    def _require_kernels(self):
+        """State this layer's prefill kernel needs; the provider decides
+        whether to supply them.
+
+        GDR selects FlashQLA in C++ when the provider registered the kernels, and native otherwise.
+        """
+        kernels = self._ctx.kernels
+        if kernels is None:
+            return
+        cfg = self.config
+        spec = GdnSpec(
+            hv=cfg.num_v_heads // self.tp.size,
+            hq=cfg.num_k_heads // self.tp.size,
+            head_dim=cfg.key_head_dim,
+            input_dtype=self._ctx.dtype,
+            state_dtype=kernels.state_dtype,
+        )
+        kernels.require(spec)
 
     def add_input_projections(self, *, in_proj_qkv, in_proj_z=None,
                               in_proj_b=None, in_proj_a=None, out_proj=None):

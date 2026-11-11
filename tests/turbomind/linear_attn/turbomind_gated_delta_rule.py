@@ -25,6 +25,7 @@ from .reference import (
 )
 
 REQUIRED_NATIVE_BRIDGE_SYMBOLS = (
+    'delta_rule_initialize',
     'delta_rule_plan',
     'delta_rule_run',
     'from_dlpack',
@@ -54,6 +55,9 @@ def is_available() -> bool:
 class NativeBridge:
     tm: object
 
+    def __post_init__(self):
+        self.tm.delta_rule_initialize()
+
     def tensor(self, x: torch.Tensor | None):
         return None if x is None else self.tm.from_dlpack(x)
 
@@ -68,6 +72,7 @@ class NativeBridge:
         cp_level='all',
         num_head_groups=1,
         heads_per_block=0,
+        has_speculative_rows=True,
     ):
         return self.tm.delta_rule_plan(
             self.tensor(tensors.q),
@@ -82,6 +87,7 @@ class NativeBridge:
             cp_level=cp_level,
             num_head_groups=num_head_groups,
             heads_per_block=heads_per_block,
+            has_speculative_rows=has_speculative_rows,
         )
 
     def run(self, tensors, *, plan, **kwargs):
@@ -190,13 +196,15 @@ class NativeBridge:
             stream_ptr=_current_stream_ptr(key),
         )
 
+
 def validate_benchmark_case(run: RunCase, request: BenchmarkRequest) -> None:
     if run.input.input_dtype != torch.bfloat16:
         raise ValueError('turbomind_requires_bf16_qkv')
 
 
-def make_benchmark_task(run: RunCase, inputs: InputTensors, request: BenchmarkRequest,
-                        device: torch.device) -> BenchmarkTask:
+def make_benchmark_task(
+    run: RunCase, inputs: InputTensors, request: BenchmarkRequest, device: torch.device
+) -> BenchmarkTask:
     validate_benchmark_case(run, request)
     tm = _load_native_bridge(REQUIRED_NATIVE_BRIDGE_SYMBOLS)
     if tm is None:
@@ -247,9 +255,14 @@ def _padded_gate_view(x: torch.Tensor) -> torch.Tensor:
 
 
 def _native_aligned_tensors(tensors):
-    if (tensors.g.stride(2) == 1 and tensors.beta.stride(2) == 1 and tensors.g.stride(1) % 4 == 0
-            and tensors.beta.stride(1) % 4 == 0 and tensors.g.stride(0) % 4 == 0
-            and tensors.beta.stride(0) % 4 == 0):
+    if (
+        tensors.g.stride(2) == 1
+        and tensors.beta.stride(2) == 1
+        and tensors.g.stride(1) % 4 == 0
+        and tensors.beta.stride(1) % 4 == 0
+        and tensors.g.stride(0) % 4 == 0
+        and tensors.beta.stride(0) % 4 == 0
+    ):
         return tensors
     return replace(tensors, g=_padded_gate_view(tensors.g), beta=_padded_gate_view(tensors.beta))
 
@@ -281,13 +294,16 @@ def _state_kwargs(
     if recurrent is None:
         recurrent = _is_recurrent_run(run, chunk_size)
     if recurrent:
-        finished = torch.full(
-            (run.input.real_batch_size,), suppress_state_store, device=device, dtype=torch.bool)
-        return native_inputs, {
-            'state_ptrs': state.ptrs[:, None],
-            'finished': finished,
-            'recurrent': True,
-        }, True
+        finished = torch.full((run.input.real_batch_size,), suppress_state_store, device=device, dtype=torch.bool)
+        return (
+            native_inputs,
+            {
+                'state_ptrs': state.ptrs[:, None],
+                'finished': finished,
+                'recurrent': True,
+            },
+            True,
+        )
     q_offsets = _q_offsets_for_tensors(native_inputs)
     sequence_num = _sequence_num(run.input, q_offsets)
     finished = torch.full((sequence_num,), suppress_state_store, device=device, dtype=torch.bool)
@@ -408,8 +424,9 @@ def chunk_gated_delta_rule_fwd(
     return out
 
 
-def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkRequest, device: torch.device,
-                    bridge: NativeBridge) -> BenchmarkTask:
+def _turbomind_task(
+    run: RunCase, inputs: InputTensors, request: BenchmarkRequest, device: torch.device, bridge: NativeBridge
+) -> BenchmarkTask:
     native_inputs = make_packed_qkv_views(_native_aligned_tensors(inputs))
     state_arg = _state_dtype_arg(request.state_dtype)
     chunk_size = request.chunk_size
@@ -492,9 +509,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
     elif planned_chunk_size <= 1:
         raise RuntimeError(f'native chunked plan selected chunk_size={planned_chunk_size}, expected > 1')
     workspace = (
-        torch.empty(plan['workspace_bytes'], device=device, dtype=torch.uint8)
-        if plan['workspace_bytes']
-        else None
+        torch.empty(plan['workspace_bytes'], device=device, dtype=torch.uint8) if plan['workspace_bytes'] else None
     )
     planned_run = replace(run, chunk_size=planned_chunk_size)
     row = base_row(
@@ -507,6 +522,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         cp_enabled=cp_enabled,
         gdr_mode=mode,
     )
+
     def prepare():
         state.reset(inputs.h0)
 

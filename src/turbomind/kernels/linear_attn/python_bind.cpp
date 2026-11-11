@@ -14,6 +14,10 @@
 #include "src/turbomind/kernels/linear_attn/registry.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
+#ifdef TM_ENABLE_FLASHQLA
+#include "src/turbomind/kernels/linear_attn/kernel/flashqla/host.h"
+#endif
+
 namespace py = pybind11;
 using namespace pybind11::literals;
 
@@ -334,7 +338,8 @@ py::dict PlanBridge(const py::object&  q,
                     std::optional<int> chunk_size,
                     const std::string& cp_level,
                     int                num_head_groups,
-                    int                heads_per_block)
+                    int                heads_per_block,
+                    bool               has_speculative_rows)
 {
     const auto parsed_mode      = ParseMode(mode);
     const auto q_tensor         = TensorFromObject(q, "q", parsed_mode != GdrMode::kCommit);
@@ -343,38 +348,32 @@ py::dict PlanBridge(const py::object&  q,
     const auto g_tensor         = TensorFromObject(g, "g", true);
     const auto beta_tensor      = TensorFromObject(beta, "beta", true);
     const auto q_offsets_tensor = TensorFromObject(q_offsets, "q_offsets", false);
-    static_cast<void>(k_tensor);
-    static_cast<void>(beta_tensor);
-
-    const auto parsed_state_dtype = ParseStateDtype(state_dtype);
-    const auto operation          = MakeOperation(parsed_mode, chunk_size, ParseContextParallelLevel(cp_level));
-    const auto context            = MakePlanningContext(parsed_mode == GdrMode::kCommit ? k_tensor : q_tensor,
-                                             v_tensor,
-                                             g_tensor,
-                                             beta_tensor,
-                                             parsed_state_dtype,
-                                             parsed_mode,
-                                             q_offsets_tensor,
-                                             num_head_groups,
-                                             heads_per_block);
-
+    const auto operation        = MakeOperation(parsed_mode, chunk_size, ParseContextParallelLevel(cp_level));
+    auto       context          = MakePlanningContext(parsed_mode == GdrMode::kCommit ? k_tensor : q_tensor,
+                                       v_tensor,
+                                       g_tensor,
+                                       beta_tensor,
+                                       ParseStateDtype(state_dtype),
+                                       parsed_mode,
+                                       q_offsets_tensor,
+                                       num_head_groups,
+                                       heads_per_block);
+    context.has_speculative_rows = has_speculative_rows;
     GatedDeltaRule rule;
     Plan           plan;
     try {
-        if (!rule.Plan(operation, context, &plan)) {
+        if (!rule.Plan(operation, context, &plan))
             throw py::value_error("registered GDR planner declined the supported workload");
-        }
     }
-    catch (const std::invalid_argument& e) {
-        throw py::value_error(e.what());
+    catch (const std::invalid_argument& error) {
+        throw py::value_error(error.what());
     }
-
-    auto out         = PlanToDict(plan);
-    auto plan_handle = std::make_unique<Plan>(plan);
-    auto capsule     = py::capsule(plan_handle.get(), "delta_rule.Plan", [](PyObject* capsule) {
+    auto out     = PlanToDict(plan);
+    auto handle  = std::make_unique<Plan>(std::move(plan));
+    auto capsule = py::capsule(handle.get(), "delta_rule.Plan", [](PyObject* capsule) {
         delete static_cast<Plan*>(PyCapsule_GetPointer(capsule, "delta_rule.Plan"));
     });
-    plan_handle.release();
+    handle.release();
     out["_handle"] = capsule;
     return out;
 }
@@ -566,13 +565,21 @@ void bind_delta_rule(py::module_& module)
                "v"_a,
                "g"_a,
                "beta"_a,
-               "q_offsets"_a       = py::none(),
-               "state_dtype"_a     = "f32",
-               "mode"_a            = "chunked",
-               "chunk_size"_a      = py::none(),
-               "cp_level"_a        = "all",
-               "num_head_groups"_a = 1,
-               "heads_per_block"_a = 0);
+               "q_offsets"_a            = py::none(),
+               "state_dtype"_a          = "f32",
+               "mode"_a                 = "chunked",
+               "chunk_size"_a           = py::none(),
+               "cp_level"_a             = "all",
+               "num_head_groups"_a      = 1,
+               "heads_per_block"_a      = 0,
+               "has_speculative_rows"_a = true);
+
+    module.def("delta_rule_initialize", [] { GatedDeltaRule{}; });
+
+#ifdef TM_ENABLE_FLASHQLA
+    // Absent from builds without TileLang support; lmdeploy.turbomind.kernels.tilelang.flashqla then builds nothing.
+    module.def("add_flashqla_kernel", &flashqla::AddKernel, "symbol"_a, "path"_a);
+#endif
 
     module.def("delta_rule_prepare_state_tma_descs",
                &PrepareStateTmaDescBridge,

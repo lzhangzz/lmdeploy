@@ -1,9 +1,15 @@
+#include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/linear_attn/delta_rule.h"
-
 #include "src/turbomind/kernels/linear_attn/registry.h"
+
+#ifdef TM_ENABLE_FLASHQLA
+#include "src/turbomind/kernels/linear_attn/kernel/flashqla/host.h"
+#endif
 
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,44 +28,35 @@ bool ForceLegacyGdr()
         bool        value{};
         std::string error;
     };
-
     static const Result result = [] {
         const char* value = std::getenv("TM_GDR_FORCE_LEGACY");
-        if (value == nullptr || std::strcmp(value, "0") == 0) {
+        if (value == nullptr || std::strcmp(value, "0") == 0)
             return Result{false, {}};
-        }
-        if (std::strcmp(value, "1") == 0) {
+        if (std::strcmp(value, "1") == 0)
             return Result{true, {}};
-        }
         return Result{false, std::string{"TM_GDR_FORCE_LEGACY must be 0 or 1, got "} + value};
     }();
-
-    if (!result.error.empty()) {
+    if (!result.error.empty())
         throw std::invalid_argument(result.error);
-    }
     return result.value;
 }
 
 std::string_view SelectArchitecture(int arch, bool force_legacy)
 {
-    if (force_legacy || (arch > 0 && arch < 900)) {
+    if (force_legacy || (arch > 0 && arch < 900))
         return kPreSm90Architecture;
-    }
-    if (arch == 900) {
+    if (arch == 900)
         return kSm90Architecture;
-    }
-    if (arch == 1200) {
+    if (arch == 1200)
         return kSm120Architecture;
-    }
     return {};
 }
 
 Operation SelectOperation(const Operation& requested, bool force_legacy)
 {
     Operation selected = requested;
-    if (force_legacy) {
+    if (force_legacy)
         selected.chunk_size = kAutoGdrChunkSize;
-    }
     return selected;
 }
 
@@ -95,10 +92,30 @@ RequireGdrKernel(const Operation& operation, const PlanningContext& context, std
 
 const GdrKernel& RequireGdrKernel(const Plan& plan)
 {
-    if (plan.kernel == nullptr) {
+    if (plan.kernel == nullptr)
         throw std::invalid_argument("GDR plan does not reference a registered kernel");
-    }
     return *plan.kernel;
+}
+
+void ReportSelection(const GdrKernel& kernel, const Operation& operation, const PlanningContext& context, bool legacy)
+{
+    static std::mutex            mutex;
+    static std::set<std::string> reported;
+    const std::string            key = std::string{kernel.name()} + ":" + std::to_string(context.hq) + ":"
+                            + std::to_string(context.hv) + ":" + std::to_string(int(operation.cp_level)) + ":"
+                            + std::to_string(context.has_speculative_rows) + ":" + std::to_string(legacy);
+    std::lock_guard lock(mutex);
+    if (reported.insert(key).second) {
+        TM_LOG_INFO(
+            "[GDR] requested=flashqla selected={} mode={} Hq={} Hv={} cp_level={} speculative={} force_legacy={}",
+            kernel.name(),
+            ModeName(operation.mode),
+            context.hq,
+            context.hv,
+            int(operation.cp_level),
+            context.has_speculative_rows,
+            legacy);
+    }
 }
 
 }  // namespace
@@ -106,17 +123,26 @@ const GdrKernel& RequireGdrKernel(const Plan& plan)
 bool GatedDeltaRule::Plan(const Operation& requested, const PlanningContext& context, delta_rule::Plan* plan) const
 {
     const bool force_legacy = ForceLegacyGdr();
-    if (force_legacy && (requested.mode == GdrMode::kVerify || requested.mode == GdrMode::kCommit)) {
+    if (force_legacy && (requested.mode == GdrMode::kVerify || requested.mode == GdrMode::kCommit))
         return false;
-    }
-    const Operation  operation    = SelectOperation(requested, force_legacy);
-    const auto       architecture = SelectArchitecture(context.arch, force_legacy);
-    const auto&      kernel       = RequireGdrKernel(operation, context, architecture);
+    const Operation operation    = SelectOperation(requested, force_legacy);
+    const auto      architecture = SelectArchitecture(context.arch, force_legacy);
+#ifdef TM_ENABLE_FLASHQLA
+    const bool flashqla = flashqla::Registered(context.hq, context.hv, context.state_dtype);
+#else
+    constexpr bool flashqla = false;
+#endif
+    const GdrKernel* selected{};
+    if (flashqla && !force_legacy)
+        selected = GdrKernelRegistry::instance().Find(operation, context, "flashqla");
+    if (!selected)
+        selected = &RequireGdrKernel(operation, context, architecture);
+    if (flashqla)
+        ReportSelection(*selected, operation, context, force_legacy);
     delta_rule::Plan candidate{};
-    candidate.kernel = &kernel;
-    if (!kernel.Plan(operation, context, &candidate)) {
+    candidate.kernel = selected;
+    if (!selected->Plan(operation, context, &candidate))
         return false;
-    }
     *plan = std::move(candidate);
     return true;
 }

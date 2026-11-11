@@ -38,6 +38,8 @@ option(BUILD_PY_FFI "Build python ffi" ON)
 option(BUILD_TEST "Build tests" OFF)
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 option(BUILD_FAST_MATH "Build in fast math mode" ON)
+option(ENABLE_TILELANG "Build support for exported TileLang kernels (FlashQLA GDN prefill); kernels are built at model load" OFF)
+set(TVM_FFI_ROOT "" CACHE PATH "TVM FFI package directory (headers and libtvm_ffi)")
 
 set(NVCC_THREADS 8 CACHE STRING "NVCC threads for compiling target architectures in parallel (0 = all CPUs)")
 

@@ -5,6 +5,7 @@ import torch
 from . import _tm
 from .builders._base import Context, ParallelGroup
 from .checkpoint import Prefix, create_checkpoint
+from .kernels.tilelang.provider import KernelProvider
 
 
 class ModelLoader:
@@ -43,13 +44,16 @@ class ModelLoader:
             'bfloat16': _tm.DataType.TYPE_BF16,
             'float8_e4m3': _tm.DataType.TYPE_FP8_E4M3,
         }[self.engine_config.gemm_input_dtype]
+        ec = self.engine_config
+        device = ec.devices[0] if ec.devices else torch.cuda.current_device()
+        major, minor = torch.cuda.get_device_capability(device)
         ctx = Context(
             [mc.context(g) for g in range(self.gpu_count)],
             mc.gemm(0),
             data_type=self.data_type,
             gemm_input_dtype=gemm_input_dtype,
+            kernels=KernelProvider(getattr(torch, ec.state_dtype), major * 10 + minor),
         )
-        ec = self.engine_config
 
         attn_tp = ParallelGroup(ec.attn_tp_size,
                                 [mc.attn_tp_rank(g) for g in range(self.gpu_count)])

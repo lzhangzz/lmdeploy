@@ -148,13 +148,18 @@ class BuiltModule:
 
 
 class Context:
-    """Bundle of per-GPU contexts and the model compute dtype."""
+    """Bundle of per-GPU contexts and the model compute dtype.
 
-    def __init__(self, devices, gemm, data_type, gemm_input_dtype):
+    ``kernels`` is the optional :class:`~lmdeploy.turbomind.kernels.tilelang.provider.KernelProvider` that layer
+    builders ask for exported kernels, the way they ask ``gemm`` for weight plans.
+    """
+
+    def __init__(self, devices, gemm, data_type, gemm_input_dtype, kernels=None):
         self.devices = devices
         self.gemm = gemm
         self.data_type = data_type
         self.gemm_input_dtype = gemm_input_dtype
+        self.kernels = kernels
         self._active_mask_stack = [(True,) * len(devices)]
 
     @property

@@ -16,6 +16,7 @@ pytest-sugar
 pytest-xdist
 pyyaml
 qwen_vl_utils
-tilelang==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
+tilelang==0.1.15; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
 timm!=1.0.23
 triton<=3.7.1,>=3.4.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
+z3-solver==4.15.4.0; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine

@@ -63,12 +63,13 @@ struct PlanningContext {
     int64_t              beta_batch_stride{};
     int                  num_head_groups{1};
     int                  heads_per_block{};
+    bool                 has_speculative_rows{true};
     std::vector<int32_t> q_offsets;
 };
 
 struct Arguments {
-    core::Tensor  q, k, v, g, beta;
-    core::Tensor  state_ptrs, state_tma_descs, q_offsets, finished;
+    core::Tensor q, k, v, g, beta;
+    core::Tensor state_ptrs, state_tma_descs, q_offsets, finished;
     // Commit consumes [0, commit_lengths[request]) and writes only recurrent state.
     // Device int32 [batch], with each length in [0, token_slots]. Q and out are unused.
     core::Tensor  commit_lengths;

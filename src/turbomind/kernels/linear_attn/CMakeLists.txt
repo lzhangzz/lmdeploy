@@ -9,6 +9,10 @@ add_library(linear_attn STATIC
 set_property(TARGET linear_attn PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET linear_attn PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
+if(ENABLE_TILELANG)
+    target_compile_definitions(linear_attn PRIVATE TM_ENABLE_FLASHQLA=1)
+endif()
+
 target_link_libraries(linear_attn PUBLIC
         core
         CUDA::cudart

@@ -80,6 +80,10 @@ if(LINEAR_ATTN_GDR_SM100_PLUS_ARCHS)
     list(APPEND LINEAR_ATTN_GDR_KERNEL_TARGETS linear_attn_kernels_sm120)
 endif()
 
+if(ENABLE_TILELANG)
+    add_subdirectory(flashqla)
+endif()
+
 # Keep family plugins before the common planner archive in the final link.
 list(APPEND LINEAR_ATTN_GDR_KERNEL_TARGETS linear_attn_kernels)
 set(LINEAR_ATTN_GDR_KERNEL_TARGETS "${LINEAR_ATTN_GDR_KERNEL_TARGETS}" PARENT_SCOPE)
