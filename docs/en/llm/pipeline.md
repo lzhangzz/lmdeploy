@@ -283,10 +283,19 @@ it to a value greater than 1 together with a matching `session_len`. See
 ### Recurrent state dtype
 
 For models with GatedDeltaNet layers, TurboMind stores the recurrent state in
-the model activation dtype. Set `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1` before
-starting LMDeploy to store it in FP32 instead; the convolution state stays in
-the activation dtype. FP32 improves numerical precision at twice the
+the model activation dtype by default. Set `state_dtype='float32'` in
+`TurbomindEngineConfig` to store it in FP32 instead; the convolution state
+stays in the activation dtype. FP32 improves numerical precision at twice the
 recurrent-state memory.
+
+```python
+from lmdeploy import pipeline, TurbomindEngineConfig
+
+pipe = pipeline('<model-path>', backend_config=TurbomindEngineConfig(state_dtype='float32'))
+```
+
+When `state_dtype` is left unset, `LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1` selects FP32
+as well, which also works with the CLI:
 
 ```bash
 LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 lmdeploy serve api_server <model-path>

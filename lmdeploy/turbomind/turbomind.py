@@ -32,7 +32,6 @@ from .tokenizer_info import TokenizerInfo
 logger = get_logger('lmdeploy')
 
 MAX_LOGPROBS = 1024
-_FP32_MAMBA_SSM_DTYPE = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', '0') == '1'
 
 
 def _construct_stop_or_bad_words(words: list[int] = None):
@@ -260,10 +259,9 @@ class TurboMind:
             'float16': _tm.DataType.TYPE_FP16,
             'float32': _tm.DataType.TYPE_FP32,
         }
-        state_dtype = 'float32' if _FP32_MAMBA_SSM_DTYPE else engine_config.dtype
         ec = _tm.EngineConfig()
         ec.data_type = dtype_map[engine_config.dtype]
-        ec.state_dtype = dtype_map[state_dtype]
+        ec.state_dtype = dtype_map[engine_config.state_dtype]
         ec.cache_block_seq_len = engine_config.cache_block_seq_len
         ec.quant_policy = engine_config.quant_policy
         ec.max_batch_size = engine_config.max_batch_size
@@ -296,7 +294,7 @@ class TurboMind:
         ec.spec_tap_layer_ids = spec_tap_layer_ids
 
         logger.info(f'turbomind engine config:\n\n'
-                    f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
+                    f'dtype={engine_config.dtype}, state_dtype={engine_config.state_dtype}, '
                     f'session_len={engine_config.session_len}, '
                     f'max_batch_size={engine_config.max_batch_size}, '
                     f'devices={engine_config.devices}, '

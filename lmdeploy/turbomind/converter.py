@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import os
+
 import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
@@ -236,6 +238,9 @@ def get_tm_config(model_path,
     ])
 
     engine_config.dtype = dtype_name
+    if engine_config.state_dtype is None:
+        fp32_state = os.getenv('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', '0') == '1'
+        engine_config.state_dtype = 'float32' if fp32_state else dtype_name
 
     # 4. Resolve session_len default.
     session_len_default = _get_and_verify_max_len(hf_model_cfg, None)

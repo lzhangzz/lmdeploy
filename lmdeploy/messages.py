@@ -199,6 +199,10 @@ class TurbomindEngineConfig:
         gemm_input_dtype: preferred GEMM input dtype. It can be None,
             'float16', 'bfloat16', or 'float8_e4m3'. This reorders eligible
             kernel families without changing the model dtype contract.
+        state_dtype: dtype of the recurrent state of linear-attention
+            (GatedDeltaNet) layers. It can be None, 'float16', 'bfloat16'
+            or 'float32'. None follows `dtype`, or 'float32' when
+            LMDEPLOY_FP32_MAMBA_SSM_DTYPE=1 is set.
         model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq, compressed-tensors,
             fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
@@ -289,6 +293,7 @@ class TurbomindEngineConfig:
 
     dtype: str = 'auto'
     gemm_input_dtype: str | None = None
+    state_dtype: str | None = None
     model_format: str | None = None
     tp: int = 1
     dp: int = 1
@@ -335,6 +340,7 @@ class TurbomindEngineConfig:
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.gemm_input_dtype in (None, 'float16', 'bfloat16', 'float8_e4m3')
+        assert self.state_dtype in (None, 'float16', 'bfloat16', 'float32')
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
